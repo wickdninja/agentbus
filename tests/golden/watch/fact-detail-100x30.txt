@@ -1,0 +1,30 @@
+ agentbus  ~/src/acme-api                                                                     fact
+  ◆ auth on the new token API                                                           · nate · 2h
+
+  key       baseline_sha
+  value     abc123
+  set by    codex, 16:37, 7m ago
+
+History  2                                                                             newest first
+  16:37  codex        abc123
+  15:02  claude       9f8e7d6
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  j/k scroll · Esc back · ? help · q quit

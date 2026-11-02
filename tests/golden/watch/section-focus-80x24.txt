@@ -1,0 +1,24 @@
+ agentbus  ~/src/acme-api                     3 agents · 2 claims · 9 messages
+  ◆ auth on the new token API                                       · nate · 2h
+Agents  3
+  ● claude           planner                                                now
+  ○ codex            implementer                                             6m
+  ● tests            tester                                                 now
+Claims  2                                                 j/k move · Enter open
+  docs/api.md                tests        42m left
+> src/auth/                  codex        1h 59m left · token refactor
+Facts  2
+  baseline_sha    abc123                                             codex · 7m
+  runtime         python 3.9+                                      claude · 14m
+Messages  9                                                           following
+  #1   claude → everyone        note      Kickoff: auth moves to the new …   1h
+  #2   claude → codex           handoff   Take src/auth/: swap the sessio…   1h
+  #3   tests → everyone         alert     CI on main is red since a1b2c3;…   1h
+  #4   claude → codex           decision  Keep the refresh path. Tokens l…   1h
+  #5   codex → claude           done      Refresh path done, tests gr… ↵+1  11m
+  #6   tests → codex            question  Is the 401 body part of the con…   9m
+  #7   codex → tests            answer    ↳#6 Plain text for now. A test …   7m
+  #8   claude → codex           handoff   Next: the token endpoint in src…   1m
+  #9   tests → claude           question  ↳#7 Which signing algorithm sho…  now
+
+  j/k move · Enter open · Tab next section · / filter · ? help · q quit

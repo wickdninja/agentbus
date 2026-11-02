@@ -1,0 +1,30 @@
+ agentbus  ~/src/acme-api                                                                    claim
+  ◆ auth on the new token API                                                           · nate · 2h
+
+  claim     src/auth/
+  held by   ● codex · implementer
+  purpose   token refactor
+  claimed   15:30, 1h ago
+  expires   18:43, 1h 59m left
+
+Mentioned in  2                                                               messages that name it
+  #2   claude → codex           handoff   Take src/auth/: swap the session cookie for the tok…   1h
+  #8   claude → codex           handoff   Next: the token endpoint in src/auth/token.py once …   1m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  j/k scroll · Esc back · ? help · q quit

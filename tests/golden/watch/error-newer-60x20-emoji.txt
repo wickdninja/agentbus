@@ -1,0 +1,20 @@
+ 🚌 agentbus  ~/src/acme-api                  not readable
+
+  🚧 This bus is newer than this watch, so the sections are
+     not drawn.
+     bus schema 3 is newer than this agentbus understands
+     (2)
+     This watch is agentbus 0.2.0; the bus needs a newer
+     one.
+     Run: agentbus upgrade ~/src/acme-api from a newer
+     install
+
+     Retrying every 1s. Last good frame: none.
+
+
+
+
+
+
+
+  r retry now · ? help · q quit

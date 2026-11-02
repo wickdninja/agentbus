@@ -1,0 +1,24 @@
+ agentbus  ~/src/acme-api                     3 agents · 2 claims · 9 messages
+  ◆ auth on the new token API                                       · nate · 2h
+
+Agents  0 of 3                                                         no match
+
+Claims  0 of 2                                                         no match
+
+Facts  0 of 2                                                          no match
+
+Messages  2 of 9                                                      following
+  #6   tests → codex            question  Is the 401 body part of the con…   9m
+  #9   tests → claude           question  ↳#7 Which signing algorithm sho…  now
+
+
+
+
+
+
+
+
+
+
+
+/kind:question_                                          Enter keep · Esc clear

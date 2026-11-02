@@ -1,0 +1,20 @@
+ 🚌 agentbus  ~/src/acme-api  3 agents · 2 claims · 9 msgs
+  🎯 auth on the new token API                  · nate · 2h
+
+👥 Agents  0 of 3                                  no match
+
+🔒 Claims  1 of 2
+  src/auth/           codex      1h 59m left
+
+📌 Facts  0 of 2                                   no match
+
+💬 Messages  4 of 9                               following
+  #1  claude→every… 📝 note Kickoff: auth moves to th…   1h
+  #2  claude→codex  🤝 hand Take src/auth/: swap the …   1h
+  #5  codex→claude  ✅ done Refresh path done, te… ↵+1  11m
+  #8  claude→codex  🤝 hand Next: the token endpoint …   1m
+
+
+
+
+  /auth · Esc clear · / edit · j/k move · ? help · q quit

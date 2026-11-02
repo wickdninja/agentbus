@@ -1,0 +1,24 @@
+ agentbus  ~/src/acme-api                                         not readable
+
+  This bus could not be read, so the sections are not drawn.
+  bus schema is not agentbus's: table messages differs (no column request_id)
+  Run: agentbus upgrade ~/src/acme-api
+
+  Retrying every 1s. Last good frame: none.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  r retry now · ? help · q quit

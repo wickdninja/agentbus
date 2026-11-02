@@ -1,0 +1,30 @@
+ agentbus  ~/src/acme-api                                                                     keys
+  watch only reads the bus. It never marks a message read and never changes a claim.
+
+Move
+  j k  ↓ ↑        one row                          g G  Home End   first, last row
+  PgUp PgDn       one page                         Ctrl-u Ctrl-d   half a page
+  Tab  Shift-Tab  next, previous section           1 2 3 4         Agents, Claims, Facts, Messages
+
+Look closer
+  Enter           open the selected row; a message opens with its thread
+  t               show or hide the thread of an open message
+  /               filter: from:NAME to:NAME kind:KIND, or any words
+  p               pause the messages, or follow them again
+  r               read the bus now
+  Esc             back: closes a detail, the filter or this page
+  q  Ctrl-C       quit (Esc never quits)
+
+Marks
+  ●   seen in the last 5 minutes   ○   quiet for 5 minutes or more  >   selected row
+  ▌   new in the last 3 seconds    ◆   the team's goal              ↳#6 a reply to message 6
+  ↵+1 one more line; Enter shows it
+
+Kinds  the short form is used under 72 columns
+  hand handoff   ask question   ans answer   done   dec decision   ALRT alert   note
+
+
+
+
+
+  j/k scroll · Esc back · q quit

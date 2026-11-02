@@ -1,0 +1,40 @@
+ agentbus  ~/src/acme-api                                                             3 agents · 2 claims · 9 messages
+  ◆ auth on the new token API                                                                               · nate · 2h
+
+Agents  3
+  ● claude           planner                                                                                        now
+  ○ codex            implementer                                                                                     6m
+  ● tests            tester                                                                                         now
+
+Claims  2
+  docs/api.md                          tests        42m left
+  src/auth/                            codex        1h 59m left · token refactor
+
+Facts  2
+  baseline_sha            abc123                                                                             codex · 7m
+  runtime                 python 3.9+                                                                      claude · 14m
+
+Messages  9                                                                                                   following
+  #1   claude → everyone        note      Kickoff: auth moves to the new token API today. Claim before you edit.     1h
+  #2   claude → codex           handoff   Take src/auth/: swap the session cookie for the token API.                 1h
+  #3   tests → everyone         alert     CI on main is red since a1b2c3; hold merges until test_login passes.       1h
+  #4   claude → codex           decision  Keep the refresh path. Tokens live 7 days and refresh rotates them.        1h
+  #5   codex → claude           done      Refresh path done, tests green. ↵+1                                       11m
+  #6   tests → codex            question  Is the 401 body part of the contract, or can it change?                    9m
+  #7   codex → tests            answer    ↳#6 Plain text for now. A test will pin it once the spec says otherwise…   7m
+  #8   claude → codex           handoff   Next: the token endpoint in src/auth/token.py once the spec lands. I wi…   1m
+▌ #9   tests → claude           question  ↳#7 Which signing algorithm should the tokens use? The spec draft says …  now
+
+
+
+
+
+
+
+
+
+
+
+
+
+  j/k move · Enter open · / filter · p pause · Tab section · ? help · q quit
