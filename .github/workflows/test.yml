@@ -1,0 +1,45 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # setup-python has no 3.9 build for Ubuntu 26.04 or arm64 macOS, so the
+          # 3.9 jobs use Ubuntu 24.04 and macOS's own /usr/bin/python3 (3.9.6).
+          - { os: ubuntu-24.04, python: "3.9" }
+          - { os: ubuntu-latest, python: "3.15" }
+          - { os: macos-latest, python: system }
+          - { os: macos-latest, python: "3.15" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: matrix.python != 'system'
+        id: py
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Pick Python
+        run: echo "PYTHON=${{ steps.py.outputs.python-path || '/usr/bin/python3' }}" >> "$GITHUB_ENV"
+      - name: Compile
+        run: |
+          "$PYTHON" -V
+          "$PYTHON" -m py_compile bin/agentbus
+      - name: Tests
+        run: |
+          status=0
+          for t in tests/test_*.sh; do
+            echo "::group::$t"
+            bash "$t" || { echo "::error::$t failed"; status=1; }
+            echo "::endgroup::"
+          done
+          exit $status

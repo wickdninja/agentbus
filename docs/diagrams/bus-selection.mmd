@@ -1,0 +1,20 @@
+flowchart TD
+    start(["agentbus command"]) --> env{{"AGENTBUS_DB set?"}}
+    env -- yes --> useenv["Use that database<br/>(--up is ignored)"]
+    env -- no --> wt{{"In a linked worktree?"}}
+    wt -- yes --> main["Start at the same spot<br/>in the main checkout"]
+    wt -- no --> walk
+    main --> walk["Walk up to the nearest .agentbus/"]
+    walk --> found{{"Found one?"}}
+    found -- no --> none["agentbus: no bus here or in any parent folder.<br/>Run: agentbus init DIR"]
+    found -- yes --> home{{"HOME's own .agentbus?"}}
+    home -- yes --> skip["Never used: keep walking"]
+    skip --> walk
+    home -- no --> up{{"--up N given?"}}
+    up -- no --> nearest["Use the nearest bus"]
+    up -- yes --> outer["Use the Nth bus above it<br/>(buses lists the chain)"]
+
+    classDef ok fill:#F5B800,stroke:#1f2328,color:#1f2328;
+    classDef bad fill:#ffffff,stroke:#1f2328,color:#1f2328,stroke-dasharray: 5 4;
+    class useenv,nearest,outer ok;
+    class none,skip bad;

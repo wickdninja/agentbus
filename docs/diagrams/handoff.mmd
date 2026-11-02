@@ -1,0 +1,30 @@
+sequenceDiagram
+    participant you as You
+    participant claude as claude (brain)
+    participant codex as codex (hand)
+    participant tests as tests (subagent)
+    participant bus as The bus
+
+    you->>bus: goal "auth on the new token API"
+    claude->>bus: join
+    bus-->>claude: goal: auth on the new token API
+    codex->>bus: join
+    bus-->>codex: goal: auth on the new token API
+    tests->>bus: join
+    bus-->>tests: goal: auth on the new token API
+
+    claude->>bus: post --to codex --kind handoff
+    codex->>bus: inbox
+    bus-->>codex: handoff from claude
+
+    codex->>bus: claim src/auth/ --purpose "token API"
+    bus-->>codex: claimed src/auth/
+    tests->>bus: claim src/auth/
+    bus--xtests: claim_conflict, held by codex
+
+    tests->>bus: post --to codex --kind question
+    codex->>bus: post --to tests --reply-to 2 --kind answer
+
+    codex->>bus: release src/auth/
+    codex->>bus: post --to claude --kind done
+    you->>bus: watch

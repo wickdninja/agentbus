@@ -1,0 +1,3231 @@
+#!/usr/bin/env python3
+"""agentbus: messages, file claims and shared facts for a workspace.
+
+AGENTBUS_DB names an explicit bus. Otherwise, walk up from cwd to the nearest
+.agentbus/ directory; linked worktrees start at the same spot in their main checkout.
+Use --up N to select an outer bus. Identity: --as NAME or AGENTBUS_AGENT.
+One file, Python 3.9+ standard library; git 2.31+ for checkout discovery.
+"""
+import sys
+
+if sys.version_info < (3, 9):
+    sys.exit("agentbus: needs Python 3.9 or newer (this is %d.%d)" % tuple(sys.version_info[:2]))
+
+import argparse  # noqa: E402
+import difflib  # noqa: E402
+import errno  # noqa: E402
+import fcntl  # noqa: E402
+import io  # noqa: E402
+import json  # noqa: E402
+import math  # noqa: E402
+import os  # noqa: E402
+import posixpath  # noqa: E402
+import random  # noqa: E402
+import re  # noqa: E402
+import secrets  # noqa: E402
+import shutil  # noqa: E402
+import sqlite3  # noqa: E402
+import stat  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+import unicodedata  # noqa: E402
+import zlib  # noqa: E402
+from contextlib import contextmanager, redirect_stdout  # noqa: E402
+from functools import lru_cache  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+from urllib.parse import quote  # noqa: E402
+
+__version__ = "0.1.0"
+MIN_GIT = (2, 31)
+MAX_TTL_MIN = 10080  # a week
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS agents (
+  name TEXT PRIMARY KEY, tool TEXT, model TEXT, cwd TEXT, branch TEXT, role TEXT,
+  joined_at TEXT NOT NULL, last_seen TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, sender TEXT NOT NULL,
+  recipient TEXT NOT NULL DEFAULT '*', kind TEXT NOT NULL DEFAULT 'note',
+  topic TEXT, body TEXT NOT NULL, reply_to INTEGER REFERENCES messages(id), request_id TEXT);
+CREATE TABLE IF NOT EXISTS cursors (
+  agent TEXT PRIMARY KEY, last_read_id INTEGER NOT NULL DEFAULT 0,
+  bcast_from INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS context (
+  key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS context_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, value TEXT, updated_by TEXT NOT NULL,
+  updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS claims (
+  resource TEXT PRIMARY KEY, agent TEXT NOT NULL, purpose TEXT,
+  claimed_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, agent TEXT NOT NULL,
+  action TEXT NOT NULL, detail TEXT);
+CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_request ON messages(sender, request_id) WHERE request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_log_ts ON log(ts);
+"""
+# The fixed table names whose shapes every open validates.
+TABLES = ("agents", "messages", "cursors", "context", "context_history", "claims", "log")
+KINDS = ("note", "question", "answer", "handoff", "decision", "alert", "done")
+MESSAGE_COLUMNS = "id, ts, sender, recipient, kind, topic, body, reply_to"
+_JSON_ERRORS = False
+
+
+def now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---------- output safety ----------
+
+# Escaped by property, not by a list of ranges: every control (Cc), format (Cf), surrogate (Cs),
+# private-use (Co), unassigned (Cn), line separator (Zl) and paragraph separator (Zp) character,
+# plus the Unicode default-ignorable code points those categories miss (combining grapheme joiner,
+# Hangul fillers, Khmer inherent vowels, Mongolian and other variation selectors). Any of these can
+# hide, reorder or break text on a terminal. U+2800 (Braille blank) is a symbol that renders as
+# nothing, like the Hangul fillers, so it is escaped too.
+_UNSAFE_CATS = frozenset(("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))
+_IGNORABLE = ((0x034F, 0x034F), (0x115F, 0x1160), (0x17B4, 0x17B5), (0x180B, 0x180F),
+              (0x2800, 0x2800), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFFA0, 0xFFA0), (0xE0000, 0xE0FFF))
+# A run of more than 8 blank-rendering spaces (U+0020 and the other Zs characters) is shown
+# escaped: on a wrapping terminal a long blank run can push the text after it to column 0 of a
+# row that looks empty before it, where it would read as a new line (a forged message header).
+_BLANK_RUN = re.compile("[\u0020\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]{9,}")
+
+
+@lru_cache(maxsize=4096)
+def _unsafe(c):
+    o = ord(c)
+    if 0x20 <= o < 0x7F:
+        return False
+    return unicodedata.category(c) in _UNSAFE_CATS or any(lo <= o <= hi for lo, hi in _IGNORABLE)
+
+
+def _esc(c):
+    o = ord(c)
+    return "\\x%02x" % o if o < 0x100 else "\\u%04x" % o if o < 0x10000 else "\\U%08x" % o
+
+
+def clean(text, newlines=False, backslash=True):
+    """Bus- or file-controlled text made safe for a terminal: controls and invisible format
+    characters become visible escapes (ESC -> \\x1b, U+202E -> \\u202e), and so does every
+    character of a run of more than 8 blanks, so text cannot drive the reader's terminal or forge a
+    line. A literal backslash is shown doubled (\\\\), so text a lane wrote as `\\x23` can never pass
+    for one of these escapes; backslash=False only for a repr(), which doubles its own. Only a
+    message body passes newlines=True."""
+    if text is None:
+        return ""
+    text = str(text)
+    out, at = [], 0
+    for m in _BLANK_RUN.finditer(text):
+        out.append(_clean_chars(text[at:m.start()], newlines, backslash))
+        out.append("".join(_esc(c) for c in m.group()))
+        at = m.end()
+    out.append(_clean_chars(text[at:], newlines, backslash))
+    return "".join(out)
+
+
+def _clean_chars(text, newlines, backslash=True):
+    return "".join("\\\\" if c == "\\" and backslash else
+                   _esc(c) if _unsafe(c) and not (newlines and c == "\n") else c for c in text)
+
+
+# Human output is hard-wrapped here, never by the terminal: a row the terminal wraps starts at
+# column 0, where text a lane wrote (a body padded to the edge, then "#99 ... [decision]") would read
+# as a new message header. The rule, on stdout and stderr alike: every physical row starts either
+# with a header agentbus itself wrote (a message header `#<id> ` built from the integer id column, a
+# `== <section>` line, a fixed confirmation such as `posted #N`, or the `agentbus: ` prefix of a
+# diagnostic) or with INDENT. A line agentbus authored is marked with HEAD while the output is
+# built; every other line (a who, claims, ctx or log row, a message body, a value) is indented,
+# and every row after the first of any line is indented by wrap_line. HEAD is a NUL, which
+# clean() always shows escaped, so no bus text can carry the mark: lane text never starts a row,
+# whatever zero-width or combining character it starts with.
+INDENT = "  "
+HEAD = "\x00"
+MIN_WIDTH = 20
+
+
+def _fd_width(fd):
+    try:
+        return os.get_terminal_size(fd).columns or None
+    except (OSError, ValueError):
+        return None
+
+
+def _tty_width():
+    """The controlling terminal's width, from /dev/tty: where `agentbus read | less` or `| cat`
+    is finally shown, though stdout is a pipe."""
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    try:
+        return _fd_width(fd)
+    finally:
+        os.close(fd)
+
+
+def term_width():
+    """The width output is wrapped to, at least MIN_WIDTH: COLUMNS when set to a number (an explicit
+    choice); else stdout's terminal; else, when stdout is not a terminal, the controlling terminal
+    (/dev/tty), else stderr's terminal; else 80."""
+    env = os.environ.get("COLUMNS", "").strip()
+    w = int(env) if env.isdigit() and len(env) < 7 and int(env) > 0 else None
+    if w is None:
+        out = sys.__stdout__.fileno() if sys.__stdout__ is not None else 1
+        w = _fd_width(out) or _tty_width() or _fd_width(2) or 80
+    return max(w, MIN_WIDTH)
+
+
+def char_width(c):
+    """Columns one character is counted as when wrapping: 1 for printable ASCII, 2 for everything
+    else. Never an undercount: no terminal draws one character wider than 2 columns, and terminals
+    and Unicode versions disagree on the rest (a combining mark that is also wide, U+302E, counted 0
+    by Unicode's tables and 2 by libc). A row that ends early is harmless; one that runs past the
+    edge is wrapped by the terminal to column 0. Text reaches here already cleaned, so controls and
+    invisible characters are ASCII escapes by then."""
+    return 1 if " " <= c <= "~" else 2
+
+
+def wrap_line(line, width):
+    """One output line as rows of at most `width` display columns; rows after the first start with
+    INDENT. A row breaks after its last space, so a path or a word that fits on a row is never cut;
+    only a token longer than a whole row is broken mid-token. The space stays at the end of the row
+    it ends (nothing is dropped). A wide character that would cross the edge moves to the next row
+    whole."""
+    rows, row, col = [], [], 0
+    for c in line:
+        w = char_width(c)
+        while col + w > width:
+            # The row's own indent (a continuation's, or an indented line's) is not a break point.
+            start = len(INDENT) if row[:len(INDENT)] == list(INDENT) else 0
+            k = next((i for i in range(len(row) - 1, start, -1) if row[i] == " "), None)
+            if k is None:  # one token fills the row: break it here
+                rows.append("".join(row))
+                row, col = [INDENT], len(INDENT)
+                break
+            rest = row[k + 1:]
+            rows.append("".join(row[:k + 1]))
+            row = [INDENT] + rest
+            col = len(INDENT) + sum(char_width(x) for x in rest)
+        row.append(c)
+        col += w
+    rows.append("".join(row))
+    return "\n".join(rows)
+
+
+def wrap_output(text, width=None):
+    """Human output, every line wrapped by wrap_line to the terminal's width. A line marked HEAD
+    (agentbus wrote its start) keeps its first row at column 0; every other non-empty line is
+    indented, so it starts with INDENT whatever text it holds."""
+    width = width or term_width()
+    lines = []
+    for line in text.split("\n"):
+        if line.startswith(HEAD):
+            line = line[len(HEAD):]
+        elif line and not line.startswith(INDENT):
+            line = INDENT + line
+        lines.append(wrap_line(line.replace(HEAD, ""), width))
+    return "\n".join(lines)
+
+
+def col0(line):
+    """Text a lane controls that will start a field at the start of a row, with a leading # or =
+    shown as \\x23 / \\x3d. Defence in depth: rows that start with lane text are indented anyway."""
+    if isinstance(line, str) and line[:1] in ("#", "="):
+        return "\\x%02x" % ord(line[0]) + line[1:]
+    return line
+
+
+# Output a bus command builds is queued, and rendered only after the bus is closed: formatting a
+# listing a lane inflated, or cleaning a long value a lane wrote, must not hold the exclusive lock,
+# and neither may a write to a stdout or stderr nobody is draining. init and upgrade queue theirs
+# too, through the same output path.
+_PENDING = []
+
+
+def later(fn):
+    _PENDING.append(fn)
+
+
+def render_pending():
+    while _PENDING:
+        _PENDING.pop(0)()
+
+
+def show(template, *fields, row=False, path_first=False):
+    """The one way a human line is printed: a literal template, every field cleaned, queued.
+    By default a line agentbus authors (`posted #{}`, `== agents`): the template starts with fixed
+    text, and the line is marked HEAD so its first row starts at column 0.
+    row=True: a line that starts with bus text (a listing row, a value): indented, so that text
+    never starts a row.
+    path_first=True: an authored line that starts with the repo path the caller named (init and
+    upgrade): marked HEAD like any authored line; its continuation rows are indented.
+    A field that starts the line has a leading # or = escaped (col0), as defence in depth.
+    Fields are cleaned and the line formatted only when the queue is rendered, after the bus is closed."""
+    if not row and not path_first and template.startswith("{"):
+        raise ValueError("an authored line starts with fixed text: " + template)
+
+    def render():
+        cleaned = [clean(f) for f in fields]
+        if template.startswith("{") and cleaned:
+            cleaned[0] = col0(cleaned[0])
+        print((INDENT if row else HEAD) + template.format(*cleaned))
+    later(render)
+
+
+def _stdout_to_devnull():
+    try:  # so the interpreter's own flush at exit cannot raise again
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def write_out(text):
+    """Write the command's buffered output to stdout. stdout closed (`>&-`), or a reader that went
+    away (`| head`), is a clean error when there is output to lose; the command itself has run."""
+    if not text:
+        return
+    if sys.stdout is None:
+        die("stdout is closed, so the output was not shown (the command itself ran)")
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        _stdout_to_devnull()
+        die("the reader closed stdout before all the output was written (the command itself ran)")
+
+
+def write_help():
+    """Write the --help or --version text argparse produced (Parser._print_message): a closed
+    stdout or a reader that went away is a one-line error, whether or not Python buffers stdout."""
+    text = "".join(_HELP_TEXT)
+    del _HELP_TEXT[:]
+    if not text:
+        return
+    if sys.stdout is None:
+        die("stdout is closed, so the help or version was not shown")
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except OSError as e:
+        if not isinstance(e, BrokenPipeError) and e.errno != errno.EPIPE:
+            raise
+        _stdout_to_devnull()
+        die("the reader closed stdout before the help or version was written")
+
+
+def flush_stdout(what):
+    """Flush whatever argparse (--help, --version) or anything else left in stdout's buffer; a
+    reader that went away is a clean error, not Python's `Exception ignored ... BrokenPipeError`."""
+    try:
+        if sys.stdout is not None:
+            sys.stdout.flush()
+    except BrokenPipeError:
+        _stdout_to_devnull()
+        die(f"the reader closed stdout before {what} was written")
+
+
+def diag(msg):
+    """A diagnostic as stderr shows it: `agentbus: ` then the cleaned message, hard-wrapped to the
+    same width as stdout with every continuation row indented, so bus text in an error (a trigger
+    or claim name) never starts a row."""
+    return wrap_line("agentbus: " + clean(msg), term_width())
+
+
+# ==== contract registry ====
+
+
+class Diag:
+    """The message of an exit by die(): cleaned and wrapped only when Python prints it at exit,
+    after every bus connection has been closed (cleaning a long value a lane wrote must not hold
+    the lock)."""
+
+    def __init__(self, msg, code="internal", **fields):
+        self.msg = msg
+        self.code = code
+        self.fields = fields
+
+    def __str__(self):
+        if _JSON_ERRORS:
+            return json.dumps({"error": {"code": self.code, "message": clean(self.msg),
+                                         **jsonable(self.fields)}}, default=repr, allow_nan=False)
+        return diag(self.msg)
+
+
+def die(msg, code="internal", **fields):
+    """Exit non-zero with an error on stderr. msg may echo bus-controlled text, so it is cleaned,
+    later (Diag)."""
+    raise SystemExit(Diag(msg, code, **fields))
+
+
+def reason(e):
+    """The message a die() carried, for a caller that turns the exit into a notice."""
+    return e.code.msg if isinstance(e.code, Diag) else str(e.code)
+
+
+def _write_fd(fd, data):
+    try:
+        while data:
+            data = data[os.write(fd, data):]
+    except OSError:
+        pass
+
+
+def exit_now(msg, grace=1.0):
+    """Write the diagnostic and end the process at once with status 1, without closing SQLite
+    connections, within `grace` seconds even when stderr is a full pipe nobody reads (the write
+    runs in a helper thread; the exit does not wait for it past grace). Exiting releases every
+    lock the process holds."""
+    t = threading.Thread(target=_write_fd, args=(2, (str(Diag(msg)) + "\n").encode("utf-8", "replace")), daemon=True)
+    t.start()
+    t.join(grace)
+    os._exit(1)
+
+
+def die_now(msg):
+    """Exit at once, without closing SQLite connections: used when SQLite may hold a file that is
+    not our bus. A normal close checkpoints and can truncate or rewrite the -wal it holds, which
+    would then be the victim file; the kernel closing the fds at exit writes nothing."""
+    exit_now(msg)
+
+
+# Every Bus connection open in this process. While one is, nothing is written to stdout or stderr:
+# a notice is queued and printed after the last one closes, so a full pipe never holds the lock.
+_HELD = []
+_NOTES = []
+
+
+def note(msg):
+    """A notice on stderr (never on stdout, which --json keeps for one JSON value); queued while a
+    bus is open."""
+    if _HELD or _JSON_ERRORS:
+        _NOTES.append(msg)
+        return
+    sys.stderr.write(diag(msg) + "\n")
+
+
+def flush_notes():
+    """Print the queued notices, once no bus is open."""
+    while _NOTES and not _HELD:
+        sys.stderr.write(diag(_NOTES.pop(0)) + "\n")
+
+
+# The phases of opening a bus that block outside SQL, where the query budget cannot reach
+# (connecting, the first read, SQLite's own opens of -wal, a hot -journal or a super-journal it
+# names), run under this watchdog: a lane that plants a FIFO at bus.db-journal makes SQLite's open
+# of it block forever, and the hung command would hold the exclusive lock with it. 6 s, the same as
+# QUERY_BUDGET_S and for the same reason (see there): an honest open does no work in proportion to
+# the bus except reading the -wal once (a -wal of several GB before it comes near), and a hung
+# command must be gone well inside the 15 s another agent retries for, on a slow machine too, so
+# that agent then gets the bus instead of failing busy.
+OPEN_BUDGET_S = 6.0
+
+
+def open_budget():
+    """OPEN_BUDGET_S. Test hook: AGENTBUS_TEST_OPEN_BUDGET=<seconds> can only shorten it."""
+    try:
+        v = float(os.environ.get("AGENTBUS_TEST_OPEN_BUDGET", ""))
+    except ValueError:
+        return OPEN_BUDGET_S
+    return min(max(v, 0.1), OPEN_BUDGET_S) if math.isfinite(v) else OPEN_BUDGET_S
+
+
+class Watchdog:
+    """One daemon thread. While armed, it ends the process (exit_now) once the deadline passes;
+    the main thread may be blocked in a system call no signal handler or progress handler reaches."""
+
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.deadline = None
+        self.why = None
+        self.thread = None
+
+    def arm(self, seconds, why):
+        with self.cond:
+            self.deadline, self.why = time.monotonic() + seconds, why
+            if self.thread is None:
+                self.thread = threading.Thread(target=self._run, name="agentbus-watchdog", daemon=True)
+                self.thread.start()
+            self.cond.notify()
+
+    def disarm(self):
+        with self.cond:
+            self.deadline = None
+            self.cond.notify()
+
+    @contextmanager
+    def suspended(self):
+        """A test pause stops the clock, so a test holding a command at a pause point inside a
+        watched phase is not taken for a hang."""
+        with self.cond:
+            left = None if self.deadline is None else self.deadline - time.monotonic()
+            self.deadline = None
+            self.cond.notify()
+        try:
+            yield
+        finally:
+            if left is not None:
+                self.arm(max(left, 0.0), self.why)
+
+    def _run(self):
+        # The kernel may deliver a process signal (Ctrl-C) to any thread that does not block it (POSIX
+        # allows it; macOS and BSD do it). Python runs the handler only when the main thread next runs
+        # bytecode, which for watch, asleep in select() for up to its interval, is too late. Blocked
+        # here, signals reach the main thread and interrupt its system call.
+        import signal
+        if hasattr(signal, "pthread_sigmask"):
+            signal.pthread_sigmask(signal.SIG_BLOCK, signal.valid_signals())
+        with self.cond:
+            while True:
+                if self.deadline is None:
+                    self.cond.wait()
+                    continue
+                left = self.deadline - time.monotonic()
+                if left > 0:
+                    self.cond.wait(left)
+                    continue
+                why = self.why
+                break
+        exit_now(why)
+
+
+WATCHDOG = Watchdog()
+
+
+@contextmanager
+def watched(seconds, why):
+    WATCHDOG.arm(seconds, why)
+    try:
+        yield
+    finally:
+        WATCHDOG.disarm()
+
+
+# Test hooks, active only when their AGENTBUS_TEST_* variable is set; they never run otherwise.
+def _test_pause(point):
+    """Test hook: AGENTBUS_TEST_PAUSE=<point>=<dir> stops here until <dir>/<point>.go exists, after
+    creating <dir>/<point>.reached (O_EXCL|O_NOFOLLOW: never through a planted link). Only pauses;
+    it changes nothing. Used to make races deterministic."""
+    spec = os.environ.get("AGENTBUS_TEST_PAUSE", "")
+    if not spec.startswith(point + "="):
+        return
+    d = spec.split("=", 1)[1]
+    mark = os.path.join(d, point + ".reached")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW
+    try:
+        os.close(os.open(mark, flags, 0o600))
+    except FileExistsError:  # reached before, by this or an earlier command: a fresh mark
+        os.unlink(mark)
+        os.close(os.open(mark, flags, 0o600))
+    with WATCHDOG.suspended():
+        deadline = time.time() + 60
+        while not os.path.exists(os.path.join(d, point + ".go")) and time.time() < deadline:
+            time.sleep(0.02)
+
+
+def _test_slow():
+    """Test hook: AGENTBUS_TEST_SLOW=<seconds> stalls the command in Python with the bus held (the
+    clock keeps running, unlike a pause), as a slow loop over planted rows would."""
+    v = os.environ.get("AGENTBUS_TEST_SLOW")
+    if v:
+        time.sleep(float(v))
+
+
+# ---------- link-safe file handling ----------
+
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+# Every path a lane can write is opened with O_NONBLOCK too: a FIFO swapped in after check_node
+# would otherwise block the open (and the exclusive lock with it) forever, before any fstat.
+NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
+
+def _ident(st):
+    return (st.st_dev, st.st_ino)
+
+
+def _owned(st):
+    return not hasattr(os, "getuid") or st.st_uid == os.getuid()
+
+
+def check_node(path, kind, must_exist=False, optional=False):
+    """Refuse a path that is a symlink, the wrong type, not owned by the caller or (for files)
+    hard-linked elsewhere. kind is "file" or "dir". A sandboxed lane can write the .agentbus folder,
+    so it can plant links there; the brain must never follow one. Returns False if absent. With
+    optional=True (a bus file), a file caught mid-unlink (0 links: SQLite deleting -wal on another
+    connection's last close) raises _Vanished, so open_bus retries instead of refusing."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        if must_exist:
+            die(f"{path} is missing")
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        die(f"refusing {path}: it is a symlink")
+    if kind == "dir" and not stat.S_ISDIR(st.st_mode):
+        die(f"refusing {path}: not a directory")
+    if kind == "file" and not stat.S_ISREG(st.st_mode):
+        die(f"refusing {path}: not a regular file")
+    if not _owned(st):
+        die(f"refusing {path}: owned by another user")
+    if kind == "file" and st.st_nlink == 0 and optional:
+        raise _Vanished(path)
+    if kind == "file" and st.st_nlink != 1:
+        die(f"refusing {path}: it has {st.st_nlink} hard links")
+    return st
+
+
+def make_dir(path):
+    """mkdir 0700, tolerating a concurrent caller that made it first, then validate what is there.
+    Returns its lstat."""
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    return check_node(path, "dir", must_exist=True)
+
+
+class _Vanished(Exception):
+    """An optional bus file vanished or was replaced between its check and its open: an ordinary
+    race with another connection closing (SQLite deletes -wal on the last close). Validation starts
+    over inside open_bus's retry budget."""
+
+
+def chmod_nofollow(path, mode, kind, expect, optional=False):
+    """chmod through an fd opened with O_NOFOLLOW, so a symlink swapped in after the check is refused
+    by the kernel instead of followed. `expect` is check_node's lstat of the path: the opened node
+    must be that same node (device and inode) and, for a file, still have one link, so a hard link
+    swapped in after the check is refused too instead of having its outside target chmodded.
+    With optional=True (a bus file), a node that vanished or was replaced by another single-link
+    file raises _Vanished instead of exiting."""
+    flags = os.O_RDONLY | NOFOLLOW | NONBLOCK
+    if kind == "dir":
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    _test_pause("before-chmod-" + os.path.basename(path))
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError as e:
+        if optional:
+            raise _Vanished(path)
+        die(f"refusing {path}: {e.strerror}")
+    except OSError as e:
+        die(f"refusing {path}: {e.strerror}")
+    try:
+        _test_pause("after-chmod-open-" + os.path.basename(path))
+        st = os.fstat(fd)
+        if kind == "file" and not stat.S_ISREG(st.st_mode):
+            die(f"refusing {path}: not a regular file (it changed while opening)")
+        if (kind == "dir") != stat.S_ISDIR(st.st_mode) or not _owned(st):
+            die(f"refusing {path}: changed while opening")
+        if optional and st.st_nlink == 0:
+            raise _Vanished(path)  # unlinked after our open (SQLite deleting -wal on its last close)
+        if kind == "file" and st.st_nlink != 1:
+            die(f"refusing {path}: it has {st.st_nlink} hard links")
+        if _ident(st) != _ident(expect):
+            if optional:
+                raise _Vanished(path)
+            die(f"refusing {path}: changed while opening")
+        os.fchmod(fd, mode)
+    finally:
+        os.close(fd)
+
+
+def write_atomic(path, data, mode):
+    """Replace path with data: a fresh, randomly named temp file in the same folder, created with
+    O_CREAT|O_EXCL|O_NOFOLLOW (never an existing file or link), then os.replace."""
+    d = os.path.dirname(path)
+    tmp = os.path.join(d, f".{os.path.basename(path)}.{secrets.token_hex(8)}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, mode)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), mode)
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+SMALL = 4096  # VERSION: a version line
+TEXT_LIMIT = 1 << 20  # info/exclude and .gitignore, read only to look for the .agentbus rule
+
+
+def read_small(path, limit=SMALL):
+    """At most `limit` bytes of a text file, as text: opened without following a symlink and
+    without blocking (a FIFO swapped in after the caller's check never hangs the read), then
+    refused unless fstat says it is a regular file owned by the caller."""
+    _test_pause("before-read-" + os.path.basename(path))
+    fd = os.open(path, os.O_RDONLY | NOFOLLOW | NONBLOCK)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            die(f"refusing {path}: not a regular file")
+        if not _owned(st):
+            die(f"refusing {path}: owned by another user")
+        data = b""
+        while len(data) < limit:
+            chunk = os.read(fd, limit - len(data))
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        os.close(fd)
+    return data.decode("utf-8", "replace")
+
+
+# ---------- git ----------
+
+def git(args, cwd=None, timeout=10):
+    try:
+        return subprocess.run(["git", *args], capture_output=True, text=True, timeout=timeout, cwd=cwd)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+_GIT_OK = None
+
+
+def have_git():
+    """False when git is not installed. Dies when it is older than MIN_GIT: rev-parse
+    --path-format=absolute (2.31) is load-bearing, and older git echoes the flag back as output."""
+    global _GIT_OK
+    if _GIT_OK is None:
+        r = git(["--version"])
+        if r is None or r.returncode != 0:
+            _GIT_OK = False
+        else:
+            m = re.search(r"(\d+)\.(\d+)", r.stdout)
+            if not m or (int(m.group(1)), int(m.group(2))) < MIN_GIT:
+                die("needs git %d.%d or newer (found: %s)" % (MIN_GIT + (r.stdout.strip() or "unknown",)))
+            _GIT_OK = True
+    return _GIT_OK
+
+
+def repo_info(path=None):
+    """(main checkout, its info/exclude path) for the git repository at `path` (default: cwd), or
+    None outside a work tree. Every worktree of one repo maps to the same checkout, including repos
+    whose git dir is not named .git (--separate-git-dir, submodules and their worktrees).
+    A linked worktree of a --separate-git-dir repo, or of a bare repository, has no main checkout
+    git can name (git's own `worktree list` reports the git dir there), so it refuses."""
+    if not have_git():
+        return None
+    r = git(["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel"],
+            cwd=path, timeout=5)
+    if r is None or r.returncode != 0:
+        return None
+    lines = r.stdout.strip().splitlines()
+    if len(lines) != 3 or lines[0].startswith("--"):
+        die("needs git %d.%d or newer (rev-parse --path-format=absolute is not supported)" % MIN_GIT)
+    gitdir, common, top = (os.path.realpath(x) for x in lines)
+    # Not `rev-parse --git-path info/exclude`: git resolves a symlinked exclude to its target.
+    exclude = os.path.join(common, "info", "exclude")
+    if gitdir == common:
+        return top, exclude  # the main worktree itself
+    if os.path.basename(common) == ".git":
+        return os.path.dirname(common), exclude
+    wt = git(["--git-dir", common, "config", "--get", "core.worktree"])
+    if wt is not None and wt.returncode == 0 and wt.stdout.strip():
+        return os.path.realpath(os.path.join(common, wt.stdout.strip())), exclude  # a submodule
+    die(f"cannot find the main checkout for this worktree: its git dir {common} records none "
+        "(a linked worktree of a --separate-git-dir or bare repository). Set AGENTBUS_DB to "
+        "<main checkout>/.agentbus/bus.db.")
+
+
+def repo_root(path=None):
+    info = repo_info(path)
+    return info[0] if info else None
+
+
+def self_path():
+    return os.path.realpath(__file__)
+
+
+def is_repo_local_copy():
+    """True when this script is a project's own copy (<repo>/.agentbus/bin/agentbus)."""
+    return os.path.basename(os.path.dirname(os.path.dirname(self_path()))) == ".agentbus"
+
+
+def source_version():
+    """'<sha> <commit date>' when this script is tracked in a git checkout of the source repo (+dirty
+    with uncommitted changes), else the release version (an installed package)."""
+    here = os.path.dirname(self_path())
+    def g(*a):
+        r = git(["-C", here, *a])
+        return r.stdout.strip() if r is not None and r.returncode == 0 else ""
+    if not have_git() or not g("ls-files", "--error-unmatch", "--", self_path()):
+        return __version__
+    out = g("log", "-1", "--format=%H %cI")
+    if not out:
+        return __version__
+    if g("status", "--porcelain", "--", self_path()):
+        out += " +dirty"
+    return out
+
+
+_RULES = (".agentbus", ".agentbus/", "/.agentbus", "/.agentbus/")
+
+
+def gitignore_has_rule(root):
+    """True when the worktree's .gitignore (a file a lane can write) has the rule. Read like any
+    lane-writable file: no symlink followed, never blocking, regular files only; anything else
+    counts as no rule (the rule then goes in info/exclude)."""
+    gi = os.path.join(root, ".gitignore")
+    try:
+        fd = os.open(gi, os.O_RDONLY | NOFOLLOW | NONBLOCK)
+    except OSError:
+        return False
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return False
+        text = os.read(fd, TEXT_LIMIT).decode("utf-8", "replace")
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    return any(line.strip() in _RULES for line in text.splitlines())
+
+
+def ensure_exclude(exclude):
+    """Add .agentbus/ to the repo's info/exclude (local, never dirties the tree), never through a
+    symlinked info/ or exclude. Returns True when it added the rule."""
+    info = os.path.dirname(exclude)
+    if not check_node(info, "dir"):
+        make_dir(info)
+    text = read_small(exclude, TEXT_LIMIT) if check_node(exclude, "file") else ""
+    if any(line.strip() in _RULES for line in text.splitlines()):
+        return False
+    _test_pause("before-exclude-append")
+    # Opened like every lane-writable path (no link followed, never blocking: a FIFO swapped in
+    # after the read is refused, not waited on), then refused unless it is still a single-link
+    # regular file owned by the caller.
+    try:
+        fd = os.open(exclude, os.O_RDWR | os.O_APPEND | os.O_CREAT | NOFOLLOW | NONBLOCK, 0o644)
+    except OSError as e:
+        die(f"refusing {exclude}: {e.strerror}")
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            die(f"refusing {exclude}: not a regular file (it changed while opening)")
+        if not _owned(st):
+            die(f"refusing {exclude}: owned by another user")
+        if st.st_nlink != 1:
+            die(f"refusing {exclude}: it has {st.st_nlink} hard links")
+        # Concurrent first uses: an exclusive flock, then the file read again through this fd, so
+        # only the first of them appends the rule. Never waited on for long: a lock nobody
+        # releases makes this a refusal (a notice for an ordinary command).
+        lock_briefly(fd, exclude)
+        os.lseek(fd, 0, os.SEEK_SET)
+        text = _read_fd(fd, TEXT_LIMIT).decode("utf-8", "replace")
+        if any(line.strip() in _RULES for line in text.splitlines()):
+            return False
+        _write_fd_all(fd, (("" if not text or text.endswith("\n") else "\n") + ".agentbus/\n").encode())
+    finally:
+        os.close(fd)  # drops the flock
+    return True
+
+
+def lock_briefly(fd, path, seconds=2.0):
+    """An exclusive flock on fd, retried for at most `seconds`."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() > deadline:
+                die(f"refusing {path}: another process keeps it locked")
+            time.sleep(0.01)
+
+
+def _read_fd(fd, limit):
+    data = b""
+    while len(data) < limit:
+        chunk = os.read(fd, limit - len(data))
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+def _write_fd_all(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+
+
+def keep_excluded(root, exclude):
+    """ensure_exclude for an ordinary command: nothing to do when .gitignore or info/exclude already
+    has the rule, and a refused write (a sandboxed lane cannot write .git) is a notice, never fatal.
+    Returns True when it added the rule."""
+    try:
+        if gitignore_has_rule(root):
+            return False
+        return ensure_exclude(exclude)
+    except OSError as e:
+        note(f"could not add .agentbus/ to {exclude} ({e.strerror or e}); add it there or to .gitignore")
+    except SystemExit as e:  # refused: a link, a FIFO, another owner
+        note(f"could not add .agentbus/ to {exclude} ({reason(e)}); add it there or to .gitignore")
+    return False
+
+
+# ---------- install ----------
+
+def install_copy(root):
+    """Copy this script to <root>/.agentbus/bin/agentbus (0700) and write VERSION. Returns (old, new).
+    Refuses if .agentbus, bin, VERSION or bin/agentbus is a symlink or the wrong type: a lane that
+    can write .agentbus could otherwise point VERSION or bin at a file outside it."""
+    folder = os.path.join(root, ".agentbus")
+    bindir = os.path.join(folder, "bin")
+    vfile = os.path.join(folder, "VERSION")
+    dest = os.path.join(bindir, "agentbus")
+    for d in (folder, bindir):
+        chmod_nofollow(d, 0o700, "dir", make_dir(d))
+    check_node(dest, "file")
+    old = read_small(vfile).strip() if check_node(vfile, "file") else "none"
+    with open(self_path(), "rb") as f:
+        code = f.read()
+    write_atomic(dest, code, 0o700)
+    new = source_version()
+    write_atomic(vfile, (new + "\n").encode(), 0o600)
+    return old, new
+
+
+# The VERSION formats agentbus itself writes (source_version): a release (0.1.0, 0.2.0rc1,
+# 1.0.0.dev3, 1.0.0+local), or a source checkout's commit (SHA-1 or SHA-256) and its committer
+# date as git's %cI prints it, then " +dirty" when it had uncommitted changes.
+_SHOWN_VERSION = re.compile(
+    r"[0-9]{1,6}(?:\.[0-9]{1,6}){1,3}(?:(?:a|b|rc)[0-9]{1,6})?(?:\.post[0-9]{1,6})?(?:\.dev[0-9]{1,6})?"
+    r"(?:\+[a-z0-9]{1,20}(?:\.[a-z0-9]{1,20}){0,4})?"
+    r"|[0-9a-f]{40}(?:[0-9a-f]{24})? [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:Z|[+-][0-9]{2}:[0-9]{2})"
+    r"(?: \+dirty)?"
+    r"|none")  # what init reports when there was no VERSION
+
+
+def shown_version(v):
+    """A repo's old VERSION (a file a lane can write) as init and upgrade print it: as written when it
+    is one of the formats agentbus writes, else a placeholder. Nothing else a lane put there is
+    printed, so it cannot carry a forged row (`agentbus: refusing ...`, `#99 ...`) however the line
+    wraps."""
+    return v if _SHOWN_VERSION.fullmatch(v) else "(VERSION is not a version)"
+
+
+def cmd_init(a):
+    if is_repo_local_copy():
+        die("init runs from the installed agentbus or a clone of its repo, not a project copy")
+    root = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo or os.getcwd())))
+    if not os.path.isdir(root):
+        die(f"not a directory: {root}", "bad_input")
+    info = repo_info(root)
+    if info and os.path.realpath(info[0]) != root:
+        top = git(["rev-parse", "--show-toplevel"], cwd=root)
+        if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root:
+            die(f"{root} is a linked worktree; its commands use the main checkout's bus. Run: agentbus init {info[0]}")
+    # Only a checkout's top level gets an exclude rule; an arbitrary directory is a workspace.
+    top = git(["rev-parse", "--show-toplevel"], cwd=root) if info else None
+    exclude = info[1] if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root else None
+    parent = os.path.dirname(root)
+    outer = next(walk_buses(parent), None) if parent != root else None
+    folder = os.path.join(root, ".agentbus")
+    say = (lambda *x, **k: None) if a.json else show
+    old, new = install_copy(root)
+    version = shown_version(new)
+    if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})? .*", version):
+        version = version[:7] + (" +dirty" if version.endswith(" +dirty") else "")
+    say("installed agentbus {} into {}/.agentbus/", version, root)
+    added = ensure_exclude(exclude) if exclude else False
+    shared = gitignore_has_rule(root) if exclude else False
+    if added:
+        say("added .agentbus/ to {} (local only; the repo stays clean)", exclude)
+    if exclude and not shared:
+        say("optional: add `.agentbus/` to .gitignore to share that rule")
+    if outer:
+        say("outer bus: {}", outer)
+    say("next: cd {}", root)
+    say("next: .agentbus/bin/agentbus --as YOUR_NAME join")
+    if a.json:
+        print_json({"directory": root, "copy": os.path.join(folder, "bin", "agentbus"), "old": old, "new": new,
+                    "exclude_added": added, "gitignore_rule": shared, "outer": outer})
+
+
+def cmd_upgrade(a):
+    """Replace a bus folder's copy of the tool: DIR's, or by default the nearest bus's (found the
+    way every command finds its bus). Works for a repo or a workspace folder alike."""
+    if is_repo_local_copy():
+        die("upgrade runs from the installed agentbus or a clone of its repo; this is a project copy")
+    if a.repo:
+        root = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo)))
+        info = repo_info(root)
+        if info and os.path.realpath(info[0]) != root:
+            top = git(["rev-parse", "--show-toplevel"], cwd=root)
+            if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root:
+                root = os.path.realpath(info[0])  # a linked worktree: its bus is the main checkout's
+    else:
+        root = selected_bus(getattr(a, "up", 0))
+    if not (check_node(os.path.join(root, ".agentbus"), "dir") and check_node(os.path.join(root, ".agentbus", "bin"), "dir")
+            and check_node(os.path.join(root, ".agentbus", "bin", "agentbus"), "file")):
+        die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}")
+    old, new = install_copy(root)
+    if a.json:
+        print_json({"directory": root, "old": old, "new": new})
+    else:
+        show("{}: {} -> {}", root, shown_version(old), new, path_first=True)
+
+
+# ---------- opening the bus ----------
+
+def discovery_start():
+    """Map cwd in a linked worktree to the same relative directory in its main checkout."""
+    cwd = os.path.realpath(os.getcwd())
+    info = repo_info(cwd)
+    if info:
+        r = git(["rev-parse", "--show-toplevel"], cwd=cwd)
+        if r is None or r.returncode != 0:
+            die("cannot find this worktree's top level")
+        top = os.path.realpath(r.stdout.strip())
+        return os.path.normpath(os.path.join(info[0], os.path.relpath(cwd, top)))
+    return cwd
+
+
+def check_bus_folder(folder):
+    check_node(folder, "dir", must_exist=True)
+    check_node(os.path.join(folder, "VERSION"), "file")
+    check_node(os.path.join(folder, "bin"), "dir")
+
+
+def walk_buses(start):
+    """Nearest to outermost. A suspect .agentbus is refused, never silently skipped."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    directory = start
+    while True:
+        folder = os.path.join(directory, ".agentbus")
+        if directory != home and os.path.lexists(folder):
+            check_bus_folder(folder)
+            yield directory
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
+
+
+def explicit_db():
+    env = os.environ.get("AGENTBUS_DB")
+    return os.path.abspath(os.path.expanduser(env)) if env else None
+
+
+def selected_bus(up):
+    for level, directory in enumerate(walk_buses(discovery_start())):
+        if level == up:
+            return directory
+    if up:
+        die(f"no bus at --up {up}; no such outer bus", "no_bus")
+    die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus")
+
+
+def db_path(args):
+    """An explicit database wins over discovery and --up."""
+    path = explicit_db()
+    strict = path is None
+    if strict:
+        path = os.path.join(selected_bus(args.up), ".agentbus", "bus.db")
+    folder = os.path.dirname(path)
+    if os.path.basename(folder) == ".agentbus" and os.path.isdir(folder):
+        check_bus_folder(folder)
+        info = repo_info(os.path.dirname(folder))
+        if info and os.path.realpath(info[0]) == os.path.realpath(os.path.dirname(folder)):
+            keep_excluded(*info)
+    return path, strict
+
+
+def cmd_buses(a):
+    """List bus locations without opening or creating any database."""
+    path = explicit_db()
+    if path:
+        folder = os.path.dirname(path)
+        if os.path.basename(folder) == ".agentbus":
+            check_bus_folder(folder)
+        paths = [(os.path.dirname(folder) if os.path.basename(folder) == ".agentbus" else folder, path)]
+    else:
+        paths = [(d, os.path.join(d, ".agentbus", "bus.db")) for d in walk_buses(discovery_start())]
+        if not paths:
+            die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus")
+        if a.up >= len(paths):
+            die(f"no bus at --up {a.up}; no such outer bus", "no_bus")
+    rows = []
+    for level, (directory, db) in enumerate(paths):
+        exists = bool(check_node(db, "file"))
+        for suffix in SIDECARS:
+            check_node(db + suffix, "file")
+        if os.path.lexists(db + "-journal"):
+            die(f"refusing {db}-journal: agentbus never writes one; remove it after checking where it came from")
+        rows.append({"level": level, "directory": directory, "exists": exists})
+    if a.json:
+        print_json(rows)
+    else:
+        for row in rows:
+            show("{}  {}  bus.db {}", row["level"], row["directory"], "exists" if row["exists"] else "not created", row=True)
+
+
+SIDECARS = ("-wal", "-shm", "-journal")
+
+
+def check_bus(path, strict_dir):
+    """Before opening: the bus files and (for a .agentbus folder) the folder itself
+    must be real, owned by the caller and not links. Then tighten modes without following links."""
+    folder = os.path.dirname(path)
+    if strict_dir or os.path.basename(folder) == ".agentbus":
+        check_node(folder, "dir", must_exist=True)
+        if os.path.basename(folder) == ".agentbus":
+            check_node(os.path.join(folder, "VERSION"), "file")
+            check_node(os.path.join(folder, "bin"), "dir")
+    for suffix in ("",) + SIDECARS:
+        st = check_node(path + suffix, "file", optional=True)
+        if st:
+            chmod_nofollow(path + suffix, 0o600, "file", st, optional=True)
+    if os.path.lexists(path + "-journal"):
+        # agentbus never uses a rollback journal (WAL, converted with an in-memory journal); a
+        # journal here was planted, and SQLite would replay it.
+        die(f"refusing {path}-journal: agentbus never writes one; remove it after checking where it came from")
+
+
+def _linked_here(path):
+    """Identity of the regular, single-link, caller-owned file at path (not followed), else None.
+    A file SQLite holds open whose identity equals this is the file named in our folder, and with one
+    link it cannot also be some victim file elsewhere."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or not _owned(st):
+        return None
+    return _ident(st)
+
+
+def _open_files():
+    """{(fd, (dev, inode))} for every regular file this process has open. Keyed by identity as well
+    as number, because fd numbers are reused."""
+    try:
+        names = [int(n) for n in os.listdir("/dev/fd") if n.isdigit()]
+    except OSError:
+        die("cannot list /dev/fd to verify the bus files SQLite opened")
+    found = set()
+    for fd in names:
+        try:
+            st = os.fstat(fd)
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode):
+            found.add((fd, _ident(st)))
+    return found
+
+
+# Every bus another agent cannot open retries for BUSY_WAIT_S, so no command may hold one longer.
+# A lane that can write bus.db can always deny service (hold the lock with its own sqlite3 connection,
+# or delete the bus); what agentbus bounds is its OWN hold, whatever rows a lane planted:
+# - QUERY_BUDGET_S: all of a command's SQL on one connection, counted from the connect (so the open
+#   counts against it). A statement still running then is stopped, its write rolled back. 6 s, the
+#   same as OPEN_BUDGET_S: an honest command's SQL takes milliseconds, and the bound must leave room
+#   under BUSY_WAIT_S for the Python work around it.
+# - HOLD_GRACE_S more for everything else done with the lock held (Python loops, fetching and
+#   decoding rows): past QUERY_BUDGET_S + HOLD_GRACE_S from the connect, the hold watchdog ends the
+#   process, which releases the lock. 8 s in all.
+# Why 8 and not more: the lock is really free only after the stopped process is gone, which takes
+# up to exit_now's 1 s grace (stderr may be a full pipe) plus a slow machine's late watchdog wake-up
+# and process teardown. At 12 s that ate the whole 3 s margin on CI runners and the waiting agent
+# failed busy. 8 s leaves at least 5 s of slack against BUSY_WAIT_S even then. BUSY_WAIT_S itself
+# stays 15 s: agents running an older agentbus wait 15 s whatever this one says, so only a shorter
+# hold keeps the promise for them, and a longer wait only delays the report of a real stuck lock.
+BUSY_WAIT_S = 15.0
+QUERY_BUDGET_S = 6.0
+HOLD_GRACE_S = 2.0
+_TIMED_OUT = False
+
+
+def query_budget():
+    """QUERY_BUDGET_S. Test hook: AGENTBUS_TEST_DEADLINE=<seconds> can only shorten it."""
+    try:
+        v = float(os.environ.get("AGENTBUS_TEST_DEADLINE", ""))
+    except ValueError:
+        return QUERY_BUDGET_S
+    return min(max(v, 0.0), QUERY_BUDGET_S) if math.isfinite(v) else QUERY_BUDGET_S
+
+
+def hold_budget():
+    """How long a command may hold a bus, from its connect: the query budget plus HOLD_GRACE_S."""
+    return query_budget() + HOLD_GRACE_S
+
+
+def held_too_long_message(path):
+    return (f"{path}: this command held the bus for {hold_budget():g} s, the most agentbus allows (other agents "
+            f"wait {BUSY_WAIT_S:g} s for it), and was stopped; a write still in progress was not saved. Something "
+            "in the bus makes this command slow (a lane can write any rows); check the bus")
+
+
+def timed_out_message():
+    return (f"a bus query ran for more than {query_budget():g} s and was stopped (a write it was part of "
+            "was rolled back). Something in the bus makes queries this slow; a lane can write any rows")
+
+
+class Bus(sqlite3.Connection):
+    """A connection that knows which file it is on, so every write can first prove the path still
+    names that file."""
+    path = None
+    ident = None
+    pin = None  # our own O_NOFOLLOW fd on the bus file
+    deadline = None  # time.monotonic() after which every statement on this connection is stopped
+    guarded = False  # the hold watchdog is armed for this connection (open_bus)
+
+    def _progress(self):
+        """SQLite's progress handler: a non-zero return stops the running statement ("interrupted")."""
+        global _TIMED_OUT
+        if time.monotonic() > self.deadline:
+            _TIMED_OUT = True
+            return 1
+        return 0
+
+    def close(self):
+        # POSIX drops every lock a process holds on a file when ANY of its fds on that file is
+        # closed, so our fd may only be closed after SQLite's own.
+        try:
+            super().close()
+        finally:
+            if self.guarded:
+                self.guarded = False
+                WATCHDOG.disarm()
+            if self.pin is not None:
+                os.close(self.pin)
+                self.pin = None
+            if self in _HELD:
+                _HELD.remove(self)
+
+    def verify(self):
+        if _linked_here(self.path) != self.ident:
+            die(f"{self.path} changed while in use (replaced, linked or moved); refusing to write")
+
+
+def _audit(con, path, before, need_main):
+    """Every regular file this process gained since `before` must be the bus or its -wal, as named
+    in our folder right now. Catches a link swapped in between our checks and SQLite's own open."""
+    main = _linked_here(path)
+    if main is None or main != con.ident:
+        die_now(f"{path} changed while opening (replaced or linked); refusing to use it")
+    allowed = {main, _linked_here(path + "-wal")}
+    seen_main = False
+    for fd, idn in _open_files() - before:
+        if idn not in allowed:
+            die_now(f"{path}: SQLite opened a file that is not this bus (a link was swapped in); refusing")
+        seen_main = seen_main or idn == main
+    if need_main and not seen_main:
+        die_now(f"{path}: cannot find the file SQLite opened; refusing")
+
+
+def _open_once(path):
+    """One attempt. Returns a Bus holding the exclusive lock, or None if another process holds it."""
+    flags = os.O_RDWR | NOFOLLOW | NONBLOCK | os.O_CREAT
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as e:
+        die(f"refusing {path}: {e.strerror}")
+    owned = []
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or not _owned(st):
+            die(f"refusing {path}: not a single-link regular file owned by you")
+        os.fchmod(fd, 0o600)
+        # Our fd stays open until both audits are done, so SQLite's own fd for the file can never
+        # reuse its number and hide in the snapshot.
+        before = _open_files()
+        _test_pause("before-connect")
+        with watched(open_budget(), f"{path}: opening the bus did not finish within {open_budget():g} s, so the "
+                     "command was stopped. SQLite was blocked on a file in the bus folder (a FIFO or other "
+                     "special file planted at bus.db-journal, for example); check the folder"):
+            return _connect_watched(path, fd, st, before, owned)
+    finally:
+        if not owned:
+            os.close(fd)
+
+
+def _connect_watched(path, fd, st, before, owned):
+    """_open_once from the connect on, under the watchdog: every SQLite-internal open (the main
+    file, -wal, a hot -journal, a super-journal it names) happens in here. Returns the Bus or None.
+    Once the connection exists it owns fd (owned is set), and con.close() closes it."""
+    # mode=rw: SQLite never creates the main file itself (we just did, without following links).
+    con = sqlite3.connect("file:" + quote(path) + "?mode=rw", uri=True, timeout=0,
+                          isolation_level=None, factory=Bus)
+    con.path, con.ident, con.pin = path, _ident(st), fd
+    owned.append(con)
+    _HELD.append(con)
+    con.deadline = time.monotonic() + query_budget()
+    con.set_progress_handler(con._progress, 10000)
+    con.row_factory = sqlite3.Row
+    # A lane can store bytes that are not UTF-8 in a TEXT column; the default decoder then
+    # fails every query that reads the row. U+FFFD is visible and passes clean() unchanged.
+    con.text_factory = lambda b: b.decode("utf-8", "replace")
+    try:
+        # SQLite opens the main file at connect time; prove it is ours before any read or write.
+        _audit(con, path, before, need_main=True)
+        # The first statement, before any that could reach a view or trigger (a lane can add
+        # either to the bus): with trusted_schema OFF, SQLite refuses to run functions with
+        # side effects from them. It reads no file.
+        con.execute("PRAGMA trusted_schema=OFF")
+        # Exclusive locking before the first WAL access: SQLite then keeps the WAL index in heap
+        # memory and never opens -shm, so a planted -shm link is never touched.
+        con.execute("PRAGMA locking_mode=EXCLUSIVE")
+        con.execute("PRAGMA temp_store=MEMORY")  # statement journals and sorts never touch disk
+        _test_pause("before-first-read")
+        # The first read is a plain read: SQLite reads the header itself and opens -wal if the
+        # file is WAL. (Setting a journal mode before it would make SQLite convert a WAL file
+        # on that read, touching -wal before the audit below.)
+        con.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()  # takes the lock
+        _audit(con, path, before, need_main=False)
+        _test_pause("before-wal-convert")
+        # Decide from SQLite's own view after its read, never from a header we read ourselves
+        # (a lane can flip bytes 18-19 at any time). Not WAL (new or flipped): convert
+        # through an in-memory journal, so no -journal file is opened for writing.
+        if con.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+            con.execute("PRAGMA journal_mode=MEMORY")
+            con.execute("PRAGMA journal_mode=WAL").fetchone()
+            con.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+        _audit(con, path, before, need_main=False)
+        _test_pause("after-open")
+    except BaseException as e:
+        if not isinstance(e, SystemExit):
+            # Before a normal close (which may checkpoint into whatever -wal SQLite holds),
+            # prove SQLite holds only our files; otherwise exit without closing.
+            _audit(con, path, before, need_main=False)
+        con.close()
+        if isinstance(e, sqlite3.OperationalError) and ("locked" in str(e) or "busy" in str(e)):
+            return None
+        raise
+    return con
+
+
+def open_bus(path, strict_dir=False):
+    """Open a bus without ever letting SQLite write through a link a lane swapped in:
+    1. the folder and files are checked (no links, one owner, one link each);
+    2. the main file is opened by us with O_NOFOLLOW and SQLite only reopens it (mode=rw, no create);
+    3. after SQLite opens the main file, and again after it opens -wal, every regular file this
+       process holds must be one of the two files named in our folder (dev/inode, single link);
+    4. exclusive locking mode, so -shm is never used and nothing else holds the bus meanwhile;
+    5. every write transaction re-checks the path still names the opened file (Bus.verify).
+    Another process holding the bus makes this retry (closing in between) for up to 15 seconds.
+    The hold watchdog ends the process once the connection has
+    been open for hold_budget(): Python work with the lock held (the setup below, the command, its
+    fetches) is bounded too, not only its SQL."""
+    folder = os.path.dirname(path)
+    if not os.path.lexists(folder):
+        os.makedirs(os.path.dirname(folder), exist_ok=True)
+        make_dir(folder)
+    deadline = time.time() + BUSY_WAIT_S
+    while True:
+        try:
+            check_bus(path, strict_dir)
+        except _Vanished as e:
+            if time.time() > deadline:
+                die(f"refusing {e}: it keeps vanishing or changing while being checked")
+            time.sleep(random.uniform(0.002, 0.03))
+            continue
+        con = _open_once(path)
+        if con is not None:
+            break
+        _test_pause("lock-retry")
+        if time.time() > deadline:
+            die(f"{path} stayed busy for {BUSY_WAIT_S:g} seconds. "
+                "Close any sqlite3 shell or dashboard holding it open, then retry.", "busy", bus=path)
+        time.sleep(random.uniform(0.002, 0.03))
+    con.guarded = True
+    WATCHDOG.arm(max(con.deadline + HOLD_GRACE_S - time.monotonic(), 0.0), held_too_long_message(path))
+    try:
+        con.execute("PRAGMA busy_timeout=15000")
+        con.execute("PRAGMA foreign_keys=ON")
+        with immediate(con):
+            # First, before any statement that could fire a trigger or read a view: a lane can
+            # add either (or a table or index) to the bus, and it would run here, unsandboxed.
+            check_objects(con)
+            # Then, still before any write: every table that exists has agentbus's own shape
+            # before creating anything in an empty bus.
+            check_schema(con, before_setup=True)
+            create_schema(con, indexes=False)
+            check_objects(con, index_sql=True)
+            create_schema(con)
+            check_schema(con)
+            normalize_stored_claims(con)
+    except BaseException:
+        con.close()
+        raise
+    return con
+
+
+def create_schema(con, indexes=True):
+    """Create SCHEMA's tables and (indexes=True) indexes, also used for reference shapes."""
+    stmts = [x for x in SCHEMA.split(";") if x.strip()]
+    for stmt in [x for x in stmts if "CREATE TABLE" in x]:
+        con.execute(stmt)
+    if indexes:
+        for stmt in [x for x in stmts if "CREATE TABLE" not in x]:
+            con.execute(stmt)
+
+
+# SQL text as tokens, for comparing a table's definition with agentbus's whatever its spacing,
+# case, comments or identifier quoting: the clauses no pragma reports (CHECK, COLLATE on a column
+# no index covers, ON CONFLICT, WITHOUT ROWID, STRICT) are then caught as tokens agentbus's lacks.
+_SQL_TOKEN = re.compile(r"""\s+|--[^\n]*|/\*.*?(?:\*/|\Z)|'(?:[^']|'')*'|"(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|\w+|.""",
+                        re.S)
+
+
+def sql_tokens(sql):
+    out = []
+    for m in _SQL_TOKEN.finditer(str(sql or "")):
+        t = m.group()
+        if t[0].isspace() or t.startswith("--") or t.startswith("/*"):
+            continue
+        if t[0] in "\"`" and len(t) > 1:
+            t = t[1:-1].replace(t[0] * 2, t[0]).lower()  # a quoted identifier is the identifier
+        elif t[0] == "[" and len(t) > 1:
+            t = t[1:-1].lower()
+        elif t[0] != "'":
+            t = t.lower()
+        out.append(t)
+    return tuple(out)
+
+
+def _qid(name):
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def table_shape(con, t):
+    """Everything about table t that changes what agentbus's statements do, from SQLite's own
+    pragmas (formatting-independent), plus its definition as tokens; None when t does not exist."""
+    cols = tuple(tuple(r)[1:] for r in con.execute(f"PRAGMA table_xinfo({_qid(t)})"))
+    if not cols:
+        return None
+    auto, named = {}, {}
+    for r in con.execute(f"PRAGMA index_list({_qid(t)})").fetchall():
+        _, name, unique, origin, part = tuple(r)[:5]
+        info = (unique, origin, part, tuple(tuple(x) for x in con.execute(f"PRAGMA index_xinfo({_qid(name)})")))
+        (named if origin == "c" else auto)[name] = info
+    fks = tuple(sorted(tuple(r)[2:] for r in con.execute(f"PRAGMA foreign_key_list({_qid(t)})")))
+    sql = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()
+    return {"columns": cols, "auto": auto, "named": named, "fks": fks, "sql": sql_tokens(sql[0] if sql else "")}
+
+
+@lru_cache(maxsize=1)
+def reference_shapes():
+    """Current table shapes, built in memory by the real creation path."""
+    ref = sqlite3.connect(":memory:")
+    try:
+        create_schema(ref)
+        return {t: table_shape(ref, t) for t in TABLES}
+    finally:
+        ref.close()
+
+
+_COLUMN_FIELDS = ("name", "type", "notnull", "default", "pk", "hidden")
+
+
+def _fk_text(fks):
+    return "; ".join(f"{f} -> {tb}({to}) on update {u} on delete {d} match {m}" for tb, f, to, u, d, m in fks) or "none"
+
+
+def _index_text(name, info):
+    unique, origin, part, cols = info
+    keys = ", ".join(f"{c[2]}{' DESC' if c[3] else ''} COLLATE {c[4]}" for c in cols if c[5])
+    return f"{'unique ' if unique else ''}{'partial ' if part else ''}index {name} ({origin}) on ({keys})"
+
+
+def shape_difference(have, want):
+    """What differs between two table shapes, as text, or None when they are the same (named
+    indexes aside: check_schema reports those as the index they are)."""
+    hc, wc = have["columns"], want["columns"]
+    if hc != wc:
+        hn, wn = [c[0] for c in hc], [c[0] for c in wc]
+        missing, extra = [n for n in wn if n not in hn], [n for n in hn if n not in wn]
+        if missing:
+            return "no column " + ", ".join(map(str, missing))
+        if extra:
+            return "extra column " + ", ".join(map(str, extra))
+        if hn != wn:
+            return f"columns in the order ({', '.join(map(str, hn))}), not ({', '.join(map(str, wn))})"
+        for h, w in zip(hc, wc):
+            for i, field in enumerate(_COLUMN_FIELDS):
+                if h[i] != w[i]:
+                    return f"column {h[0]} has {field} {h[i]!r}, not {w[i]!r}"
+    if have["auto"] != want["auto"]:
+        for name in sorted(set(have["auto"]) | set(want["auto"]), key=str):
+            h, w = have["auto"].get(name), want["auto"].get(name)
+            if h != w:
+                if w is None:
+                    return "extra " + _index_text(name, h)
+                if h is None:
+                    return "no " + _index_text(name, w)
+                return f"{_index_text(name, h)}, not {_index_text(name, w)}"
+    if have["fks"] != want["fks"]:
+        return f"foreign keys {_fk_text(have['fks'])}, not {_fk_text(want['fks'])}"
+    if have["sql"] != want["sql"]:
+        h, w = have["sql"], want["sql"]
+        i = next((k for k in range(min(len(h), len(w))) if h[k] != w[k]), min(len(h), len(w)))
+        return (f"its definition has {' '.join(h[i:i + 4]) or 'nothing'!r} where agentbus's has "
+                f"{' '.join(w[i:i + 4]) or 'nothing'!r}")
+    return None
+
+
+def check_schema(con, before_setup=False):
+    """Exit cleanly unless every table has agentbus's own shape: the same columns (name, type,
+    NOT NULL, default, primary key, hidden), the same indexes including SQLite's automatic ones
+    (unique, origin, partial, columns, collation, order), the same foreign keys and actions, and
+    the same definition token for token (no CHECK, COLLATE, ON CONFLICT, GENERATED, WITHOUT ROWID
+    or STRICT agentbus's lacks). A lane can rebuild a table: `body ... UNIQUE ON CONFLICT REPLACE`
+    made every post delete earlier posts with the same text, and `sender REFERENCES agents(name) ON
+    DELETE CASCADE` made a leave delete that agent's messages. With before_setup (no write has
+    run yet), a missing index is fine (it is about to be created), and so are missing tables, but
+    only all of them: a new bus. This release creates all seven tables at once, in one transaction, so an existing bus that lacks one was
+    changed by a lane (or another tool); recreating it empty would hide that."""
+    accepted = reference_shapes()
+    shapes = {t: table_shape(con, t) for t in TABLES}
+    missing = [t for t in TABLES if shapes[t] is None]
+    if missing and (not before_setup or len(missing) < len(TABLES)):
+        die(f"bus schema is not agentbus's: {'table' if len(missing) == 1 else 'tables'} "
+            f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing. A lane (or another tool) "
+            f"dropped {'it' if len(missing) == 1 else 'them'}; restore the bus from a copy, or move it aside to start a new one", "schema_refused")
+    for t in TABLES:
+        have = shapes[t]
+        if have is None:
+            continue
+        want = accepted[t]
+        diff = shape_difference(have, want)
+        if diff is not None:
+            die(f"bus schema is not agentbus's: table {t} differs ({diff})", "schema_refused")
+        for name, info in have["named"].items():
+            if want["named"].get(name) != info:
+                unexpected("index", name)
+        if not before_setup and set(have["named"]) != set(want["named"]):
+            die(f"bus schema is not agentbus's: table {t} differs (no index "
+                f"{', '.join(sorted(set(want['named']) - set(have['named'])))})", "schema_refused")
+    seq = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'").fetchone()
+    if seq and sql_tokens(seq[0]) != ("create", "table", "sqlite_sequence", "(", "name", ",", "seq", ")"):
+        die("bus schema is not agentbus's: table sqlite_sequence differs (its definition is not SQLite's own)", "schema_refused")
+
+
+def unexpected(typ, name):
+    die(f"bus schema is not agentbus's: unexpected {typ} {name}. A lane (or another tool) added it; "
+        "agentbus does not run schema objects it did not create. Check what it is, then drop it", "schema_refused")
+
+
+def _sql_words(sql):
+    return " ".join(str(sql).replace("(", " ( ").replace(")", " ) ").replace(",", " , ").split()).lower()
+
+
+@lru_cache(maxsize=1)
+def reference_indexes():
+    """{index name: (its table, its CREATE statement, normalised)} for the indexes SCHEMA names."""
+    ref = sqlite3.connect(":memory:")
+    try:
+        ref.executescript(SCHEMA)
+        return {r[0]: (r[1], _sql_words(r[2])) for r in
+                ref.execute("SELECT name, tbl_name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL")}
+    finally:
+        ref.close()
+
+
+def check_objects(con, index_sql=False):
+    """Exit cleanly when the bus holds a schema object agentbus did not create: a trigger, a view,
+    a virtual table, or a table or index by a name SCHEMA does not use (or a named index that is not
+    SCHEMA's own). Expected besides SCHEMA's tables and indexes: SQLite's sqlite_sequence and the
+    automatic indexes behind a PRIMARY KEY (check_schema then compares those by shape). Triggers
+    and views run inside the caller's connection (a trigger rewrote a brain's post; one looped
+    forever holding the lock), so this runs before any statement that could fire or read one.
+    Matched by exact type and name. A named index is also compared by its definition with
+    index_sql=True, which runs after check_schema, so a renamed column (which rewrites the index
+    over it) is reported as the column it is."""
+    named = reference_indexes()
+    for typ, name, tbl, sql in con.execute("SELECT type, name, tbl_name, sql FROM sqlite_master").fetchall():
+        if typ == "table" and (name in TABLES or name == "sqlite_sequence") and tbl == name \
+                and isinstance(sql, str) and _sql_words(sql).startswith("create table "):
+            continue
+        if typ == "index" and isinstance(name, str) and name.startswith("sqlite_autoindex_") \
+                and sql is None and tbl in TABLES:
+            continue
+        if typ == "index" and name in named and (not index_sql or (tbl, _sql_words(sql)) == named[name]):
+            continue
+        unexpected(typ, name)
+
+
+@contextmanager
+def immediate(con):
+    """One write transaction, taken up front so a check and the write it guards cannot interleave
+    with another agent's, and verified first: the path must still name the file this connection
+    holds."""
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        if isinstance(con, Bus):
+            con.verify()
+        yield
+    except BaseException as e:
+        if _TIMED_OUT:
+            con.set_progress_handler(None, 0)  # or the ROLLBACK would be stopped too
+        if con.in_transaction:
+            con.execute("ROLLBACK")
+        if isinstance(e, sqlite3.OperationalError) and "full" in str(e):
+            full = id_exhausted(con)
+            if full:
+                die(full)
+        raise
+    con.execute("COMMIT")
+
+
+MAX_ID = 2 ** 63 - 1
+AUTOINCREMENT_TABLES = ("messages", "context_history", "log")
+
+
+def id_exhausted(con):
+    """Why an insert failed with "database or disk is full" when the cause is an id, else None. With
+    AUTOINCREMENT, SQLite gives up once a table's largest id (or its sqlite_sequence entry) is
+    2**63-1, which only a lane writing the row directly can reach; every insert then fails. The
+    comparison is SQLite's own (CAST, as AUTOINCREMENT reads seq), so a seq stored as TEXT, REAL or
+    BLOB counts exactly when SQLite would count it."""
+    seq = {}
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'").fetchone():
+        seq = {r[0]: r[1] for r in con.execute(
+            "SELECT name, typeof(seq) FROM sqlite_sequence WHERE CAST(seq AS INTEGER) >= ?", (MAX_ID,))}
+    full, odd = [], []
+    for t in AUTOINCREMENT_TABLES:
+        top = con.execute(f'SELECT MAX(id) >= ? FROM "{t}"', (MAX_ID,)).fetchone()[0]
+        if top or t in seq:
+            full.append(t)
+            if t in seq and seq[t] != "integer":
+                odd.append(f"{t} ({seq[t].upper()})")
+    if not full:
+        return None
+    return (f"cannot add a row: {'table' if len(full) == 1 else 'tables'} {', '.join(full)} {'has' if len(full) == 1 else 'have'} reached id {MAX_ID} (2**63-1), the largest SQLite "
+            "allows, so every insert into it fails (\"database or disk is full\"). Only a lane writing rows "
+            "directly can get there: check that row, delete it and lower its sqlite_sequence entry"
+            + (f". Not an integer in sqlite_sequence, read as one: {', '.join(odd)}" if odd else ""))
+
+
+# ---------- claims: resources ----------
+
+# Resources with a scheme prefix (issue:17, table:tenants, area:billing) are opaque names compared
+# exactly. Anything else is a bus-relative path, stored normalised: a claim on X covers X/...
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+._-]*:")
+# The longest resource `claim` takes, in characters. Text a lane stored in any field is cut to this
+# length wherever agentbus builds text from it with the bus held (log rows, a refusal naming a
+# holder), so a planted 100 MB name never becomes a 100 MB log row or error.
+RESOURCE_MAX = 1024
+# The byte length of a stored value, from its record header when SQLite has octet_length (3.43+):
+# length() reads the whole value first, which for a planted 100 MB name is 100 MB per row per open.
+BYTE_LENGTH = "octet_length" if sqlite3.sqlite_version_info >= (3, 43) else "length"
+
+
+def cut(col, n=RESOURCE_MAX):
+    """SQL for column col, cut to n characters (text a lane stored can be any length), marked with
+    `...` when it was longer."""
+    return f"(CASE WHEN length({col}) > {n} THEN substr({col}, 1, {n}) || '...' ELSE {col} END)"
+
+
+def is_path(resource):
+    return not _SCHEME.match(resource)
+
+
+def norm_resource(resource, strict=True):
+    """The stored form of a claimed resource. Paths: posixpath.normpath, no leading ./, a trailing /
+    kept as the folder marker; absolute paths and paths that climb out with .. are refused (a claim
+    must name the same thing in every worktree). With strict=False (rows planted directly)
+    a bad path comes back unchanged instead of exiting."""
+    if strict and len(resource) > RESOURCE_MAX:
+        die(f"cannot claim a resource of {len(resource)} characters: at most {RESOURCE_MAX}", "bad_input")
+    if not is_path(resource):
+        return resource
+    def bad(why):
+        if strict:
+            die(f"cannot claim '{resource}': {why}", "bad_input")
+        return resource
+    if resource.startswith("/"):
+        return bad("use a bus-relative path, not an absolute one")
+    n = posixpath.normpath(resource)
+    if n in ("", "."):
+        return bad("name a path inside the bus directory")
+    if n == ".." or n.startswith("../"):
+        return bad("it climbs out of the bus directory")
+    return n + "/" if resource.endswith("/") else n
+
+
+# A text resource posixpath.normpath (or the folder-marker rule) could rewrite: an empty, . or ..
+# component, a doubled slash, or a doubled trailing slash. Everything else is stored as
+# norm_resource would store it, so the common open reads no claim at all. A resource longer than
+# `claim` takes (RESOURCE_MAX characters, so at most 4 bytes each) is skipped by its header length
+# before any GLOB reads it: no version of agentbus stored one, and a planted 100 MB name would
+# otherwise be read eight times per open. It stays as it is, for `claims` to show and `release` or
+# `leave` to remove.
+_NEEDS_NORM = (f"typeof(resource)='text' AND {BYTE_LENGTH}(resource) <= {4 * RESOURCE_MAX} AND (resource GLOB '*//*' "
+               "OR resource GLOB './*' OR resource GLOB '*/./*' "
+               "OR resource GLOB '*/.' OR resource GLOB '*/../*' OR resource GLOB '*/..' OR resource IN ('.', '..') "
+               "OR resource GLOB '../*')")
+NORMALIZE_BATCH = 500
+
+
+def normalize_stored_claims(con):
+    """Rewrite unnormalised claims planted directly (./a//b.py) in their normalised form, inside the
+    caller's transaction. Two rows that become one keep the later expiry; the dropped holder and
+    resource are logged, since they may be another agent's claim."""
+    # Only rows norm_resource could change are read: one scan in SQLite (under the query budget),
+    # then at most NORMALIZE_BATCH rows per open in Python, so a lane that planted many such rows
+    # never holds the lock for long; the rest are normalised by the next opens, and overlaps()
+    # normalises whatever it compares in the meantime. _raw: the stored bytes, so a row whose text
+    # is not UTF-8 (read back with U+FFFD) is still deleted by its real value.
+    # The row's other fields are read cut (cut()) and copied by SQL, never through Python whole.
+    for r in con.execute(f"SELECT resource, CAST(resource AS BLOB) AS _raw, {cut('agent')} AS agent, "
+                         f"{cut('expires_at')} AS expires_at, typeof(expires_at) AS et FROM claims WHERE {_NEEDS_NORM} LIMIT ?",
+                         (NORMALIZE_BATCH,)).fetchall():
+        if not isinstance(r["resource"], str) or r["et"] != "text":
+            continue  # not a row any version of this tool wrote; left for claims to show
+        n = norm_resource(r["resource"], strict=False)
+        if n == r["resource"]:
+            continue
+        other = con.execute(f"SELECT {cut('agent')}, {cut('expires_at')}, typeof(expires_at) FROM claims WHERE resource=?",
+                            (n,)).fetchone()
+        if other and (other[2] != "text" or other[1] >= r["expires_at"]):
+            con.execute("DELETE FROM claims WHERE resource=CAST(? AS TEXT)", (r["_raw"],))
+            log(con, r["agent"], "claim", f"{r['resource']} held by {r['agent']} until {r['expires_at']} dropped: "
+                f"it normalises to {n}, held by {other[0]} until {other[1]} (normalised)")
+            continue
+        if other:
+            log(con, other[0], "claim", f"{n} held by {other[0]} until {other[1]} dropped: {r['resource']}, "
+                f"held by {r['agent']} until {r['expires_at']}, normalises to it and expires later (normalised)")
+        con.execute("INSERT OR REPLACE INTO claims(resource,agent,purpose,claimed_at,expires_at) "
+                    "SELECT ?, agent, purpose, claimed_at, expires_at FROM claims WHERE resource=CAST(? AS TEXT)",
+                    (n, r["_raw"]))
+        con.execute("DELETE FROM claims WHERE resource=CAST(? AS TEXT)", (r["_raw"],))
+        log(con, r["agent"], "claim", f"{r['resource']} renamed to {n} (normalised)")
+
+
+def overlap_filters(res):
+    """[(SQL condition, params)] that together match every stored claim overlapping res (normalised):
+    the same resource, or (paths) a folder holding it or a path inside it, with or without the
+    trailing /. Each is an equality or a range on the resource index, so SQLite reads only the
+    claims that overlap, never every claim a lane planted. The folders above res are matched in
+    chunks, so no statement carries more parameters than any SQLite build allows (999 before 3.32)."""
+    if not is_path(res):
+        return [("resource=?", [res])]
+    s = res.rstrip("/")
+    parts = s.split("/")
+    forms = []
+    for i in range(1, len(parts) + 1):
+        folder = "/".join(parts[:i])
+        forms += [folder, folder + "/"]
+    out = [(f"resource IN ({','.join('?' * len(forms[k:k + 400]))})", forms[k:k + 400])
+           for k in range(0, len(forms), 400)]
+    # Everything inside s: the text that starts with s + "/" ("0" is the character after "/").
+    out.append(("resource >= ? AND resource < ?", [s + "/", s + "0"]))
+    return out
+
+
+AUTO_RELEASE_SHOWN = 20  # stale claims a claim lists (output, log rows) when it releases them
+UNDECODED_SCAN = 1000  # rows read to match a resource with U+FFFD against stored bytes that are not UTF-8
+
+
+def overlaps(x, y):
+    """Two claims conflict when they name the same resource, or one path is a folder holding the other
+    (with or without the trailing /)."""
+    x, y = norm_resource(x, strict=False), norm_resource(y, strict=False)
+    if not (is_path(x) and is_path(y)):
+        return x == y
+    x, y = x.rstrip("/"), y.rstrip("/")
+    return x == y or y.startswith(x + "/") or x.startswith(y + "/")
+
+
+def undecoded_overlaps(con, res, name, t):
+    """Stored claims whose bytes are not UTF-8 but read (with U+FFFD) as overlapping res: only
+    possible when res holds U+FFFD, since the SQL filters compare bytes. Candidates are the claims
+    from res's text before its first U+FFFD up to that prefix followed by 0xFF 0xFF (above every UTF-8
+    byte), an index range, at most UNDECODED_SCAN of them. Returns [(raw bytes, row)]."""
+    if "\ufffd" not in res:
+        return []
+    p = res[:res.index("\ufffd")]
+    rows = con.execute(f"SELECT CAST(resource AS BLOB) AS _raw, resource, {cut('agent')} AS agent, "
+                       f"{cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
+                       "WHERE resource >= ? AND resource < CAST(? AS TEXT) AND typeof(resource)='text' "
+                       "AND agent<>? AND expires_at>? LIMIT ?",
+                       (p, p.encode() + b"\xff\xff", name, t, UNDECODED_SCAN)).fetchall()
+    out = []
+    for r in rows:
+        raw = bytes(r["_raw"])
+        try:
+            raw.decode("utf-8")
+            continue  # valid UTF-8: the SQL filters already compared it
+        except UnicodeDecodeError:
+            pass
+        if len(r["resource"]) <= RESOURCE_MAX and overlaps(r["resource"], res):
+            out.append((raw, r))
+    return out
+
+
+def _is_text(param):
+    """SQL comparing to a parameter as text (a stored BLOB never equals it)."""
+    return f"CAST({param} AS TEXT)"
+
+
+def same_path_forms(res):
+    """Every stored spelling of one path resource: with and without the folder marker."""
+    if not is_path(res):
+        return [res]
+    s = res.rstrip("/")
+    return [s, s + "/"]
+
+
+# ---------- commands ----------
+
+def ident(args):
+    return args.as_ or os.environ.get("AGENTBUS_AGENT") or None
+
+
+def me(args):
+    name = ident(args)
+    if not name:
+        die("say who you are with --as NAME or AGENTBUS_AGENT=NAME", "bad_input")
+    return name
+
+
+def touch(con, name):
+    with immediate(con):
+        con.execute("UPDATE agents SET last_seen=? WHERE name=?", (now(), name))
+
+
+def log(con, agent, action, detail=""):
+    return con.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", (now(), agent, action, detail)).lastrowid
+
+
+def clean_row(r):
+    """Every field escaped for the terminal; only a message body keeps its newlines. A lane can
+    store any SQLite type in any column: numbers stay numbers, NULL (allowed in several columns,
+    and in any column of a table a lane rebuilt) is shown empty, anything else (a BLOB) is shown as
+    its repr. (--json does the same through json.dumps(default=repr); non-finite floats become strings.)"""
+    def one(k, v):
+        if isinstance(v, str):
+            return clean(v, newlines=(k == "body"))
+        if v is None:
+            return ""
+        if isinstance(v, (int, float)):
+            return v
+        return clean(repr(v), backslash=False)  # repr already shows a backslash as \\\\
+    return {k: one(k, v) for k, v in r.items()}
+
+
+def jsonable(v):
+    """v with every non-finite float (a lane can store inf or -inf in any column) as its string,
+    so json.dumps(allow_nan=False) never emits Infinity or NaN, which are not JSON."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return repr(v)
+    if isinstance(v, dict):
+        return {k: jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [jsonable(x) for x in v]
+    return v
+
+
+def print_json(obj):
+    """One JSON value, encoded after the bus is closed (obj holds plain values by then)."""
+    later(lambda: print(json.dumps(jsonable(obj), indent=2, default=repr, allow_nan=False)))
+
+
+def emit(a, obj, template, *fields):
+    """Exactly one JSON value under --json, else one human line authored by show()."""
+    if a.json:
+        print_json(obj)
+    else:
+        show(template, *fields)
+
+
+# Listings stop at this many rows unless --limit says otherwise: a lane can add rows without
+# bound, and every row is formatted (and every --json row encoded) for the reader.
+DEFAULT_LIMIT = 500
+
+
+def capped(con, sql, params, limit):
+    """(the first `limit` rows of sql, how many more it has). A negative limit means no limit, as
+    SQLite's LIMIT does. Counted only when there are more."""
+    params = list(params)
+    if limit < 0:
+        return con.execute(sql, params).fetchall(), 0
+    n = min(limit, MAX_ID - 1)
+    rows = con.execute(sql + " LIMIT ?", params + [n + 1]).fetchall()
+    if len(rows) <= n:
+        return rows, 0
+    total = con.execute(f"SELECT COUNT(*) FROM ({sql})", params).fetchone()[0]
+    return rows[:n], max(total - n, 1)
+
+
+def out(args, rows, fmt, more=0, empty=None, earlier=False, unread=False):
+    """A listing with an empty state and a directional truncation hint. JSON stays an array.
+    Rows are copied now and formatted only after the bus is closed."""
+    rows = [dict(r) for r in rows]
+    if args.json:
+        print_json(rows)
+        if more:
+            note(f"{more} more not shown (use --limit)")
+        return
+
+    if more and earlier:
+        show("... {} earlier (use --limit)", more, row=True)
+
+    def render():
+        formatter = table_formatter(rows, fmt) if fmt in (fmt_who, fmt_claim) else fmt
+        for r in rows:
+            print(formatter(clean_row(r)))
+    later(render)
+    if not rows and not more and empty:
+        show("{}", empty, row=True)
+    if more and not earlier:
+        if unread:
+            show("... {} more unread; run inbox again", more, row=True)
+        else:
+            show("... {} more (use --limit)", more, row=True)
+
+
+def read_body(parts, command):
+    """The body from the arguments, or from stdin when it is exactly `-`. Only `-` reads stdin: an
+    agent passing an empty variable gets an empty-body error, never a command waiting on its stdin. Stdin
+    is read as bytes; bytes that are not UTF-8 become U+FFFD."""
+    body = " ".join(parts).strip()
+    if body == "-":
+        _test_pause("before-stdin-read")
+        if sys.stdin is None:
+            die("body is `-` but stdin is closed", "bad_input")
+        body = sys.stdin.buffer.read().decode("utf-8", "replace").strip()
+    if not body:
+        die(f'empty message. Use {command} "text", or pipe text to {command} -.', "bad_input")
+    return body
+
+
+LIVE_WINDOW_MIN = 30
+
+
+def cmd_join(con, a):
+    name = me(a)
+    t = now()
+    with immediate(con):
+        # A name seen in the last LIVE_WINDOW_MIN minutes may belong to another live session; joining
+        # under it would overwrite that session's roster entry and let this one act as it.
+        row = con.execute("SELECT last_seen FROM agents WHERE name=?", (name,)).fetchone()
+        if row and not a.takeover:
+            try:
+                seen = datetime.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                mins = (datetime.now(timezone.utc) - seen).total_seconds() / 60
+            except (TypeError, ValueError):
+                mins = LIVE_WINDOW_MIN  # not a time this tool wrote: counts as stale
+            # A last_seen in the future is not a time this tool wrote either (a lane can set it):
+            # stale, or the name would stay locked until then.
+            if 0 <= mins < LIVE_WINDOW_MIN:
+                age = "less than a minute" if mins < 1 else f"{int(mins)} min"
+                die(f"{name} was active {age} ago and may be another live session. "
+                    f"Pick your own name, or pass --takeover only if that session is you.", "bad_input")
+        con.execute(
+            """INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen)
+               VALUES(?,?,?,?,?,?,?,?)
+               ON CONFLICT(name) DO UPDATE SET tool=excluded.tool, model=excluded.model, cwd=excluded.cwd,
+                 branch=excluded.branch, role=excluded.role, last_seen=excluded.last_seen""",
+            (name, a.tool, a.model, a.cwd or cwd_text(), a.branch, a.role, t, t))
+        ensure_cursor(con, name)
+        log(con, name, "join", json.dumps({"tool": a.tool, "model": a.model, "branch": a.branch, "role": a.role}))
+    g = current_goal(con)
+    emit(a, {"joined": name, "bus": a._db, "goal": g}, "joined as {} on {}", name, a._db)
+    if g and not a.json:
+        show("goal: {}", g["goal"])
+
+
+def cwd_text():
+    """The working directory as text SQLite accepts: bytes that are not UTF-8 shown as U+FFFD."""
+    return os.getcwd().encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
+def ensure_cursor(con, name):
+    """A new name's cursor: every message addressed to it since the bus began, broadcasts from now."""
+    con.execute("INSERT OR IGNORE INTO cursors(agent,last_read_id,bcast_from) "
+                "VALUES(?,0,(SELECT COALESCE(MAX(id),0) FROM messages))", (name,))
+
+
+def release_all(con, name):
+    """Delete every claim `name` holds, inside the caller's transaction. Returns (the first
+    DEFAULT_LIMIT resources, in order, each cut to RESOURCE_MAX characters, and how many there
+    were): a lane can plant any number of claims of any length under a name, and they are listed,
+    logged and printed only up to the cap.
+    Ordered by the first RESOURCE_MAX + 1 characters (then rowid), the same order for every name
+    within the cap: ORDER BY resource made SQLite walk the resource index, reading every planted
+    name whole from the index and again from the table (1 GB for 500 names of 1 MB); this scans
+    the table once and sorts only the short keys."""
+    paths, more = capped(con, f"SELECT {cut('resource')} FROM claims WHERE agent=? "
+                         f"ORDER BY substr(resource, 1, {RESOURCE_MAX + 1}), rowid", (name,), DEFAULT_LIMIT)
+    paths = [r[0] for r in paths]
+    con.execute("DELETE FROM claims WHERE agent=?", (name,))
+    return paths, len(paths) + more
+
+
+def claims_text(paths, total):
+    """The log detail for released claims: the count, then the first DEFAULT_LIMIT of them."""
+    if not total:
+        return "(none)"
+    return ", ".join(map(str, paths)) + (f", and {total - len(paths)} more" if total > len(paths) else "")
+
+
+def show_released(a, paths, total):
+    if not a.json:
+        for p in paths:
+            show("{}", p, row=True)
+        if total > len(paths):
+            show("... {} more", total - len(paths), row=True)
+
+
+def cmd_leave(con, a):
+    name = me(a)
+    with immediate(con):
+        paths, total = release_all(con, name)
+        con.execute("DELETE FROM agents WHERE name=?", (name,))
+        log(con, name, "leave", f"released {total} claims: {claims_text(paths, total)}")
+    emit(a, {"left": name, "released": paths, "released_count": total},
+         "left as {}, released {} claims", name, total)
+    show_released(a, paths, total)
+
+
+def q_who(con, limit=DEFAULT_LIMIT):
+    return capped(con, "SELECT * FROM agents ORDER BY last_seen DESC", (), limit)
+
+
+def fmt_who(r):
+    return [r['name'], r['role'], r['tool'], r['model'], r['branch'],
+            "seen just now" if ago(r['last_seen'], datetime.now(timezone.utc)) == "now"
+            else f"seen {ago(r['last_seen'], datetime.now(timezone.utc))} ago"]
+
+
+def table_formatter(rows, fmt):
+    """Data-sized columns, without empty columns. Keep record identities whole; long identities
+    still wrap safely. Other cells are capped to leave room for identity and relative time.
+    Measure cleaned fields after the bus closes; the returned formatter takes a cleaned row."""
+    if not rows:
+        return lambda r: INDENT
+    cells = [[str(v) for v in fmt(clean_row(r))] for r in rows]
+    caps = [28, 24, 10, 20, 20, 18] if fmt is fmt_who else [40, 28, 20, 32]
+    columns = [i for i in range(len(caps)) if any(r[i] for r in cells)]
+    width = lambda s: sum(char_width(c) for c in s)
+    sizes = {i: min(caps[i], max(width(r[i]) for r in cells)) for i in columns}
+    # Retain the first column and the time; shrink descriptive columns first.
+    time_col = 5 if fmt is fmt_who else 2
+    budget = term_width() - len(INDENT) - 2 * (len(columns) - 1)
+    flexible = [i for i in columns if i not in (0, time_col)]
+    while sum(sizes.values()) > budget and any(sizes[i] > 4 for i in flexible):
+        i = max(flexible, key=lambda i: sizes[i])
+        sizes[i] -= 1
+
+    def cell(s, n, whole=False):
+        w = width(s)
+        # Keep escaped values intact: clipping could hide the control that explains the value,
+        # or leave half an escape. Unusually long lane text still uses the safe wrapping path.
+        if w > n and not whole and '\\' not in s:
+            kept, used = [], 0
+            for c in s:
+                if used + char_width(c) > n - 3:
+                    break
+                kept.append(c)
+                used += char_width(c)
+            s, w = ''.join(kept) + '...', used + 3
+        return s + ' ' * max(0, n - w)
+    def row(r):
+        values = [str(v) for v in fmt(r)]
+        return INDENT + col0('  '.join(cell(values[i], sizes[i], whole=(i == 0)) for i in columns).rstrip())
+    return row
+
+
+def cmd_who(con, a):
+    rows, more = q_who(con, a.limit)
+    out(a, rows, fmt_who, more, empty="no agents. Join with: agentbus --as NAME join")
+
+
+def read_inputs(a):
+    """Everything a command reads from its arguments or stdin, read before the bus is opened: stdin
+    may be slow (a pipe, a FIFO, a terminal), and the bus is exclusively locked while open."""
+    a._body = None
+    if a.cmd == "ctx" and a.key == "":
+        die("KEY must not be empty. Omit KEY to list facts.", "bad_input")
+    if a.cmd == "post":
+        me(a)
+        if a.kind not in KINDS:
+            die(f"unknown kind '{a.kind}'; use one of: {', '.join(KINDS)}", "bad_input")
+        a._body = read_body(a.body, "post")
+    elif a.cmd == "ctx" and a.action == "set":
+        me(a)
+        a._body = read_body(a.value, "ctx set KEY")
+    elif a.cmd == "log" and a.action == "add":
+        me(a)
+        a._body = read_body(a.detail, "log add ACTION")
+    elif a.cmd == "goal" and a.text:
+        me(a)
+        a._body = read_body(a.text, "goal")
+
+
+def cmd_post(con, a):
+    name = me(a)
+    body = a._body
+    with immediate(con):
+        if a.request_id is not None:
+            old = con.execute("SELECT id, body, recipient, kind, topic, reply_to FROM messages "
+                              "WHERE sender=? AND request_id=?", (name, a.request_id)).fetchone()
+            if old:
+                if tuple(old)[1:] != (body, a.to, a.kind, a.topic, a.reply_to):
+                    die(f"request id '{a.request_id}' was already used with a different payload",
+                        "request_id_reused", request_id=a.request_id, agent=name)
+                emit(a, {"id": old['id'], "duplicate": True}, "posted #{} to {} [{}] (already posted)",
+                     old['id'], "everyone" if a.to == "*" else a.to, a.kind)
+                return
+        if a.reply_to is not None and not con.execute("SELECT 1 FROM messages WHERE id=?", (a.reply_to,)).fetchone():
+            die(f"no message #{a.reply_to} to reply to. See recent ids with: agentbus read", "no_message", id=a.reply_to)
+        cur = con.execute(
+            "INSERT INTO messages(ts,sender,recipient,kind,topic,body,reply_to,request_id) VALUES(?,?,?,?,?,?,?,?)",
+            (now(), name, a.to, a.kind, a.topic, body, a.reply_to, a.request_id))
+    if a.to != "*" and not con.execute("SELECT 1 FROM agents WHERE name=?", (a.to,)).fetchone():
+        note(f"{a.to} is not on the roster; the message waits for that name.")
+    emit(a, {"id": cur.lastrowid}, "posted #{} to {} [{}]", cur.lastrowid,
+         "everyone" if a.to == "*" else a.to, a.kind)
+
+
+def fmt_msg(r):
+    """A message header (marked HEAD: agentbus wrote `#<id> `, and the id is the integer rowid),
+    then the body, every line indented."""
+    mid = r["id"]
+    head = (HEAD + "#%d" % mid if isinstance(mid, int) and not isinstance(mid, bool) else f"{INDENT}#{mid}")
+    head += f" {r['sender']} -> {'everyone' if r['recipient'] == '*' else r['recipient']} [{r['kind']}]"
+    if r.get("topic"):
+        head += f" ({r['topic']})"
+    if r.get("reply_to"):
+        head += f" re #{r['reply_to']}"
+    ts = _when(r['ts'])
+    if ts is None:
+        stamp = str(r['ts'])  # hostile or malformed stored time: already cleaned
+    else:
+        local = ts.astimezone()
+        stamp = local.strftime("%H:%M")
+        if local.date() != datetime.now().date():
+            month = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[local.month - 1]
+            stamp = f"{month} {local.day} {stamp}"
+    head += f" · {stamp}"
+    return f"{head}\n{INDENT}" + str(r["body"]).replace("\n", "\n" + INDENT)
+
+
+def cmd_inbox(con, a):
+    name = me(a)
+    row = con.execute("SELECT last_read_id, bcast_from FROM cursors WHERE agent=?", (name,)).fetchone()
+    if row:
+        last, bcast = row
+    else:
+        # No cursor yet: the same start a first join would give. --peek leaves it uncreated.
+        last, bcast = 0, con.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
+    # The oldest `limit` unread. The cursor moves only after the output was written (run() calls
+    # a._after once write_out succeeded), and only past what was shown: the rest stay unread.
+    rows, more = capped(
+        con, f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?)) ORDER BY id",
+        (last, name, name, bcast), a.limit)
+    out(a, rows, fmt_msg, more, unread=True)
+    if not a.peek and (rows or not row):
+        upto = rows[-1]["id"] if rows else None
+        a._after = lambda c: mark_read(c, name, bcast, upto)
+    if not rows and not more and not a.json:
+        show("inbox empty")
+
+
+def mark_read(con, name, bcast, upto):
+    """inbox's second step, in its own short transaction once the output is written: the cursor a
+    first inbox creates (broadcasts from the newest id the read saw), then last_read_id moved up to
+    the last id shown, never down (MAX), so an overlapping inbox under the same name that showed
+    less cannot move it back."""
+    with immediate(con):
+        con.execute("INSERT OR IGNORE INTO cursors(agent,last_read_id,bcast_from) VALUES(?,0,?)", (name, bcast))
+        if upto is not None:
+            con.execute("UPDATE cursors SET last_read_id=MAX(last_read_id, ?) WHERE agent=?", (upto, name))
+
+
+def q_read(con, since=None, topic=None, limit=30):
+    """With since (0 included), the next `limit` messages after that id, oldest first; else the newest."""
+    return q_read_page(con, since, topic, limit)[0]
+
+
+def q_read_page(con, since, topic, limit):
+    q, p = f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>?", [since or 0]
+    if topic:
+        q += " AND topic=?"
+        p.append(topic)
+    if since is not None:
+        return capped(con, q + " ORDER BY id ASC", p, limit)
+    rows, more = capped(con, q + " ORDER BY id DESC", p, limit)
+    return list(reversed(rows)), more
+
+
+def cmd_read(con, a):
+    rows, more = q_read_page(con, a.since, a.topic, a.limit)
+    out(a, rows, fmt_msg, more, empty="no messages", earlier=a.since is None)
+
+
+def q_ctx(con, limit=DEFAULT_LIMIT):
+    return capped(con, "SELECT * FROM context ORDER BY key", (), limit)
+
+
+def fmt_ctx(r):
+    return INDENT + col0(f"{r['key']} = {r['value']}   ({r['updated_by']}, {r['updated_at']})")
+
+
+def cmd_ctx(con, a):
+    if a.action == "set":
+        name = me(a)
+        value = a._body
+        t = now()
+        with immediate(con):
+            con.execute(
+                "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+                (a.key, value, name, t))
+            con.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", (a.key, value, name, t))
+        emit(a, {"key": a.key, "value": value, "updated_by": name, "updated_at": t}, "set {}", a.key)
+    elif a.action == "get":
+        if a.key is not None:
+            r = con.execute("SELECT * FROM context WHERE key=?", (a.key,)).fetchone()
+            if not r:
+                die(f"no context key {a.key}. List keys with: agentbus ctx get", "no_context_key", key=a.key)
+            if a.json:
+                print_json(dict(r))
+            else:
+                show("{}", r["value"], row=True)
+        else:
+            rows, more = q_ctx(con, a.limit)
+            out(a, rows, fmt_ctx, more, empty="no facts")
+    elif a.action == "history":
+        # The newest `limit` values, oldest first.
+        rows, more = capped(con, "SELECT * FROM context_history WHERE key=? ORDER BY id DESC", (a.key,), a.limit)
+        out(a, list(reversed(rows)), lambda r: INDENT + col0(f"{r['updated_at']} {r['updated_by']}: {r['value']}"), more)
+
+
+# The shared goal: one fact every agent sees first, kept under the context key "goal" so it has the
+# same history as any fact (ctx history goal). join and status show it; watch pins it at the top.
+GOAL_KEY = "goal"
+
+
+def current_goal(con):
+    r = con.execute("SELECT value, updated_by, updated_at FROM context WHERE key=?", (GOAL_KEY,)).fetchone()
+    return {"goal": r["value"], "set_by": r["updated_by"], "set_at": r["updated_at"]} if r else None
+
+
+def cmd_goal(con, a):
+    if a._body is not None:
+        name, t = me(a), now()
+        with immediate(con):
+            con.execute(
+                "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+                (GOAL_KEY, a._body, name, t))
+            con.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", (GOAL_KEY, a._body, name, t))
+            log(con, name, "goal", a._body)
+        emit(a, {"goal": a._body, "set_by": name, "set_at": t}, "goal: {}", a._body)
+        return
+    g = current_goal(con)
+    if a.json:
+        print_json(g)
+    elif g:
+        show("goal: {}", g["goal"])
+        show("set by {} at {}", g["set_by"], g["set_at"], row=True)
+    else:
+        show("no goal yet. Set one with: agentbus --as NAME goal \"what we are shipping\"")
+
+
+def cmd_claim(con, a):
+    name = me(a)
+    if a.ttl_min < 1 or a.ttl_min > MAX_TTL_MIN:
+        die(f"--ttl-min must be at least 1 and at most {MAX_TTL_MIN} (a week)", "bad_input")
+    res = norm_resource(a.resource)
+    exp = datetime.fromtimestamp(time.time() + a.ttl_min * 60, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    released, n_released = [], 0
+    with immediate(con):
+        if not con.execute("SELECT 1 FROM agents WHERE name=?", (name,)).fetchone():
+            die(f"{name} is not on the roster. Run: agentbus --as {name} join", "not_on_roster", agent=name)
+        t = now()
+        live = "typeof(resource)='text' AND agent<>? AND expires_at>?"
+        on_roster = "EXISTS (SELECT 1 FROM agents WHERE agents.name=claims.agent)"
+        filters = overlap_filters(res)
+        for where, params in filters:
+            r = con.execute(f"SELECT resource={_is_text('?')} AS same, {cut('resource')} AS resource, {cut('agent')} AS agent, "
+                            f"{cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
+                            f"WHERE ({where}) AND {live} AND {on_roster} LIMIT 1", [res] + params + [name, t]).fetchone()
+            if r:
+                why = r["purpose"] or "no purpose given"
+                next_step = (f" Do not edit it yet. Ask {r['agent']} with post --to {r['agent']} "
+                             "--kind question, or choose another resource.")
+                if not r["same"]:
+                    die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {r['expires_at']} ({why})." + next_step,
+                        "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
+                die(f"{res} is claimed by {r['agent']} until {r['expires_at']} ({why})." + next_step,
+                    "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
+        odd = undecoded_overlaps(con, res, name, t)
+        for raw, r in odd:
+            if con.execute("SELECT 1 FROM agents WHERE name=(SELECT agent FROM claims WHERE resource=CAST(? AS TEXT))",
+                           (raw,)).fetchone():
+                die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {r['expires_at']} "
+                    f"({r['purpose'] or 'no purpose given'}). Do not edit it yet. "
+                    f"Ask {r['agent']} with post --to {r['agent']} --kind question, or choose another resource.",
+                    "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
+        for raw, r in odd:
+            if len(released) < AUTO_RELEASE_SHOWN:
+                released.append({"resource": r["resource"], "agent": r["agent"]})
+            n_released += con.execute("DELETE FROM claims WHERE resource=CAST(? AS TEXT)", (raw,)).rowcount
+        # Every overlapping claim left is held by a name not on the roster (it left or was cleared):
+        # release them and take it. Each DELETE is one statement under the query budget; only the
+        # first AUTO_RELEASE_SHOWN are listed and logged one by one, the rest as a count.
+        for where, params in filters:
+            stale = f"({where}) AND {live} AND NOT {on_roster}"
+            room = AUTO_RELEASE_SHOWN - len(released)
+            if room > 0:
+                for r in con.execute(f"SELECT {cut('resource')} AS resource, {cut('agent')} AS agent FROM claims "
+                                     f"WHERE {stale} ORDER BY resource LIMIT ?", params + [name, t, room]):
+                    released.append({"resource": r["resource"], "agent": r["agent"]})
+            n_released += con.execute(f"DELETE FROM claims WHERE {stale}", params + [name, t]).rowcount
+        for r in released:
+            log(con, name, "claim", f"{r['resource']} auto-released from {r['agent']} (not on roster)")
+        if n_released > len(released):
+            log(con, name, "claim", f"and {n_released - len(released)} more overlapping {res} auto-released (not on roster)")
+        forms = same_path_forms(res)
+        own = con.execute(
+            f"SELECT purpose, claimed_at FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))}) "
+            "ORDER BY claimed_at LIMIT 1", [name] + forms).fetchone()
+        purpose = own["purpose"] if own and a.purpose is None else a.purpose
+        claimed_at = own["claimed_at"] if own else t
+        con.execute(f"DELETE FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)
+        con.execute(
+            "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?) "
+            "ON CONFLICT(resource) DO UPDATE SET agent=excluded.agent, purpose=excluded.purpose, "
+            "claimed_at=excluded.claimed_at, expires_at=excluded.expires_at",
+            (res, name, purpose, claimed_at, exp))
+        log(con, name, "claim", f"{res} until {exp}: {purpose or ''}")
+    emit(a, {"resource": res, "agent": name, "purpose": purpose, "claimed_at": claimed_at,
+             "expires_at": exp, "auto_released": released,
+             "auto_released_count": n_released}, "claimed {} until {}", res, exp)
+
+
+def cmd_release(con, a):
+    name = me(a)
+    if a.all:
+        with immediate(con):
+            paths, total = release_all(con, name)
+            log(con, name, "release", f"all {total} claims: {claims_text(paths, total)}")
+        emit(a, {"released": paths, "released_count": total}, "released {} claims", total)
+        show_released(a, paths, total)
+        return
+    res = norm_resource(a.resource)
+    forms = sorted(set(same_path_forms(res) + [a.resource]))
+    with immediate(con):
+        paths = [r[0] for r in con.execute(
+            f"SELECT resource FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)]
+        if not paths:
+            die(f"you do not hold {a.resource}. See your claims with: agentbus claims", "not_held", resource=a.resource)
+        con.execute(f"DELETE FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)
+        log(con, name, "release", ", ".join(map(str, paths)))
+    emit(a, {"released": paths, "released_count": len(paths)}, "released {}", ", ".join(map(str, paths)))
+
+
+def q_claims(con, stale=False, limit=DEFAULT_LIMIT):
+    if stale:
+        # Unexpired claims held by agents not on the roster
+        q = """SELECT c.*, CASE WHEN c.expires_at < ? THEN 'expired' ELSE 'held' END AS state
+               FROM claims c LEFT JOIN agents ag ON c.agent = ag.name
+               WHERE ag.name IS NULL AND c.expires_at > ?
+               ORDER BY c.resource"""
+        return capped(con, q, (now(), now()), limit)
+    q = """SELECT *, CASE WHEN expires_at < ? THEN 'expired' ELSE 'held' END AS state
+           FROM claims ORDER BY resource"""
+    return capped(con, q, (now(),), limit)
+
+
+def fmt_claim(r):
+    remaining = "expired" if r['state'] == 'expired' else time_left(r['expires_at'], datetime.now(timezone.utc)) + " left"
+    return [r['resource'], r['agent'], remaining, r['purpose']]
+
+
+def cmd_claims(con, a):
+    rows, more = q_claims(con, getattr(a, "stale", False), a.limit)
+    out(a, rows, fmt_claim, more, empty="no claims")
+
+
+def cmd_log(con, a):
+    if a.action == "add":
+        name = me(a)
+        detail = a._body
+        with immediate(con):
+            row_id = log(con, name, a.what, detail)
+        emit(a, {"id": row_id, "logged": True, "agent": name, "action": a.what, "detail": detail}, "logged")
+    else:
+        rows, more = capped(con, "SELECT * FROM log ORDER BY id DESC", (), a.limit)
+        out(a, list(reversed(rows)), lambda r: INDENT + col0(f"{r['ts']} {r['agent']:<22} {r['action']:<10} {r['detail'] or ''}"),
+            more, empty="log is empty", earlier=True)
+
+
+def cmd_status(con, a):
+    (agents, m1), (ctx, m2), (claims, m3) = q_who(con, a.limit), q_ctx(con, a.limit), q_claims(con, limit=a.limit)
+    msgs = q_read(con, None, None, 10)
+    g = current_goal(con)
+    if a.json:
+        print_json({"bus": a._db, "goal": g, "agents": [dict(r) for r in agents], "context": [dict(r) for r in ctx],
+                    "claims": [dict(r) for r in claims], "messages": [dict(r) for r in msgs]})
+        for what, more in (("agents", m1), ("context keys", m2), ("claims", m3)):
+            if more:
+                note(f"{more} more {what} not shown (use --limit)")
+        return
+    show("== bus {}", a._db)
+    if g:
+        show("== goal: {}", g["goal"])
+    else:
+        show("== no goal yet (agentbus --as NAME goal \"...\")")
+    later(print)
+    show("== agents")
+    out(a, agents, fmt_who, m1, empty="no agents. Join with: agentbus --as NAME join")
+    for title, rows, fmt, more in (("context", ctx, fmt_ctx, m2), ("claims", claims, fmt_claim, m3),
+                                   ("last 10 messages", msgs, fmt_msg, 0)):
+        later(print)  # a blank line between sections
+        show("== {}", title)
+        out(a, rows, fmt, more, empty={"context": "no facts", "claims": "no claims", "last 10 messages": "no messages"}[title])
+
+
+def integer(text):
+    """An argparse type: an integer SQLite can store (64-bit signed), never one that would make a
+    query fail with OverflowError. Checked by length first: Python 3.11+ refuses to parse very long
+    digit strings at all."""
+    m = re.fullmatch(r"\s*([+-]?)0*(\d+)\s*", text)
+    if not m:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}")
+    v = int(m.group(1) + m.group(2)) if len(m.group(2)) <= 19 else None
+    if v is None or not -(2 ** 63) <= v <= 2 ** 63 - 1:
+        raise argparse.ArgumentTypeError("must be between -2**63 and 2**63-1")
+    return v
+
+
+def bus_level(text):
+    v = integer(text)
+    if v < 0:
+        raise argparse.ArgumentTypeError("must be at least 0")
+    return v
+
+
+def interval(text):
+    """An argparse type: seconds between watch refreshes, 0.2 to 60."""
+    try:
+        v = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}")
+    if not 0.2 <= v <= 60:
+        raise argparse.ArgumentTypeError("must be between 0.2 and 60 seconds")
+    return v
+
+
+# ==== discoverability ====
+
+
+class Parser(argparse.ArgumentParser):
+    """argparse, with its errors written as agentbus diagnostics (`agentbus: ` and wrapped, every
+    continuation row indented) instead of a usage block the terminal may wrap at column 0."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for action in self._actions:
+            if action.dest == "help":
+                action.help = "Show this help message and exit."
+
+    def error(self, message):
+        if _JSON_ERRORS:
+            die(message, "bad_input")
+        note(f"error: {message} ({' '.join(self.format_usage().split())})")
+        raise SystemExit(2)
+
+    def _check_value(self, action, value):
+        if isinstance(action, argparse._SubParsersAction) and value not in action.choices:
+            matches = difflib.get_close_matches(value, action.choices, n=1)
+            hint = f" (did you mean {matches[0]}?)" if matches else ""
+            message = f"unknown command '{value}'{hint}. See: agentbus --help"
+            die(message, "bad_input")
+        super()._check_value(action, value)
+
+    def _print_message(self, message, file=None):
+        """--help and --version text is collected and written by main(), which turns a reader that
+        went away into a clean error. argparse writes it straight to stdout and, from Python 3.11,
+        silently drops a write that fails; unbuffered (-u), 3.9 raised BrokenPipeError instead."""
+        if message and file is sys.stdout:
+            _HELP_TEXT.append(message)
+        else:
+            super()._print_message(message, file)
+
+
+_HELP_TEXT = []
+
+
+def limit_arg(parser, default=DEFAULT_LIMIT, what="rows"):
+    parser.add_argument("--limit", type=integer, default=default, help=f"At most this many {what} (default {default}). Use -1 for all.")
+
+
+def register_join(sub):
+    j = sub("join", help="Register yourself; refuses a name active in the last 30 min unless --takeover")
+    j.add_argument("--tool", help="Tool running this session.")
+    j.add_argument("--model", help="Model running this session.")
+    j.add_argument("--cwd", help="Working directory for this session.")
+    j.add_argument("--branch", help="Branch for this session.")
+    j.add_argument("--role", help="What you do here (shown in who/watch).")
+    j.add_argument("--takeover", action="store_true", help="Rejoin a name active in the last 30 min (only your own)")
+
+
+def register_leave(sub):
+    sub("leave", help="Leave the roster and release all your claims")
+
+
+def register_who(sub):
+    limit_arg(sub("who", help="List agents"), what="agents")
+
+
+def register_post(sub):
+    po = sub("post", help="Send a message (body '-' reads stdin)")
+    po.add_argument("body", nargs="*")
+    po.add_argument("--to", default="*", metavar="NAME",
+                    help="Deliver to this agent name; omitted means broadcast. Messages wait for that name even if it has not joined.")
+    po.add_argument("--kind", default="note",
+                    help="Message kind: note, question, answer, handoff, decision, alert, done. Default: note.")
+    po.add_argument("--topic", help="Optional topic label, filterable with read --topic.")
+    po.add_argument("--reply-to", type=integer, metavar="ID",
+                    help="Link to an earlier message; does not choose the recipient.")
+
+    po.add_argument("--request-id", metavar="TOKEN", help="Retry safely with the same sender and token; a changed payload is refused.")
+
+
+def register_inbox(sub):
+    ib = sub("inbox", help="Unread messages for you, then mark read")
+    ib.add_argument("--peek", action="store_true", help="Do not mark read")
+    limit_arg(ib, what="messages (the oldest unread; the rest stay unread)")
+
+
+def register_read(sub):
+    rd = sub("read", help="Recent messages, anyone's")
+    rd.add_argument("--since", type=integer, default=None, help="The messages after this id, oldest first")
+    rd.add_argument("--topic")
+    rd.add_argument("--limit", type=integer, default=30, help="Maximum messages; default 30. Use -1 for all.")
+
+
+def register_ctx(sub):
+    c = sub("ctx", help="Shared key/value facts")
+    limit_arg(c, what="keys (get) or values (history)")
+    actions = c.add_subparsers(dest="action", required=True)
+    for action, usage in (("set", "KEY VALUE"), ("get", "[KEY]"), ("history", "KEY")):
+        description = {"set": "Set a shared fact and record its history.",
+                       "get": "Get a fact, or list all facts.", "history": "Show the history of a fact."}[action]
+        act = actions.add_parser(action, parents=[sub.common], help=description, description=description,
+                                 usage=f"agentbus ctx {action} {usage} [options]")
+        act.add_argument("key", nargs="?" if action == "get" else None, metavar="KEY")
+        if action == "set":
+            act.add_argument("value", nargs="*", metavar="VALUE")
+        act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
+                         help="Maximum keys (get) or values (history); default 500. Use -1 for all.")
+
+
+def register_claim(sub):
+    cl = sub("claim", help="Claim a resource (bus-relative path, or issue:N, table:x, area:y)")
+    cl.add_argument("resource"); cl.add_argument("--purpose")
+    cl.add_argument("--ttl-min", type=integer, default=120, help=f"Claim lifetime in minutes: 1-{MAX_TTL_MIN}; default 120. Claim again to renew.")
+
+
+def register_release(sub):
+    rl = sub("release", help="Release your claim(s)")
+    g = rl.add_mutually_exclusive_group()
+    g.add_argument("resource", nargs="?", help="Resource to release; use the spelling from claims.")
+    g.add_argument("--all", action="store_true", help="Release all your claims")
+
+
+def register_claims(sub):
+    cl_list = sub("claims", help="List claims")
+    cl_list.add_argument("--stale", action="store_true", help="Show claims held by agents not on roster")
+    limit_arg(cl_list, what="claims")
+
+
+def register_log(sub):
+    lg = sub("log", help="Append to or show the activity log")
+    limit_arg(lg, 40, "entries (show)")
+    actions = lg.add_subparsers(dest="action", required=True)
+    add = actions.add_parser("add", parents=[sub.common], usage="agentbus log add ACTION DETAIL [options]",
+                             help="Append an activity log entry.", description="Append an activity log entry.")
+    add.add_argument("what", nargs="?", default="note", metavar="ACTION")
+    add.add_argument("detail", nargs="*", metavar="DETAIL")
+    show_log = actions.add_parser("show", parents=[sub.common], usage="agentbus log show [options]",
+                                  help="Show recent activity log entries.", description="Show recent activity log entries.")
+    for act in (add, show_log):
+        act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
+                         help="Maximum entries (show); default 40. Use -1 for all.")
+
+
+def register_status(sub):
+    st = sub("status", help="Agents, context, claims, recent messages")
+    st.add_argument("--limit", type=integer, default=DEFAULT_LIMIT,
+                    help="Limit agents, facts, and claims per section; default 500. Use -1 for all. Recent messages always shows the latest 10.")
+
+
+def register_goal(sub):
+    gl = sub("goal", help="The shared goal every agent sees first: set it with text, show it without")
+    gl.add_argument("text", nargs="*", help="The goal; '-' reads it from stdin. Omit to show the current goal.")
+
+
+def register_watch(sub):
+    w = sub("watch", help="A live view of the bus: agents, claims, facts and messages, updated in place")
+    w.add_argument("--interval", type=interval, default=1.0, help="Seconds between refreshes, 0.2 to 60; default 1.")
+    w.add_argument("--once", action="store_true", help="Print one frame and exit (what it does anyway when stdout is not a terminal).")
+
+
+def register_buses(sub):
+    sub("buses", help="List buses from nearest to outermost, without creating bus.db")
+
+
+def register_init(sub):
+    ini = sub("init", help="Install this tool into DIR/.agentbus/ (installed tool or clone only)")
+    ini.add_argument("repo", nargs="?", metavar="DIR", help="Existing directory to initialize; default current directory. Run from the installed tool or source clone.")
+
+
+def register_upgrade(sub):
+    upg = sub("upgrade", help="Replace a repo's .agentbus/bin/agentbus with this copy (installed tool or clone only)")
+    upg.add_argument("repo", nargs="?")
+
+
+REGISTER_COMMANDS = [
+    register_join,
+    register_leave,
+    register_who,
+    register_post,
+    register_inbox,
+    register_read,
+    register_ctx,
+    register_claim,
+    register_release,
+    register_claims,
+    register_log,
+    register_status,
+    register_goal,
+    register_watch,
+    register_buses,
+    register_init,
+    register_upgrade,
+]
+
+
+def build_parser():
+    p = Parser(prog="agentbus", description="Coordinate agents in one local workspace: messages, file claims, and shared facts.",
+               formatter_class=argparse.RawDescriptionHelpFormatter,
+               epilog="Start:  agentbus --as NAME join\n"
+                      "Loop:   inbox; claim PATH --purpose WHY; post RESULT --to NAME --kind handoff\n"
+                      "Finish: post RESULT --kind done; leave\n"
+                      "Humans: agentbus watch\n"
+                      "Env:    AGENTBUS_AGENT (default --as), AGENTBUS_DB (bus path)")
+    common = Parser(add_help=False)
+    # SUPPRESS: a subcommand must not reset an option set before it.
+    for parser, default in ((p, None), (common, argparse.SUPPRESS)):
+        parser.add_argument("--as", dest="as_", metavar="NAME", default=default,
+                            help="Your agent identity; overrides AGENTBUS_AGENT. "
+                                 "Successful commands run with --as refresh that agent's last-seen, except watch. "
+                                 "Omit --as to look without counting as present.")
+        parser.add_argument("--json", action="store_true", default=default,
+                            help="Print successful command results as JSON. Check exit status; errors use stderr.")
+        parser.add_argument("--up", metavar="N", type=bus_level, default=0 if parser is p else default,
+                            help="Select the Nth outer bus (default 0). AGENTBUS_DB takes precedence.")
+    p.add_argument("--version", action="version", version=f"agentbus {__version__}", help="Show program version and exit.")
+    s = p.add_subparsers(dest="cmd", required=True)
+
+    def sub(name, **k):
+        if "help" in k:
+            k.setdefault("description", k["help"])  # shown by `agentbus <command> --help` too
+        return s.add_parser(name, parents=[common], **k)
+    sub.common = common  # for the nested subparsers (ctx, log) of a register_<cmd> function
+
+    for register in REGISTER_COMMANDS:
+        register(sub)
+    return p
+
+
+POSITIONALS = ("cmd", "body", "action", "key", "value", "resource", "what", "detail", "repo", "text")
+ENV_INPUTS = ("AGENTBUS_DB", "AGENTBUS_AGENT")
+
+
+def not_utf8(v):
+    """True when text came from bytes that are not UTF-8: Python decodes argv and the environment
+    with surrogateescape, so each such byte is a lone surrogate, which SQLite and the terminal refuse."""
+    if isinstance(v, (list, tuple)):
+        return any(not_utf8(x) for x in v)
+    return isinstance(v, str) and any("\ud800" <= c <= "\udfff" for c in v)
+
+
+def refuse_bad_inputs(a):
+    """Refuse an argument or environment value that is not valid UTF-8, naming it."""
+    for dest, v in sorted(vars(a).items()):
+        if not_utf8(v):
+            name = dest if dest in POSITIONALS else "--" + dest.rstrip("_").replace("_", "-")
+            die(f"{name} is not valid UTF-8", "bad_input")
+    for k in ENV_INPUTS:
+        if not_utf8(os.environ.get(k)):
+            die(f"{k} is not valid UTF-8", "bad_input")
+
+
+# ==== watch ====
+
+# ---- watch: a live, read-only view of the bus ----------------------------------------------------
+# Each tick opens the bus, copies what the view needs, and closes it before anything is formatted or
+# drawn, like every other command: the view never holds the lock while it draws, and it never writes
+# (no join, no touch). Every lane-written string goes through clean() and is cut to its column, and
+# every row starts with text agentbus wrote, so nothing a lane stores can draw outside its cell.
+
+def watch_snapshot(path, strict, limit):
+    """Everything the view shows, as plain values, read in one short open."""
+    con = open_bus(path, strict)
+    try:
+        q = lambda sql, *p: [dict(r) for r in con.execute(sql, p).fetchall()]
+        snap = {
+            "agents": q("SELECT name, role, last_seen, joined_at FROM agents ORDER BY joined_at, name LIMIT ?", limit),
+            "claims": q("SELECT resource, agent, purpose, expires_at FROM claims WHERE expires_at > ? "
+                        "ORDER BY expires_at LIMIT ?", now(), limit),
+            "goal": current_goal(con),
+            "context": q("SELECT key, value, updated_by, updated_at FROM context WHERE key<>? ORDER BY updated_at DESC LIMIT ?",
+                         GOAL_KEY, limit),
+            "messages": list(reversed(q("SELECT id, ts, sender, recipient, kind, body, reply_to FROM messages "
+                                        "ORDER BY id DESC LIMIT ?", limit))),
+            "counts": {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("agents", "messages")},
+        }
+        snap["counts"]["claims"] = con.execute("SELECT COUNT(*) FROM claims WHERE expires_at > ?", (now(),)).fetchone()[0]
+        return snap
+    finally:
+        con.close()
+
+
+def _when(ts):
+    try:
+        return datetime.strptime(str(ts), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def ago(ts, t_now):
+    """A short age: now, 42s, 12m, 3h, 2d."""
+    t = _when(ts)
+    if t is None:
+        return "?"
+    s = int((t_now - t).total_seconds())
+    if s < 5:
+        return "now"
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if s >= n:
+            return f"{s // n}{unit}"
+    return f"{s}s"
+
+
+def time_left(ts, t_now):
+    t = _when(ts)
+    if t is None:
+        return "?"
+    m = max(0, int((t - t_now).total_seconds()) // 60)
+    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+
+
+def cell_width(c):
+    """Columns a character takes in the live view: 2 for wide (East Asian W/F), 0 for combining
+    marks, else 1. clean() has already escaped every control and format character. Ambiguous-width
+    characters (é, the em dash) count 1, as in every non-CJK terminal; each row keeps one spare column."""
+    if unicodedata.combining(c):
+        return 0
+    return 2 if unicodedata.east_asian_width(c) in "WF" else 1
+
+
+def text_width(s):
+    return sum(cell_width(c) for c in s)
+
+
+def fit(text, n):
+    """Lane text cleaned, folded to one line, and cut (with an ellipsis) or padded to exactly n columns."""
+    s = " ".join(clean(text if isinstance(text, str) else ("" if text is None else str(text))).split())
+    n = max(0, n)
+    if text_width(s) <= n:
+        return s + " " * (n - text_width(s))
+    out, w = [], 0
+    for c in s:
+        cw = cell_width(c)
+        if w + cw > n - 1:
+            break
+        out.append(c)
+        w += cw
+    return "".join(out) + "…" + " " * (n - 1 - w)
+
+
+def fit_left(text, n):
+    """Like fit(), but cut from the left: keeps the end of a path (…/myrepo)."""
+    s = clean(text)
+    if text_width(s) <= n:
+        return s + " " * (n - text_width(s))
+    out, w = [], 0
+    for c in reversed(s):
+        cw = cell_width(c)
+        if w + cw > n - 1:
+            break
+        out.append(c)
+        w += cw
+    return "…" + "".join(reversed(out)) + " " * (n - 1 - w)
+
+
+class Paint:
+    def __init__(self, on, emoji=False):
+        self.on = on
+        self.emoji = emoji
+
+    def __call__(self, code, s):
+        return f"\033[{code}m{s}\033[0m" if self.on and code else s
+
+
+# Agent colours, assigned in roster order so the first eight never share one. No red: red means alert.
+AGENT_COLOURS = (34, 36, 35, 32, 33, 94, 96, 95)
+KIND_COLOURS = {"handoff": 33, "question": 35, "answer": 36, "done": 32, "decision": 34, "alert": 31}
+FRESH_S = 3.0  # how long a new message is marked, and an agent that just posted is lit
+IDLE_MIN = 5  # an agent not seen for this long shows a hollow dot
+ONCE_MESSAGES = 20  # messages in a single frame (--once, or stdout not a terminal)
+WATCH_MIN_COLS = 40
+# Emoji for a role (matched on words in it), a message kind and each section. Every one is a single
+# East Asian Wide code point (no variation selector), so the column arithmetic stays exact. Shown only
+# on a terminal, and AGENTBUS_NO_EMOJI=1 turns them off.
+ROLE_EMOJI = ((("brain", "lead", "orchestrat", "planner", "coordinat"), "🧠"),
+              (("lane", "hand", "implement", "worker", "fix", "build", "dev"), "✋"),
+              (("test", "qa"), "🧪"), (("review", "audit", "security"), "🔍"), (("doc", "writer"), "📚"),
+              (("deploy", "ops", "release"), "🚀"), (("design", "ui", "ux"), "🎨"),
+              (("human", "owner", "user", "you"), "🙋"))
+KIND_EMOJI = {"handoff": "🤝", "question": "❓", "answer": "💬", "done": "✅", "decision": "🧭", "alert": "🚨", "note": "📝"}
+SECTION_EMOJI = {"Agents": "👥", "Claims": "🔒", "Facts": "📌", "Messages": "💬"}
+
+
+def role_emoji(role):
+    words = str(role or "").lower()
+    for keys, e in ROLE_EMOJI:
+        if any(k in words for k in keys):
+            return e
+    return "🤖"
+WIDE_COLS = 72  # from here the kind gets its own column
+
+
+def colour_map(agents):
+    by_order = {}
+    for a in agents:
+        name = str(a["name"])
+        if name not in by_order and len(by_order) < len(AGENT_COLOURS):
+            by_order[name] = AGENT_COLOURS[len(by_order)]
+    return lambda name: by_order.get(str(name), AGENT_COLOURS[zlib.crc32(str(name).encode("utf-8", "replace")) % len(AGENT_COLOURS)])
+
+
+def share_rows(needs, room):
+    """Rows for each section: one each while room lasts, then round-robin to whoever needs more."""
+    got = [0] * len(needs)
+    for i, n in enumerate(needs):
+        if room and n:
+            got[i], room = 1, room - 1
+    while room:
+        grew = False
+        for i, n in enumerate(needs):
+            if room and got[i] < n:
+                got[i], room, grew = got[i] + 1, room - 1, True
+        if not grew:
+            break
+    return got
+
+
+def render_watch(snap, where, cols, rows, fresh, t_now, paint, live=True):
+    """The frame: a header bar, then Agents, Claims, Facts and Messages (newest last). Messages, the
+    part that moves, get their share of the screen first; any section cut short says how many it
+    left out and which command shows them. live: fill the screen and end with the key hint; else
+    (one frame: --once, or not a terminal) the content alone, with the last ONCE_MESSAGES messages."""
+    if cols < WATCH_MIN_COLS:
+        return [fit(f"watch needs {WATCH_MIN_COLS}+ columns", cols)]
+    width = cols - 1  # one spare column: an ambiguous-width character drawn wide never wraps a row
+    wide = cols >= WIDE_COLS
+    colour = colour_map(snap["agents"])
+    n = snap["counts"]
+    hot = {m["sender"] for m in snap["messages"] if m["id"] in fresh}
+
+    def plural(k, word):
+        return f"{n[k]} {word}{'' if n[k] == 1 else 's'}"
+    stats = f"{plural('agents', 'agent')} · {plural('claims', 'claim')} · {plural('messages', 'message')} "
+    head = " agentbus  "
+    room = width - len(head) - len(stats) - 1
+    header = paint("1;7", head + fit_left(where, room) + " " + stats if room >= 8 else fit(head + stats.strip(), width))
+
+    def more(k, shown, command):
+        return paint("2", "  " + fit(f"… {k - shown} more · agentbus {command}", width - 2))
+
+    # Agents
+    agent_rows = []
+    for a in snap["agents"]:
+        seen = _when(a["last_seen"])
+        idle = seen is None or (t_now - seen).total_seconds() > IDLE_MIN * 60
+        dot = paint("2", "○") if idle else paint(colour(a["name"]), "●")
+        name_w = 16 if wide else 12
+        lead_w = 1  # the dot; with emoji, "● 🧠"
+        if paint.emoji:
+            dot += " " + role_emoji(a["role"])
+            lead_w = 4
+        name = paint("1" if a["name"] in hot else "", fit(a["name"], name_w))
+        role_w = max(0, width - 2 - lead_w - 1 - name_w - 1 - 5)
+        role = fit(a["role"], role_w) if wide else " " * role_w
+        agent_rows.append(f"  {dot} {name} {paint('2', role)}{paint('2', ago(a['last_seen'], t_now).rjust(5))}")
+    # Claims
+    claim_rows = []
+    res_w = max(14, min(36, width // 3))
+    for c in snap["claims"]:
+        holder = paint(colour(c["agent"]), fit(c["agent"], 12))
+        rest = f"{time_left(c['expires_at'], t_now)} left" + (f" · {c['purpose']}" if wide and c["purpose"] else "")
+        claim_rows.append(f"  {fit(c['resource'], res_w)} {holder} {paint('2', fit(rest, width - 2 - res_w - 14))}")
+    # Facts, newest first
+    fact_rows = []
+    key_w, by_w = max(10, min(24, width // 5)), min(20, width // 4)
+    for x in snap["context"]:
+        by = f"{x['updated_by']} · {ago(x['updated_at'], t_now)}"
+        fact_rows.append(f"  {fit(x['key'], key_w)} {fit(x['value'], width - 2 - key_w - 1 - by_w - 1)} "
+                         f"{paint('2', fit(by, by_w).rstrip().rjust(by_w))}")
+    # Messages, oldest to newest
+    msg_rows = []
+    for m in snap["messages"]:
+        new = m["id"] in fresh
+        kind = str(m["kind"])
+        kc = KIND_COLOURS.get(kind, 2)
+        to = "everyone" if m["recipient"] == "*" else m["recipient"]
+        route_w = 24 if wide else 15
+        arrow = " → " if wide else "→"
+        part = (route_w - len(arrow)) // 2
+        frm, dest = fit(m["sender"], part).rstrip(), fit(to, part).rstrip()
+        route_plain_w = text_width(frm) + len(arrow) + text_width(dest)
+        route = (paint(colour(m["sender"]), frm) + paint("2", arrow)
+                 + (paint("2", dest) if to == "everyone" else paint(colour(to), dest))
+                 + " " * (route_w - route_plain_w))
+        lines_ = str(m["body"] or "").split("\n")
+        extra = f" ↵+{len(lines_) - 1}" if len(lines_) > 1 else ""
+        reply = f"↳#{m['reply_to']} " if m["reply_to"] else ""
+        mid = fit("#" + str(m["id"]), 5)
+        age = ago(m["ts"], t_now).rjust(4)
+        emo = KIND_EMOJI.get(kind, "📝") if paint.emoji else ""
+        if wide:
+            bar = paint(kc, "▌") if new else " "
+            kind_cell = (emo + " " if emo else "") + fit(kind, 9)
+            body_w = (width - 1 - 1 - 5 - route_w - 1 - text_width(kind_cell) - 1 - text_width(reply)
+                      - text_width(extra) - 1 - 4)
+            msg_rows.append(f"{bar} {paint('2', mid)}{route} {paint(kc, kind_cell)} {paint('2', reply)}"
+                            f"{paint('1' if new else '', fit(lines_[0], body_w))}{paint('2', extra)} {paint('2', age)}")
+        else:
+            lead = emo or paint(kc, "▌")  # narrow: the kind is the emoji, or a bar in the kind's colour
+            body_w = (width - text_width(emo or "▌") - 1 - 5 - route_w - 1 - text_width(reply)
+                      - text_width(extra) - 1 - 4)
+            msg_rows.append(f"{lead} {paint('2', mid)}{route} {paint('2', reply)}"
+                            f"{paint('1' if new else '', fit(lines_[0], body_w))}{paint('2', extra)} {paint('2', age)}")
+
+    sections = [("Agents", n["agents"], agent_rows, "no one yet. Join with: agentbus --as NAME join", "who"),
+                ("Claims", n["claims"], claim_rows, "nothing claimed", "claims"),
+                ("Facts", len(snap["context"]), fact_rows, "none yet", "ctx get")]
+    # A blank line between sections whenever the whole frame fits with them (or the screen is tall).
+    natural = 3 + 4 + sum(max(1, len(r)) for _, _, r, _, _ in sections) + max(1, len(msg_rows))
+    gap = live and (rows >= 30 or natural + 4 <= rows)
+    if live:
+        fixed = 1 + 1 + 1 + 4 + (4 if gap else 0)  # header, goal, footer, four titles, blank lines
+        body_rows = max(4, rows - fixed)
+        want_msgs = max(1, len(msg_rows))
+        msg_share = min(want_msgs + (1 if n["messages"] > len(msg_rows) else 0), max(3, body_rows // 2))
+        needs = [max(1, len(r) + (1 if total > len(r) else 0)) for _, total, r, _, _ in sections]
+        shares = share_rows(needs, max(0, body_rows - msg_share))
+        msg_share = max(1, body_rows - sum(shares))  # rows the others did not need go to messages
+    else:
+        shares = [len(r) + (1 if total > len(r) else 0) or 1 for _, total, r, _, _ in sections]
+        msg_share = ONCE_MESSAGES + 1
+
+    g = snap.get("goal")
+    if g:
+        tail = f" · {g['set_by']} · {ago(g['set_at'], t_now)}"
+        goal_row = (paint("1;33", "  🎯 " if paint.emoji else "  ◆ ") + paint("1", fit(g["goal"], width - 4 - text_width(clean(tail))))
+                    + paint("2", fit(tail, text_width(clean(tail)))))
+    else:
+        goal_row = paint("2", ("  🎯 " if paint.emoji else "  ◇ ") + fit('no goal yet · agentbus --as NAME goal "..."',
+                                                                            width - (5 if paint.emoji else 4)))
+    out = [header, goal_row]
+    for (title, total, rows_, empty, command), share in zip(sections, shares):
+        if gap or not live:
+            out.append("")
+        out.append(paint("1", (SECTION_EMOJI[title] + " " if paint.emoji else "") + title) + paint("2", f"  {total}"))
+        if not rows_:
+            out.append(paint("2", "  " + fit(empty, width - 2)))
+            continue
+        cut = len(rows_) > share or total > len(rows_)
+        keep = rows_[:share - 1] if cut and share > 1 else rows_[:share]
+        out.extend(keep)
+        if cut and share > 1:
+            out.append(more(total, len(keep), command))
+    if gap or not live:
+        out.append("")
+    out.append(paint("1", ("💬 " if paint.emoji else "") + "Messages") + paint("2", f"  {n['messages']}"))
+    if not msg_rows:
+        out.append(paint("2", "  quiet so far"))
+    else:
+        earlier = n["messages"] - min(len(msg_rows), msg_share)
+        if earlier > 0:
+            shown = msg_rows[-(msg_share - 1):] if msg_share > 1 else []
+            out.append(paint("2", "  " + fit(f"… {n['messages'] - len(shown)} earlier · agentbus read", width - 2)))
+            out.extend(shown)
+        else:
+            out.extend(msg_rows[-msg_share:])
+    if not live:
+        return out
+    out = out[:rows - 1]
+    while len(out) < rows - 1:
+        out.append("")
+    out.append(paint("2", "  " + fit("q quit · read-only", width - 2)))
+    return out
+
+
+def cmd_watch(a, strict):
+    """The live view, redrawn in place until q. --json: one snapshot as JSON. --once, or stdout not
+    a terminal: one frame, then exit."""
+    colour_on = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+    emoji_on = sys.stdout.isatty() and not os.environ.get("AGENTBUS_NO_EMOJI") and \
+        (sys.stdout.encoding or "").lower().replace("-", "") == "utf8"
+    paint = Paint(colour_on, emoji_on)
+    home = os.path.expanduser("~")
+    folder = os.path.dirname(a._db)
+    where = os.path.dirname(folder) if os.path.basename(folder) == ".agentbus" else a._db
+    where = "~" + where[len(home):] if where == home or where.startswith(home + os.sep) else where
+    limit = 200
+    if a.json:
+        snap = watch_snapshot(a._db, strict, limit)
+        print_json({"bus": a._db, "directory": where, **snap})
+        return
+    if a.once or not sys.stdout.isatty():
+        snap = watch_snapshot(a._db, strict, limit)
+        size = shutil.get_terminal_size((100, 40))
+        frame = render_watch(snap, where, size.columns, size.lines, set(), datetime.now(timezone.utc), paint, live=False)
+        write_out("\n".join(l.rstrip() for l in frame) + "\n")
+        return
+    import select
+    import signal
+    import termios
+    import tty as ttymod
+    stdin = sys.stdin.fileno() if sys.stdin and sys.stdin.isatty() else None
+    saved = termios.tcgetattr(stdin) if stdin is not None else None
+    wake_r, wake_w = os.pipe()  # SIGWINCH writes here, so a resize redraws at once, not on the next tick
+    os.set_blocking(wake_w, False)
+    old_winch = signal.signal(signal.SIGWINCH, lambda *_: os.write(wake_w, b"r"))
+    # Ctrl-C sets a flag and wakes the loop instead of raising: a KeyboardInterrupt raised inside a
+    # query (the budget's progress handler is Python) comes back as a database error, which the loop
+    # would show and carry on from.
+    stop = []
+    old_int = signal.signal(signal.SIGINT, lambda *_: (stop.append(1), os.write(wake_w, b"i")))
+    # Ctrl-C must end watch however it was started. A blocked signal survives exec, and a CI runner
+    # or a parent shell can start us with SIGINT or SIGWINCH blocked: the handler above would then
+    # never run and watch would ignore Ctrl-C for good. And the C-level handler writes the signal
+    # number to the wakeup fd from whichever thread took the signal, so select() wakes even when the
+    # kernel did not deliver the signal to this thread.
+    old_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGWINCH})
+    old_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)
+    first_seen, out = {}, sys.stdout
+    snap = {"agents": [], "claims": [], "context": [], "messages": [], "counts": {"agents": 0, "claims": 0, "messages": 0}}
+    out.write("\033[?1049h\033[?25l")
+    try:
+        if stdin is not None:
+            ttymod.setcbreak(stdin)
+        next_read = 0.0
+        while not stop:
+            status = None
+            if time.monotonic() >= next_read:
+                try:
+                    snap = watch_snapshot(a._db, strict, limit)
+                except SystemExit as e:  # busy, or refused: say so and try again next tick
+                    if stop:
+                        break
+                    status = reason(e)
+                next_read = time.monotonic() + a.interval
+                started = not first_seen
+                for m in snap["messages"]:
+                    first_seen.setdefault(m["id"], 0.0 if started else time.monotonic())
+            fresh = {i for i, t in first_seen.items() if t and time.monotonic() - t < FRESH_S}
+            size = shutil.get_terminal_size()
+            frame = render_watch(snap, where, size.columns, size.lines, fresh, datetime.now(timezone.utc), paint)
+            if status:
+                frame[-1] = paint("31", "  " + fit(status, size.columns - 3))
+            out.write("\033[H" + "\n".join(l + "\033[K" for l in frame) + "\033[J")
+            out.flush()
+            wait = max(0.05, next_read - time.monotonic())
+            ready, _, _ = select.select([wake_r] + ([stdin] if stdin is not None else []), [], [], wait)
+            if wake_r in ready:
+                os.read(wake_r, 64)
+            if stdin is not None and stdin in ready:
+                key = os.read(stdin, 32)
+                if key in (b"q", b"Q", b"\x1b"):  # a lone ESC; arrow keys and the like arrive as \x1b[...
+                    break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        signal.set_wakeup_fd(old_wakeup)
+        signal.signal(signal.SIGWINCH, old_winch)
+        signal.signal(signal.SIGINT, old_int)
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        os.close(wake_r)
+        os.close(wake_w)
+        out.write("\033[?25h\033[?1049l")
+        out.flush()
+        if saved is not None:
+            termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
+
+
+# ==== embedded skill ====
+# ==== setup ====
+# ==== hooks ====
+# ==== doctor ====
+
+COMMANDS = {
+    "join": cmd_join,
+    "leave": cmd_leave,
+    "who": cmd_who,
+    "post": cmd_post,
+    "inbox": cmd_inbox,
+    "read": cmd_read,
+    "ctx": cmd_ctx,
+    "claim": cmd_claim,
+    "release": cmd_release,
+    "claims": cmd_claims,
+    "log": cmd_log,
+    "status": cmd_status,
+    "goal": cmd_goal,
+}
+# Commands that need no open database: handler(a).
+NO_DB_COMMANDS = {
+    "init": cmd_init,
+    "upgrade": cmd_upgrade,
+    "buses": cmd_buses,
+}
+# Commands answered before argument parsing: handler(argv_after_the_command) -> exit status.
+EARLY_COMMANDS = {
+}
+
+
+def main():
+    global _JSON_ERRORS
+    argv = sys.argv[1:]
+    _JSON_ERRORS = "--json" in argv[:argv.index("--") if "--" in argv else len(argv)]
+    os.umask(0o077)  # bus.db and -wal are created owner-only
+    if argv and argv[0] in EARLY_COMMANDS:
+        raise SystemExit(EARLY_COMMANDS[argv[0]](argv[1:]) or 0)  # not sys.exit: test_security TEST 7
+    p = build_parser()
+    try:
+        a = p.parse_args()
+    except SystemExit:
+        write_help()  # --help / --version, into a reader that may have gone away
+        raise
+    except OSError as e:  # never expected (argparse's own writes go through _print_message)
+        if e.errno != errno.EPIPE:
+            raise
+        _stdout_to_devnull()
+        die("the reader closed stdout before the help or version was written")
+    _JSON_ERRORS = bool(a.json)
+    if a.cmd == "release" and not a.resource and not a.all:
+        p.error("release needs a resource or --all")
+    try:
+        run(a)
+    except UnicodeError as e:
+        # Last resort: text that is not UTF-8 reached a place that cannot take it (a path, the
+        # terminal). The inputs agentbus knows about are refused or replaced before this.
+        die(f"text is not valid UTF-8 or cannot be shown here ({type(e).__name__}: {getattr(e, 'reason', e)})")
+    flush_stdout("all the output")
+    if a.json:
+        flush_notes()  # only a fully successful command may emit non-error notices
+
+
+def run(a):
+    refuse_bad_inputs(a)
+    try:
+        if a.cmd in NO_DB_COMMANDS:
+            # These commands need no open database; use the same queued output path.
+            try:
+                NO_DB_COMMANDS[a.cmd](a)
+            finally:
+                emit_pending(a)
+            return
+        read_inputs(a)
+        a._db, strict = db_path(a)
+        if a.cmd == "watch":
+            try:
+                cmd_watch(a, strict)
+            finally:
+                emit_pending(a)  # --json queues its one value like every command
+            return
+        # Commands queue their output (later()); it is formatted and printed only once the bus is
+        # closed, so a reader piped into a slow consumer, or a listing a lane inflated, never holds
+        # the exclusive lock.
+        a._after = None
+        try:
+            con = open_bus(a._db, strict)
+            try:
+                COMMANDS[a.cmd](con, a)
+                _test_slow()
+                who = ident(a)
+                if who and a.cmd not in ("join", "leave"):
+                    # Any command run under a name counts as being seen. Best effort: the
+                    # command's own result already stands, so a refused touch (bus moved
+                    # meanwhile) is skipped.
+                    try:
+                        touch(con, who)
+                    except SystemExit:
+                        pass
+            finally:
+                con.close()
+        except BaseException:
+            a._after = None
+            raise
+        finally:
+            emit_pending(a)  # a write that fails exits here, so a._after never runs
+        if a._after:
+            # The output is written: now (inbox) mark it read, in a second short open. A process
+            # that dies between the two shows the same messages again next time (at least once).
+            _test_pause("before-mark-read")
+            try:
+                con = open_bus(a._db, strict)
+                try:
+                    a._after(con)
+                finally:
+                    con.close()
+            except (SystemExit, sqlite3.Error, OSError) as e:
+                why = reason(e) if isinstance(e, SystemExit) else timed_out_message() if _TIMED_OUT else str(e)
+                die(f"the messages above were shown but not marked read ({why}); the next inbox shows them again")
+            finally:
+                if not a.json:
+                    flush_notes()
+    except (sqlite3.Error, OSError) as e:
+        if _TIMED_OUT:
+            die(timed_out_message())
+        if isinstance(e, sqlite3.Error):
+            die(f"database error: {e}")
+        die(f"{e.strerror or e}: {e.filename or ''}".rstrip(": "))
+
+
+def emit_pending(a):
+    """Once every bus is closed: the queued notices on stderr, then the queued output, formatted
+    and (human output) wrapped, on stdout."""
+    if a.json and sys.exc_info()[0] is not None:
+        _NOTES.clear()
+        _PENDING.clear()
+        return
+    if not a.json:
+        flush_notes()
+    _test_pause("before-format")
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        render_pending()
+    _test_pause("before-stdout-write")
+    write_out(buf.getvalue() if a.json else wrap_output(buf.getvalue()))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        if not _JSON_ERRORS:
+            raise
+        die(str(e))

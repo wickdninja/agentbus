@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentbus"
+dynamic = ["version"]
+description = "A tiny shared SQLite bus so coding agents working on one repo can message, share facts and claim files"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Environment :: Console",
+]
+
+[project.urls]
+Homepage = "https://github.com/wickdninja/agentbus"
+
+[project.scripts]
+agentbus = "agentbus:main"
+
+# bin/agentbus is the single self-contained file `init` copies into repos. The wheel ships that same
+# file as the top-level module agentbus.py, so the installed command and a repo copy are one file.
+[tool.hatch.version]
+path = "bin/agentbus"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"bin/agentbus" = "agentbus.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["bin/agentbus", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "pyproject.toml", "skill/", "docs/", "examples/", "tests/"]

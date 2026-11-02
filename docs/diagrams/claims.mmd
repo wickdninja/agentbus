@@ -1,0 +1,22 @@
+stateDiagram-v2
+    direction TB
+    state "free" as free
+    state "held" as held
+    state "renewed<br/>claim again" as renewed
+    state "refused<br/>another agent claims an overlapping path" as refused
+    state "released<br/>release PATH" as released
+    state "expired<br/>TTL passes, 120 min default" as expired
+    state "holder gone<br/>off the roster (crashed or stale)" as gone
+
+    [*] --> free
+    free --> held: claim PATH
+    held --> renewed
+    renewed --> held
+    held --> refused
+    refused --> held: claim_conflict names the holder
+    held --> released
+    held --> expired
+    held --> gone
+    released --> free
+    expired --> free
+    gone --> free: next claim auto-releases
