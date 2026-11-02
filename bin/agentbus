@@ -6281,7 +6281,7 @@ def ambiguous_is_wide(stdin, out, select_mod):
     try:
         out.write("\r●\033[6n")
         out.flush()
-    except OSError:
+    except (OSError, UnicodeError):
         return False, b""
     got, end = b"", time.monotonic() + 0.1
     while time.monotonic() < end:
@@ -6421,12 +6421,13 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
     snap, error, stale, last_good = empty_snapshot(), None, None, None
     first_seen = {}
     cache = {}  # (section, key) -> detail data, read on open and on r
+    asked = set()  # (section, key) of detail reads queued or running
     decoder = KeyDecoder()
     out.write("\033[?1049h\033[?25l")
     out.flush()
     if stdin is not None:
         ttymod.setcbreak(stdin)
-        if not paint.ascii:
+        if not paint.ascii and (out.encoding or "").lower().replace("-", "") == "utf8":
             wide, rest = ambiguous_is_wide(stdin, out, select)
             if wide:
                 paint.ascii, paint.emoji = True, False
@@ -6438,12 +6439,14 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
     got_first = False
     esc_at = time.monotonic()
 
-    def want_detail(force=False):
+    def want_detail():
+        """Read the open detail unless it is cached (r clears the cache): on open and on r, never per tick."""
         d = view.detail
         if view.mode != "detail" or not d:
             return
         k = (d["section"], d["key"])
-        if force or k not in cache:
+        if k not in cache and k not in asked:
+            asked.add(k)
             shown = view.shown(snap)
             top = max((m["id"] for m in shown["messages"]), default=0)
             if d["section"] == "messages":
@@ -6462,6 +6465,7 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
                     stop.append(eff[1])
                 elif eff[0] == "read":
                     cache.clear()
+                    asked.clear()
                     reader.ask(("snap",))
                 elif eff[0] == "detail":
                     want_detail()
@@ -6473,8 +6477,6 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
             view.effects = []
             if stop:
                 return
-        if any(k == "r" for k in keys):
-            want_detail(force=True)
 
     while not stop:
         now_m = time.monotonic()
@@ -6496,8 +6498,10 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
                 else:
                     age = None if last_good is None else int(time.monotonic() - last_good)
                     error = dict(err, retry_s=a.interval, last_good_s=age, directory=tilde(bus_directory(a._db)))
-            elif err is None:
-                cache[(req[1], req[2])] = value
+            else:
+                asked.discard((req[1], req[2]))
+                if err is None:
+                    cache[(req[1], req[2])] = value
         fresh = {i for i, t in first_seen.items() if t and time.monotonic() - t < FRESH_S}
         if error and error.get("code") == "busy" and last_good is not None:
             error["last_good_s"] = int(time.monotonic() - last_good)

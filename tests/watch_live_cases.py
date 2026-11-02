@@ -402,13 +402,19 @@ def detail_reads():
     path = bin_path()
     log = os.path.join(os.path.dirname(DB), "..", "..", "detail-calls")
     wrapper = os.path.join(os.path.dirname(log), "count_detail.py")
+    if os.path.exists(log):
+        os.unlink(log)
     with open(wrapper, "w") as f:
         f.write("import runpy, sys\n"
                 "g = runpy.run_path(sys.argv[1], run_name='agentbus_counted')\n"
                 "real, log = g['watch_detail'], sys.argv[2]\n"
                 "def counted(*a, **k):\n"
                 "    open(log, 'a').write('call\\n')\n"
-                "    return real(*a, **k)\n"
+                "    try:\n"
+                "        return real(*a, **k)\n"
+                "    except BaseException as e:\n"
+                "        open(log, 'a').write('failed ' + repr(getattr(e, 'code', e))[:300] + '\\n')\n"
+                "        raise\n"
                 "g['render_watch'].__globals__['watch_detail'] = counted\n"
                 "sys.argv = ['agentbus'] + sys.argv[3:]\n"
                 "g['render_watch'].__globals__['contract_main']()\n")
@@ -418,12 +424,15 @@ def detail_reads():
         for _ in range(6):  # six ticks at 0.2 s
             s.frame_after(s.mark(), lambda f: True, 5, "a tick")
         n = open(log).read().count("call")
-        assert n == 1, f"watch_detail ran {n} times for one open detail over several ticks"
+        assert n == 1, f"watch_detail ran {n} times for one open detail over several ticks: {open(log).read()[-600:]}"
         key(s, b"r", lambda f: "message #10" in f[0], "r")
         t0 = time.monotonic()
         while open(log).read().count("call") < 2 and time.monotonic() - t0 < 5:
             s.pump(0.05)
-        assert open(log).read().count("call") == 2, "r did not read the detail again"
+        for _ in range(4):  # four more ticks: r read the detail once, not once per effect or per tick
+            s.frame_after(s.mark(), lambda f: True, 5, "a tick after r")
+        n = open(log).read().count("call")
+        assert n == 2, f"r read the detail {n - 1} times (want once)"
         s.send(b"qq")
         assert s.wait(10) == 0
     finally:

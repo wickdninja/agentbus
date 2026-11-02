@@ -215,6 +215,12 @@ assert any(m["body"] == "add a live watch view" for m in j["messages"])
 assert all("topic" in m for m in j["messages"]) and isinstance(j["unread"], dict), "topic and unread (additive) missing"
 assert set(j["omitted"]) == {"agents", "context", "claims", "messages"}, j.get("omitted")
 PY
+# A bus folder nothing has written yet is the empty bus, with the same keys (omitted and unread too), and stays unwritten.
+mkdir -p "$T/fresh"
+j=$(AGENTBUS_DB="$T/fresh/bus.db" json_ok agentbus watch --json)
+"$PY" -c 'import json,sys; j=json.loads(sys.argv[1]); assert j["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 0} and j["unread"] == {} and j["messages"] == [], j' "$j" \
+  || fail "watch --json on an unwritten bus folder lacks omitted or unread: $j"
+[ ! -e "$T/fresh/bus.db" ] || fail "watch --json created bus.db"
 ok "watch --json returns agents, claims, context, messages and counts"
 
 echo "TEST 8: a crowded bus fits every terminal: messages keep their share, cut sections say what they left out"
