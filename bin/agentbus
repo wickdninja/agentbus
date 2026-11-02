@@ -4832,6 +4832,8 @@ SKILL_TEXT = (
     '\n'
     'Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal; work toward it (a lead sets it with `goal "TEXT"`). Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.\n'
     '\n'
+    'Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.\n'
+    '\n'
     '## Before shared work\n'
     '\n'
     'Read `inbox --limit 20` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
@@ -5683,7 +5685,7 @@ def cmd_setup(a):
     elif all(c.action == "unchanged" for c in done):
         show("done. Nothing to change.")
     else:
-        show("done. Start a new {} session to load it.", SETUP_NAMES[target])
+        show("done. Start a new {} session to load {}.", SETUP_NAMES[target], "them" if target == "claude" else "it")
         show("next: cd your-repo && agentbus init .")
 
 
@@ -6098,6 +6100,120 @@ def register_hook(sub):
 
 REGISTER_COMMANDS.append(register_hook)
 
+
+# ---- setup claude: the hooks piece ----
+# The same five hooks the plugin registers, written to Claude Code's settings.json with the installed tool's
+# absolute path (recorded now, never looked up on PATH when a hook runs). When the agentbus plugin is installed
+# its hooks.json already provides them, and this piece adds nothing.
+CLAUDE_HOOK_EVENTS = (("SessionStart", "startup|resume|clear"), ("UserPromptSubmit", None),
+                      ("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit"), ("Stop", None), ("SessionEnd", None))
+CLAUDE_HOOK_TIMEOUT = 5
+CLAUDE_PLUGIN_NOTE = "hooks   provided by the agentbus plugin; not added"
+
+
+def claude_plugin_provides_hooks():
+    """True when the agentbus plugin is installed for the user and not switched off. Read from Claude Code's
+    own record of installed plugins (<config>/plugins/installed_plugins.json, and enabledPlugins in
+    settings.json); no claude process is started, so setup never touches Claude Code's state. Unreadable or
+    unfamiliar files mean "not installed" (hooks are added; doctor reports a duplicate if there is one)."""
+    config = setup_config_dir("claude", "user")
+
+    def load(name, *parts):
+        raw = setup_read(os.path.join(config, *parts, name))
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (ValueError, RecursionError):
+            return None
+    installed = load("installed_plugins.json", "plugins")
+    plugins = installed.get("plugins") if isinstance(installed, dict) else None
+    if not isinstance(plugins, dict):
+        return False
+    settings = load("settings.json")
+    switches = settings.get("enabledPlugins") if isinstance(settings, dict) else None
+    switches = switches if isinstance(switches, dict) else {}
+    for plugin_id, installs in plugins.items():
+        if not (isinstance(plugin_id, str) and plugin_id.split("@")[0] == "agentbus" and isinstance(installs, list)):
+            continue
+        if switches.get(plugin_id) is False:
+            continue
+        if any(isinstance(i, dict) and i.get("scope", "user") == "user" for i in installs):
+            return True
+    return False
+
+
+def claude_hook_tool():
+    """The running installed tool as one quoted shell word: sys.argv[0] made absolute when it is an executable
+    file (the installed command), else this interpreter and this file."""
+    def word(path):
+        return "'" + path.replace("'", "'\\''") + "'"
+    argv0 = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    if argv0 and os.path.isfile(argv0) and os.access(argv0, os.X_OK):
+        return word(argv0)
+    return word(sys.executable) + " " + word(self_path())
+
+
+class ClaudeHooksPiece(JsonEntriesPiece):
+    def __init__(self):
+        super().__init__("claude_hooks", lambda scope: os.path.join(setup_config_dir("claude", scope), "settings.json"),
+                         self.entries)
+
+    @staticmethod
+    def entries(scope):
+        tool = claude_hook_tool()
+        return [(event, matcher, {"type": "command", "timeout": CLAUDE_HOOK_TIMEOUT,
+                                  "command": f"{tool} hook claude {event} 2>/dev/null || true {MANAGED_TAG}"})
+                for event, matcher in CLAUDE_HOOK_EVENTS]
+
+    def plan(self, scope, uninstall=False):
+        if not uninstall and claude_plugin_provides_hooks():
+            return [Change(self.path_for(scope), "unchanged", "provided by the agentbus plugin; not added",
+                           line=CLAUDE_PLUGIN_NOTE)]
+        changes = super().plan(scope, uninstall)
+        count = f"{len(CLAUDE_HOOK_EVENTS)} hooks"
+        names = f"{count} ({', '.join(e for e, _ in CLAUDE_HOOK_EVENTS)})"
+        for c in changes:
+            if c.action in ("installed", "updated"):
+                c.line, c.would = c.line.replace(count, names, 1), c.would.replace(count, names, 1)
+        return changes
+
+    def recorded_commands(self, scope):
+        """The tagged hook commands in the settings file, [] when it is missing or unreadable."""
+        raw = setup_read(self.path_for(scope))
+        try:
+            hooks = json.loads(raw.decode("utf-8")).get("hooks", {}) if raw else {}
+        except (ValueError, RecursionError, AttributeError):
+            return []
+        return [h["command"] for groups in hooks.values() if isinstance(groups, list) for g in groups
+                if isinstance(g, dict) and isinstance(g.get("hooks"), list) for h in g["hooks"] if self.tagged(h)]
+
+    def check(self, scope):
+        commands = self.recorded_commands(scope)
+        if not commands and claude_plugin_provides_hooks():
+            return [(self.id, "ok", "the agentbus plugin provides the hooks", "")]
+        rows = super().check(scope)
+        fix = "agentbus setup claude" + (" --scope project" if scope == "project" else "")
+        if not commands:
+            return rows
+        import shlex
+        try:
+            words = shlex.split(commands[0])
+            argv = words[:words.index("hook")] + ["--version"]
+            run = subprocess.run(argv, capture_output=True, text=True, timeout=5, cwd=os.path.sep)
+            said = run.stdout.strip()
+            rows.append(("claude_hooks_tool", "ok" if run.returncode == 0 and said.startswith("agentbus ") else "problem",
+                         f"the hooks run {words[0]}" + (f" ({said})" if said else " (it does not print a version)"), fix))
+        except (ValueError, OSError, subprocess.SubprocessError):
+            rows.append(("claude_hooks_tool", "problem", "the executable the hooks run cannot be started", fix))
+        if claude_plugin_provides_hooks():
+            rows.append(("claude_hooks_duplicate", "problem", "the agentbus plugin and setup both register hooks",
+                         "agentbus setup claude --uninstall"))
+        return rows
+
+
+if not os.environ.get("AGENTBUS_TEST_SETUP_NO_HOOKS"):  # test hook: tests of the skill piece number the pieces
+    SETUP_TARGETS["claude"].append(ClaudeHooksPiece())
 
 # ==== doctor ====
 

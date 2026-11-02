@@ -6,6 +6,8 @@ set -euo pipefail
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export HOME="$T/home"; mkdir -p "$HOME"
 unset CLAUDE_CONFIG_DIR CODEX_HOME AGENTBUS_TEST_SETUP_FAIL AGENTBUS_TEST_SETUP_JSON
+# The tests below are about the skill piece and the engine; the hooks piece has its own section at the end.
+export AGENTBUS_TEST_SETUP_NO_HOOKS=1
 W="$T/work"; mkdir -p "$W"
 # Every fixed FAIL text in this file belongs to one assertion, so a FAIL line (and a mutation's expect in
 # tests/mutations.json) points at exactly one place. Bug it catches: three asserts all failed with "update line".
@@ -43,7 +45,7 @@ run_setup claude
 [ "$RC" = 0 ] || fail "exit $RC: $OUT"
 has "agentbus setup claude (user)"
 has "  + ~/.claude/skills/agentbus/SKILL.md   installed, $SIZE bytes"
-has "done. Start a new Claude Code session to load it."
+has "done. Start a new Claude Code session to load them."
 has "next: cd your-repo && agentbus init ."
 agentbus skill | cmp -s - "$SKILL_DIR/SKILL.md" || fail "the installed file is not what agentbus skill prints"
 [ "$(mode "$SKILL_DIR/SKILL.md")" = 600 ] || fail "SKILL.md mode $(mode "$SKILL_DIR/SKILL.md")"
@@ -636,6 +638,154 @@ for js in (True, False):
 PY
 AGENTBUS_TEST_SETUP_JSON="$T/hooks-intr.json" run_setup claude; [ "$RC" = 0 ] && [ -f "$T/hooks-intr.json" ] || fail "the rerun did not finish an interrupted setup: $RC $OUT"
 ok "an interrupted setup says committed, stays retryable, names the files and the rerun, and the rerun finishes it"
+
+echo
+echo "TEST: hooks: setup claude adds five tagged entries with the recorded absolute path, keeps existing hooks and keys, and a second run changes nothing"
+unset AGENTBUS_TEST_SETUP_NO_HOOKS AGENTBUS_TEST_SETUP_JSON
+reset
+mkdir -p "$HOME/.claude"; S="$HOME/.claude/settings.json"
+"$PY" -I - "$S" <<'PY'
+import json, sys
+json.dump({"theme": "dark", "env": {"A": "1"},
+           "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}],
+                     "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo post"}]}]}},
+          open(sys.argv[1], "w"), indent=2)
+PY
+cp "$S" "$T/s.orig"
+run_setup claude
+[ "$RC" = 0 ] || fail "hooks install: exit $RC: $OUT"
+has "  + ~/.claude/skills/agentbus/SKILL.md   installed, $SIZE bytes"
+grep -qF "  + ~/.claude/settings.json   added 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd); the file as it was is saved as settings.json.agentbus-" <<<"$OUT" || { echo "$OUT" >&2; fail "hooks install line"; }
+has "done. Start a new Claude Code session to load them."
+"$PY" -I - "$S" "$T/s.orig" <<'PY' || fail "settings.json lacks five tagged entries, or lost an existing hook or key"
+import json, os, shlex, subprocess, sys
+now = json.load(open(sys.argv[1])); orig = json.load(open(sys.argv[2]))
+hooks = now.pop("hooks")
+assert now == {k: v for k, v in orig.items() if k != "hooks"}, now
+assert hooks["PostToolUse"] == orig["hooks"]["PostToolUse"], hooks["PostToolUse"]
+assert hooks["Stop"][0] == orig["hooks"]["Stop"][0] and len(hooks["Stop"]) == 2, hooks["Stop"]
+want = {"SessionStart": "startup|resume|clear", "UserPromptSubmit": None, "PreToolUse": "Edit|Write|MultiEdit|NotebookEdit", "Stop": None, "SessionEnd": None}
+assert sorted(hooks) == sorted(set(want) | {"PostToolUse"}), sorted(hooks)
+for event, matcher in want.items():
+    groups = [g for g in hooks[event] if any(h["command"].endswith(" # agentbus:managed") for h in g["hooks"])]
+    assert len(groups) == 1 and groups[0].get("matcher") == matcher and len(groups[0]["hooks"]) == 1, (event, groups)
+    h = groups[0]["hooks"][0]
+    assert h["type"] == "command" and h["timeout"] == 5, h
+    words = shlex.split(h["command"])
+    tool = words[:words.index("hook")]
+    assert os.path.isabs(tool[0]) or os.path.isabs(tool[-1]), tool
+    assert h["command"].endswith(f" hook claude {event} 2>/dev/null || true # agentbus:managed"), h["command"]
+    assert h["command"].startswith("'"), h["command"]  # the executable is quoted, never looked up on PATH
+    ran = subprocess.run([*tool, "--version"], capture_output=True, text=True, cwd="/")
+    assert ran.returncode == 0 and ran.stdout.startswith("agentbus "), (tool, ran)
+assert not any(e.startswith("Subagent") for e in hooks), sorted(hooks)
+PY
+h1=$(hash_tree "$HOME")
+run_setup claude
+has "  = ~/.claude/settings.json   unchanged"
+[ "$(hash_tree "$HOME")" = "$h1" ] || fail "a second hooks run changed a file"
+ok "five tagged entries with the recorded executable, existing hooks and keys kept, a rerun changes nothing"
+
+echo
+echo "TEST: hooks: the registered command exits 0 without python3, and runs the hook with it"
+mkdir -p "$W/hproj"; (cd "$W/hproj" && "${AB[@]}" init . >/dev/null)
+printf '{"session_id":"aaaaaaaa-0000-4000-8000-000000000001","cwd":"%s","source":"startup"}' "$W/hproj" >"$T/hp.json"
+cmd=$("$PY" -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["hooks"]["SessionStart"][0]["hooks"][0]["command"])' "$S")
+RC=0; got=$(cd "$W/hproj" && env -i HOME="$HOME" PATH=/nonexistent /bin/sh -c "$cmd" <"$T/hp.json" 2>&1) || RC=$?
+[ "$RC" = 0 ] && [ -z "$got" ] || fail "the registered command without python3: exit $RC, output: $got"
+RC=0; got=$(cd "$W/hproj" && env -i HOME="$HOME" TMPDIR="$TMPDIR" PATH="$(dirname "$(command -v "$PY")"):/usr/bin:/bin" /bin/sh -c "$cmd" <"$T/hp.json" 2>/dev/null) || RC=$?
+[ "$RC" = 0 ] && grep -qF "you are on this folder's bus as claude-" <<<"$got" || fail "the registered command with python3: exit $RC, output: $got"
+ok "|| true keeps a missing python3 at exit 0; with python3 the recorded tool answers"
+
+echo
+echo "TEST: hooks: uninstall gives parsed-JSON equality with the original plus a user edit made in between"
+"$PY" -I - "$S" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["model"] = "opus"; d["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": "echo late"}]})
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+run_setup claude --uninstall
+[ "$RC" = 0 ] || fail "hooks uninstall: exit $RC: $OUT"
+"$PY" -I - "$S" "$T/s.orig" <<'PY' || fail "uninstall did not leave the original plus the user's edit"
+import json, sys
+now = json.load(open(sys.argv[1])); orig = json.load(open(sys.argv[2]))
+orig["model"] = "opus"; orig["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": "echo late"}]})
+assert now == orig, (now, orig)
+PY
+ok "tagged entries gone, everything else (including the edit) kept"
+
+echo
+echo "TEST: hooks: an invalid settings.json is refused and left byte-identical"
+printf '{ not json' >"$S"; cp "$S" "$T/s.bad"
+run_setup claude
+[ "$RC" = 1 ] && grep -qF "is not valid JSON; not changed." <<<"$OUT" || fail "invalid settings.json: exit $RC: $OUT"
+cmp -s "$S" "$T/s.bad" || fail "invalid settings.json was changed"
+[ ! -e "$HOME/.claude/skills/agentbus" ] || fail "the skill was written although the hooks file was refused"
+ok "refused, nothing written"
+
+echo
+echo "TEST: hooks: an installed agentbus plugin provides the hooks, so only the skill is added"
+reset
+mkdir -p "$HOME/.claude/plugins"
+"$PY" -I - "$HOME/.claude/plugins/installed_plugins.json" "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" agentbus@agentbus <<'PY'
+import json, sys
+d = json.load(open(sys.argv[2])); entry = next(iter(d["plugins"].values()))
+d["plugins"] = {sys.argv[3]: entry}
+json.dump(d, open(sys.argv[1], "w"))
+PY
+run_setup claude
+[ "$RC" = 0 ] || fail "plugin present: exit $RC: $OUT"
+has "  = hooks   provided by the agentbus plugin; not added"
+has "  + ~/.claude/skills/agentbus/SKILL.md   installed, $SIZE bytes"
+[ ! -e "$HOME/.claude/settings.json" ] || fail "hooks were added although the plugin provides them"
+# a plugin Claude Code has switched off provides nothing; one of another name is not agentbus
+printf '{"enabledPlugins": {"agentbus@agentbus": false}}' >"$HOME/.claude/settings.json"
+run_setup claude; grep -qF "  + ~/.claude/settings.json   added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "a disabled plugin still counted"; }
+reset; mkdir -p "$HOME/.claude/plugins"; cp "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" "$HOME/.claude/plugins/installed_plugins.json"
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "another plugin's id counted as agentbus"; }
+reset; mkdir -p "$HOME/.claude/plugins"; printf 'not json' >"$HOME/.claude/plugins/installed_plugins.json"
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "an unreadable plugin record stopped setup"; }
+ok "installed and enabled: skill only; disabled, another name or unreadable: hooks added"
+
+echo
+echo "TEST: hooks: check reports the entry, the recorded executable and a plugin duplicate"
+reset; run_setup claude >/dev/null
+rows() { "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$S" <<'PY'
+import json, runpy, shlex, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_check")
+# check runs inside the tool, whose argv[0] is the executable setup recorded
+sys.argv[0] = shlex.split(json.load(open(sys.argv[2]))["hooks"]["Stop"][0]["hooks"][0]["command"])[0]
+for r in m["ClaudeHooksPiece"]().check("user"):
+    print(r[0], r[1])
+PY
+}
+got=$(rows); [ "$got" = "$(printf 'claude_hooks ok\nclaude_hooks_tool ok')" ] || fail "check after install: $got"
+"$PY" -I - "$S" <<'PY'
+import json, re, sys
+d = json.load(open(sys.argv[1]))
+for groups in d["hooks"].values():
+    for g in groups:
+        for h in g["hooks"]:
+            h["command"] = re.sub(r"^'[^']*'", "'/nonexistent/agentbus'", h["command"])
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+got=$(rows); grep -qx "claude_hooks_tool problem" <<<"$got" || fail "check with a missing executable: $got"
+run_setup claude >/dev/null; mkdir -p "$HOME/.claude/plugins"
+"$PY" -I - "$HOME/.claude/plugins/installed_plugins.json" "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" agentbus@agentbus <<'PY'
+import json, sys
+d = json.load(open(sys.argv[2])); entry = next(iter(d["plugins"].values()))
+d["plugins"] = {sys.argv[3]: entry}
+json.dump(d, open(sys.argv[1], "w"))
+PY
+got=$(rows); grep -qx "claude_hooks_duplicate problem" <<<"$got" || fail "check with the plugin and setup hooks both present: $got"
+ok "check: ok after install; a missing executable and a plugin duplicate are problems"
+
+echo
+echo "TEST: hooks: --scope project writes ./.claude/settings.json under the current directory only"
+reset; run_setup claude --scope project
+[ "$RC" = 0 ] && [ -f "$W/.claude/settings.json" ] && [ ! -e "$HOME/.claude/settings.json" ] || fail "project hooks: exit $RC, $OUT"
+grep -qF "  + .claude/settings.json" <<<"$OUT" || grep -qF "settings.json   added 5 hooks" <<<"$OUT" || fail "project hooks line: $OUT"
+ok "project scope: the settings file is under the work folder"
 
 echo
 echo "All setup tests passed"

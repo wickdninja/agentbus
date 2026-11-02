@@ -196,5 +196,86 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "FAIL: update line: the edited SKILL.md was not saved as a .bak"
+  },
+  {
+    "name": "a hook makes a lane's name (AGENTBUS_AGENT) leave when its session ends",
+    "file": "bin/agentbus",
+    "find": "if not ident or not ident\\[1\\] or payload.get\\(\"reason\"\\) not in HOOK_END_REASONS:",
+    "replace": "if not ident or payload.get(\"reason\") not in HOOK_END_REASONS:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd left a name set by AGENTBUS_AGENT"
+  },
+  {
+    "name": "SessionStart takes over a name another live session holds",
+    "file": "bin/agentbus",
+    "find": "hook_join\\(con, name, takeover=derived\\)",
+    "replace": "hook_join(con, name, takeover=True)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionStart took over a live name"
+  },
+  {
+    "name": "a hook uses an AGENTBUS_AGENT outside the allowed pattern",
+    "file": "bin/agentbus",
+    "find": "return \\(env, False\\) if HOOK_NAME_RE.fullmatch\\(env\\) else None",
+    "replace": "return (env, False)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "unsafe AGENTBUS_AGENT"
+  },
+  {
+    "name": "a hook exits 1",
+    "file": "bin/agentbus",
+    "find": "os\\._exit\\(0\\)  # not SystemExit",
+    "replace": "os._exit(1)  # not SystemExit",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "rc 1"
+  },
+  {
+    "name": "PreToolUse nudges about an unclaimed path every time",
+    "file": "bin/agentbus",
+    "find": "if own or not isinstance\\(payload.get\\(\"session_id\"\\), str\\) or not hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\):",
+    "replace": "if own:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "second unclaimed nudge for the same path"
+  },
+  {
+    "name": "a message of an unknown kind is counted under its own name",
+    "file": "bin/agentbus",
+    "find": "key = kind if isinstance\\(kind, str\\) and kind in KINDS else \"other\"",
+    "replace": "key = kind",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "unknown kind:"
+  },
+  {
+    "name": "a hook waits five seconds for a busy bus",
+    "file": "bin/agentbus",
+    "find": "^HOOK_BUSY_S = 0\\.3",
+    "replace": "HOOK_BUSY_S = 5.0",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a held bus made a hook wait more than 1 s"
+  },
+  {
+    "name": "setup claude records a PATH lookup instead of the tool's absolute path",
+    "file": "bin/agentbus",
+    "find": "        return word\\(argv0\\)\\n",
+    "replace": "        return \"agentbus\"\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "settings.json lacks five tagged entries, or lost an existing hook or key"
+  },
+  {
+    "name": "setup claude adds hooks although the plugin provides them",
+    "file": "bin/agentbus",
+    "find": "if not uninstall and claude_plugin_provides_hooks\\(\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line:   = hooks   provided by the agentbus plugin; not added"
   }
 ]

@@ -75,12 +75,13 @@ echo "STEP 6: setup claude puts the skill in HOME (runs once the command exists)
 if agentbus setup --help >/dev/null 2>&1; then
   say "agentbus setup claude (user)
   + ~/.claude/skills/agentbus/SKILL.md   installed, $(agentbus skill | wc -c | sed 's/^ *//' | python3 -c 'import sys; print(format(int(sys.stdin.read()), ","))') bytes
-done. Start a new Claude Code session to load it.
+  + ~/.claude/settings.json   added 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd)
+done. Start a new Claude Code session to load them.
 next: cd your-repo && agentbus init ." agentbus setup claude
   [ -f "$HOME/.claude/skills/agentbus/SKILL.md" ] || fail "setup claude wrote no skill into HOME"
   second=$(agentbus setup claude)
-  grep -qxF "  = ~/.claude/skills/agentbus/SKILL.md   unchanged" <<<"$second" && ! grep -q 'installed' <<<"$second" || fail "a second setup run was not a no-op: $second"
-  ok "setup claude installed the skill and a second run changed nothing"
+  grep -qxF "  = ~/.claude/skills/agentbus/SKILL.md   unchanged" <<<"$second" && grep -qxF "  = ~/.claude/settings.json   unchanged" <<<"$second" && ! grep -q 'installed' <<<"$second" || fail "a second setup run was not a no-op: $second"
+  ok "setup claude installed the skill and the hooks and a second run changed nothing"
 else
   skip_part "agentbus setup does not exist in this build"
 fi

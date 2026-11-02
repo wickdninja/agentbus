@@ -19,6 +19,8 @@ Discovery finds the nearest ancestor bus; linked worktrees map to their main che
 
 Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal; work toward it (a lead sets it with `goal "TEXT"`). Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.
 
+Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.
+
 ## Before shared work
 
 Read `inbox --limit 20` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
