@@ -79,9 +79,14 @@ Want to see it without touching a repo? Run `examples/two-agent-handoff.sh` (fro
 
 <img src="docs/how-agents-work.jpg" alt="A six-panel comic: the human pins a goal, the brain robot hands a sealed envelope to a hand robot, the hand padlocks a code file with an hourglass, a test ghost bounces off the lock and sends a question instead, the hand releases the file and sends a green check, and the human watches it all on a dashboard" width="100%">
 
+<sub>The cast: the brain robot is the lead agent, the boxy robot is the implementer, the ghost is a subagent, and the one in the hoodie is you.</sub>
+
 The team shares one goal. Each agent claims files before it edits them and hands work to the next through inboxes. When it finishes, it posts done, and a human watches it all happen.
 
-<img src="docs/diagrams/handoff.png" alt="A handoff, end to end: you set the goal, agents join, claim files, hand off, ask and answer, release and post done" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/hero-dark.png">
+  <img src="docs/diagrams/hero-light.png" alt="How agents work together. The bus sits in the middle holding the goal, inboxes, claims and facts. 1: you set the goal. 2: claude, the lead, hands off to codex. 3: codex claims src/auth/. 4: the tests subagent's claim is refused, held by codex, so it asks codex instead. 5: codex answers, releases src/auth/, and posts done to claude. 6: you watch it all live." width="100%">
+</picture>
 
 Full diagrams and their sources: [docs/workflow.md](docs/workflow.md)
 

@@ -2,7 +2,7 @@
   "theme": "base",
   "themeVariables": {
     "fontFamily": "Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif",
-    "fontSize": "16px",
+    "fontSize": "18px",
     "background": "#ffffff",
     "primaryColor": "#FFF4CC",
     "primaryBorderColor": "#F5B800",
@@ -35,7 +35,7 @@
     "noteTextColor": "#1f2328",
     "activationBkgColor": "#FFF4CC",
     "activationBorderColor": "#F5B800",
-    "sequenceNumberColor": "#1f2328",
+    "sequenceNumberColor": "#ffffff",
     "stateBkg": "#FFF4CC",
     "stateLabelColor": "#1f2328",
     "labelColor": "#1f2328",
@@ -46,8 +46,35 @@
     "compositeBackground": "#FFFBEA",
     "compositeBorder": "#F5B800"
   },
-  "themeCSS": ".node rect, .node polygon, .node path { rx: 12px; ry: 12px; stroke-width: 2px; } .actor { rx: 12px; ry: 12px; stroke-width: 2px; } .note { rx: 8px; ry: 8px; } .edgeLabel { font-size: 14px; } .messageText { font-size: 14px; }",
-  "flowchart": { "curve": "basis", "padding": 18, "nodeSpacing": 50, "rankSpacing": 60, "htmlLabels": true },
-  "sequence": { "diagramMarginX": 30, "diagramMarginY": 24, "actorMargin": 60, "width": 170, "height": 56, "boxMargin": 12, "boxTextMargin": 8, "noteMargin": 14, "messageMargin": 42, "mirrorActors": false, "useMaxWidth": false, "wrap": false },
-  "state": { "padding": 14, "nodeSpacing": 60, "rankSpacing": 70 }
+  "themeCSS": ".node rect, .node polygon, .node path { rx: 12px; ry: 12px; stroke-width: 2px; } rect.actor { rx: 12px; ry: 12px; stroke-width: 2px; } .note { rx: 8px; ry: 8px; } .edgeLabel { font-size: 16px; } .sequenceNumber { font-size: 13px; font-weight: 700; } .flowchart-link { stroke-width: 2px; } path.transition { stroke-width: 2px; } .messageLine0, .messageLine1 { stroke-width: 2px; } .edgeLabel, .edgeLabel p, .edgeLabel span { background-color: #ffffff !important; }",
+  "flowchart": {
+    "curve": "basis",
+    "padding": 18,
+    "nodeSpacing": 50,
+    "rankSpacing": 60,
+    "htmlLabels": true
+  },
+  "sequence": {
+    "diagramMarginX": 30,
+    "diagramMarginY": 30,
+    "actorMargin": 50,
+    "width": 200,
+    "height": 56,
+    "boxMargin": 12,
+    "boxTextMargin": 8,
+    "noteMargin": 14,
+    "messageMargin": 46,
+    "mirrorActors": true,
+    "useMaxWidth": false,
+    "wrap": false,
+    "actorFontSize": 17,
+    "messageFontSize": 17,
+    "noteFontSize": 16,
+    "actorFontWeight": 600
+  },
+  "state": {
+    "padding": 14,
+    "nodeSpacing": 60,
+    "rankSpacing": 70
+  }
 }

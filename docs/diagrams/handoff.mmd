@@ -1,30 +1,35 @@
 sequenceDiagram
+    autonumber
     participant you as You
-    participant claude as claude (brain)
-    participant codex as codex (hand)
+    participant claude as claude (lead)
+    participant codex as codex (implementer)
     participant tests as tests (subagent)
     participant bus as The bus
 
     you->>bus: goal "auth on the new token API"
     claude->>bus: join
     bus-->>claude: goal: auth on the new token API
-    codex->>bus: join
-    bus-->>codex: goal: auth on the new token API
-    tests->>bus: join
-    bus-->>tests: goal: auth on the new token API
+    Note over codex,bus: codex and tests join too,<br/>and see the same goal
 
-    claude->>bus: post --to codex --kind handoff
+    claude->>bus: post "auth refactor is yours" --to codex --kind handoff
     codex->>bus: inbox
-    bus-->>codex: handoff from claude
+    bus-->>codex: #35;1 claude -> codex [handoff]
 
     codex->>bus: claim src/auth/ --purpose "token API"
     bus-->>codex: claimed src/auth/
     tests->>bus: claim src/auth/
-    bus--xtests: claim_conflict, held by codex
+    bus--xtests: refused: src/auth/ is claimed by codex
+    Note over tests,bus: exit 1, and the error says<br/>ask codex with post --kind question
 
     tests->>bus: post --to codex --kind question
+    codex->>bus: inbox
+    bus-->>codex: #35;2 tests -> codex [question]
     codex->>bus: post --to tests --reply-to 2 --kind answer
 
     codex->>bus: release src/auth/
-    codex->>bus: post --to claude --kind done
+    codex->>bus: post "done, tests green" --to claude --reply-to 1 --kind done
+    claude->>bus: inbox
+    bus-->>claude: #35;4 codex -> claude [done] re #35;1
+
     you->>bus: watch
+    Note over you,bus: watch shows agents, claims, facts and messages, live
