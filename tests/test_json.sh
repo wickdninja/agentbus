@@ -44,39 +44,46 @@ def array(rows, **fields):
     assert type(rows) is list and rows, rows
     for row in rows:
         shape(row, **fields)
+def listing(r, **fields):
+    """A listing is an envelope: the contract version, the rows, whether rows were left out, a cursor."""
+    assert type(r) is dict and set(r) == {'v', 'items', 'has_more', 'next'} and r['v'] == 1, r
+    assert r['has_more'] is False and r['next'] is None, r
+    array(r['items'], **fields)
+    return r['items']
 null = type(None)
 fact = dict(key=str, value=str, updated_by=str, updated_at=str)
 agent = dict(name=str, tool=(str, null), model=(str, null), cwd=str, branch=(str, null), role=(str, null), joined_at=str, last_seen=str)
 message = dict(id=int, ts=str, sender=str, recipient=str, kind=str, topic=(str, null), body=str, reply_to=(int, null))
 claim = dict(resource=str, agent=str, purpose=(str, null), claimed_at=str, expires_at=str, state=str)
 for name in ('a', 'b'):
-    shape(j('--as', name, 'join', '--tool', 't'), joined=str, bus=str, goal=(dict, null))
+    joined = shape(j('--as', name, 'join', '--tool', 't'), joined=str, bus=str, goal=(dict, null), agentbus=str, contract=int)
+    assert joined['contract'] == 1
 shape(j('--as', 'a', 'post', 'hello'), id=int)
 qid = shape(j('--as', 'a', 'post', 'q', '--to', 'b', '--kind', 'question'), id=int)['id']
 shape(j('--as', 'b', 'post', 'ans', '--to', 'a', '--reply-to', str(qid), '--kind', 'answer'), id=int)
-array(j('--as', 'b', 'inbox'), **message)
-assert j('--as', 'b', 'inbox') == []
-array(j('who'), **agent)
-array(j('read'), **message)
-shape(j('--as', 'a', 'ctx', 'set', 'k', 'sha-old'), **fact)
-shape(j('--as', 'b', 'ctx', 'set', 'k', 'sha-new'), **fact)
+listing(j('--as', 'b', 'inbox'), **message)
+assert j('--as', 'b', 'inbox')['items'] == []
+listing(j('who'), **agent)
+listing(j('read'), **message)
+shape(j('--as', 'a', 'ctx', 'set', 'k', 'sha-old'), unchanged=bool, **fact)
+shape(j('--as', 'b', 'ctx', 'set', 'k', 'sha-new'), unchanged=bool, **fact)
 latest = shape(j('ctx', 'get', 'k'), **fact)
 assert (latest['value'], latest['updated_by']) == ('sha-new', 'b'), latest
-array(j('ctx', 'get'), **fact)
-history = j('ctx', 'history', 'k')
-array(history, id=int, **fact)
+listing(j('ctx', 'get'), **fact)
+history = listing(j('ctx', 'history', 'k'), id=int, **fact)
 assert [(r['key'], r['value'], r['updated_by']) for r in history] == [('k', 'sha-old', 'a'), ('k', 'sha-new', 'b')], history
 assert history[0]['id'] < history[1]['id'], history
 for resource in ('src/a.py', 'issue:1'):
     shape(j('--as', 'a', 'claim', resource), resource=str, agent=str, purpose=null, claimed_at=str, expires_at=str,
           auto_released=list, auto_released_count=int)
-array(j('claims'), **claim)
-assert j('claims', '--stale') == []
+listing(j('claims'), **claim)
+assert j('claims', '--stale')['items'] == []
 assert j('goal') is None
-goal = shape(j('--as', 'a', 'goal', 'ship it'), goal=str, set_by=str, set_at=str)
+goal = shape(j('--as', 'a', 'goal', 'ship it'), goal=str, set_by=str, set_at=str, unchanged=bool)
 assert goal['goal'] == 'ship it' and goal['set_by'] == 'a', goal
 assert shape(j('goal'), goal=str, set_by=str, set_at=str)['goal'] == 'ship it'
-status = shape(j('status'), bus=str, goal=dict, agents=list, context=list, claims=list, messages=list)
+status = shape(j('status'), bus=str, goal=dict, agents=list, context=list, claims=list, messages=list, omitted=dict)
+shape(status['omitted'], agents=int, context=int, claims=int, messages=int)
 array(status['agents'], **agent); array(status['context'], **fact)
 array(status['claims'], **claim); array(status['messages'], **message)
 for args, expected in [(('src/a.py',), ['src/a.py']), (('--all',), ['issue:1']), (('--all',), [])]:
@@ -84,18 +91,25 @@ for args, expected in [(('src/a.py',), ['src/a.py']), (('--all',), ['issue:1']),
     assert released == {'released': expected, 'released_count': len(expected)}, released
 entry = shape(j('--as', 'a', 'log', 'add', 'note', 'detail'), id=int, logged=bool, agent=str, action=str, detail=str)
 assert entry['logged'] is True and entry['id'] > 0
-logs = j('log', 'show')
-array(logs, id=int, ts=str, agent=str, action=str, detail=(str, null))
+logs = listing(j('log', 'show'), id=int, ts=str, agent=str, action=str, detail=(str, null))
 assert [(r['agent'], r['action'], r['detail']) for r in logs if r['id'] == entry['id']] == [('a', 'note', 'detail')]
 shape(j('--as', 'a', 'leave'), left=str, released=list, released_count=int)
 repo = pathlib.Path(tmp)/'install'; repo.mkdir()
 shape(j('init', str(repo)), directory=str, copy=str, old=str, new=str, exclude_added=bool, gitignore_rule=bool, outer=null)
-shape(j('upgrade', str(repo)), directory=str, old=str, new=str)
-array(j('buses'), level=int, directory=str, exists=bool)
+shape(j('upgrade', str(repo)), directory=str, old=str, new=str, schema_old=(int, type(None)), schema_new=(int, type(None)), backup=(str, type(None)))
+schema = shape(j('schema'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, exit_codes=dict, env=dict)
+assert schema['contract'] == 1 and 'post' in schema['commands']
+shape(j('schema', 'post'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, exit_codes=dict, env=dict)
+listing(j('buses'), level=int, directory=str, exists=bool, copy_version=(str, null), stale=bool)
+assert shape(j('skill'), text=str)['text'].startswith('---\nname: agentbus\n')
+assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbus\n')
+setup = shape(j('setup', 'claude', '--dry-run'), target=str, scope=str, dry_run=bool, changes=list)
+array(setup['changes'], path=str, action=str, detail=str)
 j('--as', 'b', 'claim', 'watch-fixture')
 for after in (False, True):
     for once in ((), ('--once',)):
-        snap = shape(j('watch', *once, after=after), bus=str, directory=str, goal=dict, agents=list, claims=list, context=list, messages=list, counts=dict)
+        snap = shape(j('watch', *once, after=after), bus=str, directory=str, goal=dict, agents=list, claims=list, context=list, messages=list, counts=dict, omitted=dict)
+        shape(snap['omitted'], agents=int, context=int, claims=int, messages=int)
         shape(snap['counts'], agents=int, claims=int, messages=int)
         array(snap['agents'], name=str, role=(str, null), last_seen=str, joined_at=str)
         array(snap['claims'], resource=str, agent=str, purpose=null, expires_at=str)
@@ -105,9 +119,9 @@ for after in (False, True):
 assert seen == inventory(parser), ('untested parser commands', inventory(parser) - seen, 'extra', seen - inventory(parser))
 print('PASS: every parser subcommand prints one JSON value with exact keys and types')
 # Both shared-option placements must work, including nested actions.
-shape(j('--as', 'a', 'join', after=True), joined=str, bus=str, goal=dict)
+shape(j('--as', 'a', 'join', after=True), joined=str, bus=str, goal=dict, agentbus=str, contract=int)
 for args in [('who',), ('read',), ('status',), ('claims',), ('log', 'show'), ('ctx', 'get'), ('--as', 'a', 'inbox'),
-             ('--as', 'a', 'post', 'after'), ('--as', 'a', 'ctx', 'set', 'k2', 'v'), ('upgrade', str(repo)), ('buses',)]:
+             ('--as', 'a', 'post', 'after'), ('--as', 'a', 'ctx', 'set', 'k2', 'v'), ('upgrade', str(repo)), ('buses',), ('schema',)]:
     j(*args, after=True)
 with tempfile.TemporaryDirectory() as cwd:
     p = subprocess.run([*agentbus_argv(), 'who'], cwd=cwd, capture_output=True, text=True, check=True)
@@ -119,3 +133,4 @@ else:
     raise AssertionError('plain who printed JSON')
 print('PASS: --json before or after the subcommand')
 PY
+echo "All JSON tests passed"

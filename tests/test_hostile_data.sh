@@ -122,12 +122,15 @@ expect_fail "bus schema is not agentbus's: table agents differs" env AGENTBUS_DB
 python3 "$T/restore.py" "$D1"
 sweep "$D1"
 # Numeric zero is data, not an empty column, even when stored while the table was untyped.
-outof env AGENTBUS_DB="$D1" "${AB[@]}" who | python3 -c 'import sys; assert any(r.split()==["0","0","0","0","0","seen","?","ago"] for r in sys.stdin)' || fail "who hid numeric zero fields"
-outof env AGENTBUS_DB="$D1" "${AB[@]}" claims | python3 -c 'import sys; assert any(r.split()==["0","0","expired","0"] for r in sys.stdin)' || fail "claims hid numeric zero fields"
+# Read the output from a file: a pipe into python3 -c under pipefail can die on SIGPIPE when python exits early.
+outof env AGENTBUS_DB="$D1" "${AB[@]}" who > "$T/zero.who"
+python3 -c 'import sys; assert any(r.split()==["0","0","0","0","0","seen","?","ago"] for r in open(sys.argv[1]))' "$T/zero.who" || fail "who hid numeric zero fields"
+outof env AGENTBUS_DB="$D1" "${AB[@]}" claims > "$T/zero.claims"
+python3 -c 'import sys; assert any(r.split()==["0","0","expired","0"] for r in open(sys.argv[1]))' "$T/zero.claims" || fail "claims hid numeric zero fields"
 o=$(json_ok env AGENTBUS_DB="$D1" "${AB[@]}" --json who)
-printf '%s' "$o" | python3 -c 'import json,sys; r=[a for a in json.load(sys.stdin) if a["name"]=="infy2"][0]; assert r["tool"]=="inf" and r["model"]=="-inf", r' || fail "inf not shown as a string"
+printf '%s' "$o" | python3 -c 'import json,sys; r=[a for a in json.load(sys.stdin)["items"] if a["name"]=="infy2"][0]; assert r["tool"]=="inf" and r["model"]=="-inf", r' || fail "inf not shown as a string"
 o=$(json_ok env AGENTBUS_DB="$D1" "${AB[@]}" --json read)
-printf '%s' "$o" | python3 -c 'import json,sys; assert sorted(str(m["reply_to"]) for m in json.load(sys.stdin) if m["reply_to"] is not None)==["-inf","inf"]' || fail "reply_to inf not shown as a string"
+printf '%s' "$o" | python3 -c 'import json,sys; assert sorted(str(m["reply_to"]) for m in json.load(sys.stdin)["items"] if m["reply_to"] is not None)==["-inf","inf"]' || fail "reply_to inf not shown as a string"
 ok "non-finite floats shown as strings under --json"
 
 echo "TEST 2: NULL in every nullable column of every table never crashes a command"
@@ -287,7 +290,7 @@ echo "TEST 7: a last_seen in the future does not lock the name"
 D7="$T/future.db"; seed "$D7"
 python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("UPDATE agents SET last_seen=? WHERE name=?", ("2999-01-01T00:00:00Z", "seed")); c.commit()' "$D7"
 AGENTBUS_DB="$D7" agentbus --as seed join --tool t2 >/dev/null 2>"$T/err" || fail "future last_seen locked the name: $(cat "$T/err")"
-[ "$(AGENTBUS_DB="$D7" agentbus --json who | python3 -c 'import json,sys; print([a["tool"] for a in json.load(sys.stdin) if a["name"]=="seed"][0])')" = t2 ] || fail "rejoin did not update the roster"
+[ "$(AGENTBUS_DB="$D7" agentbus --json who | python3 -c 'import json,sys; print([a["tool"] for a in json.load(sys.stdin)["items"] if a["name"]=="seed"][0])')" = t2 ] || fail "rejoin did not update the roster"
 AGENTBUS_DB="$D7" agentbus --as other join --tool t >/dev/null
 expect_fail "other was active less than a minute ago" env AGENTBUS_DB="$D7" "${AB[@]}" --as other join --tool t
 ok "a future last_seen counts as stale; a name seen just now is still refused"

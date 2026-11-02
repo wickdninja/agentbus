@@ -29,19 +29,19 @@ def snapshot():
 before = snapshot()
 for args in [('ctx', 'set', '', 'value'), ('ctx', 'get', ''), ('ctx', 'history', '')]:
     p = run('--as', 'a', *args)
-    assert p.returncode == 1 and p.stdout == '', (args, p)
+    assert p.returncode == 2 and p.stdout == '', (args, p)  # a usage error: exit 2
     assert p.stderr == 'agentbus: KEY must not be empty. Omit KEY to list facts.\n', p.stderr
     assert snapshot() == before, (args, 'changed bus')
     # A missing bus must not be created by an invalid key either.
     with tempfile.TemporaryDirectory() as d:
         os.environ['AGENTBUS_DB'] = os.path.join(d, 'missing.db')
         p = run('--as', 'a', *args)
-        assert p.returncode == 1 and not os.listdir(d), (args, p.stderr, os.listdir(d))
+        assert p.returncode == 2 and not os.listdir(d), (args, p.stderr, os.listdir(d))
     os.environ['AGENTBUS_DB'] = db
 assert run('--as', 'a', 'ctx', 'set', 'key', 'value').returncode == 0
 p = run('ctx', 'get', '--json')
 assert p.returncode == 0, p.stderr
-rows = json.loads(p.stdout)
+rows = json.loads(p.stdout)['items']
 assert len(rows) == 1 and rows[0]['key'] == 'key' and rows[0]['value'] == 'value', rows
 for args, message in [
     (('ctx', 'get', 'missing'), 'no context key missing. List keys with: agentbus ctx get'),
@@ -54,7 +54,7 @@ for args, message in [
         assert p.returncode == 1 and p.stdout == '', (args, p)
         if flags:
             code, field, value = {'ctx': ('no_context_key', 'key', 'missing'), 'post': ('no_message', 'id', 99999), 'release': ('not_held', 'resource', 'missing')}[args[0]]
-            assert json.loads(p.stderr) == {'error': {'code': code, 'message': message, field: value}}, p.stderr
+            assert json.loads(p.stderr) == {'error': {'code': code, 'message': message, 'retryable': False, 'committed': False, field: value}}, p.stderr
             assert len(p.stderr.splitlines()) == 1, p.stderr
         else:
             assert p.stderr == 'agentbus: ' + message + '\n', p.stderr
@@ -90,7 +90,7 @@ echo "TEST 2: a stdin body with bytes that are not UTF-8 is stored with U+FFFD"
 printf 'caf\xff ok' | agentbus --as a post - >/dev/null || fail "stdin body with a \\xff byte refused"
 printf 'v\xff' | agentbus --as a ctx set sk - >/dev/null || fail "ctx set from stdin with a \\xff byte"
 printf 'd\xff' | agentbus --as a log add w - >/dev/null || fail "log add from stdin with a \\xff byte"
-outof agentbus --json read | python3 -c 'import json,sys; assert any(m["body"] == "caf� ok" for m in json.load(sys.stdin))' || fail "body not stored with U+FFFD"
+outof agentbus --json read | python3 -c 'import json,sys; assert any(m["body"] == "caf� ok" for m in json.load(sys.stdin)["items"])' || fail "body not stored with U+FFFD"
 # ctx get KEY prints the value as a row, indented like every row that starts with bus text.
 [ "$(outof agentbus ctx get sk)" = "  v�" ] || fail "ctx value not stored with U+FFFD"
 ok "stdin read as bytes, decoded with replacement"

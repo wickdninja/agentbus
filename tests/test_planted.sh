@@ -144,7 +144,7 @@ sleep 0.5
 AGENTBUS_DB="$D5" "${AB[@]}" --as other post "while who stalled" >/dev/null 2>"$T/pe" || fail "the post failed while who stalled: $(cat "$T/pe")"
 rc=0; wait $S || rc=$?
 took=$(since "$t0")
-[ "$rc" = 1 ] || fail "the stalled command was not ended (rc $rc)"
+[ "$rc" = 3 ] || fail "the stalled command was not ended (rc $rc)"
 tr -d '\n' < "$T/e5" | sed 's/  */ /g' | grep -q "held the bus for 8 s, the most agentbus allows" || fail "no hold message: $(cat "$T/e5")"
 under "$took" 12 || fail "the stalled command took ${took}s"
 [ ! -s "$T/o5" ] || fail "the stopped command printed output"

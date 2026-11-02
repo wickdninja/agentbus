@@ -2,9 +2,10 @@
 set -euo pipefail
 # The residual race (see docs/sandboxed-agents.md) closes at the sandbox: a lane that cannot create
 # links (symbolic or hard) in the bus folder cannot plant one. This proves the documented sandbox-exec profile does
-# that and still lets the lane use the bus. macOS only; elsewhere it says SKIP.
+# that and still lets the lane use the bus. macOS only; elsewhere it exits 77 (a platform skip).
 . "$(dirname "$0")/lib.sh"
-if [ "$(uname)" != Darwin ] || [ ! -x /usr/bin/sandbox-exec ]; then echo "SKIP: sandbox-exec is macOS only"; exit 0; fi
+[ "$(uname)" = Darwin ] || skip_platform not-macos "sandbox-exec is macOS only"
+[ -x /usr/bin/sandbox-exec ] || skip_platform no-sandbox-exec "/usr/bin/sandbox-exec is missing"
 T=$(mktemp -d); T=$(cd "$T" && pwd -P); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
 R="$T/repo"; mkrepo "$R"; agentbus init "$R" >/dev/null
 B="$R/.agentbus"; echo keep > "$T/victim"

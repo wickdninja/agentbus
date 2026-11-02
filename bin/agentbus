@@ -12,9 +12,11 @@ if sys.version_info < (3, 9):
     sys.exit("agentbus: needs Python 3.9 or newer (this is %d.%d)" % tuple(sys.version_info[:2]))
 
 import argparse  # noqa: E402
+import base64  # noqa: E402
 import difflib  # noqa: E402
 import errno  # noqa: E402
 import fcntl  # noqa: E402
+import hashlib  # noqa: E402
 import io  # noqa: E402
 import json  # noqa: E402
 import math  # noqa: E402
@@ -24,6 +26,7 @@ import random  # noqa: E402
 import re  # noqa: E402
 import secrets  # noqa: E402
 import shutil  # noqa: E402
+import signal  # noqa: E402
 import sqlite3  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
@@ -36,7 +39,7 @@ from functools import lru_cache  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from urllib.parse import quote  # noqa: E402
 
-__version__ = "0.1.0"
+__version__ = "0.2.0.dev0"
 MIN_GIT = (2, 31)
 MAX_TTL_MIN = 10080  # a week
 
@@ -68,6 +71,24 @@ CREATE INDEX IF NOT EXISTS idx_log_ts ON log(ts);
 """
 # The fixed table names whose shapes every open validates.
 TABLES = ("agents", "messages", "cursors", "context", "context_history", "claims", "log")
+# The bus schema version, kept in PRAGMA user_version (its only store). 1 is exactly the shape SCHEMA
+# creates, which is also v0.1.0's shape: a v0.1.0 bus (that shape, user_version 0) is adopted by
+# stamping 1, with no other write.
+SCHEMA_VERSION = 1
+# A user_version above this, or below 0, is not one any release wrote (versions go up by one per
+# schema change): it is reported as damage (schema_corrupt), not as a newer agentbus.
+MAX_SCHEMA_VERSION = 10000
+# The version-1 shape, which every v0.1.0 bus has with user_version 0. While SCHEMA is version 1 this is
+# SCHEMA itself; the release that changes SCHEMA keeps today's text here (tests/test_schema.sh compares
+# it with v0.1.0's SCHEMA), so a v0.1.0 bus is still recognised and migrated from version 1.
+SCHEMA_V1 = SCHEMA
+# Shapes found on real buses made before user_version existed (user_version 0), each with the
+# statements that bring it to version 1: [{"name", "schema": its CREATE statements as captured,
+# "steps": [SQL, ...]}]. Only shapes captured from a real file (tests/fixtures/schema/PROVENANCE.md)
+# go here; a bus matches one only when every table's shape equals the captured one.
+HISTORY = []
+# MIGRATIONS[n]: the statements that take a version-n bus to n + 1, run in order after a backup.
+MIGRATIONS = {}
 KINDS = ("note", "question", "answer", "handoff", "decision", "alert", "done")
 MESSAGE_COLUMNS = "id, ts, sender, recipient, kind, topic, body, reply_to"
 _JSON_ERRORS = False
@@ -288,13 +309,14 @@ def write_out(text):
     if not text:
         return
     if sys.stdout is None:
-        die("stdout is closed, so the output was not shown (the command itself ran)")
+        die("stdout is closed, so the output was not shown (the command itself ran)", "output_failed")
     try:
+        _test_fail("emit")
         sys.stdout.write(text)
         sys.stdout.flush()
     except BrokenPipeError:
         _stdout_to_devnull()
-        die("the reader closed stdout before all the output was written (the command itself ran)")
+        die("the reader closed stdout before all the output was written (the command itself ran)", "output_failed")
 
 
 def write_help():
@@ -305,7 +327,7 @@ def write_help():
     if not text:
         return
     if sys.stdout is None:
-        die("stdout is closed, so the help or version was not shown")
+        die("stdout is closed, so the help or version was not shown", "output_failed")
     try:
         sys.stdout.write(text)
         sys.stdout.flush()
@@ -313,7 +335,7 @@ def write_help():
         if not isinstance(e, BrokenPipeError) and e.errno != errno.EPIPE:
             raise
         _stdout_to_devnull()
-        die("the reader closed stdout before the help or version was written")
+        die("the reader closed stdout before the help or version was written", "output_failed")
 
 
 def flush_stdout(what):
@@ -324,7 +346,7 @@ def flush_stdout(what):
             sys.stdout.flush()
     except BrokenPipeError:
         _stdout_to_devnull()
-        die(f"the reader closed stdout before {what} was written")
+        die(f"the reader closed stdout before {what} was written", "output_failed")
 
 
 def diag(msg):
@@ -337,32 +359,447 @@ def diag(msg):
 # ==== contract registry ====
 
 
+# True once a write the command itself made has been committed (not the last-seen refresh, not the
+# setup an open does): any failure after that carries committed: true.
+_WROTE = False
+# True once the command's own database rows were committed. Only that makes repeating it unsafe (without a
+# --request-id): a command that changed only files (init, upgrade's copy, setup) is safe to repeat and stays retryable.
+_WROTE_ROWS = False
+# The command that finishes an interrupted init or setup (set by each), named in its interrupted error.
+_RERUN = None
+# The files the command itself has changed so far (init's and upgrade's copy and VERSION, init's exclude rule, setup's
+# config files and backups): a file write is the command's change as much as a row is (file_changed).
+_CHANGED = []
+# True when the command carries a --request-id (set in read_inputs).
+_HAS_TOKEN = False
+
+
 class Diag:
     """The message of an exit by die(): cleaned and wrapped only when Python prints it at exit,
     after every bus connection has been closed (cleaning a long value a lane wrote must not hold
-    the lock)."""
+    the lock). It also knows the exit status of its code: the one mapping, independent of --json
+    (CONTRACT["errors"]); contract_main() applies it."""
 
     def __init__(self, msg, code="internal", **fields):
         self.msg = msg
         self.code = code
         self.fields = fields
 
+    @property
+    def status(self):
+        return CONTRACT["errors"].get(self.code, CONTRACT["errors"]["internal"])["exit"]
+
+    @property
+    def retryable(self):
+        """The code's own value, but never true once the command's change was saved unless a
+        --request-id makes repeating it return the saved result."""
+        own = CONTRACT["errors"].get(self.code, CONTRACT["errors"]["internal"])["retryable"]
+        return own and (not _WROTE_ROWS or _HAS_TOKEN)
+
     def __str__(self):
+        # committed: the command's own write had already been saved when this failure came, so a caller
+        # must not repeat it blindly (every JSON error carries it; human text says so unless it already does)
         if _JSON_ERRORS:
-            return json.dumps({"error": {"code": self.code, "message": clean(self.msg),
-                                         **jsonable(self.fields)}}, default=repr, allow_nan=False)
-        return diag(self.msg)
+            return json.dumps({"error": {"code": self.code, "message": clean(self.msg), "retryable": self.retryable,
+                                         "committed": _WROTE, **jsonable(self.fields)}}, default=repr, allow_nan=False)
+        saved = _WROTE and self.code not in ("output_failed", "ack_failed")
+        text = self.msg.rstrip()
+        if saved:
+            text += ("" if text[-1:] in ".!?" else ".") + " The command's change was saved before this."
+        return diag(text)
+
+
+def file_changed(path):
+    """Record that the command itself changed the file at path: any failure after this says committed true,
+    and an interrupted error names the files (field changed)."""
+    global _WROTE
+    _WROTE = True
+    _CHANGED.append(path)
 
 
 def die(msg, code="internal", **fields):
     """Exit non-zero with an error on stderr. msg may echo bus-controlled text, so it is cleaned,
-    later (Diag)."""
+    later (Diag). Every call names its code (tests/test_contract.sh checks the source)."""
     raise SystemExit(Diag(msg, code, **fields))
 
 
 def reason(e):
     """The message a die() carried, for a caller that turns the exit into a notice."""
     return e.code.msg if isinstance(e.code, Diag) else str(e.code)
+
+
+# ---- the contract registry: one source for `schema`, the --help result lines and docs/reference.md ----
+# A result schema is a JSON Schema subset (type, required, properties, items, enum, anyOf, $ref to
+# "#/objects/NAME"); tests/schema_check.py validates against it. Extra keys are always allowed: JSON
+# changes are additive within contract version 1. Arguments are not repeated here: cmd_schema reads
+# them from the argparse tree.
+
+_STR, _INT, _BOOL = {"type": "string"}, {"type": "integer"}, {"type": "boolean"}
+_NSTR, _NINT = {"type": ["string", "null"]}, {"type": ["integer", "null"]}
+
+
+def _o(props, optional=()):
+    """An object schema: every key in props is required unless named in optional."""
+    return {"type": "object", "required": [k for k in props if k not in optional], "properties": dict(props)}
+
+
+def _ref(name):
+    return {"$ref": "#/objects/" + name}
+
+
+def _list(item):
+    return {"type": "array", "items": item}
+
+
+def _env(item):
+    """A listing: items, whether rows were left out, and a cursor (null except the four id walks)."""
+    return _o({"v": _INT, "items": _list(item), "has_more": _BOOL, "next": _NSTR})
+
+
+_NGOAL = {"anyOf": [{"type": "null"}, _ref("Goal")]}
+_OMITTED = _o({k: _INT for k in ("agents", "context", "claims", "messages")})
+# What every command that opens a bus can fail with, beyond its own codes.
+_BUS_ERRORS = ["bad_input", "no_bus", "busy", "schema_refused", "schema_older", "schema_newer", "schema_corrupt",
+               "backup_failed", "bus_unavailable", "output_failed", "interrupted", "internal"]
+# Commands that only look for a bus, that also touch files in a repo, and that touch nothing.
+_FIND_ERRORS = ["bad_input", "no_bus", "bus_unavailable", "output_failed", "interrupted", "internal"]
+_FILES_ERRORS = ["bad_input", "no_bus", "bus_unavailable", "busy", "output_failed", "interrupted", "internal"]
+_PLAIN_ERRORS = ["bad_input", "output_failed", "interrupted", "internal"]
+_SAFE = {"class": "safe", "how": "repeat freely", "short": "safe to repeat"}
+_REPEAT = {"class": "idempotent", "how": "repeat", "short": "safe to repeat"}
+
+
+def _cmd(summary, result, errors=(), retry=_SAFE, text=None, base=_BUS_ERRORS):
+    """base: the codes every command of its kind can fail with, from what its code path can raise
+    (tests/test_exit_codes.sh checks that every code it observes for a command is listed here)."""
+    return {"summary": summary, "result": result, "retry": retry, "text": text, "errors": list(errors) + list(base)}
+
+
+CONTRACT = {
+    "contract": 1,
+    "objects": {
+        "Agent": _o({"name": _STR, "tool": _NSTR, "model": _NSTR, "cwd": _NSTR, "branch": _NSTR, "role": _NSTR,
+                     "joined_at": _STR, "last_seen": _STR}),
+        "Message": _o({"id": _INT, "ts": _STR, "sender": _STR, "recipient": _STR, "kind": _STR, "topic": _NSTR,
+                       "body": _STR, "reply_to": _NINT}),
+        "Claim": _o({"resource": _STR, "agent": _STR, "purpose": _NSTR, "claimed_at": _STR, "expires_at": _STR,
+                     "state": {"type": "string", "enum": ["held", "expired"]}}),
+        "Fact": _o({"key": _STR, "value": _STR, "updated_by": _STR, "updated_at": _STR, "unchanged": _BOOL}, optional=("unchanged",)),
+        "FactVersion": _o({"id": _INT, "key": _STR, "value": _NSTR, "updated_by": _STR, "updated_at": _STR}),
+        "LogEntry": _o({"id": _INT, "ts": _STR, "agent": _STR, "action": _STR, "detail": _NSTR}),
+        "Goal": _o({"goal": _STR, "set_by": _STR, "set_at": _STR, "unchanged": _BOOL}, optional=("unchanged",)),
+        "BusLevel": _o({"level": _INT, "directory": _STR, "exists": _BOOL, "copy_version": _NSTR, "stale": _BOOL}),
+        "UpgradeRow": _o({"directory": _STR, "status": {"type": "string", "enum": ["upgraded", "current", "skipped", "failed",
+                                                                                 "would_upgrade"]},
+                          "old": _NSTR, "new": _STR, "schema_old": _NINT, "schema_new": _NINT, "backup": _NSTR,
+                          "error": {"anyOf": [{"type": "null"}, _o({"code": _STR, "message": _STR, "file": _STR}, optional=("file",))]}}),
+        "Envelope": _env({}),
+    },
+    "errors": {
+        "claim_conflict": {"exit": 1, "retryable": False, "fields": ["resource", "holder", "expires_at", "purpose"],
+                           "meaning": "Another agent holds an overlapping claim.", "action": "Ask the holder, or work elsewhere."},
+        "not_held": {"exit": 1, "retryable": False, "fields": ["resource"],
+                     "meaning": "You do not hold that claim.", "action": "Nothing to release; use release --if-held for cleanup."},
+        "no_message": {"exit": 1, "retryable": False, "fields": ["id"],
+                       "meaning": "There is no message with that id.", "action": "Check the id with read."},
+        "no_context_key": {"exit": 1, "retryable": False, "fields": ["key"],
+                           "meaning": "There is no fact with that key.", "action": "List keys with ctx get."},
+        "not_on_roster": {"exit": 1, "retryable": False, "fields": ["agent"],
+                          "meaning": "That name has not joined.", "action": "Join first."},
+        "name_active": {"exit": 1, "retryable": False, "fields": ["agent", "last_seen_min"],
+                        "meaning": "The name was active recently and may be another live session.",
+                        "action": "Pick another name, or join --takeover if it is you."},
+        "request_id_reused": {"exit": 1, "retryable": False, "fields": ["request_id", "agent"],
+                              "meaning": "That request id was used with a different message.",
+                              "action": "Use a new token for a different message."},
+        "bad_input": {"exit": 2, "retryable": False, "fields": [],
+                      "meaning": "The arguments are not valid (a usage error).", "action": "Fix the arguments."},
+        "no_bus": {"exit": 3, "retryable": False, "fields": [],
+                   "meaning": "There is no bus here or above.", "action": "Run agentbus init DIR, or set AGENTBUS_DB."},
+        "busy": {"exit": 3, "retryable": True, "fields": ["bus"],
+                 "meaning": "Another process held the bus for 15 seconds.", "action": "Retry after a few seconds."},
+        "schema_refused": {"exit": 3, "retryable": False, "fields": [],
+                           "meaning": "The bus tables are not agentbus's.", "action": "Stop and tell the user."},
+        "schema_older": {"exit": 3, "retryable": False, "fields": ["bus", "bus_schema", "tool_schema"],
+                         "meaning": "The bus is older than this tool and was opened read-only.",
+                         "action": "Run any command that is not watch to upgrade it, or agentbus upgrade DIR."},
+        "schema_newer": {"exit": 3, "retryable": False, "fields": ["bus", "bus_schema", "tool_schema"],
+                         "meaning": "The bus is newer than this copy of the tool.", "action": "Use a newer agentbus."},
+        "schema_corrupt": {"exit": 3, "retryable": False, "fields": ["bus", "bus_schema"],
+                           "meaning": "bus.db records a schema version no agentbus writes; another tool or a lane changed it.",
+                           "action": "Stop and tell the user; restore a backup (docs/how-to/upgrade.md)."},
+        "backup_failed": {"exit": 3, "retryable": False, "fields": ["bus", "reason"],
+                          "meaning": "The backup before a migration could not be made.", "action": "Free disk space or move the bus."},
+        "copy_newer": {"exit": 1, "retryable": False, "fields": ["directory", "copy_version", "tool_version"],
+                       "meaning": "The folder's copy of agentbus is newer than this one; it is never downgraded.",
+                       "action": "Run upgrade or init with a newer agentbus."},
+        "bus_unavailable": {"exit": 3, "retryable": False, "fields": [], "optional_fields": ["file"],
+                            "meaning": "The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time.",
+                            "action": "Read the message, fix the folder, then run the command again."},
+        "ack_failed": {"exit": 3, "retryable": True, "fields": ["delivered"],
+                       "meaning": "inbox printed its messages but could not mark them read.",
+                       "action": "The output was complete: use it, expect the same messages again, and dedupe by id."},
+        "output_failed": {"exit": 1, "retryable": True, "fields": [],
+                          "meaning": "stdout could not be written; committed effects stand.", "action": "Retry with the same token."},
+        "interrupted": {"exit": 130, "retryable": True, "fields": [], "optional_fields": ["directory", "backup", "migrations", "rerun", "changed"],
+                        "meaning": "The command was stopped (Ctrl-C or SIGINT) before it finished.",
+                        "action": "Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun)."},
+        "items_failed": {"exit": 1, "retryable": False, "fields": ["failed"],
+                         "meaning": "Some of the items the command works on failed or were refused (buses of upgrade --all, "
+                                    "files of setup); stdout holds the whole result, and failed lists those items.",
+                         "action": "Read each failed item's error, fix it, then run the command again."},
+        "internal": {"exit": 4, "retryable": False, "fields": [],
+                     "meaning": "A bug in agentbus.", "action": "Report it."},
+    },
+    "exit_codes": {
+        "0": "success",
+        "1": "the command ran and refused (conflicts, missing things)",
+        "2": "usage: bad arguments, unknown command, missing identity",
+        "3": "the bus is unavailable or unsafe",
+        "4": "internal error",
+        "130": "interrupted (Ctrl-C), the shell convention",
+    },
+    # Fields every error object carries, beside the per-code ones in "errors". retryable here is the
+    # code's own value; the error object says false whenever committed is true and no --request-id was given.
+    "error_fields": {
+        "code": {"type": "string", "meaning": "One of the error codes below; branch on this, not on the message."},
+        "message": {"type": "string", "meaning": "What happened and what to do, for a person."},
+        "retryable": {"type": "boolean", "meaning": "Whether running the same command again can succeed. False once the command saved database rows, unless it had a --request-id; a command that changed only files (init, upgrade's copy, setup) stays retryable."},
+        "committed": {"type": "boolean", "meaning": "True when the command's own change had been saved before the failure, so a write must not be repeated without its --request-id unless retryable is true."},
+    },
+    "env": {
+        "AGENTBUS_DB": {"meaning": "Path of the bus database; overrides discovery and --up.",
+                        "default": "the nearest .agentbus/bus.db above the working directory"},
+        "AGENTBUS_AGENT": {"meaning": "Your agent identity; --as overrides it.", "default": "unset"},
+        "NO_COLOR": {"meaning": "Turns colour off in watch.", "default": "unset"},
+        "AGENTBUS_NO_EMOJI": {"meaning": "Turns emoji off in watch.", "default": "unset"},
+        "COLUMNS": {"meaning": "Width human output is wrapped to.", "default": "the terminal width, else 80"},
+    },
+    # Commands the parser may have that `schema` leaves out.
+    "hidden": ["hook", "__complete"],
+    # Facts about arguments the parser cannot say, by command then argument name.
+    "arg_notes": {
+        "post": {"body": {"required": True}, "--kind": {"choices": list(KINDS)}},
+        "ctx set": {"value": {"required": True}},
+        "log add": {"detail": {"required": True}},
+    },
+    "commands": {
+        "join": _cmd("Register on the roster",
+                     _o({"joined": _STR, "bus": _STR, "goal": _NGOAL, "agentbus": _STR, "contract": _INT}),
+                     ["name_active"], {"class": "idempotent_with_flag", "how": "join --takeover for your own name",
+                                       "short": "only with --takeover"}),
+        "leave": _cmd("Leave the roster and release your claims",
+                      _o({"left": _STR, "released": _list(_STR), "released_count": _INT}),
+                      retry={"class": "idempotent", "how": "a second run reports released_count 0 and writes no log row",
+                             "short": "safe to repeat"}),
+        "who": _cmd("List agents, most recently seen first", _env(_ref("Agent"))),
+        "post": _cmd("Send a message", _o({"id": _INT, "duplicate": _BOOL}, optional=("duplicate",)),
+                     ["no_message", "request_id_reused"],
+                     {"class": "needs_request_id", "short": "only with --request-id",
+                      "how": "pass --request-id TOKEN; the same token and payload returns the original id with duplicate true"}),
+        "inbox": _cmd("Unread messages for you, oldest first, then mark them read", _env(_ref("Message")), ["ack_failed"],
+                      {"class": "at_least_once", "short": "repeat; dedupe by id",
+                       "how": "repeat; a crash or ack_failed redelivers, so check message ids before acting",
+                       "with": {"--peek": {"class": "safe", "how": "repeat freely"}}}),
+        "read": _cmd("Recent messages, anyone's", _env(_ref("Message"))),
+        "ctx set": _cmd("Set a shared fact and record its history", _ref("Fact"),
+                        retry={"class": "idempotent", "short": "safe to repeat",
+                               "how": "an unchanged value writes no history row and returns unchanged true"}),
+        "ctx get": _cmd("Get one fact, or list all facts", {"anyOf": [_ref("Fact"), _env(_ref("Fact"))]}, ["no_context_key"],
+                        text='a Fact, or {"v": integer, "items": [Fact], "has_more": boolean, "next": string or null}'),
+        "ctx history": _cmd("Show the history of a fact", _env(_ref("FactVersion"))),
+        "claim": _cmd("Claim a resource",
+                      _o({"resource": _STR, "agent": _STR, "purpose": _NSTR, "claimed_at": _STR, "expires_at": _STR,
+                          "auto_released": _list(_o({"resource": _STR, "agent": _STR})), "auto_released_count": _INT}),
+                      ["claim_conflict", "not_on_roster"],
+                      {"class": "idempotent", "how": "renews the claim and keeps its purpose and claimed_at", "short": "safe to repeat"}),
+        "release": _cmd("Release one claim, or all of yours", _o({"released": _list(_STR), "released_count": _INT}), ["not_held"],
+                        {"class": "idempotent_with_flag", "short": "with --if-held",
+                         "how": "release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent"}),
+        "claims": _cmd("List claims", _env(_ref("Claim"))),
+        "log add": _cmd("Append an activity log entry",
+                        _o({"id": _INT, "logged": _BOOL, "agent": _STR, "action": _STR, "detail": _STR}),
+                        retry={"class": "unsafe", "short": "appends each time",
+                               "how": "each call appends a row; check log show --limit 1 before retrying"}),
+        "log show": _cmd("Show recent activity log entries", _env(_ref("LogEntry"))),
+        "status": _cmd("Agents, facts, claims and recent messages",
+                       _o({"bus": _STR, "goal": _NGOAL, "agents": _list(_ref("Agent")), "context": _list(_ref("Fact")),
+                           "claims": _list(_ref("Claim")), "messages": _list(_ref("Message")), "omitted": _OMITTED})),
+        "goal": _cmd("Show or set the shared goal", _NGOAL, text="null or a Goal",
+                     retry={"class": "idempotent", "short": "safe to repeat",
+                            "how": "showing is free; an unchanged goal writes no history row and returns unchanged true"}),
+        "watch": _cmd("A live view of the bus; with --json one snapshot",
+                      _o({"bus": _STR, "directory": _STR,
+                          "agents": _list(_o({"name": _STR, "role": _NSTR, "last_seen": _STR, "joined_at": _STR})),
+                          "claims": _list(_o({"resource": _STR, "agent": _STR, "purpose": _NSTR, "expires_at": _STR})),
+                          "goal": _NGOAL, "context": _list(_ref("Fact")),
+                          "messages": _list(_o({"id": _INT, "ts": _STR, "sender": _STR, "recipient": _STR, "kind": _STR,
+                                                "body": _STR, "reply_to": _NINT})),
+                          "counts": _o({"agents": _INT, "claims": _INT, "messages": _INT}), "omitted": _OMITTED})),
+        "buses": _cmd("List buses from nearest to outermost", _env(_ref("BusLevel")), base=_FIND_ERRORS),
+        "init": _cmd("Install this tool into DIR/.agentbus/",
+                     _o({"directory": _STR, "copy": _STR, "old": _STR, "new": _STR, "exclude_added": _BOOL,
+                         "gitignore_rule": _BOOL, "outer": _NSTR}),
+                     # refuse_downgrade reads the folder's bus (schema_probe): its refusals are init's too
+                     ["copy_newer", "schema_newer", "schema_corrupt", "schema_refused"], retry=_REPEAT, base=_FILES_ERRORS),
+        "upgrade": _cmd("Replace a bus folder's copy of the tool with this one and migrate its database",
+                        {"anyOf": [_o({"directory": _STR, "old": _STR, "new": _STR, "schema_old": _NINT, "schema_new": _NINT,
+                                       "backup": _NSTR}),
+                                   _o({"buses": _list(_ref("UpgradeRow")), "upgraded": _INT, "current": _INT, "skipped": _INT,
+                                       "failed": _INT, "would_upgrade": _INT}, optional=("would_upgrade",))]},
+                        ["copy_newer", "items_failed"], retry=_REPEAT,
+                        text='{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, '
+                             '"backup": string or null}, or with --all or --dry-run '
+                             '{"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, '
+                             '"failed": integer, "would_upgrade": integer (--dry-run)}'),
+        "schema": _cmd("Result shapes, errors, exit codes and retry rules",
+                       _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"}, "objects": {"type": "object"},
+                           "error_fields": {"type": "object"}, "errors": {"type": "object"}, "exit_codes": {"type": "object"}, "env": {"type": "object"}}), base=_PLAIN_ERRORS),
+        "skill": _cmd("Print the bundled skill, or with --agents-md the AGENTS.md block", _o({"text": _STR}), base=_PLAIN_ERRORS),
+        "setup": _cmd("Install the skill for Claude Code or the AGENTS.md block for Codex",
+                      _o({"target": _STR, "scope": _STR, "dry_run": _BOOL,
+                          "changes": _list(_o({"path": _STR, "detail": _STR, "action": {"type": "string", "enum": [
+                              "installed", "updated", "replaced_link", "unchanged", "removed", "skipped", "refused"]},
+                              "backup": _STR}, optional=("backup",)))}),
+                      ["items_failed"], text='{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, '
+                      '"detail": string, "action": string, "backup": string (only when a backup was saved)}]}',
+                      retry={"class": "idempotent", "short": "safe to repeat",
+                             "how": "a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object"},
+                      base=_PLAIN_ERRORS),
+    },
+}
+
+for _e in CONTRACT["errors"].values():
+    _e.setdefault("optional_fields", [])
+
+
+def result_text(schema, brief=False):
+    """A schema as one short phrase: {"id": integer}, [Agent], string or null. brief: only the
+    keys, at most four ({id}, {resource, agent, purpose, ...})."""
+    if "$ref" in schema:
+        return schema["$ref"].rsplit("/", 1)[-1]
+    if "anyOf" in schema:
+        return " or ".join(result_text(s, brief) for s in schema["anyOf"])
+    t = schema.get("type")
+    if isinstance(t, list):
+        return " or ".join(t)
+    if t == "array":
+        return "[" + result_text(schema["items"], brief) + "]"
+    if t == "object" and "required" in schema:
+        keys = schema["required"]
+        if brief:
+            keys = [k for k in keys if k != "v"]
+            return "{" + ", ".join(keys if len(keys) <= 4 else keys[:3] + ["..."]) + "}"
+        return "{" + ", ".join('"%s": %s' % (k, result_text(schema["properties"][k], brief)) for k in keys) + "}"
+    return t or "any"
+
+
+def help_line(entry):
+    """The line each subcommand's --help ends with."""
+    return "JSON result: %s. Retry: %s." % (entry.get("text") or result_text(entry["result"]), entry["retry"]["short"])
+
+
+class ContractFormatter(argparse.HelpFormatter):
+    """HelpFormatter that prints the registry's result line as it is, not re-wrapped."""
+
+    def _fill_text(self, text, width, indent):
+        if text.startswith("JSON result: "):
+            return indent + text
+        return super()._fill_text(text, width, indent)
+
+
+GLOBAL_DESTS = ("as_", "json", "up")
+
+
+def _arg_entry(action, notes):
+    positional = not action.option_strings
+    name = (action.metavar if isinstance(action.metavar, str) else action.dest) if positional else max(action.option_strings, key=len)
+    e = {"name": name}
+    if positional:
+        e["positional"] = True
+    if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
+        e["type"] = "boolean"
+    else:
+        e["type"] = {integer: "integer", bus_level: "integer", interval: "number"}.get(action.type, "string")
+    if action.required or (positional and action.nargs is None):
+        e["required"] = True
+    if action.nargs in ("*", "+"):
+        e["repeatable"] = True
+    if action.choices:
+        e["choices"] = list(action.choices)
+    if action.default not in (None, argparse.SUPPRESS, False):
+        e["default"] = action.default
+    if action.help and action.help is not argparse.SUPPRESS:
+        e["help"] = action.help
+    e.update(notes.get(name, {}))
+    return e
+
+
+def parser_leaves(parser, prefix=()):
+    """{command path: its parser} for every command that runs (not a group such as ctx)."""
+    found = {}
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for name, child in action.choices.items():
+                if not prefix and name in CONTRACT["hidden"]:
+                    continue
+                found.update(parser_leaves(child, prefix + (name,)) or {prefix + (name,): child})
+    return found
+
+
+def contract_commands(parser):
+    """The `commands` section: the registry's facts plus each command's arguments from the parser."""
+    out = {}
+    for path, leaf in parser_leaves(parser).items():
+        name = " ".join(path)
+        reg = CONTRACT["commands"][name]
+        notes = CONTRACT["arg_notes"].get(name, {})
+        args = [_arg_entry(a, notes) for a in leaf._actions
+                if not isinstance(a, (argparse._HelpAction, argparse._SubParsersAction)) and a.dest not in GLOBAL_DESTS]
+        errors = list(dict.fromkeys(reg["errors"]))
+        out[name] = {"summary": reg["summary"], "args": args, "result": reg["result"], "errors": errors,
+                     "retry": {k: v for k, v in reg["retry"].items() if k != "short"},
+                     "exit_codes": sorted({0} | {CONTRACT["errors"][c]["exit"] for c in errors}), "help": help_line(reg)}
+    return out
+
+
+def apply_contract_help(parser):
+    """End every command's --help with its registry line (called once, at the end of build_parser)."""
+    for path, leaf in parser_leaves(parser).items():
+        leaf.epilog = help_line(CONTRACT["commands"][" ".join(path)])
+        leaf.formatter_class = ContractFormatter
+
+
+def contract_main():
+    """main(), with the exit status taken from the error code (Diag.status) and a crash made an
+    internal error (exit 4) in both output modes. The one entry point that applies the mapping."""
+    try:
+        main()
+        return
+    except SystemExit as e:
+        if not isinstance(e.code, Diag):
+            raise
+        failure = e.code
+    except KeyboardInterrupt:
+        if _CHANGED:
+            again = f". Run: {_RERUN} to finish" if _RERUN else ""
+            failure = Diag("interrupted before the command finished, after it had changed "
+                           + ", ".join(dict.fromkeys(_CHANGED)) + again, "interrupted",
+                           changed=list(dict.fromkeys(_CHANGED)), **({"rerun": _RERUN} if _RERUN else {}))
+        else:
+            failure = Diag("interrupted before the command finished", "interrupted")
+    except Exception as e:
+        if not _JSON_ERRORS:
+            import traceback
+            traceback.print_exc()
+            raise SystemExit(CONTRACT["errors"]["internal"]["exit"])
+        failure = Diag(str(e), "internal")
+    try:
+        sys.stderr.write(str(failure) + "\n")
+        sys.stderr.flush()
+    except OSError:
+        pass
+    raise SystemExit(failure.status)
 
 
 def _write_fd(fd, data):
@@ -373,22 +810,23 @@ def _write_fd(fd, data):
         pass
 
 
-def exit_now(msg, grace=1.0):
-    """Write the diagnostic and end the process at once with status 1, without closing SQLite
+def exit_now(msg, code, grace=None):
+    """Write the diagnostic and end the process at once with the status of `code`, without closing SQLite
     connections, within `grace` seconds even when stderr is a full pipe nobody reads (the write
     runs in a helper thread; the exit does not wait for it past grace). Exiting releases every
     lock the process holds."""
-    t = threading.Thread(target=_write_fd, args=(2, (str(Diag(msg)) + "\n").encode("utf-8", "replace")), daemon=True)
+    d = Diag(msg, code)
+    t = threading.Thread(target=_write_fd, args=(2, (str(d) + "\n").encode("utf-8", "replace")), daemon=True)
     t.start()
-    t.join(grace)
-    os._exit(1)
+    t.join(EXIT_GRACE_S if grace is None else grace)
+    os._exit(d.status)
 
 
-def die_now(msg):
+def die_now(msg, code):
     """Exit at once, without closing SQLite connections: used when SQLite may hold a file that is
     not our bus. A normal close checkpoints and can truncate or rewrite the -wal it holds, which
     would then be the victim file; the kernel closing the fds at exit writes nothing."""
-    exit_now(msg)
+    exit_now(msg, code)
 
 
 # Every Bus connection open in this process. While one is, nothing is written to stdout or stderr:
@@ -488,10 +926,19 @@ class Watchdog:
                     continue
                 why = self.why
                 break
-        exit_now(why)
+        for undo in list(_KILL_CLEANUP):  # put back what a stopped migration had changed
+            try:
+                said = undo()
+                if isinstance(said, str):
+                    why = said  # what really happened (a migration that committed first)
+            except Exception:
+                pass
+        exit_now(why, "bus_unavailable")
 
 
 WATCHDOG = Watchdog()
+# Cleanups the watchdog runs before it ends the process (a migration's undo).
+_KILL_CLEANUP = []
 
 
 @contextmanager
@@ -523,6 +970,26 @@ def _test_pause(point):
         deadline = time.time() + 60
         while not os.path.exists(os.path.join(d, point + ".go")) and time.time() < deadline:
             time.sleep(0.02)
+
+
+def _test_fail(point):
+    """Test hook: AGENTBUS_TEST_FAIL=<point> makes the command fail there, as a real fault would:
+    parse (bad arguments), open (the bus cannot be opened), before-emit (a database error after the
+    command ran, before any output), emit (stdout cannot be written), ack (inbox cannot mark messages
+    read), touch (the last-seen refresh fails), internal (a bug). tests/test_failure_phases.sh and test_exit_codes.sh use it."""
+    if os.environ.get("AGENTBUS_TEST_FAIL") != point:
+        return
+    if point == "parse":
+        die("injected parse failure", "bad_input")
+    if point == "open":
+        die("injected open failure", "bus_unavailable")
+    if point == "before-emit":
+        raise sqlite3.OperationalError("injected failure before output")
+    if point == "emit":
+        raise BrokenPipeError(errno.EPIPE, "injected")
+    if point in ("ack", "touch"):
+        raise sqlite3.OperationalError("injected " + point + " failure")
+    raise RuntimeError("injected internal failure")
 
 
 def _test_slow():
@@ -559,20 +1026,20 @@ def check_node(path, kind, must_exist=False, optional=False):
         st = os.lstat(path)
     except FileNotFoundError:
         if must_exist:
-            die(f"{path} is missing")
+            die(f"{path} is missing", "bus_unavailable", file=path)
         return False
     if stat.S_ISLNK(st.st_mode):
-        die(f"refusing {path}: it is a symlink")
+        die(f"refusing {path}: it is a symlink", "bus_unavailable", file=path)
     if kind == "dir" and not stat.S_ISDIR(st.st_mode):
-        die(f"refusing {path}: not a directory")
+        die(f"refusing {path}: not a directory", "bus_unavailable", file=path)
     if kind == "file" and not stat.S_ISREG(st.st_mode):
-        die(f"refusing {path}: not a regular file")
+        die(f"refusing {path}: not a regular file", "bus_unavailable", file=path)
     if not _owned(st):
-        die(f"refusing {path}: owned by another user")
+        die(f"refusing {path}: owned by another user", "bus_unavailable", file=path)
     if kind == "file" and st.st_nlink == 0 and optional:
         raise _Vanished(path)
     if kind == "file" and st.st_nlink != 1:
-        die(f"refusing {path}: it has {st.st_nlink} hard links")
+        die(f"refusing {path}: it has {st.st_nlink} hard links", "bus_unavailable", file=path)
     return st
 
 
@@ -608,24 +1075,24 @@ def chmod_nofollow(path, mode, kind, expect, optional=False):
     except FileNotFoundError as e:
         if optional:
             raise _Vanished(path)
-        die(f"refusing {path}: {e.strerror}")
+        die(f"refusing {path}: {e.strerror}", "bus_unavailable", file=path)
     except OSError as e:
-        die(f"refusing {path}: {e.strerror}")
+        die(f"refusing {path}: {e.strerror}", "bus_unavailable", file=path)
     try:
         _test_pause("after-chmod-open-" + os.path.basename(path))
         st = os.fstat(fd)
         if kind == "file" and not stat.S_ISREG(st.st_mode):
-            die(f"refusing {path}: not a regular file (it changed while opening)")
+            die(f"refusing {path}: not a regular file (it changed while opening)", "bus_unavailable", file=path)
         if (kind == "dir") != stat.S_ISDIR(st.st_mode) or not _owned(st):
-            die(f"refusing {path}: changed while opening")
+            die(f"refusing {path}: changed while opening", "bus_unavailable", file=path)
         if optional and st.st_nlink == 0:
             raise _Vanished(path)  # unlinked after our open (SQLite deleting -wal on its last close)
         if kind == "file" and st.st_nlink != 1:
-            die(f"refusing {path}: it has {st.st_nlink} hard links")
+            die(f"refusing {path}: it has {st.st_nlink} hard links", "bus_unavailable", file=path)
         if _ident(st) != _ident(expect):
             if optional:
                 raise _Vanished(path)
-            die(f"refusing {path}: changed while opening")
+            die(f"refusing {path}: changed while opening", "bus_unavailable", file=path)
         os.fchmod(fd, mode)
     finally:
         os.close(fd)
@@ -656,18 +1123,26 @@ SMALL = 4096  # VERSION: a version line
 TEXT_LIMIT = 1 << 20  # info/exclude and .gitignore, read only to look for the .agentbus rule
 
 
+COPY_LIMIT = 16 << 20  # a bus folder's copy of agentbus, read to keep beside a backup
+
+
 def read_small(path, limit=SMALL):
     """At most `limit` bytes of a text file, as text: opened without following a symlink and
     without blocking (a FIFO swapped in after the caller's check never hangs the read), then
     refused unless fstat says it is a regular file owned by the caller."""
+    return _read_file(path, limit).decode("utf-8", "replace")
+
+
+def _read_file(path, limit):
+    """read_small's bytes."""
     _test_pause("before-read-" + os.path.basename(path))
     fd = os.open(path, os.O_RDONLY | NOFOLLOW | NONBLOCK)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
-            die(f"refusing {path}: not a regular file")
+            die(f"refusing {path}: not a regular file", "bus_unavailable", file=path)
         if not _owned(st):
-            die(f"refusing {path}: owned by another user")
+            die(f"refusing {path}: owned by another user", "bus_unavailable", file=path)
         data = b""
         while len(data) < limit:
             chunk = os.read(fd, limit - len(data))
@@ -676,7 +1151,7 @@ def read_small(path, limit=SMALL):
             data += chunk
     finally:
         os.close(fd)
-    return data.decode("utf-8", "replace")
+    return data
 
 
 # ---------- git ----------
@@ -702,7 +1177,7 @@ def have_git():
         else:
             m = re.search(r"(\d+)\.(\d+)", r.stdout)
             if not m or (int(m.group(1)), int(m.group(2))) < MIN_GIT:
-                die("needs git %d.%d or newer (found: %s)" % (MIN_GIT + (r.stdout.strip() or "unknown",)))
+                die("needs git %d.%d or newer (found: %s)" % (MIN_GIT + (r.stdout.strip() or "unknown",)), "no_bus")
             _GIT_OK = True
     return _GIT_OK
 
@@ -721,7 +1196,7 @@ def repo_info(path=None):
         return None
     lines = r.stdout.strip().splitlines()
     if len(lines) != 3 or lines[0].startswith("--"):
-        die("needs git %d.%d or newer (rev-parse --path-format=absolute is not supported)" % MIN_GIT)
+        die("needs git %d.%d or newer (rev-parse --path-format=absolute is not supported)" % MIN_GIT, "no_bus")
     gitdir, common, top = (os.path.realpath(x) for x in lines)
     # Not `rev-parse --git-path info/exclude`: git resolves a symlinked exclude to its target.
     exclude = os.path.join(common, "info", "exclude")
@@ -734,7 +1209,7 @@ def repo_info(path=None):
         return os.path.realpath(os.path.join(common, wt.stdout.strip())), exclude  # a submodule
     die(f"cannot find the main checkout for this worktree: its git dir {common} records none "
         "(a linked worktree of a --separate-git-dir or bare repository). Set AGENTBUS_DB to "
-        "<main checkout>/.agentbus/bus.db.")
+        "<main checkout>/.agentbus/bus.db.", "no_bus")
 
 
 def repo_root(path=None):
@@ -808,15 +1283,15 @@ def ensure_exclude(exclude):
     try:
         fd = os.open(exclude, os.O_RDWR | os.O_APPEND | os.O_CREAT | NOFOLLOW | NONBLOCK, 0o644)
     except OSError as e:
-        die(f"refusing {exclude}: {e.strerror}")
+        die(f"refusing {exclude}: {e.strerror}", "bus_unavailable")
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
-            die(f"refusing {exclude}: not a regular file (it changed while opening)")
+            die(f"refusing {exclude}: not a regular file (it changed while opening)", "bus_unavailable")
         if not _owned(st):
-            die(f"refusing {exclude}: owned by another user")
+            die(f"refusing {exclude}: owned by another user", "bus_unavailable")
         if st.st_nlink != 1:
-            die(f"refusing {exclude}: it has {st.st_nlink} hard links")
+            die(f"refusing {exclude}: it has {st.st_nlink} hard links", "bus_unavailable")
         # Concurrent first uses: an exclusive flock, then the file read again through this fd, so
         # only the first of them appends the rule. Never waited on for long: a lock nobody
         # releases makes this a refusal (a notice for an ordinary command).
@@ -840,7 +1315,7 @@ def lock_briefly(fd, path, seconds=2.0):
             return
         except BlockingIOError:
             if time.monotonic() > deadline:
-                die(f"refusing {path}: another process keeps it locked")
+                die(f"refusing {path}: another process keeps it locked", "busy", bus=str(path))
             time.sleep(0.01)
 
 
@@ -884,16 +1359,37 @@ def install_copy(root):
     bindir = os.path.join(folder, "bin")
     vfile = os.path.join(folder, "VERSION")
     dest = os.path.join(bindir, "agentbus")
+    if os.path.lexists(folder):
+        refuse_downgrade(root)
     for d in (folder, bindir):
         chmod_nofollow(d, 0o700, "dir", make_dir(d))
     check_node(dest, "file")
     old = read_small(vfile).strip() if check_node(vfile, "file") else "none"
     with open(self_path(), "rb") as f:
         code = f.read()
+    if os.environ.get("AGENTBUS_TEST_INSTALL_FAIL") == "eperm":  # test hook: bin/ made immutable (chflags uchg)
+        raise PermissionError(errno.EPERM, os.strerror(errno.EPERM), dest)
     write_atomic(dest, code, 0o700)
+    file_changed(dest)
     new = source_version()
     write_atomic(vfile, (new + "\n").encode(), 0o600)
+    file_changed(vfile)
     return old, new
+
+
+def refuse_downgrade(root):
+    """Never replace a newer copy: refuse (copy_newer) when the folder's VERSION is a release newer
+    than this tool, and (schema_newer) when its bus has a schema this tool does not know. The bus is
+    read without a write; a bus that cannot be read now (busy) is refused too, never guessed at."""
+    folder = os.path.join(root, ".agentbus")
+    check_node(folder, "dir")
+    vfile = os.path.join(folder, "VERSION")
+    old = read_small(vfile).strip() if check_node(vfile, "file") else ""
+    mine, theirs = release_key(__version__), release_key(old)
+    if mine is not None and theirs is not None and theirs > mine:
+        die(f"{root}: its copy of agentbus ({old}) is newer than this one ({__version__}); nothing was changed. "
+            "Upgrade it with a newer agentbus", "copy_newer", directory=root, copy_version=old, tool_version=__version__)
+    schema_probe(os.path.join(folder, "bus.db"))  # raises schema_newer (or busy) before anything is written
 
 
 # The VERSION formats agentbus itself writes (source_version): a release (0.1.0, 0.2.0rc1,
@@ -915,9 +1411,47 @@ def shown_version(v):
     return v if _SHOWN_VERSION.fullmatch(v) else "(VERSION is not a version)"
 
 
+_RELEASE = re.compile(r"([0-9]{1,6}(?:\.[0-9]{1,6}){1,3})(?:(a|b|rc)([0-9]{1,6}))?(?:\.post([0-9]{1,6}))?"
+                      r"(?:\.dev([0-9]{1,6}))?(?:\+[a-z0-9]{1,20}(?:\.[a-z0-9]{1,20}){0,4})?")
+
+
+def release_key(v):
+    """A sortable key for a release version (PEP 440 order for the forms agentbus writes:
+    1.0.dev1 < 1.0a1 < 1.0rc1 < 1.0 < 1.0.post1), or None when v is not one (a commit, junk)."""
+    m = _RELEASE.fullmatch(v or "")
+    if not m:
+        return None
+    nums, pre, pre_n, post, dev = m.groups()
+    release = tuple(int(x) for x in nums.split(".")) + (0,) * (4 - len(nums.split(".")))
+    if pre:
+        pre_key = (0, ("a", "b", "rc").index(pre), int(pre_n))
+    elif dev and not post:
+        pre_key = (-1, 0, 0)
+    else:
+        pre_key = (1, 0, 0)
+    return (release, pre_key, int(post) if post else -1, int(dev) if dev else math.inf)
+
+
+def bus_copy_version(db_path):
+    """The release version of the copy in the bus folder holding db_path (.agentbus/VERSION), or None:
+    no such folder or file, a VERSION that is a source commit or not a version, or a file that is a
+    link or not the caller's. Reads one small file, never the database."""
+    folder = os.path.dirname(db_path)
+    if os.path.basename(folder) != ".agentbus":
+        return None
+    vfile = os.path.join(folder, "VERSION")
+    try:
+        if not check_node(vfile, "file"):
+            return None
+        v = read_small(vfile).strip()
+    except (SystemExit, OSError):
+        return None
+    return v if release_key(v) is not None else None
+
+
 def cmd_init(a):
     if is_repo_local_copy():
-        die("init runs from the installed agentbus or a clone of its repo, not a project copy")
+        die("init runs from the installed agentbus or a clone of its repo, not a project copy", "bad_input")
     root = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo or os.getcwd())))
     if not os.path.isdir(root):
         die(f"not a directory: {root}", "bad_input")
@@ -925,7 +1459,7 @@ def cmd_init(a):
     if info and os.path.realpath(info[0]) != root:
         top = git(["rev-parse", "--show-toplevel"], cwd=root)
         if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root:
-            die(f"{root} is a linked worktree; its commands use the main checkout's bus. Run: agentbus init {info[0]}")
+            die(f"{root} is a linked worktree; its commands use the main checkout's bus. Run: agentbus init {info[0]}", "bad_input")
     # Only a checkout's top level gets an exclude rule; an arbitrary directory is a workspace.
     top = git(["rev-parse", "--show-toplevel"], cwd=root) if info else None
     exclude = info[1] if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root else None
@@ -933,12 +1467,16 @@ def cmd_init(a):
     outer = next(walk_buses(parent), None) if parent != root else None
     folder = os.path.join(root, ".agentbus")
     say = (lambda *x, **k: None) if a.json else show
+    global _RERUN
+    _RERUN = "agentbus init " + root
     old, new = install_copy(root)
     version = shown_version(new)
     if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})? .*", version):
         version = version[:7] + (" +dirty" if version.endswith(" +dirty") else "")
     say("installed agentbus {} into {}/.agentbus/", version, root)
     added = ensure_exclude(exclude) if exclude else False
+    if added:
+        file_changed(exclude)
     shared = gitignore_has_rule(root) if exclude else False
     if added:
         say("added .agentbus/ to {} (local only; the repo stays clean)", exclude)
@@ -953,11 +1491,61 @@ def cmd_init(a):
                     "exclude_added": added, "gitignore_rule": shared, "outer": outer})
 
 
+# While upgrade runs: every migration it started (_Undo), so a Ctrl-C after one committed says what was
+# done and how to finish. None for every other command.
+_UPGRADE_MIGRATIONS = None
+
+
 def cmd_upgrade(a):
-    """Replace a bus folder's copy of the tool: DIR's, or by default the nearest bus's (found the
-    way every command finds its bus). Works for a repo or a workspace folder alike."""
+    """Replace a bus folder's copy of the tool and migrate its database: DIR's, or by default the
+    nearest bus's (found the way every command finds its bus); with --all, every bus folder under DIR.
+    Works for a repo or a workspace folder alike. A Ctrl-C after a migration committed is the
+    interrupted error naming each migration, its backup and the command that finishes the job."""
+    global _UPGRADE_MIGRATIONS
+    _UPGRADE_MIGRATIONS = []
+    try:
+        _cmd_upgrade(a)
+    except KeyboardInterrupt:
+        done = [u for u in _UPGRADE_MIGRATIONS if u.committed and u.summary]
+        # The bus folders whose copy (or VERSION) this run had already replaced: install_copy records each file.
+        mark = os.sep + ".agentbus" + os.sep
+        copies = list(dict.fromkeys(p.split(mark, 1)[0] for p in _CHANGED if mark in p))
+        if not done and not copies:
+            raise
+        where = [bus_directory(u.bus) for u in done]
+        last = copies[-1] if copies else where[-1]
+        if a.all and a.repo:
+            again = "agentbus upgrade --all " + os.path.realpath(os.path.abspath(os.path.expanduser(a.repo)))
+        else:
+            again = "agentbus upgrade " + last
+        said = []
+        if done:
+            what = "; ".join(f"{d} ({u.summary})" for d, u in zip(where, done))
+            said.append(f"interrupted after the bus was migrated: {what}. "
+                        + ("Its copy of agentbus may not have been replaced yet. " if not copies else ""))
+        if copies:
+            said.append(("Then" if done else "interrupted after") + " the copy of agentbus was replaced in "
+                        + ", ".join(copies) + ". ")
+        die("".join(said) + f"Run: {again} to finish", "interrupted", directory=last,
+            backup=done[-1].backup if done else None,
+            migrations=[{"directory": d, "schema_old": u.schema[0], "schema_new": u.schema[1], "backup": u.backup}
+                        for d, u in zip(where, done)], rerun=again, changed=list(dict.fromkeys(_CHANGED)))
+
+
+def _cmd_upgrade(a):
     if is_repo_local_copy():
-        die("upgrade runs from the installed agentbus or a clone of its repo; this is a project copy")
+        die("upgrade runs from the installed agentbus or a clone of its repo; this is a project copy", "bad_input")
+    if a.depth < 0:
+        die("--depth must be 0 or more", "bad_input")
+    if a.all:
+        if not a.repo:
+            die("upgrade --all needs a directory: agentbus upgrade --all DIR", "bad_input")
+        top = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo)))
+        if not os.path.isdir(top):
+            die(f"not a directory: {top}", "bad_input")
+        rows = [upgrade_one(d, a.dry_run, top) for d in find_bus_dirs(top, a.depth)]
+        report_upgrades(a, rows)
+        return
     if a.repo:
         root = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo)))
         info = repo_info(root)
@@ -969,12 +1557,297 @@ def cmd_upgrade(a):
         root = selected_bus(getattr(a, "up", 0))
     if not (check_node(os.path.join(root, ".agentbus"), "dir") and check_node(os.path.join(root, ".agentbus", "bin"), "dir")
             and check_node(os.path.join(root, ".agentbus", "bin", "agentbus"), "file")):
-        die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}")
-    old, new = install_copy(root)
+        die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}", "no_bus")
+    if a.dry_run:
+        report_upgrades(a, [upgrade_one(root, True)])
+        return
+    refuse_downgrade(root)
+    replaced = read_copy(root)
+    db = os.path.join(root, ".agentbus", "bus.db")
+    schema_old = schema_new = backup = None
+    # The bus first, then the copy: a migration that fails leaves the folder as it was.
+    if os.path.lexists(db):
+        con = open_bus(db, migrate=True, old_copy=replaced)
+        try:
+            schema_new = schema_old = user_version(con)
+            if con.migrated:
+                schema_old, backup = con.migrated["from"], con.migrated["backup"]
+        finally:
+            con.close()
+    _test_pause("before-install")
+    old, new = install_after_migration(root, schema_old, schema_new, backup)
     if a.json:
-        print_json({"directory": root, "old": old, "new": new})
-    else:
+        print_json({"directory": root, "old": old, "new": new, "schema_old": schema_old, "schema_new": schema_new,
+                    "backup": backup})
+    elif schema_old == schema_new:
         show("{}: {} -> {}", root, shown_version(old), new, path_first=True)
+    elif backup:
+        show("{}: {} -> {}   schema {} -> {}   backup {}", root, shown_version(old), new, schema_old, schema_new, backup,
+             path_first=True)
+    else:
+        show("{}: {} -> {}   schema {} -> {}", root, shown_version(old), new, schema_old, schema_new, path_first=True)
+
+
+# Folders upgrade --all never walks into: version control, dependencies, caches, and a bus folder
+# itself (a bus is found by its parent).
+WALK_SKIP = frozenset((".git", "node_modules", ".venv", "__pycache__", ".agentbus"))
+# How long upgrade --all waits for each bus to be free: an agent's command holds one for milliseconds,
+# and a bus held longer (a sqlite3 shell, a dashboard) is reported failed, with the fix, not waited on.
+UPGRADE_BUSY_WAIT_S = 5.0
+
+
+def find_bus_dirs(top, depth):
+    """Every directory under top (top included, at most depth levels below it) that has a
+    .agentbus/bin/agentbus entry, nearest first and in name order. Never follows a symlink."""
+    found = []
+
+    def walk(d, level):
+        if os.path.lexists(os.path.join(d, ".agentbus")):
+            folder = os.path.join(d, ".agentbus")
+            if os.path.islink(folder) or os.path.lexists(os.path.join(folder, "bin", "agentbus")):
+                found.append(d)
+        if level >= depth:
+            return
+        try:
+            entries = sorted(os.scandir(d), key=lambda e: e.name)
+        except OSError:
+            return
+        for e in entries:
+            if e.name not in WALK_SKIP and e.is_dir(follow_symlinks=False):
+                walk(e.path, level + 1)
+    walk(top, 0)
+    return found
+
+
+def install_after_migration(root, schema_old, schema_new, backup):
+    """install_copy, once the bus may already have been migrated: a refusal then says what did happen
+    (the migration and its backup) and that running upgrade again finishes the job."""
+    try:
+        return install_copy(root)
+    except (SystemExit, OSError) as e:
+        if schema_old is None or schema_old == schema_new:
+            raise
+        if isinstance(e, OSError):
+            r = {"code": "bus_unavailable", "message": f"{e.strerror or e}: {e.filename or root}"}
+        else:
+            r = refusal(e)
+        done = f"schema {schema_old} -> {schema_new}" + (f", backup {backup}" if backup else "")
+        die(f"{root}: the bus was migrated ({done}), but its copy of agentbus could not be replaced: {r['message']}. "
+            f"Run: agentbus upgrade {root} again", r["code"], directory=root, backup=backup)
+
+
+def read_copy(root):
+    """(the bytes of a bus folder's copy, its VERSION text) before upgrade replaces them, so a backup
+    taken by the migration can keep the copy that wrote it beside it. Read like any lane-writable file."""
+    folder = os.path.join(root, ".agentbus")
+    dest, vfile = os.path.join(folder, "bin", "agentbus"), os.path.join(folder, "VERSION")
+    check_node(dest, "file", must_exist=True)
+    code = _read_file(dest, COPY_LIMIT)
+    version = _read_file(vfile, SMALL) if check_node(vfile, "file") else b""
+    return code, version
+
+
+def check_still_under(top, d):
+    """Refuse d unless it is still a real directory inside top: every component from top down to
+    d (and its .agentbus) is a directory and not a symlink, and d resolves to itself. A folder found
+    by the walk can be swapped for a link to a bus outside top before its turn comes."""
+    if os.path.realpath(d) != d or not d.startswith(top.rstrip(os.sep) + os.sep) and d != top:
+        die(f"refusing {d}: it now resolves outside {top} (a link was swapped in); not upgraded", "bus_unavailable", file=d)
+    rel = os.path.relpath(d, top)
+    path = top
+    for part in ([] if rel == "." else rel.split(os.sep)) + [".agentbus"]:
+        path = os.path.join(path, part)
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            die(f"refusing {path}: it is now a link or not a directory (it changed during the run); not upgraded", "bus_unavailable", file=path)
+
+
+def short_version(v):
+    """A VERSION as a one-word label: a release as written, a source commit as its first 7 digits."""
+    v = shown_version(v)
+    if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})? .*", v):
+        return v[:7] + (" +dirty" if v.endswith(" +dirty") else "")
+    return v
+
+
+def schema_probe(db):
+    """(schema the bus has, schema it would have after an upgrade) read through a read-only open (which
+    changes no data or schema; it may finish SQLite's recovery of a crashed writer's journal); None for
+    both when there is no bus.db. Raises the open's refusal (busy, newer, refused)."""
+    if not os.path.lexists(db):
+        return None, None
+    try:
+        con = open_bus(db, read_only=True, busy_wait=UPGRADE_BUSY_WAIT_S)
+    except SystemExit as e:
+        r = refusal(e)
+        if r["code"] == "schema_older":
+            return e.code.fields["bus_schema"], SCHEMA_VERSION
+        if r["code"] == "no_bus":
+            return None, None
+        raise
+    try:
+        have = user_version(con)
+    finally:
+        con.close()
+    return have, SCHEMA_VERSION
+
+
+def upgrade_one(root, dry_run=False, top=None):
+    """Upgrade one bus folder: its copy (never to an older version), then its database (migrated
+    after a backup, or stamped). A dict of what happened; refusals are reported, not raised."""
+    folder = os.path.join(root, ".agentbus")
+    db = os.path.join(folder, "bus.db")
+    row = {"directory": root, "status": None, "old": None, "new": source_version(),
+           "schema_old": None, "schema_new": None, "backup": None, "error": None}
+    try:
+        _test_pause("before-upgrade-" + os.path.basename(root))
+        if top is not None:
+            check_still_under(top, root)
+        if not (check_node(folder, "dir") and check_node(os.path.join(folder, "bin"), "dir")
+                and check_node(os.path.join(folder, "bin", "agentbus"), "file")):
+            die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}", "no_bus")
+        vfile = os.path.join(folder, "VERSION")
+        old = read_small(vfile).strip() if check_node(vfile, "file") else "none"
+        row["old"] = shown_version(old)
+        mine, theirs = release_key(__version__), release_key(old)
+        if mine is not None and theirs is not None and theirs > mine:
+            row["status"] = "skipped"
+            return row
+        same_copy = old == source_version() and _same_file(os.path.join(folder, "bin", "agentbus"), self_path())
+        have, want = schema_probe(db)
+        row["schema_old"], row["schema_new"] = have, want
+        if same_copy and have == want:
+            row["status"] = "current"
+            return row
+        if dry_run:
+            row["status"] = "would_upgrade"
+            return row
+        if top is not None:
+            check_still_under(top, root)  # again, right before the writes
+        replaced = None if same_copy else read_copy(root)
+        # The bus first, then the copy: a migration that fails leaves the folder as it was.
+        if os.path.lexists(db):
+            con = open_bus(db, migrate=True, busy_wait=UPGRADE_BUSY_WAIT_S, old_copy=replaced)
+            try:
+                done = con.migrated
+                row["schema_new"] = user_version(con)
+            finally:
+                con.close()
+            if done:
+                row["schema_old"], row["backup"] = done["from"], done["backup"]
+        if not same_copy:
+            _test_pause("before-install")
+            if top is not None:
+                check_still_under(top, root)
+            install_after_migration(root, row["schema_old"], row["schema_new"], row["backup"])
+        row["status"] = "upgraded"
+    except SystemExit as e:
+        row["status"], row["error"] = "failed", refusal(e)
+    except OSError as e:
+        # The system refused a file (the copy could not be replaced, a folder could not be read): as upgrade DIR
+        # reports it, with the path, never as a bug. A rerun once the cause is fixed finishes the folder.
+        where = e.filename or root
+        row["status"] = "failed"
+        row["error"] = {"code": "bus_unavailable", "message": f"{e.strerror or e}: {where}", "file": where}
+    except sqlite3.Error as e:
+        # SQLite refusing the file (not a database, corrupt, unreadable) is the bus being unusable, as upgrade DIR
+        # reports it; only a misuse of the API by this program is a bug.
+        row["status"] = "failed"
+        misuse = (sqlite3.ProgrammingError, sqlite3.InterfaceError, sqlite3.InternalError, sqlite3.NotSupportedError)
+        if isinstance(e, misuse):
+            row["error"] = {"code": "internal", "message": str(e)}
+        else:
+            row["error"] = {"code": "bus_unavailable", "message": f"database error: {e}: {db}", "file": db}
+    return row
+
+
+def _same_file(a, b):
+    try:
+        with open(a, "rb") as x, open(b, "rb") as y:
+            return x.read() == y.read()
+    except OSError:
+        return False
+
+
+def _upgrade_parts(row):
+    """A report row as its columns: directory, copy, then (when the schema changed) schema and backup."""
+    s = row["status"]
+    if s == "current":
+        return [tilde(row["directory"]), f"current ({short_version(row['new'])})"]
+    if s == "skipped":
+        return [tilde(row["directory"]), f"skipped: copy is newer ({short_version(row['old'])})"]
+    if s == "failed":
+        msg = row["error"]["message"]
+        if row["error"]["code"] == "busy" and "stayed busy" in msg:
+            msg = "busy. Close any sqlite3 shell or dashboard holding it, then retry."
+        return [tilde(row["directory"]), f"failed: {msg}"]
+    old, new = short_version(row["old"]), short_version(row["new"])
+    copy = f"{old} -> {new}" if old != new else f"current ({new})"
+    parts = [tilde(row["directory"]), ("would upgrade: " if s == "would_upgrade" else "") + copy]
+    if row["schema_old"] is not None and row["schema_old"] != row["schema_new"]:
+        parts.append(f"schema {row['schema_old']} -> {row['schema_new']}")
+        if row["backup"]:
+            parts.append("backup " + os.path.relpath(row["backup"], row["directory"]))
+    return parts
+
+
+def report_upgrades(a, rows):
+    counts = {k: sum(1 for r in rows if r["status"] == k) for k in ("upgraded", "current", "skipped", "failed")}
+    if a.dry_run:
+        counts["would_upgrade"] = sum(1 for r in rows if r["status"] == "would_upgrade")
+    if a.json:
+        print_json({"buses": rows, **counts})
+    else:
+        for parts in (_upgrade_parts(r) for r in rows):
+            if len(parts) == 2:
+                show("{}   {}", *parts, path_first=True)
+            elif len(parts) == 3:
+                show("{}   {}   {}", *parts, path_first=True)
+            else:
+                show("{}   {}   {}   {}", *parts, path_first=True)
+        if a.dry_run:
+            show("would upgrade {}, current {}, skipped {}, failed {}", counts["would_upgrade"], counts["current"],
+                 counts["skipped"], counts["failed"])
+        else:
+            show("upgraded {}, current {}, skipped {}, failed {}", counts["upgraded"], counts["current"],
+                 counts["skipped"], counts["failed"])
+    if counts["failed"]:
+        emit_pending(a)  # the report is the result: printed before the error says a bus failed
+        failed = [r for r in rows if r["status"] == "failed"]
+        die(f"{len(failed)} of {len(rows)} bus folders failed: " + ", ".join(r["directory"] for r in failed)
+            + "; each one's row says why", "items_failed", failed=failed)
+
+
+# Commands whose human output carries the stale-copy notice (never under --json).
+STALE_NOTICE_COMMANDS = ("join", "status", "buses")
+
+
+def copy_label(directory):
+    """A bus folder's VERSION as one word for a human row (a source commit shortened), or none."""
+    vfile = os.path.join(directory, ".agentbus", "VERSION")
+    try:
+        return short_version(read_small(vfile).strip()) if check_node(vfile, "file") else "none"
+    except (SystemExit, OSError):
+        return "unreadable"
+
+
+def stale_copy(db_path):
+    """(the bus copy's version, True when it is a release older than this tool), from VERSION."""
+    copy = bus_copy_version(db_path)
+    mine = release_key(__version__)
+    return copy, bool(copy and mine is not None and release_key(copy) < mine)
+
+
+def stale_copy_notice(a, db_path):
+    """The installed tool's notice, on stderr, that a bus folder's copy is older than itself: only
+    from a tool that is not that copy, never with --json, and off with AGENTBUS_NO_UPDATE_NOTICE=1."""
+    if a.json or a.cmd not in STALE_NOTICE_COMMANDS or os.environ.get("AGENTBUS_NO_UPDATE_NOTICE", "") not in ("", "0") \
+            or is_repo_local_copy():
+        return
+    copy, stale = stale_copy(db_path)
+    if stale:
+        note(f"this bus's copy is {copy}; the installed agentbus is {__version__}. "
+             f"Run: agentbus upgrade {bus_directory(db_path)}")
 
 
 # ---------- opening the bus ----------
@@ -986,7 +1859,7 @@ def discovery_start():
     if info:
         r = git(["rev-parse", "--show-toplevel"], cwd=cwd)
         if r is None or r.returncode != 0:
-            die("cannot find this worktree's top level")
+            die("cannot find this worktree's top level", "no_bus")
         top = os.path.realpath(r.stdout.strip())
         return os.path.normpath(os.path.join(info[0], os.path.relpath(cwd, top)))
     return cwd
@@ -1062,21 +1935,25 @@ def cmd_buses(a):
         for suffix in SIDECARS:
             check_node(db + suffix, "file")
         if os.path.lexists(db + "-journal"):
-            die(f"refusing {db}-journal: agentbus never writes one; remove it after checking where it came from")
-        rows.append({"level": level, "directory": directory, "exists": exists})
+            die(f"refusing {db}-journal: agentbus never writes one; remove it after checking where it came from", "bus_unavailable", file=db + "-journal")
+        copy, stale = stale_copy(db)
+        rows.append({"level": level, "directory": directory, "exists": exists, "copy_version": copy, "stale": stale})
+        stale_copy_notice(a, db)
     if a.json:
-        print_json(rows)
+        print_json(envelope(rows))
     else:
         for row in rows:
-            show("{}  {}  bus.db {}", row["level"], row["directory"], "exists" if row["exists"] else "not created", row=True)
+            show("{}  {}  bus.db {}  copy {}", row["level"], row["directory"], "exists" if row["exists"] else "not created",
+                 row["copy_version"] or copy_label(row["directory"]), row=True)
 
 
 SIDECARS = ("-wal", "-shm", "-journal")
 
 
-def check_bus(path, strict_dir):
+def check_bus(path, strict_dir, read_only=False):
     """Before opening: the bus files and (for a .agentbus folder) the folder itself
-    must be real, owned by the caller and not links. Then tighten modes without following links."""
+    must be real, owned by the caller and not links. Then tighten modes without following links
+    (not for a read-only open, which changes no data or schema; may finish SQLite's recovery of a crashed writer's journal)."""
     folder = os.path.dirname(path)
     if strict_dir or os.path.basename(folder) == ".agentbus":
         check_node(folder, "dir", must_exist=True)
@@ -1085,12 +1962,12 @@ def check_bus(path, strict_dir):
             check_node(os.path.join(folder, "bin"), "dir")
     for suffix in ("",) + SIDECARS:
         st = check_node(path + suffix, "file", optional=True)
-        if st:
+        if st and not read_only:
             chmod_nofollow(path + suffix, 0o600, "file", st, optional=True)
     if os.path.lexists(path + "-journal"):
         # agentbus never uses a rollback journal (WAL, converted with an in-memory journal); a
         # journal here was planted, and SQLite would replay it.
-        die(f"refusing {path}-journal: agentbus never writes one; remove it after checking where it came from")
+        die(f"refusing {path}-journal: agentbus never writes one; remove it after checking where it came from", "bus_unavailable", file=path + "-journal")
 
 
 def _linked_here(path):
@@ -1112,7 +1989,7 @@ def _open_files():
     try:
         names = [int(n) for n in os.listdir("/dev/fd") if n.isdigit()]
     except OSError:
-        die("cannot list /dev/fd to verify the bus files SQLite opened")
+        die("cannot list /dev/fd to verify the bus files SQLite opened", "bus_unavailable")
     found = set()
     for fd in names:
         try:
@@ -1160,8 +2037,8 @@ def hold_budget():
     return query_budget() + HOLD_GRACE_S
 
 
-def held_too_long_message(path):
-    return (f"{path}: this command held the bus for {hold_budget():g} s, the most agentbus allows (other agents "
+def held_too_long_message(path, hold=None):
+    return (f"{path}: this command held the bus for {hold_budget() if hold is None else hold:g} s, the most agentbus allows (other agents "
             f"wait {BUSY_WAIT_S:g} s for it), and was stopped; a write still in progress was not saved. Something "
             "in the bus makes this command slow (a lane can write any rows); check the bus")
 
@@ -1179,6 +2056,8 @@ class Bus(sqlite3.Connection):
     pin = None  # our own O_NOFOLLOW fd on the bus file
     deadline = None  # time.monotonic() after which every statement on this connection is stopped
     guarded = False  # the hold watchdog is armed for this connection (open_bus)
+    wal_was_there = True  # bus.db-wal existed before this connection opened the bus
+    migrated = None  # {"from", "to", "backup"} when this open changed the schema version
 
     def _progress(self):
         """SQLite's progress handler: a non-zero return stops the running statement ("interrupted")."""
@@ -1205,7 +2084,7 @@ class Bus(sqlite3.Connection):
 
     def verify(self):
         if _linked_here(self.path) != self.ident:
-            die(f"{self.path} changed while in use (replaced, linked or moved); refusing to write")
+            die(f"{self.path} changed while in use (replaced, linked or moved); refusing to write", "bus_unavailable")
 
 
 def _audit(con, path, before, need_main):
@@ -1213,54 +2092,64 @@ def _audit(con, path, before, need_main):
     in our folder right now. Catches a link swapped in between our checks and SQLite's own open."""
     main = _linked_here(path)
     if main is None or main != con.ident:
-        die_now(f"{path} changed while opening (replaced or linked); refusing to use it")
+        die_now(f"{path} changed while opening (replaced or linked); refusing to use it", "bus_unavailable")
     allowed = {main, _linked_here(path + "-wal")}
     seen_main = False
     for fd, idn in _open_files() - before:
         if idn not in allowed:
-            die_now(f"{path}: SQLite opened a file that is not this bus (a link was swapped in); refusing")
+            die_now(f"{path}: SQLite opened a file that is not this bus (a link was swapped in); refusing", "bus_unavailable")
         seen_main = seen_main or idn == main
     if need_main and not seen_main:
-        die_now(f"{path}: cannot find the file SQLite opened; refusing")
+        die_now(f"{path}: cannot find the file SQLite opened; refusing", "bus_unavailable")
 
 
-def _open_once(path):
-    """One attempt. Returns a Bus holding the exclusive lock, or None if another process holds it."""
-    flags = os.O_RDWR | NOFOLLOW | NONBLOCK | os.O_CREAT
+def _open_once(path, read_only=False, budgets=None):
+    """One attempt. Returns a Bus holding the exclusive lock, or None if another process holds it.
+    read_only: the file must exist (never created) and its mode is left alone. budgets: (open, query)
+    seconds, by default open_budget() and query_budget()."""
+    open_s, query_s = budgets or (open_budget(), query_budget())
+    flags = os.O_RDWR | NOFOLLOW | NONBLOCK | (0 if read_only else os.O_CREAT)  # as a write, but never creating
     try:
         fd = os.open(path, flags, 0o600)
+    except FileNotFoundError:
+        if read_only:
+            die(f"no bus at {path} yet (nothing has written it). Run any agentbus command there, or: agentbus init DIR",
+                "no_bus", bus=path)
+        die(f"refusing {path}: No such file or directory", "bus_unavailable", file=path)
     except OSError as e:
-        die(f"refusing {path}: {e.strerror}")
+        die(f"refusing {path}: {e.strerror}", "bus_unavailable", file=path)
     owned = []
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or not _owned(st):
-            die(f"refusing {path}: not a single-link regular file owned by you")
-        os.fchmod(fd, 0o600)
+            die(f"refusing {path}: not a single-link regular file owned by you", "bus_unavailable", file=path)
+        if not read_only:
+            os.fchmod(fd, 0o600)
         # Our fd stays open until both audits are done, so SQLite's own fd for the file can never
         # reuse its number and hide in the snapshot.
         before = _open_files()
         _test_pause("before-connect")
-        with watched(open_budget(), f"{path}: opening the bus did not finish within {open_budget():g} s, so the "
+        with watched(open_s, f"{path}: opening the bus did not finish within {open_s:g} s, so the "
                      "command was stopped. SQLite was blocked on a file in the bus folder (a FIFO or other "
                      "special file planted at bus.db-journal, for example); check the folder"):
-            return _connect_watched(path, fd, st, before, owned)
+            return _connect_watched(path, fd, st, before, owned, read_only, query_s)
     finally:
         if not owned:
             os.close(fd)
 
 
-def _connect_watched(path, fd, st, before, owned):
+def _connect_watched(path, fd, st, before, owned, read_only=False, query_s=None):
     """_open_once from the connect on, under the watchdog: every SQLite-internal open (the main
     file, -wal, a hot -journal, a super-journal it names) happens in here. Returns the Bus or None.
     Once the connection exists it owns fd (owned is set), and con.close() closes it."""
     # mode=rw: SQLite never creates the main file itself (we just did, without following links).
+    wal_was_there = os.path.lexists(path + "-wal")
     con = sqlite3.connect("file:" + quote(path) + "?mode=rw", uri=True, timeout=0,
                           isolation_level=None, factory=Bus)
-    con.path, con.ident, con.pin = path, _ident(st), fd
+    con.path, con.ident, con.pin, con.wal_was_there = path, _ident(st), fd, wal_was_there
     owned.append(con)
     _HELD.append(con)
-    con.deadline = time.monotonic() + query_budget()
+    con.deadline = time.monotonic() + (query_budget() if query_s is None else query_s)
     con.set_progress_handler(con._progress, 10000)
     con.row_factory = sqlite3.Row
     # A lane can store bytes that are not UTF-8 in a TEXT column; the default decoder then
@@ -1286,8 +2175,9 @@ def _connect_watched(path, fd, st, before, owned):
         _test_pause("before-wal-convert")
         # Decide from SQLite's own view after its read, never from a header we read ourselves
         # (a lane can flip bytes 18-19 at any time). Not WAL (new or flipped): convert
-        # through an in-memory journal, so no -journal file is opened for writing.
-        if con.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+        # through an in-memory journal, so no -journal file is opened for writing. A read-only
+        # open converts nothing: it reads the file in whatever mode it is.
+        if not read_only and con.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
             con.execute("PRAGMA journal_mode=MEMORY")
             con.execute("PRAGMA journal_mode=WAL").fetchone()
             con.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
@@ -1305,7 +2195,103 @@ def _connect_watched(path, fd, st, before, owned):
     return con
 
 
-def open_bus(path, strict_dir=False):
+def refusal(e):
+    """{"code", "message"} of a SystemExit raised by die(), for a caller that shows the error itself
+    (watch's frame) instead of exiting."""
+    if isinstance(e.code, Diag):
+        return {"code": e.code.code, "message": e.code.msg}
+    return {"code": "internal", "message": str(e.code)}
+
+
+def bus_directory(path):
+    """The directory a bus belongs to, as commands name it: the folder holding .agentbus, else the
+    database's own folder (an explicit AGENTBUS_DB elsewhere)."""
+    folder = os.path.dirname(path)
+    return os.path.dirname(folder) if os.path.basename(folder) == ".agentbus" else folder
+
+
+def schema_older(path, have):
+    die(f"this bus is older than this agentbus (schema {have}, needs {SCHEMA_VERSION}). Any agentbus command "
+        f"that is not watch upgrades it after taking a backup, or run: agentbus upgrade {bus_directory(path)}",
+        "schema_older", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
+
+
+def schema_newer(path, have):
+    die(f"this bus is newer than this copy of agentbus (schema {have}, this copy knows {SCHEMA_VERSION}). "
+        f"Use a newer agentbus: agentbus upgrade {bus_directory(path)} from an up-to-date install",
+        "schema_newer", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
+
+
+def user_version(con):
+    return con.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _has_tables(con):
+    names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    return any(t in names for t in TABLES)
+
+
+def schema_state(con):
+    """What a bus needs, read without writing, after check_objects: ("new", 0) no tables yet;
+    ("adopt", 0) the version-1 shape without the stamp (a v0.1.0 bus); ("current", n);
+    ("older", (n, history entry or None)) a migration is due; ("newer", n). A shape that is none of
+    these is refused here, by check_schema's own message."""
+    check_objects(con)
+    have = user_version(con)
+    if have < 0 or have > MAX_SCHEMA_VERSION:
+        die(f"bus.db records schema version {have}, which no agentbus writes: another tool or a lane changed it. "
+            "Check the bus, or restore a backup (docs/how-to/upgrade.md)", "schema_corrupt", bus=getattr(con, "shown", con.path),
+            bus_schema=have)
+    if have > SCHEMA_VERSION:
+        return "newer", have
+    if not _has_tables(con):
+        return "new", have  # nothing of agentbus's (every table dropped counts too): created as new
+    if have == SCHEMA_VERSION:
+        check_schema(con, before_setup=True)  # a missing index is created by the write open
+        return "current", have
+    if have == 0:
+        if SCHEMA_VERSION == 1 or SCHEMA_V1 == SCHEMA:
+            try:
+                check_schema(con, before_setup=True)
+                return "adopt", 0
+            except SystemExit:
+                entry = history_match(con)
+                if entry is None:
+                    raise
+                return "older", (0, entry)
+        if {t: table_shape(con, t) for t in TABLES} == schema_shapes(SCHEMA_V1):
+            return "older", (0, {"name": "v0.1.0", "schema": SCHEMA_V1, "steps": []})  # stamp 1, then migrate
+        entry = history_match(con)
+        if entry is None:
+            check_schema(con)  # refused, with the difference named
+            die("bus schema is not agentbus's: it matches no version this agentbus knows", "schema_refused")
+        return "older", (0, entry)
+    return "older", (have, None)
+
+
+def history_match(con):
+    """The HISTORY entry whose captured shape this bus has, table for table, else None."""
+    if not HISTORY:
+        return None
+    shapes = {t: table_shape(con, t) for t in TABLES}
+    for entry in HISTORY:
+        if schema_shapes(entry["schema"]) == shapes:
+            return entry
+    return None
+
+
+@lru_cache(maxsize=None)
+def schema_shapes(schema):
+    """{table: shape} of the tables a schema text creates, built in memory."""
+    ref = sqlite3.connect(":memory:")
+    try:
+        ref.executescript(schema)
+        return {t: table_shape(ref, t) for t in TABLES}
+    finally:
+        ref.close()
+
+
+def open_bus(path, strict_dir=False, migrate=True, read_only=False, busy_wait=BUSY_WAIT_S, hold=None, old_copy=None):
     """Open a bus without ever letting SQLite write through a link a lane swapped in:
     1. the folder and files are checked (no links, one owner, one link each);
     2. the main file is opened by us with O_NOFOLLOW and SQLite only reopens it (mode=rw, no create);
@@ -1313,52 +2299,535 @@ def open_bus(path, strict_dir=False):
        process holds must be one of the two files named in our folder (dev/inode, single link);
     4. exclusive locking mode, so -shm is never used and nothing else holds the bus meanwhile;
     5. every write transaction re-checks the path still names the opened file (Bus.verify).
-    Another process holding the bus makes this retry (closing in between) for up to 15 seconds.
-    The hold watchdog ends the process once the connection has
-    been open for hold_budget(): Python work with the lock held (the setup below, the command, its
-    fetches) is bounded too, not only its SQL."""
+    Another process holding the bus makes this retry (closing in between) for up to busy_wait seconds
+    (default 15). The hold watchdog ends the process once the connection has been open for `hold`
+    seconds (default and most hold_budget()): Python work with the lock held (the setup below, the
+    command, its fetches) is bounded too, not only its SQL.
+    Open modes: the default write open creates a new bus, stamps the schema version and migrates an
+    older bus. migrate=False refuses a bus that needs a migration (schema_older) instead of writing
+    it. read_only=True creates nothing and changes no data or schema (no file, no folder, no mode
+    change, no setup, no stamp; SQL is query_only), and refuses a bus that needs a write first (schema_older,
+    or no_bus when there are no tables). It opens the bus exactly as a write does (the same checks,
+    exclusive locking, the same audits): it changes no row or schema, and may finish SQLite's
+    recovery of a crashed writer's -wal (folding its committed frames into bus.db) on close."""
+    hold = hold_budget() if hold is None else min(max(float(hold), 0.05), hold_budget())
+    query_s = min(query_budget(), hold - min(HOLD_GRACE_S, hold / 2))
+    budgets = (min(open_budget(), hold), query_s)
     folder = os.path.dirname(path)
     if not os.path.lexists(folder):
+        if read_only:
+            die(f"no bus at {path}: {folder} does not exist. Run: agentbus init DIR", "no_bus", bus=path)
         os.makedirs(os.path.dirname(folder), exist_ok=True)
         make_dir(folder)
-    deadline = time.time() + BUSY_WAIT_S
+    deadline = time.time() + busy_wait
     while True:
         try:
-            check_bus(path, strict_dir)
+            check_bus(path, strict_dir, read_only)
         except _Vanished as e:
             if time.time() > deadline:
-                die(f"refusing {e}: it keeps vanishing or changing while being checked")
+                die(f"refusing {e}: it keeps vanishing or changing while being checked", "bus_unavailable", file=str(e))
             time.sleep(random.uniform(0.002, 0.03))
             continue
-        con = _open_once(path)
+        con = _open_once(path, read_only, budgets)
         if con is not None:
             break
         _test_pause("lock-retry")
         if time.time() > deadline:
-            die(f"{path} stayed busy for {BUSY_WAIT_S:g} seconds. "
+            die(f"{path} stayed busy for {busy_wait:g} seconds. "
                 "Close any sqlite3 shell or dashboard holding it open, then retry.", "busy", bus=path)
         time.sleep(random.uniform(0.002, 0.03))
+    con.shown = path
     con.guarded = True
-    WATCHDOG.arm(max(con.deadline + HOLD_GRACE_S - time.monotonic(), 0.0), held_too_long_message(path))
+    WATCHDOG.arm(max(con.deadline + (hold - query_s) - time.monotonic(), 0.0), held_too_long_message(path, hold))
     try:
-        con.execute("PRAGMA busy_timeout=15000")
+        con.execute(f"PRAGMA busy_timeout={int(busy_wait * 1000)}")
         con.execute("PRAGMA foreign_keys=ON")
-        with immediate(con):
+        if read_only:
+            _setup_read_only(con, path)
+            return con
+        with immediate(con, record=False):  # setup is not the command's change
             # First, before any statement that could fire a trigger or read a view: a lane can
-            # add either (or a table or index) to the bus, and it would run here, unsandboxed.
-            check_objects(con)
-            # Then, still before any write: every table that exists has agentbus's own shape
-            # before creating anything in an empty bus.
+            # add either (or a table or index) to the bus, and it would run here, unsandboxed
+            # (schema_state runs check_objects first). Then, still before any write: every table
+            # that exists has agentbus's own shape before creating anything in an empty bus.
+            state, info = schema_state(con)
+        if state == "newer":
+            schema_newer(path, info)
+        if state == "older":
+            if not migrate:
+                schema_older(path, info[0])
+            migrate_bus(con, path, info, old_copy)
+        with immediate(con, record=False):  # the stamp and setup are not the command's change either
+            # Again, in the transaction that writes: the connection kept its exclusive lock since
+            # the check above, so this only re-proves what that check found.
+            state, info = schema_state(con)
+            if state == "newer":
+                schema_newer(path, info)
+            if state == "older":
+                schema_older(path, info[0])
             check_schema(con, before_setup=True)
             create_schema(con, indexes=False)
             check_objects(con, index_sql=True)
             create_schema(con)
             check_schema(con)
+            if state in ("new", "adopt"):
+                # A new bus, or a v0.1.0 bus whose tables already have the version-1 shape: the
+                # stamp is the only write adoption makes.
+                con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                if state == "adopt":
+                    con.migrated = {"from": 0, "to": SCHEMA_VERSION, "backup": None}
             normalize_stored_claims(con)
     except BaseException:
         con.close()
         raise
     return con
+
+
+def _setup_read_only(con, path):
+    """The checks of a read-only open, which changes no data or schema (it may finish SQLite's recovery of a
+    crashed writer's journal): refuse what the default open would refuse,
+    and a bus that needs a write before it can be read (no tables yet, or a migration)."""
+    con.execute("PRAGMA query_only=ON")
+    con.execute("BEGIN")
+    try:
+        state, info = schema_state(con)
+        if state == "newer":
+            schema_newer(path, info)
+        if state == "older":
+            schema_older(path, info[0])
+        if state == "new":
+            die(f"no bus at {path} yet (nothing has written it). Run any agentbus command there, or: agentbus init DIR",
+                "no_bus", bus=path)
+    finally:
+        if con.in_transaction:
+            con.execute("COMMIT")
+
+
+# ---------- migrations and backups ----------
+
+# A migration's own budget, replacing QUERY_BUDGET_S and the hold watchdog for the connection that
+# migrates: the quick_check, the backup copy and its check, and the migration SQL all count against
+# it. With HOLD_GRACE_S and the exit it stays under BUSY_WAIT_S, so an agent waiting on the bus always
+# gets it (then migrates it itself if this run was stopped). 10 s copies and checks hundreds of MB; a
+# bus too big for that fails backup_failed with the bus unchanged.
+MIGRATE_BUDGET_S = 9.0
+# How long the watchdog waits for a COMMIT in progress before it gives up on undoing (UNDO_LOCK_WAIT_S),
+# and exit_now's grace for writing its message (EXIT_GRACE_S): with MIGRATE_BUDGET_S and HOLD_GRACE_S a
+# stopped migration is gone in 13 s, inside the 15 s another agent waits.
+UNDO_LOCK_WAIT_S = 1.0
+EXIT_GRACE_S = 1.0
+BACKUP_KEEP = 5
+PARTIAL_MAX_AGE_S = 3600
+BACKUP_SPARE = 16 << 20
+COPY_BLOCK = 1 << 20
+_BACKUP_NAME = re.compile(r"bus-v([0-9]{1,6})-([0-9]{8}T[0-9]{6}Z)(?:-([0-9]{1,2}))?\.db")
+
+
+def migrate_budget():
+    """MIGRATE_BUDGET_S. Test hook: AGENTBUS_TEST_DEADLINE=<seconds> can only shorten it."""
+    try:
+        v = float(os.environ.get("AGENTBUS_TEST_DEADLINE", ""))
+    except ValueError:
+        return MIGRATE_BUDGET_S
+    return min(max(v, 0.0), MIGRATE_BUDGET_S) if math.isfinite(v) else MIGRATE_BUDGET_S
+
+
+def backup_failed(path, why):
+    die(f"{path}: could not back up the bus before upgrading it ({why}); nothing was changed",
+        "backup_failed", bus=path, reason=why)
+
+
+def migration_steps(have, entry):
+    """The statements that take this bus to SCHEMA_VERSION, as [(from version, [SQL, ...])]."""
+    plan, v = [], have
+    if entry is not None:
+        plan.append((0, list(entry["steps"])))
+        v = 1
+    while v < SCHEMA_VERSION:
+        if v not in MIGRATIONS:
+            die(f"bus schema {v} has no migration to {v + 1} in this agentbus", "schema_refused", bus=None)
+        plan.append((v, list(MIGRATIONS[v])))
+        v += 1
+    return plan
+
+
+def rehearse(con, plan):
+    """Run the migration on an in-memory copy of the bus's schema (no rows), then check the result as
+    every open checks a bus: a bus whose shape the statements would not bring to agentbus's is
+    refused here, before any backup or write."""
+    ref = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        for typ, name, sql in con.execute("SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL "
+                                          "AND name <> 'sqlite_sequence' ORDER BY type DESC, rowid").fetchall():
+            ref.execute(sql)
+        for _, stmts in plan:
+            for stmt in stmts:
+                ref.execute(stmt)
+        check_schema(ref)
+        check_objects(ref, index_sql=True)
+    finally:
+        ref.close()
+
+
+def _backups_dir(path):
+    """The backups folder beside the bus, made 0700, opened once as a directory fd that every later
+    step passes as dir_fd: swapping the folder for a link afterwards cannot redirect a write."""
+    d = os.path.join(os.path.dirname(path), "backups")
+    expect = make_dir(d)
+    try:
+        dfd = os.open(d, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW)
+    except OSError as e:
+        backup_failed(path, f"cannot open {d}: {e.strerror}")
+    st = os.fstat(dfd)
+    if not stat.S_ISDIR(st.st_mode) or not _owned(st) or _ident(st) != _ident(expect):
+        os.close(dfd)
+        backup_failed(path, f"{d} changed while opening")
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        os.fchmod(dfd, 0o700)
+        if stat.S_IMODE(os.fstat(dfd).st_mode) != 0o700:
+            os.close(dfd)
+            backup_failed(path, f"cannot make {d} owner-only")
+    return d, dfd
+
+
+def _entry_stat(name, dfd):
+    try:
+        st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+    except OSError:
+        return None
+    return st if stat.S_ISREG(st.st_mode) and _owned(st) else None
+
+
+def _same_bytes(fd_a, fd_b, size, deadline):
+    off = 0
+    while off < size:
+        if time.monotonic() > deadline:
+            raise TimeoutError
+        n = min(COPY_BLOCK, size - off)
+        if os.pread(fd_a, n, off) != os.pread(fd_b, n, off):
+            return False
+        off += n
+    return True
+
+
+def _reusable_backup(con, dfd, version, size, deadline):
+    """The newest existing backup of this version that already holds exactly the bus's bytes (a run
+    that died after its backup), so a retried migration does not make a second one."""
+    names = sorted((m.group(2), int(m.group(3) or 1), n) for n in os.listdir(dfd)
+                   for m in [_BACKUP_NAME.fullmatch(n)] if m and int(m.group(1)) == version)
+    for _, _, name in reversed(names):
+        st = _entry_stat(name, dfd)
+        if st is None or st.st_size != size or st.st_nlink != 1 or stat.S_IMODE(st.st_mode) != 0o600:
+            continue
+        try:
+            fd = os.open(name, os.O_RDONLY | NOFOLLOW | NONBLOCK, dir_fd=dfd)
+        except OSError:
+            continue
+        try:
+            fst = os.fstat(fd)
+            if _ident(fst) == _ident(st) and _same_bytes(con.pin, fd, size, deadline):
+                return name
+        except TimeoutError:
+            return None
+        finally:
+            os.close(fd)
+    return None
+
+
+def _copy_names(backup_name):
+    """The names of the copy (and its VERSION) kept beside a backup: agentbus-<stamp>, VERSION-<stamp>."""
+    stamp = backup_name.split("-", 2)[2][:-len(".db")]
+    return f"agentbus-{stamp}", f"VERSION-{stamp}"
+
+
+def _keep_copy(dfd, backup_name, old_copy, undo=None):
+    """Write the replaced copy and its VERSION beside the backup, 0600, each through a temp file
+    that is checked (size) and then linked in, so a name is only ever a complete copy; never over an
+    existing name (a retried migration that reuses its backup keeps the first copy saved). Returns the
+    names it created."""
+    made = []
+    for name, data in zip(_copy_names(backup_name), old_copy):
+        if _entry_stat(name, dfd) is not None:
+            continue
+        tmp = f".{name}.{secrets.token_hex(8)}.tmp"
+        if undo is not None:
+            undo.tmps.append(tmp)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600, dir_fd=dfd)
+        try:
+            if os.environ.get("AGENTBUS_TEST_BACKUP_FAIL") == "keep-enospc":
+                _write_fd_all(fd, data[:len(data) // 2])
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+            if os.environ.get("AGENTBUS_TEST_BACKUP_FAIL") == "keep-stall":
+                _write_fd_all(fd, data[:len(data) // 2])
+                time.sleep(60)  # test hook: stalled until the watchdog stops the migration
+            _write_fd_all(fd, data)
+            os.fsync(fd)
+            if os.fstat(fd).st_size != len(data):
+                raise OSError(errno.EIO, f"the kept copy {name} does not match the copy it saves")
+            try:
+                os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)
+                made.append(name)
+            except FileExistsError:
+                pass
+        finally:
+            os.close(fd)
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except OSError:
+                pass
+            if undo is not None and tmp in undo.tmps:
+                undo.tmps.remove(tmp)
+    return made
+
+
+def _prune_backups(dfd, keep):
+    """Keep `keep` (the backup just taken, whatever its stamp says) and the newest BACKUP_KEEP - 1
+    other backups (exact name pattern, regular files we own); remove .partial files older than an
+    hour (a crash mid-copy leaves one)."""
+    full, now_s = [], time.time()
+    for n in os.listdir(dfd):
+        m = _BACKUP_NAME.fullmatch(n[:-len(".partial")] if n.endswith(".partial") else n)
+        st = _entry_stat(n, dfd) if m else None
+        if st is None:
+            continue
+        if n.endswith(".partial"):
+            if now_s - st.st_mtime > PARTIAL_MAX_AGE_S:
+                os.unlink(n, dir_fd=dfd)
+            continue
+        if n != keep:
+            full.append((m.group(2), int(m.group(3) or 1), n))
+    for _, _, n in sorted(full)[:max(len(full) - (BACKUP_KEEP - 1), 0)]:
+        os.unlink(n, dir_fd=dfd)
+        for kept in _copy_names(n):  # the copy upgrade kept beside it goes with it
+            if _entry_stat(kept, dfd) is not None:
+                os.unlink(kept, dir_fd=dfd)
+
+
+class _Undo:
+    """What a migration made in backups/ (its dir fd, the folder if it made it, the partial, the
+    published backup and kept copy), removed again if the migration does not complete."""
+
+    def __init__(self):
+        self.dfd, self.made_dir, self.partial, self.names, self.empty_wal = None, None, None, [], None
+        self.tmps = []  # a kept copy's temp file while it is written
+        # COMMIT and `committed` change together under the lock; the watchdog thread takes it before
+        # undoing, so it never removes the backup of a migration that has committed.
+        self.lock = threading.Lock()
+        self.committed = False
+        self.summary = None  # "schema N -> M, backup PATH", for the message when it did commit
+        self.bus, self.backup, self.schema = None, None, (None, None)  # the bus, its backup and (N, M), for upgrade
+
+    def run(self):
+        """Undo, unless the migration committed (then say so). Returns a message for the watchdog
+        when the state is not "nothing was changed"."""
+        if not self.lock.acquire(timeout=UNDO_LOCK_WAIT_S):
+            return "the upgrade was stopped while it was committing; run any agentbus command to see the bus's state"
+        try:
+            if self.committed:
+                return (f"the bus was migrated ({self.summary}) before the command was stopped; run "
+                        "agentbus upgrade DIR again to finish replacing the copy" if self.summary else None)
+            self._undo()
+        finally:
+            self.lock.release()
+        return None
+
+    def _undo(self):
+        for tmp in list(self.tmps):
+            try:
+                os.unlink(tmp, dir_fd=self.dfd)
+            except (OSError, TypeError):
+                pass
+        if self.empty_wal:  # only when the watchdog ends the process: nothing else can use it then
+            try:
+                st = os.lstat(self.empty_wal)
+                if stat.S_ISREG(st.st_mode) and st.st_size == 0 and st.st_nlink == 1 and _owned(st):
+                    os.unlink(self.empty_wal)
+            except OSError:
+                pass
+        for name in ([self.partial] if self.partial else []) + self.names:
+            try:
+                os.unlink(name, dir_fd=self.dfd)
+            except (OSError, TypeError):
+                pass
+        if self.made_dir:
+            try:
+                os.rmdir(self.made_dir)  # only if empty; a link there is not a directory to remove
+            except OSError:
+                pass
+
+    def close(self):
+        if self.dfd is not None:
+            os.close(self.dfd)
+            self.dfd = None
+
+
+def take_backup(con, path, version, deadline, old_copy=None, undo=None):
+    """A verified copy of bus.db in backups/, taken with the exclusive lock held, before any migrating
+    write. Never by name through SQLite: the bytes come from our own pinned O_NOFOLLOW fd on the bus
+    and go into a file we created with O_EXCL|O_NOFOLLOW under the backups folder's fd. Returns the
+    backup's name (a reused one when a dead run already made it)."""
+    size = os.fstat(con.pin).st_size + (os.lstat(path + "-wal").st_size if os.path.lexists(path + "-wal") else 0)
+    vfs = os.statvfs(os.path.dirname(path))
+    free, need = vfs.f_bavail * vfs.f_frsize, 2 * size + BACKUP_SPARE
+    if os.environ.get("AGENTBUS_TEST_BACKUP_FAIL") == "space":
+        free = need - 1
+    if free < need:
+        backup_failed(path, f"not enough free space for a backup; free {-(-(need - free) // (1 << 20))} MB or move the bus")
+    busy, _, _ = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if busy:
+        backup_failed(path, "the bus could not be checkpointed")
+    _test_pause("after-checkpoint")
+    # The bus itself must pass SQLite's quick_check (on our own audited connection, never by naming a
+    # file); the backup is then checked byte for byte against it, so it passes too.
+    problems = [r[0] for r in con.execute("PRAGMA quick_check").fetchall()]
+    if problems != ["ok"]:
+        backup_failed(path, "the bus fails SQLite's quick_check (" + "; ".join(map(str, problems[:3])) + "); it is not migrated")
+    size = os.fstat(con.pin).st_size
+    undo = undo or _Undo()
+    if not os.path.lexists(os.path.join(os.path.dirname(path), "backups")):
+        undo.made_dir = os.path.join(os.path.dirname(path), "backups")
+    d, dfd = _backups_dir(path)
+    undo.dfd = dfd
+    partial = None
+    try:
+        name = _reusable_backup(con, dfd, version, size, deadline)
+        if name:
+            if old_copy:
+                undo.names += _keep_copy(dfd, name, old_copy, undo)
+            return os.path.join(d, name)
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        for k in range(1, 100):
+            name = f"bus-v{version}-{stamp}{'' if k == 1 else f'-{k}'}.db"
+            if _entry_stat(name, dfd) is not None or os.path.lexists(os.path.join(d, name)):
+                continue
+            try:
+                out = os.open(name + ".partial", os.O_RDWR | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600, dir_fd=dfd)
+            except FileExistsError:
+                continue
+            except OSError as e:
+                backup_failed(path, f"cannot create {name}.partial: {e.strerror}")
+            partial = name + ".partial"
+            undo.partial = partial
+            break
+        else:
+            backup_failed(path, "no free backup name")
+        try:
+            off = 0
+            while off < size:
+                if time.monotonic() > deadline:
+                    raise TimeoutError
+                block = os.pread(con.pin, min(COPY_BLOCK, size - off), off)
+                if not block:
+                    break
+                if os.environ.get("AGENTBUS_TEST_BACKUP_FAIL") == "enospc":
+                    raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+                if os.environ.get("AGENTBUS_TEST_BACKUP_FAIL") == "corrupt" and off == 0:
+                    block = bytes([block[0] ^ 0xFF]) + block[1:]  # test hook: a bad write
+                _write_fd_all(out, block)
+                off += len(block)
+                if off == len(block):
+                    _test_pause("mid-copy")
+                    _test_slow()
+            os.fsync(out)
+            if time.monotonic() > deadline:
+                raise TimeoutError
+            st = os.fstat(out)
+            if st.st_size != size or off != size or st.st_nlink != 1 or not _owned(st) \
+                    or stat.S_IMODE(st.st_mode) != 0o600 or not stat.S_ISREG(st.st_mode) \
+                    or not _same_bytes(con.pin, out, size, deadline):
+                raise OSError(errno.EIO, "the backup does not match the bus")
+            # Publish exactly the file we wrote and checked: link (never replaces an existing
+            # name), then the name must be our descriptor's file.
+            try:
+                os.link(partial, name, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)
+            except FileExistsError:
+                raise OSError(errno.EEXIST, f"{name} appeared while the backup was written; not replaced")
+            linked = _entry_stat(name, dfd)
+            if linked is None or _ident(linked) != _ident(st):
+                raise OSError(errno.EIO, f"{name} is not the file that was written; not used")
+            undo.names.append(name)
+            os.unlink(partial, dir_fd=dfd)
+            partial = undo.partial = None
+            published = _ident(st)
+            if old_copy:
+                undo.names += _keep_copy(dfd, name, old_copy, undo)
+        except TimeoutError:
+            backup_failed(path, f"the backup did not finish within {migrate_budget():g} s")
+        except OSError as e:
+            backup_failed(path, e.strerror or str(e))
+        finally:
+            os.close(out)
+        os.fsync(dfd)
+        _test_pause("after-backup")
+        st = _entry_stat(name, dfd)
+        if st is None or st.st_size != size or _ident(st) != published:
+            backup_failed(path, f"the backup {name} is gone or changed")  # nothing is migrated without it
+        return os.path.join(d, name)
+    finally:
+        if partial is not None:
+            try:
+                os.unlink(partial, dir_fd=dfd)
+            except OSError:
+                pass
+            undo.partial = None
+
+
+def migrate_bus(con, path, info, old_copy=None):
+    """Bring an older bus to SCHEMA_VERSION: rehearse the statements on its schema, back it up (a
+    verified copy), then run them, check the result as every open does, stamp the version and log
+    it, all in one transaction that a failed check rolls back. On its own budget (MIGRATE_BUDGET_S).
+    Records what changed on con.migrated."""
+    have, entry = info
+    plan = migration_steps(have, entry)
+    rehearse(con, plan)
+    budget = migrate_budget()
+    start = time.monotonic()
+    con.deadline = start + budget
+    WATCHDOG.arm(budget + HOLD_GRACE_S, f"{path}: upgrading the bus did not finish within {budget:g} s and was "
+                 "stopped; nothing was changed")
+    # Everything the migration makes in backups/ is removed again unless it commits, also when the
+    # watchdog stops it, so a failed upgrade leaves the folder as it was.
+    undo = _Undo()
+    if not con.wal_was_there:
+        undo.empty_wal = path + "-wal"  # SQLite made it for this connection; a stopped run leaves it empty
+    _KILL_CLEANUP.append(undo.run)
+    undo.bus, undo.schema = path, (have, SCHEMA_VERSION)
+    if _UPGRADE_MIGRATIONS is not None:
+        _UPGRADE_MIGRATIONS.append(undo)  # the upgrade names it if a Ctrl-C comes once it has committed
+    try:
+        backup = take_backup(con, path, have, start + budget, old_copy, undo)
+        undo.summary, undo.backup = f"schema {have} -> {SCHEMA_VERSION}, backup {backup}", backup
+        # Under upgrade the migration is the command's change (committed: true after it); for any other
+        # command it is setup, like the stamp, and the command's own write is what counts.
+        with immediate(con, record=_UPGRADE_MIGRATIONS is not None, guard=undo):
+            if user_version(con) != have:
+                die(f"{path} changed while it was being upgraded; retry", "busy", bus=path)
+            for _, stmts in plan:
+                for stmt in stmts:
+                    con.execute(stmt)
+            check_schema(con)
+            check_objects(con, index_sql=True)
+            con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            log(con, "agentbus", "migrate", f"v{have} -> v{SCHEMA_VERSION}, backup {os.path.basename(backup)}")
+            _test_pause("before-commit")
+        # Old backups are pruned only once the migration has committed: a failed or stopped one keeps every backup
+        # that was there before it (its own is removed by the undo).
+        try:
+            _prune_backups(undo.dfd, os.path.basename(backup))
+        except OSError:
+            pass  # old backups stay; never a reason to stop
+    except BaseException:
+        undo.empty_wal = None  # the process lives on and SQLite still has it open
+        if not undo.committed:
+            undo.run()
+        raise
+    finally:
+        _KILL_CLEANUP.remove(undo.run)
+        undo.close()
+    con.migrated = {"from": have, "to": SCHEMA_VERSION, "backup": backup}
+    # Back to an ordinary command's budgets for whatever the command does next.
+    con.deadline = time.monotonic() + query_budget()
+    WATCHDOG.arm(hold_budget(), held_too_long_message(path))
 
 
 def create_schema(con, indexes=True):
@@ -1556,11 +3025,27 @@ def check_objects(con, index_sql=False):
 
 
 @contextmanager
-def immediate(con):
+def _sigint_deferred():
+    """Hold SIGINT back (blocked, so it stays pending) while the body runs in the main thread."""
+    import signal
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "pthread_sigmask"):
+        yield
+        return
+    old = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old)
+
+
+@contextmanager
+def immediate(con, record=True, guard=None):
     """One write transaction, taken up front so a check and the write it guards cannot interleave
     with another agent's, and verified first: the path must still name the file this connection
-    holds."""
+    holds. record: a commit that changed rows is noted (_WROTE, _WROTE_ROWS) for the error contract."""
+    global _WROTE, _WROTE_ROWS
     con.execute("BEGIN IMMEDIATE")
+    changes = con.total_changes
     try:
         if isinstance(con, Bus):
             con.verify()
@@ -1573,9 +3058,39 @@ def immediate(con):
         if isinstance(e, sqlite3.OperationalError) and "full" in str(e):
             full = id_exhausted(con)
             if full:
-                die(full)
+                die(full, "bus_unavailable")
         raise
-    con.execute("COMMIT")
+    # A command's own commit and the note that it happened are one step: a Ctrl-C that arrives meanwhile is
+    # held until both are done and raised then, so an interrupted error never says committed false for a saved write.
+    # With a guard (a migration), the watchdog's lock is held too and guard.committed is set in the same step.
+    if guard is not None:
+        with _sigint_deferred(), guard.lock:
+            if record:
+                _test_pause("commit")
+            con.execute("COMMIT")
+            guard.committed = True
+            if record and con.total_changes != changes:
+                _WROTE = _WROTE_ROWS = True
+        return
+    # A command's own commit and the note that it happened are one step: a Ctrl-C that arrives meanwhile is
+    # held until both are done and raised then, so an interrupted error never says committed false for a saved write.
+    held, old = [], None
+    if record and callable(signal.getsignal(signal.SIGINT)):
+        try:
+            old = signal.signal(signal.SIGINT, lambda *_: held.append(1))
+        except ValueError:  # not the main thread
+            old = None
+    try:
+        if record:
+            _test_pause("commit")
+        con.execute("COMMIT")
+        if record and con.total_changes != changes:
+            _WROTE = _WROTE_ROWS = True
+    finally:
+        if old is not None:
+            signal.signal(signal.SIGINT, old)
+    if held:
+        raise KeyboardInterrupt
 
 
 MAX_ID = 2 ** 63 - 1
@@ -1791,7 +3306,7 @@ def me(args):
 
 
 def touch(con, name):
-    with immediate(con):
+    with immediate(con, record=False):
         con.execute("UPDATE agents SET last_seen=? WHERE name=?", (now(), name))
 
 
@@ -1859,14 +3374,74 @@ def capped(con, sql, params, limit):
     return rows[:n], max(total - n, 1)
 
 
-def out(args, rows, fmt, more=0, empty=None, earlier=False, unread=False):
-    """A listing with an empty state and a directional truncation hint. JSON stays an array.
-    Rows are copied now and formatted only after the bus is closed."""
+def envelope(items, more=0, cursor=None):
+    """The JSON of a listing: the contract version, the rows, whether rows were left out, and a
+    cursor (null except for the four id walks, see make_cursor)."""
+    return {"v": CONTRACT["contract"], "items": items, "has_more": bool(more), "next": cursor}
+
+
+CURSOR_PREFIX = "v1."
+
+
+def cursor_command(a):
+    return a.cmd if a.cmd in ("read", "inbox") else f"{a.cmd} {a.action}"
+
+
+def cursor_filters(a):
+    """What a cursor is bound to besides its command: the filters that choose the rows."""
+    if a.cmd == "read":
+        return {"topic": a.topic}
+    if a.cmd == "ctx":
+        return {"key": a.key}
+    if a.cmd == "inbox":
+        return {"as": ident(a)}
+    return {}
+
+
+def _filter_hash(filters):
+    return hashlib.sha256(json.dumps(filters, sort_keys=True).encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def make_cursor(a, row_id):
+    """An opaque cursor for the id walks (ctx history, read, log show: --before; inbox --peek:
+    --after): v1. and base64url of {c: command, f: filter hash, id}. Row ids are immutable and only
+    grow, so a walk never skips or repeats a row. Callers must not parse it."""
+    return make_cursor_text({"c": cursor_command(a), "f": _filter_hash(cursor_filters(a)), "id": row_id})
+
+
+def make_cursor_text(body):
+    return CURSOR_PREFIX + base64.urlsafe_b64encode(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
+
+
+def read_cursor(a, text, flag):
+    """The row id inside a cursor, refusing (bad_input) any that is not from this command with these filters."""
+    def refuse(why):
+        die(f"{flag} needs the next value from a previous page of this same command and filters ({why})", "bad_input")
+    if not text.startswith(CURSOR_PREFIX):
+        refuse("not a cursor")
+    payload = text[len(CURSOR_PREFIX):]
+    try:
+        body = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except ValueError:
+        refuse("not a cursor")
+    if not (isinstance(body, dict) and set(body) == {"c", "f", "id"} and isinstance(body["id"], int)
+            and not isinstance(body["id"], bool) and isinstance(body["c"], str) and isinstance(body["f"], str)):
+        refuse("not a cursor")
+    if make_cursor_text(body) != text:  # only a cursor this tool made, byte for byte
+        refuse("not a cursor")
+    if body["c"] != cursor_command(a):
+        refuse("it came from another command")
+    if body["f"] != _filter_hash(cursor_filters(a)):
+        refuse("it was made with other filters")
+    return body["id"]
+
+
+def out(args, rows, fmt, more=0, empty=None, earlier=False, unread=False, cursor=None):
+    """A listing with an empty state and a directional truncation hint. JSON is an envelope
+    (envelope()). Rows are copied now and formatted only after the bus is closed."""
     rows = [dict(r) for r in rows]
     if args.json:
-        print_json(rows)
-        if more:
-            note(f"{more} more not shown (use --limit)")
+        print_json(envelope(rows, more, cursor))
         return
 
     if more and earlier:
@@ -1922,7 +3497,8 @@ def cmd_join(con, a):
             if 0 <= mins < LIVE_WINDOW_MIN:
                 age = "less than a minute" if mins < 1 else f"{int(mins)} min"
                 die(f"{name} was active {age} ago and may be another live session. "
-                    f"Pick your own name, or pass --takeover only if that session is you.", "bad_input")
+                    f"Pick your own name, or pass --takeover only if that session is you.", "name_active",
+                    agent=name, last_seen_min=int(mins))
         con.execute(
             """INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen)
                VALUES(?,?,?,?,?,?,?,?)
@@ -1932,7 +3508,8 @@ def cmd_join(con, a):
         ensure_cursor(con, name)
         log(con, name, "join", json.dumps({"tool": a.tool, "model": a.model, "branch": a.branch, "role": a.role}))
     g = current_goal(con)
-    emit(a, {"joined": name, "bus": a._db, "goal": g}, "joined as {} on {}", name, a._db)
+    emit(a, {"joined": name, "bus": a._db, "goal": g, "agentbus": __version__, "contract": CONTRACT["contract"]},
+         "joined as {} on {}", name, a._db)
     if g and not a.json:
         show("goal: {}", g["goal"])
 
@@ -1983,8 +3560,9 @@ def cmd_leave(con, a):
     name = me(a)
     with immediate(con):
         paths, total = release_all(con, name)
-        con.execute("DELETE FROM agents WHERE name=?", (name,))
-        log(con, name, "leave", f"released {total} claims: {claims_text(paths, total)}")
+        gone = con.execute("DELETE FROM agents WHERE name=?", (name,)).rowcount
+        if total or gone:  # a second leave changes nothing and writes nothing
+            log(con, name, "leave", f"released {total} claims: {claims_text(paths, total)}")
     emit(a, {"left": name, "released": paths, "released_count": total},
          "left as {}, released {} claims", name, total)
     show_released(a, paths, total)
@@ -2046,7 +3624,18 @@ def cmd_who(con, a):
 def read_inputs(a):
     """Everything a command reads from its arguments or stdin, read before the bus is opened: stdin
     may be slow (a pipe, a FIFO, a terminal), and the bus is exclusively locked while open."""
+    global _HAS_TOKEN
+    _HAS_TOKEN = getattr(a, "request_id", None) is not None
     a._body = None
+    a._before_id = a._after_id = None
+    if getattr(a, "before", None) is not None:
+        if a.cmd == "read" and a.since is not None:
+            die("--before and --since cannot be combined: --since pages forward from an id, --before pages back", "bad_input")
+        a._before_id = read_cursor(a, a.before, "--before")
+    if getattr(a, "after", None) is not None:
+        if not a.peek:
+            die("--after needs --peek: a consuming inbox continues by running inbox again", "bad_input")
+        a._after_id = read_cursor(a, a.after, "--after")
     if a.cmd == "ctx" and a.key == "":
         die("KEY must not be empty. Omit KEY to list facts.", "bad_input")
     if a.cmd == "post":
@@ -2121,12 +3710,15 @@ def cmd_inbox(con, a):
     else:
         # No cursor yet: the same start a first join would give. --peek leaves it uncreated.
         last, bcast = 0, con.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
+    if a._after_id is not None:  # inbox --peek --after: the walk continues past the last page's last id
+        last = max(last, a._after_id)
     # The oldest `limit` unread. The cursor moves only after the output was written (run() calls
     # a._after once write_out succeeded), and only past what was shown: the rest stay unread.
     rows, more = capped(
         con, f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?)) ORDER BY id",
         (last, name, name, bcast), a.limit)
-    out(a, rows, fmt_msg, more, unread=True)
+    nxt = make_cursor(a, rows[-1]["id"] if rows else last) if more and a.peek else None
+    out(a, rows, fmt_msg, more, unread=True, cursor=nxt)
     if not a.peek and (rows or not row):
         upto = rows[-1]["id"] if rows else None
         a._after = lambda c: mark_read(c, name, bcast, upto)
@@ -2150,8 +3742,11 @@ def q_read(con, since=None, topic=None, limit=30):
     return q_read_page(con, since, topic, limit)[0]
 
 
-def q_read_page(con, since, topic, limit):
+def q_read_page(con, since, topic, limit, before=None):
     q, p = f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>?", [since or 0]
+    if before is not None:
+        q += " AND id<?"
+        p.append(before)
     if topic:
         q += " AND topic=?"
         p.append(topic)
@@ -2162,8 +3757,11 @@ def q_read_page(con, since, topic, limit):
 
 
 def cmd_read(con, a):
-    rows, more = q_read_page(con, a.since, a.topic, a.limit)
-    out(a, rows, fmt_msg, more, empty="no messages", earlier=a.since is None)
+    rows, more = q_read_page(con, a.since, a.topic, a.limit, a._before_id)
+    # Walking back (no --since): the cursor is the oldest id shown. With --since, has_more means more
+    # after it and the caller continues with --since LAST_ID, so there is no cursor.
+    nxt = make_cursor(a, rows[0]["id"] if rows else MAX_ID if a._before_id is None else a._before_id) if more and a.since is None else None
+    out(a, rows, fmt_msg, more, empty="no messages", earlier=a.since is None, cursor=nxt)
 
 
 def q_ctx(con, limit=DEFAULT_LIMIT):
@@ -2180,12 +3778,21 @@ def cmd_ctx(con, a):
         value = a._body
         t = now()
         with immediate(con):
-            con.execute(
-                "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
-                (a.key, value, name, t))
-            con.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", (a.key, value, name, t))
-        emit(a, {"key": a.key, "value": value, "updated_by": name, "updated_at": t}, "set {}", a.key)
+            cur = con.execute("SELECT value, updated_by, updated_at FROM context WHERE key=?", (a.key,)).fetchone()
+            unchanged = bool(cur) and cur["value"] == value  # the same value again writes nothing
+            if unchanged:
+                name, t = cur["updated_by"], cur["updated_at"]
+            else:
+                con.execute(
+                    "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+                    (a.key, value, name, t))
+                con.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", (a.key, value, name, t))
+        result = {"key": a.key, "value": value, "updated_by": name, "updated_at": t, "unchanged": unchanged}
+        if unchanged:
+            emit(a, result, "set {} (unchanged)", a.key)
+        else:
+            emit(a, result, "set {}", a.key)
     elif a.action == "get":
         if a.key is not None:
             r = con.execute("SELECT * FROM context WHERE key=?", (a.key,)).fetchone()
@@ -2199,9 +3806,12 @@ def cmd_ctx(con, a):
             rows, more = q_ctx(con, a.limit)
             out(a, rows, fmt_ctx, more, empty="no facts")
     elif a.action == "history":
-        # The newest `limit` values, oldest first.
-        rows, more = capped(con, "SELECT * FROM context_history WHERE key=? ORDER BY id DESC", (a.key,), a.limit)
-        out(a, list(reversed(rows)), lambda r: INDENT + col0(f"{r['updated_at']} {r['updated_by']}: {r['value']}"), more)
+        # The newest `limit` values, oldest first; --before continues back from a previous page.
+        before = MAX_ID if a._before_id is None else a._before_id
+        rows, more = capped(con, "SELECT * FROM context_history WHERE key=? AND id<? ORDER BY id DESC", (a.key, before), a.limit)
+        rows = list(reversed(rows))
+        nxt = make_cursor(a, rows[0]["id"] if rows else before) if more else None
+        out(a, rows, lambda r: INDENT + col0(f"{r['updated_at']} {r['updated_by']}: {r['value']}"), more, cursor=nxt)
 
 
 # The shared goal: one fact every agent sees first, kept under the context key "goal" so it has the
@@ -2218,13 +3828,18 @@ def cmd_goal(con, a):
     if a._body is not None:
         name, t = me(a), now()
         with immediate(con):
-            con.execute(
-                "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
-                (GOAL_KEY, a._body, name, t))
-            con.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", (GOAL_KEY, a._body, name, t))
-            log(con, name, "goal", a._body)
-        emit(a, {"goal": a._body, "set_by": name, "set_at": t}, "goal: {}", a._body)
+            cur = current_goal(con)
+            unchanged = bool(cur) and cur["goal"] == a._body  # the same goal again writes nothing
+            if unchanged:
+                name, t = cur["set_by"], cur["set_at"]
+            else:
+                con.execute(
+                    "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, updated_at=excluded.updated_at",
+                    (GOAL_KEY, a._body, name, t))
+                con.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", (GOAL_KEY, a._body, name, t))
+                log(con, name, "goal", a._body)
+        emit(a, {"goal": a._body, "set_by": name, "set_at": t, "unchanged": unchanged}, "goal: {}", a._body)
         return
     g = current_goal(con)
     if a.json:
@@ -2313,7 +3928,8 @@ def cmd_release(con, a):
     if a.all:
         with immediate(con):
             paths, total = release_all(con, name)
-            log(con, name, "release", f"all {total} claims: {claims_text(paths, total)}")
+            if total:  # releasing nothing writes nothing
+                log(con, name, "release", f"all {total} claims: {claims_text(paths, total)}")
         emit(a, {"released": paths, "released_count": total}, "released {} claims", total)
         show_released(a, paths, total)
         return
@@ -2322,6 +3938,9 @@ def cmd_release(con, a):
     with immediate(con):
         paths = [r[0] for r in con.execute(
             f"SELECT resource FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)]
+        if not paths and a.if_held:  # cleanup: not holding it is the state asked for
+            emit(a, {"released": [], "released_count": 0}, "released {} claims", 0)
+            return
         if not paths:
             die(f"you do not hold {a.resource}. See your claims with: agentbus claims", "not_held", resource=a.resource)
         con.execute(f"DELETE FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)
@@ -2360,9 +3979,12 @@ def cmd_log(con, a):
             row_id = log(con, name, a.what, detail)
         emit(a, {"id": row_id, "logged": True, "agent": name, "action": a.what, "detail": detail}, "logged")
     else:
-        rows, more = capped(con, "SELECT * FROM log ORDER BY id DESC", (), a.limit)
-        out(a, list(reversed(rows)), lambda r: INDENT + col0(f"{r['ts']} {r['agent']:<22} {r['action']:<10} {r['detail'] or ''}"),
-            more, empty="log is empty", earlier=True)
+        before = MAX_ID if a._before_id is None else a._before_id
+        rows, more = capped(con, "SELECT * FROM log WHERE id<? ORDER BY id DESC", (before,), a.limit)
+        rows = list(reversed(rows))
+        nxt = make_cursor(a, rows[0]["id"] if rows else before) if more else None
+        out(a, rows, lambda r: INDENT + col0(f"{r['ts']} {r['agent']:<22} {r['action']:<10} {r['detail'] or ''}"),
+            more, empty="log is empty", earlier=True, cursor=nxt)
 
 
 def cmd_status(con, a):
@@ -2370,11 +3992,10 @@ def cmd_status(con, a):
     msgs = q_read(con, None, None, 10)
     g = current_goal(con)
     if a.json:
+        total = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         print_json({"bus": a._db, "goal": g, "agents": [dict(r) for r in agents], "context": [dict(r) for r in ctx],
-                    "claims": [dict(r) for r in claims], "messages": [dict(r) for r in msgs]})
-        for what, more in (("agents", m1), ("context keys", m2), ("claims", m3)):
-            if more:
-                note(f"{more} more {what} not shown (use --limit)")
+                    "claims": [dict(r) for r in claims], "messages": [dict(r) for r in msgs],
+                    "omitted": {"agents": m1, "context": m2, "claims": m3, "messages": max(total - len(msgs), 0)}})
         return
     show("== bus {}", a._db)
     if g:
@@ -2389,6 +4010,31 @@ def cmd_status(con, a):
         later(print)  # a blank line between sections
         show("== {}", title)
         out(a, rows, fmt, more, empty={"context": "no facts", "claims": "no claims", "last 10 messages": "no messages"}[title])
+
+
+def cmd_schema(a):
+    """The machine contract: every command's arguments, result shape, errors and retry rule, plus the
+    shared objects, error codes, exit codes and environment (CONTRACT, with arguments read from the
+    parser). Needs no bus."""
+    parser = build_parser()
+    commands = contract_commands(parser)
+    want = " ".join(a.command)
+    if want:
+        commands = {k: v for k, v in commands.items() if k == want or k.startswith(want + " ")}
+        if not commands:
+            die(f"unknown command '{want}'. List them with: agentbus schema", "bad_input")
+    if a.json:
+        print_json({"contract": CONTRACT["contract"], "agentbus": __version__, "commands": commands,
+                    "global_args": [_arg_entry(x, {}) for x in parser._actions if x.dest in GLOBAL_DESTS],
+                    "objects": CONTRACT["objects"], "error_fields": CONTRACT["error_fields"], "errors": CONTRACT["errors"],
+                    "exit_codes": CONTRACT["exit_codes"],
+                    "env": CONTRACT["env"]})
+        return
+    rows = [(k, result_text(CONTRACT["commands"][k]["result"], brief=True), CONTRACT["commands"][k]["retry"]["short"]) for k in commands]
+    show("contract {}: command, JSON result, retry rule", CONTRACT["contract"])
+    for name, res, retry in rows:
+        show("{}  {}  retry: {}", name, res, retry, row=True)
+    show("details: agentbus schema COMMAND --json")
 
 
 def integer(text):
@@ -2430,6 +4076,9 @@ class Parser(argparse.ArgumentParser):
     continuation row indented) instead of a usage block the terminal may wrap at column 0."""
 
     def __init__(self, *args, **kwargs):
+        # No option abbreviations: --js would mean --json to argparse, but whether errors print as JSON
+        # is decided from the exact word before parsing, so an abbreviation would get the wrong format.
+        kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
         for action in self._actions:
             if action.dest == "help":
@@ -2501,6 +4150,7 @@ def register_post(sub):
 def register_inbox(sub):
     ib = sub("inbox", help="Unread messages for you, then mark read")
     ib.add_argument("--peek", action="store_true", help="Do not mark read")
+    ib.add_argument("--after", metavar="NEXT", help="With --peek: continue after the previous page (its next value).")
     limit_arg(ib, what="messages (the oldest unread; the rest stay unread)")
 
 
@@ -2508,6 +4158,7 @@ def register_read(sub):
     rd = sub("read", help="Recent messages, anyone's")
     rd.add_argument("--since", type=integer, default=None, help="The messages after this id, oldest first")
     rd.add_argument("--topic")
+    rd.add_argument("--before", metavar="NEXT", help="Older messages than the previous page (its next value).")
     rd.add_argument("--limit", type=integer, default=30, help="Maximum messages; default 30. Use -1 for all.")
 
 
@@ -2525,6 +4176,8 @@ def register_ctx(sub):
             act.add_argument("value", nargs="*", metavar="VALUE")
         act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
                          help="Maximum keys (get) or values (history); default 500. Use -1 for all.")
+        if action == "history":
+            act.add_argument("--before", metavar="NEXT", help="Older values than the previous page (its next value).")
 
 
 def register_claim(sub):
@@ -2538,6 +4191,7 @@ def register_release(sub):
     g = rl.add_mutually_exclusive_group()
     g.add_argument("resource", nargs="?", help="Resource to release; use the spelling from claims.")
     g.add_argument("--all", action="store_true", help="Release all your claims")
+    rl.add_argument("--if-held", action="store_true", help="With a resource: succeed (releasing nothing) when you do not hold it, for cleanup.")
 
 
 def register_claims(sub):
@@ -2559,6 +4213,7 @@ def register_log(sub):
     for act in (add, show_log):
         act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
                          help="Maximum entries (show); default 40. Use -1 for all.")
+    show_log.add_argument("--before", metavar="NEXT", help="Older entries than the previous page (its next value).")
 
 
 def register_status(sub):
@@ -2588,8 +4243,16 @@ def register_init(sub):
 
 
 def register_upgrade(sub):
-    upg = sub("upgrade", help="Replace a repo's .agentbus/bin/agentbus with this copy (installed tool or clone only)")
-    upg.add_argument("repo", nargs="?")
+    upg = sub("upgrade", help="Replace a repo's .agentbus/bin/agentbus with this copy and migrate its bus (installed tool or clone only)")
+    upg.add_argument("repo", nargs="?", metavar="DIR")
+    upg.add_argument("--all", action="store_true", help="Upgrade every bus folder under DIR")
+    upg.add_argument("--depth", type=integer, default=5, metavar="N", help="With --all: how many levels below DIR to look (default 5)")
+    upg.add_argument("--dry-run", action="store_true", help="Change nothing; report what would change")
+
+
+def register_schema(sub):
+    sc = sub("schema", help="Result shapes, errors, exit codes and retry rules of every command")
+    sc.add_argument("command", nargs="*", metavar="COMMAND", help="One command (for example post, or ctx get); omit for all.")
 
 
 REGISTER_COMMANDS = [
@@ -2610,6 +4273,7 @@ REGISTER_COMMANDS = [
     register_buses,
     register_init,
     register_upgrade,
+    register_schema,
 ]
 
 
@@ -2643,6 +4307,7 @@ def build_parser():
 
     for register in REGISTER_COMMANDS:
         register(sub)
+    apply_contract_help(p)
     return p
 
 
@@ -2660,6 +4325,7 @@ def not_utf8(v):
 
 def refuse_bad_inputs(a):
     """Refuse an argument or environment value that is not valid UTF-8, naming it."""
+    _test_fail("parse")
     for dest, v in sorted(vars(a).items()):
         if not_utf8(v):
             name = dest if dest in POSITIONALS else "--" + dest.rstrip("_").replace("_", "-")
@@ -2673,13 +4339,25 @@ def refuse_bad_inputs(a):
 
 # ---- watch: a live, read-only view of the bus ----------------------------------------------------
 # Each tick opens the bus, copies what the view needs, and closes it before anything is formatted or
-# drawn, like every other command: the view never holds the lock while it draws, and it never writes
-# (no join, no touch). Every lane-written string goes through clean() and is cut to its column, and
+# drawn, like every other command: the view never holds the lock while it draws, and its read-only open
+# changes no data or schema (no join, no touch; it may finish SQLite's recovery of a crashed writer's journal). Every lane-written string goes through clean() and is cut to its column, and
 # every row starts with text agentbus wrote, so nothing a lane stores can draw outside its cell.
 
-def watch_snapshot(path, strict, limit):
-    """Everything the view shows, as plain values, read in one short open."""
-    con = open_bus(path, strict)
+def empty_snapshot():
+    return {"agents": [], "claims": [], "goal": None, "context": [], "messages": [],
+            "counts": {"agents": 0, "claims": 0, "messages": 0}}
+
+
+def watch_snapshot(path, strict, limit, read_only=True):
+    """Everything the view shows, as plain values, read in one short open. Read-only: it never
+    creates, stamps, migrates or tidies the bus. A bus folder whose bus.db nothing has written yet
+    is shown as the empty bus it is (and still not created)."""
+    try:
+        con = open_bus(path, strict, read_only=read_only)
+    except SystemExit as e:
+        if read_only and refusal(e)["code"] == "no_bus" and os.path.isdir(os.path.dirname(path)):
+            return empty_snapshot()
+        raise
     try:
         q = lambda sql, *p: [dict(r) for r in con.execute(sql, p).fetchall()]
         snap = {
@@ -2694,6 +4372,10 @@ def watch_snapshot(path, strict, limit):
             "counts": {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("agents", "messages")},
         }
         snap["counts"]["claims"] = con.execute("SELECT COUNT(*) FROM claims WHERE expires_at > ?", (now(),)).fetchone()[0]
+        facts = con.execute("SELECT COUNT(*) FROM context WHERE key<>?", (GOAL_KEY,)).fetchone()[0]
+        snap["omitted"] = {"agents": snap["counts"]["agents"] - len(snap["agents"]), "context": facts - len(snap["context"]),
+                           "claims": snap["counts"]["claims"] - len(snap["claims"]),
+                           "messages": snap["counts"]["messages"] - len(snap["messages"])}
         return snap
     finally:
         con.close()
@@ -2834,13 +4516,63 @@ def share_rows(needs, room):
     return got
 
 
-def render_watch(snap, where, cols, rows, fresh, t_now, paint, live=True):
+def watch_fix_line(error, where, interval):
+    """The one line that says what to do about an unreadable bus, by error code."""
+    code = error.get("code")
+    if code == "schema_older":
+        return f"Run: agentbus upgrade {where}"
+    if code == "schema_newer":
+        return f"Run: agentbus upgrade {where} from a newer install"
+    if code == "busy":
+        return f"Another process holds the bus. Retrying every {interval:g}s."
+    if code == "no_bus":
+        return f"Run: agentbus init {where}"
+    return None
+
+
+def tilde(path):
+    """path with the home directory (as named, or as resolved) shown as ~."""
+    for home in dict.fromkeys((os.path.expanduser("~"), os.path.realpath(os.path.expanduser("~")))):
+        if path == home or path.startswith(home + os.sep):
+            return "~" + path[len(home):]
+    return path
+
+
+def render_error_frame(error, where, cols, rows, paint, interval, live=True):
+    """The frame for a bus that could not be read: what happened and the fix, never empty sections
+    (which would look like lost history)."""
+    width = cols - 1
+    head, tail = " agentbus  ", " not readable "
+    room = width - len(head) - len(tail)
+    header = paint("1;7", head + fit_left(where, room) + tail if room >= 8 else fit(head + tail.strip(), width))
+    out = [header, "", "  " + fit("This bus could not be read, so the sections below are not drawn.", width - 2)]
+    fix = watch_fix_line(error, error.get("directory") or where, interval)
+    for text in (error.get("message", ""), fix):
+        if text:  # wrapped, never cut: the fix names a path to type
+            for row in wrap_line(INDENT + " ".join(clean(str(text)).split()), width).split("\n"):
+                out.append(INDENT + fit(row[len(INDENT):], width - len(INDENT)))
+    if error.get("code") != "busy":
+        out += ["", "  " + fit(f"Retrying every {interval:g}s.", width - 2)]
+    if not live:
+        return out
+    out = out[:rows - 1]
+    while len(out) < rows - 1:
+        out.append("")
+    out.append(paint("2", "  " + fit("q quit · read-only", width - 2)))
+    return out
+
+
+def render_watch(snap, where, cols, rows, fresh, t_now, paint, live=True, error=None, interval=1.0):
     """The frame: a header bar, then Agents, Claims, Facts and Messages (newest last). Messages, the
     part that moves, get their share of the screen first; any section cut short says how many it
     left out and which command shows them. live: fill the screen and end with the key hint; else
-    (one frame: --once, or not a terminal) the content alone, with the last ONCE_MESSAGES messages."""
+    (one frame: --once, or not a terminal) the content alone, with the last ONCE_MESSAGES messages.
+    error ({"code", "message"}): the bus could not be read; the frame says so and names the fix
+    instead of drawing sections."""
     if cols < WATCH_MIN_COLS:
         return [fit(f"watch needs {WATCH_MIN_COLS}+ columns", cols)]
+    if error is not None:
+        return render_error_frame(error, where, cols, rows, paint, interval, live)
     width = cols - 1  # one spare column: an ambiguous-width character drawn wide never wraps a row
     wide = cols >= WIDE_COLS
     colour = colour_map(snap["agents"])
@@ -2989,10 +4721,8 @@ def cmd_watch(a, strict):
     emoji_on = sys.stdout.isatty() and not os.environ.get("AGENTBUS_NO_EMOJI") and \
         (sys.stdout.encoding or "").lower().replace("-", "") == "utf8"
     paint = Paint(colour_on, emoji_on)
-    home = os.path.expanduser("~")
     folder = os.path.dirname(a._db)
-    where = os.path.dirname(folder) if os.path.basename(folder) == ".agentbus" else a._db
-    where = "~" + where[len(home):] if where == home or where.startswith(home + os.sep) else where
+    where = tilde(os.path.dirname(folder) if os.path.basename(folder) == ".agentbus" else a._db)
     limit = 200
     if a.json:
         snap = watch_snapshot(a._db, strict, limit)
@@ -3026,30 +4756,30 @@ def cmd_watch(a, strict):
     old_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGWINCH})
     old_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)
     first_seen, out = {}, sys.stdout
-    snap = {"agents": [], "claims": [], "context": [], "messages": [], "counts": {"agents": 0, "claims": 0, "messages": 0}}
+    snap = empty_snapshot()
     out.write("\033[?1049h\033[?25l")
     try:
         if stdin is not None:
             ttymod.setcbreak(stdin)
         next_read = 0.0
+        error = None
         while not stop:
-            status = None
             if time.monotonic() >= next_read:
                 try:
                     snap = watch_snapshot(a._db, strict, limit)
-                except SystemExit as e:  # busy, or refused: say so and try again next tick
+                    error = None
+                except SystemExit as e:  # busy, or refused: say so, draw no sections, try again next tick
                     if stop:
                         break
-                    status = reason(e)
+                    error = dict(refusal(e), directory=tilde(bus_directory(a._db)))
                 next_read = time.monotonic() + a.interval
                 started = not first_seen
                 for m in snap["messages"]:
                     first_seen.setdefault(m["id"], 0.0 if started else time.monotonic())
             fresh = {i for i, t in first_seen.items() if t and time.monotonic() - t < FRESH_S}
             size = shutil.get_terminal_size()
-            frame = render_watch(snap, where, size.columns, size.lines, fresh, datetime.now(timezone.utc), paint)
-            if status:
-                frame[-1] = paint("31", "  " + fit(status, size.columns - 3))
+            frame = render_watch(snap, where, size.columns, size.lines, fresh, datetime.now(timezone.utc), paint,
+                                 error=error, interval=a.interval)
             out.write("\033[H" + "\n".join(l + "\033[K" for l in frame) + "\033[J")
             out.flush()
             wait = max(0.05, next_read - time.monotonic())
@@ -3076,7 +4806,899 @@ def cmd_watch(a, strict):
 
 
 # ==== embedded skill ====
+# The skill and the Codex AGENTS.md block, embedded so `agentbus skill` and `agentbus setup` need no
+# clone and no path. Generated by scripts/embed_skill.py from skills/agentbus/SKILL.md (only the brain
+# runs it, at merge); tests/test_skill.sh holds the byte budget.
+# BEGIN EMBEDDED SKILL (generated by scripts/embed_skill.py; edit skills/agentbus/SKILL.md, not this block)
+SKILL_TEXT = (
+    '---\n'
+    'name: agentbus\n'
+    'description: "Coordinate shared workspace work through agentbus: join at session start, read the inbox between steps, claim before editing, post questions and handoffs, and leave when finished."\n'
+    '---\n'
+    '\n'
+    '# agentbus protocol\n'
+    '\n'
+    'Use agentbus when multiple agents or humans share work in this workspace.\n'
+    '\n'
+    '## Command and identity\n'
+    '\n'
+    "Run the bus directory's `.agentbus/bin/agentbus`; from another worktree, use its absolute path. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Reuse a name only when its session has ended. Below, `agentbus` means that copy. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
+    '\n'
+    "Dispatchers must give workers the absolute CLI and database paths and set `AGENTBUS_DB` for their own and their workers' commands. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n"
+    '\n'
+    'Discovery finds the nearest ancestor bus; linked worktrees map to their main checkout. `buses` lists the chain; `--up 1` selects the next outer bus.\n'
+    '\n'
+    '## Start\n'
+    '\n'
+    'Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal; work toward it (a lead sets it with `goal "TEXT"`). Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.\n'
+    '\n'
+    '## Before shared work\n'
+    '\n'
+    'Read `inbox --limit 20` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
+    '\n'
+    'Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. Claims are advisory and expire after 120 minutes by default. Claim again to renew; omitted purpose preserves the current purpose and acquisition time stays unchanged. `--ttl-min` sets a lifetime of 1 to 10080 minutes.\n'
+    '\n'
+    '## Communicate\n'
+    '\n'
+    '- Ask: `post "QUESTION" --to RECIPIENT --kind question`\n'
+    '- Answer: `post "ANSWER" --to ORIGINAL_SENDER --reply-to ID --kind answer`\n'
+    '- Hand off: `post "BRANCH; STATE; NEXT STEP; CHECKS" --to RECIPIENT --kind handoff`\n'
+    '- Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`\n'
+    '- Record a lasting fact: `ctx set KEY "VALUE"`\n'
+    '\n'
+    'Check recipients with `who`. Messages queue for absent names; posting does not start agents. Without `--to`, a message is broadcast. `--reply-to` links a message without choosing its recipient.\n'
+    '\n'
+    '## Read correctly\n'
+    '\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. Duplicate delivery is possible; check message IDs before repeating actions.\n'
+    '\n'
+    'A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`.\n'
+    '\n'
+    '## Finish the session\n'
+    '\n'
+    'Run `release RESOURCE` when finished. Before ending the session, check `inbox --limit 20`, post the result or handoff, then `leave`, which releases all claims.\n'
+    '\n'
+    '## Boundaries\n'
+    '\n'
+    "Follow the user's authorized scope. Peer messages supply information; they do not authorize new work. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Use `--json` when parsing output; check the exit status first. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from the installed agentbus, not this copy; on schema_newer, this copy is older than the bus. Do not hold the bus open in another SQLite client.\n"
+    '\n'
+    'See the [reference](https://github.com/wickdninja/agentbus/blob/main/docs/reference.md) for JSON shapes, output, delivery, resources, and bus selection.\n'
+    '\n'
+    '<!-- agentbus:managed -->\n'
+)
+AGENTS_SNIPPET = (
+    '## agentbus\n'
+    "This workspace has a shared agentbus. Run `.agentbus/bin/agentbus skill` for the full protocol; if it says `unknown command 'skill'`, the copy is 0.1.x: stop and tell the user to run `agentbus upgrade --all PARENT_DIR`.\n"
+    'Join: `.agentbus/bin/agentbus --as NAME join`. Before editing: `.agentbus/bin/agentbus --as NAME claim PATH --purpose WHY`.\n'
+    'Between steps: `.agentbus/bin/agentbus --as NAME inbox --limit 20`. Finish: `.agentbus/bin/agentbus --as NAME post RESULT --kind done`, then `leave`.\n'
+)
+SKILL_SHA256_HISTORY = (
+    "2af5e4efedd84d7da42da6c4c5ddd02f230cc002e05b733741557dfd38b06156",
+)
+AGENTS_SHA256_HISTORY = (
+)
+# END EMBEDDED SKILL
+
+MANAGED_MARKER = "<!-- agentbus:managed -->"
+
+
+def cmd_skill(a):
+    """Print the bundled skill (or the AGENTS.md block) exactly as embedded: not wrapped, not
+    indented, so the output is byte-equal to skills/agentbus/SKILL.md."""
+    text = AGENTS_SNIPPET if a.agents_md else SKILL_TEXT
+    if a.json:
+        print_json({"text": text})
+        return
+    write_out(text)
+
+
+def register_skill(sub):
+    s = sub("skill", help="Print the bundled skill (the agent protocol); --agents-md prints the Codex AGENTS.md block")
+    s.add_argument("--agents-md", action="store_true", help="Print the block for an AGENTS.md file instead")
+
+
+REGISTER_COMMANDS.append(register_skill)
+
+
 # ==== setup ====
+# `agentbus setup claude|codex` puts what an agent needs in its own config: the skill for Claude Code,
+# the AGENTS.md block for Codex, hooks later. Every target is a list of pieces (SETUP_TARGETS); each
+# piece plans its change first (no writes), and nothing is written unless no piece refuses. The rules
+# for each kind of file are the point: a file agentbus did not write is never overwritten, a managed
+# one is updated in place, and uninstall removes only what setup added.
+#
+# Piece interface (a Change is path, action, detail, plus the human text):
+#   plan(scope, uninstall=False) -> [Change]   no writes; action is installed | updated | replaced_link |
+#                                               unchanged | removed | skipped | refused
+#   apply(change)                              performs one planned Change
+#   remove(scope) -> [Change]                  plan(uninstall=True) then apply each
+#   check(scope) -> [(id, status, detail, fix)]  for doctor; status is ok | missing | stale | problem
+
+MANAGED_TAG = "# agentbus:managed"  # ends the command string of every hook entry setup writes
+SETUP_READ_LIMIT = 1 << 20
+SETUP_GLYPH = {"installed": "+", "updated": "~", "replaced_link": "~", "unchanged": "=",
+               "removed": "-", "skipped": "!", "refused": "!"}
+
+
+class Change:
+    """One planned or done change. `line` is the human text after the glyph and `would` its dry-run
+    form; both may hold {path}, which is shown with the home folder as ~. `detail` is the plain
+    text for --json. `write` performs it."""
+
+    def __init__(self, path, action, detail="", line=None, would=None, write=None, backup_hint=None):
+        self.path, self.action, self.detail = path, action, detail
+        self.line, self.would, self.write = line, would, write
+        self.backup = None  # the basename of the copy write() saved; {backup} in line shows it
+        self.backup_hint = backup_hint  # what a dry run says: <file>.agentbus-<date and time>.bak
+
+    def text(self, dry_run):
+        body = (self.would if dry_run and self.would else self.line)
+        if body is None:
+            body = "{path}" + (f"   {self.detail}" if self.detail else "")
+        return body.replace("{path}", tilde(self.path)).replace("{backup}", self.backup or self.backup_hint or "")
+
+    def as_json(self):
+        """backup: the full path of the copy write() saved, only when it saved one."""
+        out = {"path": self.path, "action": self.action, "detail": self.detail}
+        if self.backup:
+            out["backup"] = os.path.join(os.path.dirname(self.path), self.backup)
+        return out
+
+
+def tilde(path):
+    home = os.path.expanduser("~")
+    if home and home != "/" and (path == home or path.startswith(home + os.sep)):
+        return "~" + path[len(home):]
+    return path
+
+
+def setup_config_dir(target, scope):
+    """The folder a target's config lives in: Claude Code's (CLAUDE_CONFIG_DIR, else ~/.claude; the
+    project's .claude) or Codex's (CODEX_HOME, else ~/.codex; the project root itself holds AGENTS.md)."""
+    if target == "claude":
+        if scope == "project":
+            return os.path.join(os.getcwd(), ".claude")
+        override = os.environ.get("CLAUDE_CONFIG_DIR")
+        return os.path.abspath(override) if override else os.path.join(os.path.expanduser("~"), ".claude")
+    if scope == "project":
+        return os.getcwd()
+    override = os.environ.get("CODEX_HOME")  # Codex reads its config from CODEX_HOME (default ~/.codex)
+    return os.path.abspath(override) if override else os.path.join(os.path.expanduser("~"), ".codex")
+
+
+def setup_lstat(path):
+    try:
+        return os.lstat(path)
+    except FileNotFoundError:
+        return None
+
+
+def setup_read(path, follow=False):
+    """The bytes of a regular file of at most SETUP_READ_LIMIT, or None when it is something else or
+    too big. Never follows a link unless follow=True, and never blocks on a fifo."""
+    flags = os.O_RDONLY | NONBLOCK | (0 if follow else NOFOLLOW)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = os.read(fd, SETUP_READ_LIMIT + 1)
+        while len(data) <= SETUP_READ_LIMIT:
+            more = os.read(fd, SETUP_READ_LIMIT + 1 - len(data))
+            if not more:
+                break
+            data += more
+    finally:
+        os.close(fd)
+    return None if len(data) > SETUP_READ_LIMIT else data
+
+
+def setup_mkdirs(path):
+    """Create the folders above a file we will write, owner-only, never through a link we create."""
+    missing = []
+    while path and not os.path.isdir(path):
+        missing.append(path)
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    for d in reversed(missing):
+        os.mkdir(d, 0o700)
+
+
+def setup_write(path, data, mode):
+    """write_atomic, then the folder is synced so the rename survives a crash."""
+    write_atomic(path, data, mode)
+    setup_sync_dir(os.path.dirname(path))
+
+
+def setup_backup_write(path, data):
+    """Save data as <path>.agentbus-<UTC time to the microsecond>Z.bak, one new file per call, so no edit is
+    lost and names sort in the order they were made. The name is chosen when this runs, with O_EXCL, so
+    two setups at once never share one; a clash moves the stamp on a microsecond. Returns the basename."""
+    from datetime import timedelta
+    now, n = datetime.now(timezone.utc), 0
+    while True:
+        name = f"{path}.agentbus-{(now + timedelta(microseconds=n)).strftime('%Y%m%dT%H%M%S.%fZ')}.bak"
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600)
+            break
+        except FileExistsError:
+            n += 1
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        try:
+            os.unlink(name)
+        except OSError:
+            pass
+        raise
+    setup_sync_dir(os.path.dirname(name))
+    file_changed(name)
+    return os.path.basename(name)
+
+
+def setup_sync_dir(folder):
+    try:
+        fd = os.open(folder or ".", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass  # some filesystems cannot sync a folder; the file is written
+    finally:
+        os.close(fd)
+
+
+def setup_test_fail(point):
+    """Test hook: AGENTBUS_TEST_SETUP_FAIL_AT=<point> fails the write at that point (after-backup)."""
+    if os.environ.get("AGENTBUS_TEST_SETUP_FAIL_AT") == point:
+        raise OSError(errno.EIO, "injected failure")
+
+
+def setup_blocked_parent(path):
+    """The nearest existing folder above path that is not a folder (a link to nowhere, a file), or None:
+    setup cannot create anything below it, and says so in planning instead of failing halfway."""
+    d = os.path.dirname(path)
+    while d and d != os.path.dirname(d):
+        if os.path.lexists(d):
+            return None if os.path.isdir(d) else d
+        d = os.path.dirname(d)
+    return None
+
+
+def setup_guard(path, planned, point):
+    """Right before a write: the file must still be what planning read (None: still absent), or setup
+    stops and the user's newer change stands."""
+    _test_pause(point)
+    st = setup_lstat(path)
+    now = None if st is None else (setup_read(path) if stat.S_ISREG(st.st_mode) else b"\0not a plain file")
+    if now != planned:
+        raise OSError(errno.EAGAIN, "changed while setup ran; run it again")
+
+
+def sha256_hex(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def has_marker(data):
+    lines = data.decode("utf-8", "replace").rstrip().splitlines()
+    return bool(lines) and lines[-1].strip() == MANAGED_MARKER
+
+
+def is_agentbus_skill_dir(path):
+    """True when path (a folder, perhaps reached through a link) holds a SKILL.md whose front matter
+    says `name: agentbus`."""
+    data = setup_read(os.path.join(path, "SKILL.md"), follow=True)
+    if data is None:
+        return False
+    text = data.decode("utf-8", "replace")
+    if not text.startswith("---\n"):
+        return False
+    head = text[4:].split("\n---", 1)[0]
+    return any(line.strip().strip("'\"") in ("name: agentbus", "name:agentbus") for line in head.splitlines())
+
+
+class SkillFilePiece:
+    """The Claude Code skill: <config>/skills/agentbus/SKILL.md, a real file with the managed marker."""
+    id = "skill"
+
+    def paths(self, scope):
+        folder = os.path.join(setup_config_dir("claude", scope), "skills", "agentbus")
+        return folder, os.path.join(folder, "SKILL.md")
+
+    def plan(self, scope, uninstall=False):
+        folder, skill = self.paths(scope)
+        try:
+            return self._plan(scope, folder, skill, uninstall)
+        except OSError as e:
+            return [Change(skill, "refused", f"{skill} cannot be inspected ({e.strerror or e}); not changed.",
+                           line="{path} cannot be inspected (" + (e.strerror or "error") + "); not changed.")]
+
+    def _refuse(self, path, why, fix):
+        msg = f"{{path}} {why}; not changed." + (f" {fix}" if fix else "")
+        return [Change(path, "refused", msg.replace("{path}", path), line=msg)]
+
+    def _plan(self, scope, folder, skill, uninstall):
+        want = SKILL_TEXT.encode("utf-8")
+        project = "agentbus setup claude --scope project"
+        st = setup_lstat(folder)
+        link_changes = []
+        if st is not None and stat.S_ISLNK(st.st_mode):
+            old = os.readlink(folder)
+            alive = os.path.isdir(folder)
+            # A link that dangles to .../skill is what the old README line left once skill/ moved.
+            ours = is_agentbus_skill_dir(folder) if alive else old.rstrip("/").endswith(("/skill", "/skills/agentbus"))
+            if not ours:
+                return self._refuse(folder, "is a symlink to something that is not an agentbus skill",
+                                    f"Remove it or run: {project}")
+            if uninstall:
+                return [Change(folder, "skipped", f"is a link to {old}; not removed",
+                               line="{path}   is a link to " + old + "; not removed")]
+            link_changes = [Change(folder, "replaced_link", f"replaced the link to {old}",
+                                   line="{path}   replaced the link to " + old + " (the old install line)",
+                                   would="would replace the link {path} to " + old + " (the old install line)",
+                                   write=lambda: os.unlink(folder))]
+            st = None
+        elif st is not None and not stat.S_ISDIR(st.st_mode):
+            return self._refuse(folder, "exists and is not a folder", f"Move it aside, or run: {project}")
+        if st is None:
+            if uninstall:
+                return [Change(skill, "unchanged", "not installed", line="{path}   not installed")]
+            blocked = None if link_changes else setup_blocked_parent(skill)  # the old link is replaced, not blocking
+            if blocked:
+                return self._refuse(skill, f"cannot be created: {blocked} is not a folder (is it a link to nowhere?)", "")
+            return link_changes + [self._install(skill, want, existing=None)]
+        sk = setup_lstat(skill)
+        if sk is None:
+            if uninstall:
+                return [Change(folder, "unchanged", "not installed", line="{path}   not installed")]
+            return [self._install(skill, want, existing=None)]
+        if stat.S_ISLNK(sk.st_mode):
+            return self._refuse(skill, "is a symlink", f"Remove it or run: {project}")
+        data = setup_read(skill)
+        if data is None or not stat.S_ISREG(sk.st_mode):
+            return self._refuse(skill, "exists and is not a plain file written by agentbus",
+                                f"Move it aside, or run: {project}")
+        if not has_marker(data):
+            if uninstall:
+                return [Change(skill, "skipped", "was not written by agentbus; not changed",
+                               line="{path}   was not written by agentbus; not changed")]
+            return self._refuse(skill, "exists and was not written by agentbus",
+                                f"Move it aside, or run: {project}")
+        digest = sha256_hex(data)
+        unedited = data == want or digest in SKILL_SHA256_HISTORY
+        if uninstall:
+            if not unedited:
+                return [Change(skill, "skipped", "modified; not removed", line="{path}   modified; not removed")]
+            return [self._remove(folder, skill)]
+        if data == want:
+            return [Change(skill, "unchanged", "", line="{path}   unchanged")]
+        return [self._install(skill, want, existing=data, unedited=unedited)]
+
+    def _install(self, skill, want, existing, unedited=True):
+        size = f"{len(want):,} bytes"
+        backup = existing is not None and not unedited
+
+        def write():
+            setup_guard(skill, existing, "setup-before-write")
+            setup_mkdirs(os.path.dirname(skill))
+            if backup:
+                change.backup = setup_backup_write(skill, existing)
+                setup_test_fail("after-backup")
+            setup_write(skill, want, 0o600)
+        if existing is None:
+            change = Change(skill, "installed", f"{len(want)} bytes", line=f"{{path}}   installed, {size}",
+                            would=f"would install {{path}} ({size})", write=write)
+            return change
+        note = "; your edited copy is saved as {backup}" if backup else ""
+        change = Change(skill, "updated", f"{len(want)} bytes", line=f"{{path}}   updated, {size}{note}",
+                        would=f"would update {{path}} ({size}){note}", write=write,
+                        backup_hint="SKILL.md.agentbus-<date and time>.bak")
+        return change
+
+    def _remove(self, folder, skill):
+        def write():
+            os.unlink(skill)
+            try:
+                os.rmdir(folder)
+            except OSError:
+                pass  # the folder holds something else (a backup, the user's files): it stays
+        gone = not [n for n in os.listdir(folder) if n != "SKILL.md"]
+        shown = folder + os.sep if gone else skill
+        return Change(shown, "removed", "", line="removed {path}", would="would remove {path}", write=write)
+
+    def apply(self, change):
+        if change.write:
+            change.write()
+
+    def remove(self, scope):
+        changes = self.plan(scope, uninstall=True)
+        for c in changes:
+            self.apply(c)
+        return changes
+
+    def check(self, scope):
+        folder, skill = self.paths(scope)
+        fix = "agentbus setup claude" + (" --scope project" if scope == "project" else "")
+        st = setup_lstat(skill)
+        if st is None:
+            return [("skill", "missing", f"{tilde(skill)} is not installed", fix)]
+        data = setup_read(skill)
+        if data is None or not has_marker(data):
+            return [("skill", "problem", f"{tilde(skill)} was not written by agentbus", fix)]
+        if data == SKILL_TEXT.encode("utf-8"):
+            return [("skill", "ok", f"{tilde(skill)} is current", "")]
+        return [("skill", "stale", f"{tilde(skill)} is an older copy of the skill", fix)]
+
+
+AGENTS_BEGIN = "<!-- agentbus:begin -->"
+AGENTS_END = "<!-- agentbus:end -->"
+
+
+class TextBlockPiece:
+    """A block of text between two marker lines in a file the user owns (the Codex AGENTS.md). The file's
+    line ending is kept (CRLF stays CRLF); markers inside a fenced code block are the user's text, not
+    ours; a block the user edited is never removed, and is backed up (the whole file) before it is
+    replaced."""
+    id = "agents_md"
+
+    def __init__(self, target, filename, text):
+        self.target, self.filename, self.text = target, filename, text
+
+    def path(self, scope):
+        return os.path.join(setup_config_dir(self.target, scope), self.filename)
+
+    @staticmethod
+    def scan(text):
+        """(lines, begins, ends, open_fence): the lines of text (endings kept), the line numbers of the
+        marker lines at column 0 outside fenced code, and whether a fence is still open at the end."""
+        lines = re.findall(r"[^\n]*\n|[^\n]+", text)
+        begins, ends, fence = [], [], None
+        for i, line in enumerate(lines):
+            bare = line.rstrip("\r\n")
+            m = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", bare)
+            if fence is None:
+                if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+                    fence = (m.group(1)[0], len(m.group(1)))
+                    continue
+            else:
+                if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] and not m.group(2).strip():
+                    fence = None
+                continue
+            # Column 0 only: setup writes its markers there, and an indented marker is an example inside
+            # an indented code block or a list item.
+            if bare.rstrip() == AGENTS_BEGIN:
+                begins.append(i)
+            elif bare.rstrip() == AGENTS_END:
+                ends.append(i)
+        return lines, begins, ends, fence is not None
+
+    def plan(self, scope, uninstall=False):
+        path = self.path(scope)
+        try:
+            return self._plan(scope, path, uninstall)
+        except OSError as e:
+            msg = f"{{path}} cannot be inspected ({e.strerror or e}); not changed."
+            return [Change(path, "refused", msg.replace("{path}", path), line=msg)]
+
+    def _refuse(self, path, why, fix=""):
+        msg = "{path} " + why + "; not changed." + (" " + fix if fix else "")
+        return [Change(path, "refused", msg.replace("{path}", path), line=msg)]
+
+    def _plan(self, scope, path, uninstall):
+        lines_n = self.text.count("\n")
+        project = f"agentbus setup {self.target} --scope project"
+        st = setup_lstat(path)
+        if st is None:
+            if uninstall:
+                return [Change(path, "unchanged", "not installed", line="{path}   not installed")]
+            blocked = setup_blocked_parent(path)
+            if blocked:
+                return self._refuse(path, f"cannot be created: {blocked} is not a folder (is it a link to nowhere?)")
+            block = AGENTS_BEGIN + "\n" + self.text + AGENTS_END + "\n"
+            return [self._change(path, None, None, block, "added", lines_n)]
+        if stat.S_ISLNK(st.st_mode):
+            return self._refuse(path, "is a symlink", f"Edit the file it points to, or run: {project}")
+        raw = setup_read(path)
+        if raw is None or not stat.S_ISREG(st.st_mode):
+            return self._refuse(path, "is not a plain text file agentbus can read", f"Or run: {project}")
+        try:
+            old = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return self._refuse(path, "is not valid UTF-8")
+        lines, begins, ends, open_fence = self.scan(old)
+        if len(begins) != len(ends) or len(begins) > 1 or (begins and begins[0] > ends[0]):
+            return self._refuse(path, "has damaged agentbus markers")
+        crlf = "\r\n" in old and old.count("\r\n") * 2 >= old.count("\n")
+        nl = "\r\n" if crlf else "\n"
+        body = (AGENTS_BEGIN + "\n" + self.text + AGENTS_END + "\n").replace("\n", nl)
+        if begins:
+            b, e = begins[0], ends[0]
+            had = "".join(lines[b + 1:e]).replace("\r\n", "\n")
+            unedited = had == self.text or sha256_hex(had.encode("utf-8")) in AGENTS_SHA256_HISTORY
+            if uninstall:
+                if not unedited:
+                    return [Change(path, "skipped", "the agentbus block was edited; not removed",
+                                   line="{path}   the agentbus block was edited; not removed")]
+                before, after = "".join(lines[:b]), "".join(lines[e + 1:])
+                if not after:  # the block closes the file: take the separator setup added with it
+                    if before.endswith(nl):
+                        before = before[:-len(nl)]
+                return [self._change(path, st, raw, before + after, "removed", lines_n)]
+            end = lines[e]
+            new_block = body if end.endswith("\n") else body[:-len(nl)]
+            new = "".join(lines[:b]) + new_block + "".join(lines[e + 1:])
+            if new == old:
+                return [Change(path, "unchanged", "", line="{path}   unchanged")]
+            return [self._change(path, st, raw, new, "updated", lines_n, backup=not unedited)]
+        if uninstall:
+            return [Change(path, "unchanged", "not installed", line="{path}   not installed")]
+        if open_fence:
+            return self._refuse(path, "has an unclosed code fence")
+        new = body if not old else old + nl + body
+        return [self._change(path, st, raw, new, "added", lines_n)]
+
+    def _change(self, path, st, raw, new, verb, lines_n, backup=False):
+        mode = stat.S_IMODE(st.st_mode) if st is not None else 0o600
+        def write():
+            setup_guard(path, raw, "setup-before-write")
+            setup_mkdirs(os.path.dirname(path))
+            if backup:
+                change.backup = setup_backup_write(path, raw)
+                setup_test_fail("after-backup")
+            setup_write(path, new.encode("utf-8"), mode)
+        note = "; your edited copy is saved as {backup}" if backup else ""
+        if verb == "removed":
+            change = Change(path, "removed", "", line="{path}   removed the agentbus block",
+                            would="would remove the agentbus block from {path}", write=write)
+            return change
+        action = "installed" if verb == "added" else "updated"
+        change = Change(path, action, f"{lines_n} lines", line="{path}   " + f"{verb} the agentbus block ({lines_n} lines){note}",
+                        would=f"would {'add' if verb == 'added' else 'update'} the agentbus block "
+                              + ("to" if verb == "added" else "in") + f" {{path}} ({lines_n} lines){note}", write=write,
+                        backup_hint=self.filename + ".agentbus-<date and time>.bak")
+        return change
+
+    def apply(self, change):
+        if change.write:
+            change.write()
+
+    def remove(self, scope):
+        changes = self.plan(scope, uninstall=True)
+        for c in changes:
+            self.apply(c)
+        return changes
+
+    def check(self, scope):
+        path = self.path(scope)
+        fix = f"agentbus setup {self.target}" + (" --scope project" if scope == "project" else "")
+        raw = setup_read(path) if setup_lstat(path) is not None else None
+        if raw is None:
+            return [(self.id, "missing", f"{tilde(path)} has no agentbus block", fix)]
+        text = raw.decode("utf-8", "replace").replace("\r\n", "\n")
+        lines, begins, ends, _ = self.scan(text)
+        if len(begins) != 1 or len(ends) != 1 or begins[0] > ends[0]:
+            return [(self.id, "missing", f"{tilde(path)} has no agentbus block", fix)]
+        if "".join(lines[begins[0] + 1:ends[0]]) == self.text:
+            return [(self.id, "ok", f"{tilde(path)} has the current block", "")]
+        return [(self.id, "stale", f"{tilde(path)} has an older agentbus block", fix)]
+
+
+class _JsonRefused(ValueError):
+    pass
+
+
+def _json_unique(pairs):
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise _JsonRefused(f'has the key "{k}" twice')
+        seen[k] = v
+    return seen
+
+
+def _json_no_float(text):
+    # A rewrite could change a fractional or huge number (0.1 + 0.2 style rounding, 1e400 as infinity).
+    raise _JsonRefused(f"has the number {text}, which agentbus cannot rewrite exactly")
+
+
+def _json_no_constant(text):
+    raise _JsonRefused(f"has {text}, which is not JSON")
+
+
+class JsonEntriesPiece:
+    """Hook entries merged into a JSON file (Claude settings.json, Codex hooks.json): {"hooks": {EVENT:
+    [{"matcher"?: M, "hooks": [{"type": "command", "command": "... # agentbus:managed"}]}]}}.
+    `entries(scope)` returns [(event, matcher or None, hook dict)], each hook's command ending in
+    MANAGED_TAG. Only tagged hooks are ever changed or removed."""
+
+    def __init__(self, id, path_for, entries_for):
+        self.id, self.path_for, self.entries_for = id, path_for, entries_for
+
+    @staticmethod
+    def tagged(hook):
+        return isinstance(hook, dict) and isinstance(hook.get("command"), str) and hook["command"].rstrip().endswith(MANAGED_TAG)
+
+    def merge(self, doc, desired):
+        """Returns the new document (doc is not changed). desired is [] for uninstall."""
+        import copy
+        doc = copy.deepcopy(doc)
+        want = {}
+        for event, matcher, hook in desired:
+            want.setdefault((event, matcher), []).append(hook)
+        hooks = doc.get("hooks")
+        placed = set()
+        if isinstance(hooks, dict):
+            for event in list(hooks):
+                groups = hooks[event]
+                keep = []
+                for group in groups:
+                    inner = group.get("hooks") if isinstance(group, dict) else None
+                    if not isinstance(inner, list) or not any(self.tagged(h) for h in inner):
+                        keep.append(group)
+                        continue
+                    key = (event, group.get("matcher"))
+                    mine = all(self.tagged(h) for h in inner) and set(group) <= {"matcher", "hooks"}
+                    if mine:
+                        if key in want and key not in placed:
+                            placed.add(key)
+                            group["hooks"] = want[key]
+                            keep.append(group)
+                        continue  # a duplicate or an entry we no longer write
+                    group["hooks"] = [h for h in inner if not self.tagged(h)]  # a user group that holds one of ours
+                    keep.append(group)
+                if keep:
+                    hooks[event] = keep
+                else:
+                    del hooks[event]
+        for key, wanted in want.items():
+            if key in placed:
+                continue
+            event, matcher = key
+            hooks = doc.setdefault("hooks", {})
+            group = {"hooks": wanted}
+            if matcher is not None:
+                group = {"matcher": matcher, "hooks": wanted}
+            hooks.setdefault(event, []).append(group)
+        if isinstance(doc.get("hooks"), dict) and not doc["hooks"]:
+            del doc["hooks"]
+        return doc
+
+    def plan(self, scope, uninstall=False):
+        path = self.path_for(scope)
+        try:
+            return self._plan(scope, path, uninstall)
+        except OSError as e:
+            msg = f"{{path}} cannot be inspected ({e.strerror or e}); not changed."
+            return [Change(path, "refused", msg.replace("{path}", path), line=msg)]
+
+    def _refuse(self, path, why):
+        msg = "{path} " + why + "; not changed."
+        return [Change(path, "refused", msg.replace("{path}", path), line=msg)]
+
+    def _plan(self, scope, path, uninstall):
+        st = setup_lstat(path)
+        desired = [] if uninstall else self.entries_for(scope)
+        count = len(desired)
+        if st is None:
+            if uninstall:
+                return [Change(path, "unchanged", "not installed", line="{path}   not installed")]
+            blocked = setup_blocked_parent(path)
+            if blocked:
+                return self._refuse(path, f"cannot be created: {blocked} is not a folder (is it a link to nowhere?)")
+            doc, indent, newline, raw = {}, 2, True, None
+        else:
+            if stat.S_ISLNK(st.st_mode):
+                return self._refuse(path, "is a symlink")
+            raw = setup_read(path)
+            if raw is None or not stat.S_ISREG(st.st_mode):
+                return self._refuse(path, "is not a plain file agentbus can read")
+            try:
+                text = raw.decode("utf-8")
+                doc = json.loads(text, object_pairs_hook=_json_unique, parse_float=_json_no_float,
+                                 parse_constant=_json_no_constant)
+            except _JsonRefused as e:
+                return self._refuse(path, str(e))
+            except (ValueError, RecursionError):
+                return self._refuse(path, "is not valid JSON")
+            if not isinstance(doc, dict) or not isinstance(doc.get("hooks", {}), dict) or any(
+                    not isinstance(v, list) for v in doc.get("hooks", {}).values()):
+                return self._refuse(path, "does not have the shape of a hooks file")
+            m = re.search(r"\n([ \t]+)\S", text)
+            indent = (m.group(1) if m.group(1).startswith("\t") else len(m.group(1))) if m else 2
+            newline = text.endswith("\n")
+        new = self.merge(doc, desired)
+        if st is not None and new == doc:
+            return [Change(path, "unchanged", "" if not uninstall else "not installed",
+                           line="{path}   " + ("unchanged" if not uninstall else "not installed"))]
+        body = json.dumps(new, indent=indent, ensure_ascii=False) + ("\n" if newline else "")
+        mode = stat.S_IMODE(st.st_mode) if st is not None else 0o600
+        save = raw is not None  # every change to a file that exists keeps the file as it was, in its own backup
+        hint = os.path.basename(path) + ".agentbus-<date and time>.bak"
+        note = "; the file as it was is saved as {backup}" if save else ""
+
+        def write():
+            setup_guard(path, raw, "setup-before-write-entries")  # its own name: tests pause here after another piece wrote
+            setup_mkdirs(os.path.dirname(path))
+            if save:
+                change.backup = setup_backup_write(path, raw)
+                setup_test_fail("after-backup")
+            setup_write(path, body.encode("utf-8"), mode)
+        if uninstall:
+            change = Change(path, "removed", "", line="{path}   removed the agentbus hooks" + note,
+                            would="would remove the agentbus hooks from {path}" + note, write=write, backup_hint=hint)
+            return [change]
+        verb = "installed" if st is None or not any(self.tagged(h) for g in sum(doc.get("hooks", {}).values(), [])
+                                                      if isinstance(g, dict) for h in g.get("hooks", [])) else "updated"
+        word = "added" if verb == "installed" else "updated"
+        change = Change(path, verb, f"{count} hooks", line="{path}   " + f"{word} {count} hooks" + note,
+                        would=f"would {'add' if verb == 'installed' else 'update'} {count} hooks "
+                              + ("to" if verb == "installed" else "in") + " {path}" + note, write=write, backup_hint=hint)
+        return [change]
+
+    def apply(self, change):
+        if change.write:
+            change.write()
+
+    def remove(self, scope):
+        changes = self.plan(scope, uninstall=True)
+        for c in changes:
+            self.apply(c)
+        return changes
+
+    def check(self, scope):
+        path = self.path_for(scope)
+        fix = f"agentbus setup {'claude' if 'claude' in self.id else 'codex'}" + (" --scope project" if scope == "project" else "")
+        if setup_lstat(path) is None:
+            return [(self.id, "missing", f"{tilde(path)} has no agentbus hooks", fix)]
+        change = self.plan(scope)[0]
+        if change.action == "unchanged":
+            return [(self.id, "ok", f"{tilde(path)} has the current hooks", "")]
+        if change.action == "refused":
+            return [(self.id, "problem", change.detail, fix)]
+        return [(self.id, "stale" if change.action == "updated" else "missing", f"{tilde(path)} needs the agentbus hooks", fix)]
+
+
+def _test_json_piece():
+    """Test hook: AGENTBUS_TEST_SETUP_JSON=<file> adds a second Claude piece that merges one hook entry
+    into <file>, so the framework's ordering, failure and json_entries rules run through the CLI."""
+    path = os.environ.get("AGENTBUS_TEST_SETUP_JSON")
+    if not path:
+        return []
+    return [JsonEntriesPiece("test_json", lambda scope: path,
+                             lambda scope: [("SessionStart", None, {"type": "command", "command": "echo agentbus " + MANAGED_TAG})])]
+
+
+SETUP_TARGETS = {
+    "claude": [
+        SkillFilePiece(),
+    ],
+    "codex": [
+        TextBlockPiece("codex", "AGENTS.md", AGENTS_SNIPPET),
+    ],
+}
+SETUP_NAMES = {"claude": "Claude Code", "codex": "Codex"}
+
+
+def setup_line(glyph, text):
+    """One change line, `  <glyph> <text>`. show() takes only literal templates (tests/test_security.sh)."""
+    if glyph == "+":
+        show("+ {}", text, row=True)
+    elif glyph == "~":
+        show("~ {}", text, row=True)
+    elif glyph == "=":
+        show("= {}", text, row=True)
+    elif glyph == "-":
+        show("- {}", text, row=True)
+    else:
+        show("! {}", text, row=True)
+
+
+def setup_report(a, target, scope, changes, dry_run, uninstall, failure=None):
+    if a.json:
+        write_out(json.dumps({"target": target, "scope": scope, "dry_run": dry_run,
+                              "changes": [c.as_json() for c in changes]}, indent=2, ensure_ascii=False) + "\n")
+        return
+    show("agentbus setup {}{} ({})", target, " --uninstall" if uninstall else "", scope)
+    for c in changes:
+        setup_line(SETUP_GLYPH[c.action], c.text(dry_run))
+    if failure:
+        show("! {}", failure, row=True)
+
+
+# The setup actions that change a file (or remove one).
+SETUP_WRITES = ("installed", "updated", "replaced_link", "removed")
+
+
+def cmd_setup(a):
+    if is_repo_local_copy():
+        die("setup runs from the installed agentbus, not a project copy. "
+            f"Run: agentbus setup {a.target}", "bad_input")
+    target, scope, uninstall, dry_run = a.target, a.scope, a.uninstall, a.dry_run
+    global _RERUN
+    _RERUN = f"agentbus setup {target}" + (" --scope project" if scope == "project" else "") + (" --uninstall" if uninstall else "")
+    pieces = list(SETUP_TARGETS[target]) + (_test_json_piece() if target == "claude" else [])
+    planned = [piece.plan(scope, uninstall) for piece in pieces]
+    flat = [c for chs in planned for c in chs]
+    if any(c.action == "refused" for c in flat):
+        refused = [c for c in flat if c.action == "refused"]
+        setup_report(a, target, scope, refused, dry_run, uninstall)
+        if not a.json:
+            show("nothing was changed.")
+        emit_pending(a)
+        die(f"setup {target} refused {len(refused)} file(s) and changed nothing: "
+            + ", ".join(tilde(c.path) for c in refused), "items_failed", failed=[c.as_json() for c in refused])
+    if dry_run:
+        setup_report(a, target, scope, flat, True, uninstall)
+        if not a.json:
+            show("dry run: nothing was written.")
+        return
+    done = []
+    fail_at = os.environ.get("AGENTBUS_TEST_SETUP_FAIL", "")
+    for index, (piece, chs) in enumerate(zip(pieces, planned), 1):
+        cur = None
+        try:
+            if fail_at == str(index):
+                raise OSError(errno.EIO, "injected failure")
+            for cur in chs:
+                piece.apply(cur)
+                if cur.action in SETUP_WRITES:
+                    file_changed(cur.path)
+                done.append(cur)
+        except OSError as e:
+            where = cur.path if cur is not None else (chs[0].path if chs else piece.id)
+            problem = f"{tilde(where)} could not be written ({e.strerror or e})"
+            failed = Change(where, "refused", problem)
+            failed.backup = cur.backup if cur is not None and cur not in done else None  # saved before the write failed
+            if a.json:
+                setup_report(a, target, scope, done + [failed], False, uninstall)
+            else:
+                # Everything on disk from this run: the changes that completed, plus every backup written,
+                # including the one the failing change saved before it failed.
+                written = []
+                for c in done + ([cur] if cur is not None and cur not in done else []):
+                    if c.action in ("installed", "updated", "replaced_link", "removed") and c in done:
+                        written.append(tilde(c.path))
+                    if c.backup:
+                        written.append(tilde(os.path.join(os.path.dirname(c.path), c.backup)))
+                wrote = ", ".join(written) or "nothing"
+                setup_report(a, target, scope, done, False, uninstall,
+                             failure=f"{problem}; stopped. Written before this: {wrote}. Fix that and run again: agentbus setup {target}")
+            emit_pending(a)
+            die(f"setup {target} stopped: {problem}. Fix that and run again: agentbus setup {target}", "items_failed",
+                failed=[failed.as_json()])
+    setup_report(a, target, scope, done, False, uninstall)
+    if a.json:
+        return
+    if uninstall:
+        show("done.")
+    elif all(c.action == "unchanged" for c in done):
+        show("done. Nothing to change.")
+    else:
+        show("done. Start a new {} session to load it.", SETUP_NAMES[target])
+        show("next: cd your-repo && agentbus init .")
+
+
+def register_setup(sub):
+    s = sub("setup", help="Teach your agent to use agentbus: install the skill for Claude Code or the block for Codex")
+    s.add_argument("target", choices=sorted(SETUP_TARGETS), help="claude (skill) or codex (AGENTS.md block)")
+    s.add_argument("--scope", choices=("user", "project"), default="user",
+                   help="user: your own config (default); project: files under the current directory")
+    s.add_argument("--dry-run", action="store_true", help="Show what would change; write nothing")
+    s.add_argument("--uninstall", action="store_true", help="Remove what setup added; edited files stay")
+
+
+REGISTER_COMMANDS.append(register_setup)
+
+
 # ==== hooks ====
 # ==== doctor ====
 
@@ -3100,6 +5722,9 @@ NO_DB_COMMANDS = {
     "init": cmd_init,
     "upgrade": cmd_upgrade,
     "buses": cmd_buses,
+    "schema": cmd_schema,
+    "skill": cmd_skill,
+    "setup": cmd_setup,
 }
 # Commands answered before argument parsing: handler(argv_after_the_command) -> exit status.
 EARLY_COMMANDS = {
@@ -3123,7 +5748,7 @@ def main():
         if e.errno != errno.EPIPE:
             raise
         _stdout_to_devnull()
-        die("the reader closed stdout before the help or version was written")
+        die("the reader closed stdout before the help or version was written", "output_failed")
     _JSON_ERRORS = bool(a.json)
     if a.cmd == "release" and not a.resource and not a.all:
         p.error("release needs a resource or --all")
@@ -3132,7 +5757,7 @@ def main():
     except UnicodeError as e:
         # Last resort: text that is not UTF-8 reached a place that cannot take it (a path, the
         # terminal). The inputs agentbus knows about are refused or replaced before this.
-        die(f"text is not valid UTF-8 or cannot be shown here ({type(e).__name__}: {getattr(e, 'reason', e)})")
+        die(f"text is not valid UTF-8 or cannot be shown here ({type(e).__name__}: {getattr(e, 'reason', e)})", "output_failed")
     flush_stdout("all the output")
     if a.json:
         flush_notes()  # only a fully successful command may emit non-error notices
@@ -3140,6 +5765,8 @@ def main():
 
 def run(a):
     refuse_bad_inputs(a)
+    if os.environ.get("AGENTBUS_TEST_CRASH") == "1":
+        raise RuntimeError("test crash")  # test hook: an unexpected error before the bus is opened
     try:
         if a.cmd in NO_DB_COMMANDS:
             # These commands need no open database; use the same queued output path.
@@ -3150,6 +5777,7 @@ def run(a):
             return
         read_inputs(a)
         a._db, strict = db_path(a)
+        stale_copy_notice(a, a._db)
         if a.cmd == "watch":
             try:
                 cmd_watch(a, strict)
@@ -3161,9 +5789,12 @@ def run(a):
         # the exclusive lock.
         a._after = None
         try:
-            con = open_bus(a._db, strict)
+            _test_fail("open")
+            con = open_for(a, strict)
             try:
+                _test_fail("internal")
                 COMMANDS[a.cmd](con, a)
+                _test_fail("before-emit")
                 _test_slow()
                 who = ident(a)
                 if who and a.cmd not in ("join", "leave"):
@@ -3171,8 +5802,9 @@ def run(a):
                     # command's own result already stands, so a refused touch (bus moved
                     # meanwhile) is skipped.
                     try:
+                        _test_fail("touch")
                         touch(con, who)
-                    except SystemExit:
+                    except (SystemExit, sqlite3.Error):
                         pass
             finally:
                 con.close()
@@ -3188,21 +5820,42 @@ def run(a):
             try:
                 con = open_bus(a._db, strict)
                 try:
+                    _test_fail("ack")
                     a._after(con)
                 finally:
                     con.close()
             except (SystemExit, sqlite3.Error, OSError) as e:
                 why = reason(e) if isinstance(e, SystemExit) else timed_out_message() if _TIMED_OUT else str(e)
-                die(f"the messages above were shown but not marked read ({why}); the next inbox shows them again")
+                die(f"the messages were delivered but could not be marked read ({why}); the next inbox shows them again", "ack_failed", delivered=True)
             finally:
                 if not a.json:
                     flush_notes()
     except (sqlite3.Error, OSError) as e:
         if _TIMED_OUT:
-            die(timed_out_message())
+            die(timed_out_message(), "bus_unavailable")
         if isinstance(e, sqlite3.Error):
-            die(f"database error: {e}")
-        die(f"{e.strerror or e}: {e.filename or ''}".rstrip(": "))
+            # SQLite refusing the file (unreadable, full, corrupt, a planted FIFO) is the bus being
+            # unusable; only a misuse of the API by this program is a bug.
+            misuse = (sqlite3.ProgrammingError, sqlite3.InterfaceError, sqlite3.InternalError, sqlite3.NotSupportedError)
+            die(f"database error: {e}", "internal" if isinstance(e, misuse) else "bus_unavailable")
+        die(f"{e.strerror or e}: {e.filename or ''}".rstrip(": "), "bus_unavailable")
+
+
+# Commands that only read: run under no name (nothing to touch), they use a read-only open, so they
+# work beside a live writer; the open changes no data or schema, and may finish SQLite's recovery of a
+# crashed writer's journal. A bus that needs a write first (no tables yet, an older
+# schema) gets the ordinary open, which creates or migrates it as before.
+READ_ONLY_COMMANDS = ("who", "status", "read")
+
+
+def open_for(a, strict):
+    if a.cmd in READ_ONLY_COMMANDS and not ident(a):
+        try:
+            return open_bus(a._db, strict, read_only=True)
+        except SystemExit as e:
+            if refusal(e)["code"] not in ("schema_older", "no_bus"):
+                raise
+    return open_bus(a._db, strict)
 
 
 def emit_pending(a):
@@ -3222,10 +5875,12 @@ def emit_pending(a):
     write_out(buf.getvalue() if a.json else wrap_output(buf.getvalue()))
 
 
+def cli():
+    """The one entry point: bin/agentbus and the installed command (pyproject's script) both run
+    this, so the exit status comes from the error code (contract_main) and an unexpected error
+    under --json is the same JSON error either way."""
+    contract_main()
+
+
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        if not _JSON_ERRORS:
-            raise
-        die(str(e))
+    cli()

@@ -23,6 +23,45 @@ rm "$T/tests/test_b_fails.sh" "$T/ran_after_failure"
 rc=0; bash "$RUNNER" "$T"/tests/test_*.sh >"$T/out" 2>&1 || rc=$?
 [ "$rc" = 0 ] || fail "the runner exited $rc with every test passing"
 [ "$(tail -n 1 "$T/out")" = "ALL TESTS PASSED (2 files)" ] || fail "the runner's last line was not ALL TESTS PASSED (2 files): $(tail -n 1 "$T/out")"
+# A file that exits 77 is a SKIP: reported, counted apart from passes, and a failure under AGENTBUS_NO_SKIP=1.
+printf '#!/bin/bash\necho "SKIP: needs the thing"\nexit 77\n' > "$T/tests/test_e_skip.sh"   # skip-ok: throwaway test file
+rc=0; env -u AGENTBUS_NO_SKIP bash "$RUNNER" "$T/tests/test_a_ok.sh" "$T/tests/test_e_skip.sh" >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 0 ] && grep -q "^SKIP $T/tests/test_e_skip.sh (needs the thing)\$" "$T/out" && [ "$(tail -n 1 "$T/out")" = "ALL TESTS PASSED (2 files, 1 skipped)" ] \
+  || fail "a skipped file was not reported and counted (rc $rc): $(cat "$T/out")"
+rc=0; AGENTBUS_NO_SKIP=1 bash "$RUNNER" "$T/tests/test_a_ok.sh" "$T/tests/test_e_skip.sh" >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 1 ] && [ "$(tail -n 1 "$T/out")" = "FAILED: $T/tests/test_e_skip.sh" ] || fail "AGENTBUS_NO_SKIP=1 did not turn a skip into a failure (rc $rc): $(cat "$T/out")"
+# Under AGENTBUS_NO_SKIP=1 only a known platform skip (skip_platform KEY) stays a skip, and EVERY SKIP line must be one.
+nosk() { rc=0; AGENTBUS_NO_SKIP=1 bash "$RUNNER" "$T/tests/test_a_ok.sh" "$T/tests/test_f_skip.sh" >"$T/out" 2>&1 || rc=$?; }
+skipfile() { printf '#!/bin/bash\n%s\nexit 77\n' "$1" > "$T/tests/test_f_skip.sh"; }   # skip-ok: throwaway test files
+skipfile 'echo "SKIP: platform: not-macos (sandbox-exec is macOS only)"'   # skip-ok
+nosk
+[ "$rc" = 0 ] && [ "$(tail -n 1 "$T/out")" = "ALL TESTS PASSED (2 files, 1 skipped)" ] || fail "a known platform skip failed under AGENTBUS_NO_SKIP=1 (rc $rc): $(cat "$T/out")"
+for reason in "platform:needs ws07" "platform: needs ws07" "platform: not-macos-ish" "needs ws07"; do
+  skipfile "echo \"SKIP: $reason\""   # skip-ok
+  nosk
+  [ "$rc" = 1 ] && [ "$(tail -n 1 "$T/out")" = "FAILED: $T/tests/test_f_skip.sh" ] || fail "'$reason' got through AGENTBUS_NO_SKIP=1 (rc $rc): $(cat "$T/out")"
+done
+skipfile 'echo "SKIP: platform: not-macos"; echo "SKIP: needs ws07"'   # skip-ok
+nosk
+[ "$rc" = 1 ] || fail "a bad second SKIP line got through AGENTBUS_NO_SKIP=1 (rc $rc): $(cat "$T/out")"
+# No test file may print a skip and exit 0: that counts a skipped test as a pass. A skip is skip_test, skip_part
+# (which ends in all_passed) or skip_platform, all of which exit 77. Case does not matter; a line that really needs to
+# say it (a throwaway test file written by a test) carries the comment `# skip-ok`.
+bad=$(grep -n -i -E "(echo|printf)( +-[a-z]+)* +[\"'\\]*(\\n)?skip|skip.*exit 0" "$TESTS_DIR"/test_*.sh | grep -v -E 'skip-ok|skip_(test|part|platform)\(|^[^:]*:[0-9]+:[[:space:]]*#' || true)
+[ -z "$bad" ] || fail "a test prints a skip itself instead of calling skip_test/skip_part/skip_platform (or marks the line # skip-ok): $bad"
+# --skip-heavy leaves out the files that run other tests again; --only-heavy runs only those.
+rc=0; bash "$RUNNER" --skip-heavy tests/test_mutations.sh tests/test_eval_harness.sh >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 0 ] && [ "$(tail -n 1 "$T/out")" = "ALL TESTS PASSED (0 files)" ] || fail "--skip-heavy ran a heavy file (rc $rc): $(cat "$T/out")"
+rc=0; bash "$RUNNER" --only-heavy "$T/tests/test_a_ok.sh" >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 0 ] && [ "$(tail -n 1 "$T/out")" = "ALL TESTS PASSED (0 files)" ] || fail "--only-heavy ran an ordinary file (rc $rc): $(cat "$T/out")"
+# RUN_ALL_TIMEOUT caps each file: a file that outlives it fails the run with rc 124 (needs timeout or gtimeout).
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  printf '#!/bin/bash\nsleep 30\n' > "$T/tests/test_d_slow.sh"
+  rc=0; RUN_ALL_TIMEOUT=1 bash "$RUNNER" "$T/tests/test_d_slow.sh" >"$T/out" 2>&1 || rc=$?
+  [ "$rc" = 1 ] && grep -q '^FAIL .*test_d_slow.sh (rc 124)$' "$T/out" || fail "RUN_ALL_TIMEOUT=1 did not stop a slow test (rc $rc): $(cat "$T/out")"
+else
+  skip_part "neither timeout nor gtimeout is installed, so the per-file cap is not checked"
+fi
 ok "CONTRIBUTING's test command is the runner: exit 1 at the first failing test with FAILED: <file>, 0 when all pass"
 
 export HOME="$T/home"; mkdir -p "$HOME"
@@ -82,7 +121,7 @@ def check(tokens, source):
             assert token.split('=')[0] in flags, (source, key, token)
     checked.append((source, key))
 
-skill = (root/'skill/SKILL.md').read_text()
+skill = (root/'skills/agentbus/SKILL.md').read_text()
 reference = (root/'docs/reference.md').read_text()
 for source, text in [('skill', skill), ('reference', reference)]:
     assert 'Do not truncate a consuming inbox' in text, source
@@ -96,7 +135,7 @@ start = skill.split('## Start\n', 1)[1].split('\n## ', 1)[0]
 assert re.search(r'`join`, then `status --limit 20` and `inbox --limit 20`', start), start
 assert 'run `claims`, then' not in skill
 assert 'claim itself is the check' in skill
-assert len(skill.split()) < 650, 'keep the protocol short'
+assert len(skill.split()) < 720, 'keep the protocol short (the byte cap, 4800, is pinned in tests/test_skill.sh)'
 links = re.findall(r'\]\(([^)]+)\)', skill)
 assert links and all(link.startswith('https://github.com/wickdninja/agentbus/blob/main/docs/') for link in links), links
 
@@ -125,7 +164,7 @@ for snippet in re.findall(r'`([^`]+)`', skill):
     check(shlex.split(snippet), ('skill', snippet))
 
 readme = (root/'README.md').read_text()
-assert 'ln -s "$PWD/skill" ~/.claude/skills/agentbus' in readme
+assert 'ln -s "$PWD/skill" ~/.claude/skills/agentbus' in readme  # valid for the pinned release (v0.1.0); skill/ links to skills/agentbus
 assert 'or copy' not in readme
 blocks = re.findall(r'```bash\n(.*?)```', readme, re.S)
 assert blocks, 'README has no shell examples'
@@ -140,11 +179,36 @@ for block in blocks:
                 check(tokens[i+1:], ('README', line))
                 break
 assert len(checked) >= 25, checked
+# Every install line pins one release tag (never a moving revision), and they all agree. That the tag is
+# v<__version__> is a release check (scripts/release_check.py): before the release-prep commit the
+# README keeps pointing at the last tag, whose commands are the only ones it may tell a user to run.
+version = runpy.run_path(bin_, run_name='agentbus_docs')['__version__']
+pins = set()
+pinned = 0
+for name in ['README.md', *sorted(str(p.relative_to(root)) for p in (root/'docs').rglob('*.md'))]:
+    for m in re.finditer(r'git\+https://github\.com/wickdninja/agentbus(@[^\s`"\')]*)?', (root/name).read_text()):
+        assert m.group(1) and re.fullmatch(r'@v\d+\.\d+\.\d+', m.group(1)), (name, 'install line must pin a release tag', m.group(0))
+        pins.add(m.group(1))
+        pinned += 1
+assert len(pins) == 1, ('install lines pin different tags', pins)
+# The README must not send a user to a command the release it pins lacks: tests/released_commands.txt lists
+# the commands of each release tag (one line per tag, added by the release-prep commit).
+released = {}
+for line in (root/'tests/released_commands.txt').read_text().splitlines():
+    if line.strip() and not line.startswith('#'):
+        tag, cmds = line.split(':', 1)
+        released[tag.strip()] = set(cmds.split())
+(pin,) = pins
+assert pin[1:] in released, (f'tests/released_commands.txt has no line for {pin[1:]}', sorted(released))
+for m in re.finditer(r'\bagentbus[ ]+(?:--[a-z-]+[ ]+(?:[A-Za-z0-9_.-]+[ ]+)?)*([a-z][a-z-]*)', readme):
+    word = m.group(1)
+    assert word not in commands or word in released[pin[1:]], (f'README tells users to run `agentbus {word}`, which {pin[1:]} does not have', m.group(0))
+assert pinned >= 2, 'README must show both pinned install lines'
 assert 'examples/two-agent-handoff.sh' in readme, 'README must link the executable demo'
 # Inline command names and forms in the README's table and prose.
 inline = re.sub(r'```.*?```', '', readme, flags=re.S)
 non_commands = {
-    'pipx install git+https://github.com/wickdninja/agentbus',
+    'pipx install git+https://github.com/wickdninja/agentbus@v0.1.0',
     'examples/two-agent-handoff.sh',
     'mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus',
     'AGENTS.md', '.agentbus/bin/agentbus', '/path/to/agentbus/skill/SKILL.md',
@@ -153,13 +217,32 @@ non_commands = {
 for snippet in re.findall(r'`([^`]+)`', inline):
     if snippet in non_commands:
         continue
+    if snippet.startswith('agentbus '):
+        snippet = snippet[len('agentbus '):]
     if snippet == '--up':  # a reference to the option, not an invocation
         assert snippet in all_flags
         continue
     check(shlex.split(snippet), ('README', snippet))
 
 # Scan tracked text, including staged additions. Binary files (NUL or non-UTF-8) are ignored.
-files = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z']).split(b'\0')
+def tracked_files():
+    # git's list when root is the top of its own work tree; otherwise (no .git, or a copy inside another repo) every
+    # file under root, so the scan cannot fail or look at the wrong repository.
+    import os
+    try:
+        top = subprocess.check_output(['git', '-C', str(root), 'rev-parse', '--show-toplevel'], stderr=subprocess.DEVNULL).decode().strip()
+    except (subprocess.CalledProcessError, OSError):
+        top = ''
+    if top and os.path.realpath(top) == os.path.realpath(str(root)):
+        return subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z']).split(b'\0')
+    found = []
+    for dirpath, dirs, names in os.walk(str(root)):
+        dirs[:] = [d for d in dirs if d != '.git']
+        found += [os.path.relpath(os.path.join(dirpath, n), str(root)).encode() for n in names]
+    return found
+
+
+files = tracked_files()
 assert any(name == b'README.md' for name in files), 'empty tracked-file inventory'
 for name in files:
     if not name:
@@ -178,3 +261,4 @@ for name in files:
 print(f'Checked {len(checked)} documented command forms against --help')
 PY
 ok "documented commands, actions and flags exist; README links the executable demo; tracked text has no em-dashes"
+all_passed "All docs tests passed"

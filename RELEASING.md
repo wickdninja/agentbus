@@ -1,0 +1,41 @@
+# Releasing agentbus
+
+A release is a tag. The workflow (`.github/workflows/release.yml`) refuses a tag that fails the checks below, runs the whole test workflow, builds the wheel and sdist **once**, verifies those exact files (members, an install of each, a broken-install negative control) and records their sha256s in `SHA256SUMS`. It then publishes those same files as GitHub release assets (with build provenance attestations) and, when the owner turns it on, to PyPI (trusted publishing, attestations on). Every job re-checks the files against `SHA256SUMS`, and `verify_published` installs what was published and compares the sha256s again. Tags, releases and PyPI are the owner's call.
+
+Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release candidate builds version `X.Y.ZrcN` (`__version__` carries the suffix), is a GitHub prerelease, and is never published to PyPI; its README pin and CHANGELOG heading are the final `X.Y.Z`.
+
+## Checklist
+
+1. **Release-prep commit.** One commit on `main`. It differs for a candidate and for a final tag.
+   - **Release candidate `vX.Y.ZrcN`:**
+     - `__version__` in `bin/agentbus` becomes `X.Y.ZrcN`;
+     - `.claude-plugin/plugin.json` version is `X.Y.ZrcN` and the `ref` in `.claude-plugin/marketplace.json` is the rc tag (a git source, never a `./` path);
+     - the `CHANGELOG.md` heading is `## X.Y.Z - YYYY-MM-DD` (the final version, with the section stating which of the five versioned things changed: tool, copy, schema, skill, hooks);
+     - the skill hashes: `python3 scripts/embed_skill.py --release`;
+     - **no pin change and no `tests/released_commands.txt` line:** the README and `docs/` keep pinning the last final release, which must already exist as a git tag (`release_check.py` fails if it does not).
+   - **Final tag `vX.Y.Z`:** one commit that moves all of these together, merged before the tag is made on it:
+     - `__version__` becomes `X.Y.Z`;
+     - the new tag's line in `tests/released_commands.txt` (the commands that release has; the README may only name those for the tag it pins);
+     - the pinned install lines in `README.md` and `docs/` (`@vX.Y.Z`);
+     - the plugin version and marketplace `ref` (the tag), the CHANGELOG heading, and `python3 scripts/embed_skill.py --release`.
+2. **Check.** `git fetch origin main && python3 scripts/release_check.py --tag vX.Y.Z` prints `release check passed: X.Y.Z`. It checks the tag shape, that `__version__` equals the tag, that the tagged commit is an ancestor of `origin/main`, the CHANGELOG heading, the pins, the plugin manifests, the skill hashes and a clean `git status`. The README pin equals the new version only at this point; on every other commit it keeps naming the last tag. For a release candidate the pin is the **last final release** (the newest tag in `tests/released_commands.txt`), because main's public README must never point at a tag that does not exist. For the final tag, the pin bump and the tag land together: one commit that bumps the version, the pins, `tests/released_commands.txt`, the CHANGELOG heading and the plugin manifests; merge it; tag that commit.
+3. **Gates.** `bash tests/run_all.sh` prints `ALL TESTS PASSED (N files)` on the oldest and newest Python (`PYTHON=/usr/bin/python3`, `PYTHON=python3.15`), with `AGENTBUS_EMBED_CHECK=1 python3 scripts/embed_skill.py --check` printing `embedded skill is current`. CI's `test` and all `package` jobs are green.
+4. **Tag.** `git tag vX.Y.Z && git push origin vX.Y.Z`. A release candidate is `vX.Y.ZrcN`: it creates a prerelease and skips the published-install check.
+5. **Workflow.** `release.yml` is green: `check`, `test`, `build`, `publish`, and `verify_published` (final tags only).
+6. **Verify the published install.** `bash scripts/verify_published.sh vX.Y.Z --sums SHA256SUMS` (download `SHA256SUMS` from the release; add `--pypi` once PyPI is on) runs the literal install lines from the README on a clean machine, compares the published files with the recorded sha256s, and prints `published install verified: vX.Y.Z`. The same script runs in the workflow.
+7. **Look.** `uv tool install git+https://github.com/wickdninja/agentbus@vX.Y.Z`, then `agentbus --version`.
+8. **Launch** (see `docs/launch/`). Drafts are shown to the owner whole before anything is posted.
+
+## Time to first handoff
+
+`bash scripts/ttfh.sh` installs into a throwaway home, runs `agentbus init .` and `agentbus setup claude`, and times the path to a second agent's `inbox` showing the first agent's handoff. CI records the number on the summary of each `package` run. It has no pass or fail time (it mostly measures the network); put the latest number in the release notes.
+
+## Repository settings (the owner's call; nothing here changes them)
+
+- A tag ruleset for `v*`: only the owner (or release managers) can create tags, and nobody can move or delete one. The workflow also checks that the tag still points at the commit it built and passes `--verify-tag`, but only a ruleset stops a tag from being created on an unreviewed commit.
+- Required reviewers on the `pypi` environment, so a PyPI upload waits for a human.
+- Branch protection on `main`: a release must come from it, and `release_check.py` fails on a tagged commit that is not an ancestor of `origin/main`.
+
+## PyPI
+
+Off. Setting the repository variable `PUBLISH_PYPI` to `true` turns on the `pypi` job (trusted publishing, final tags only). That is the owner's decision.

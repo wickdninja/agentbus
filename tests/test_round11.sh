@@ -61,7 +61,7 @@ def headers():
     row.update(ts='2026-10-31T20:19:27Z', recipient='*', reply_to=None)
     assert m['fmt_msg'](row).removeprefix(m['HEAD']) == '#2 codex -> everyone [done] · Oct 31 15:19\n  done'
     db = fresh('headers'); ok('--as', 'a', 'post', 'hello', db=db)
-    stored = json.loads(ok('read', db=db, json_=True))[0]
+    stored = json.loads(ok('read', db=db, json_=True))['items'][0]
     assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', stored['ts']), stored
     assert re.search(r'^#1 a -> everyone \[note\] · \d\d:\d\d$', ok('read', db=db), re.M)
 check('1 local message headers and UTC JSON', headers)
@@ -94,7 +94,7 @@ def empty():
     for args, text in [(('who',), 'no agents. Join with: agentbus --as NAME join'), (('claims',), 'no claims'),
                        (('claims','--stale'), 'no claims'), (('ctx','get'), 'no facts'), (('read',), 'no messages'), (('log','show'), 'log is empty')]:
         assert ok(*args, db=db) == '  '+text+'\n', args
-        assert json.loads(ok(*args, db=db, json_=True)) == [], args
+        assert json.loads(ok(*args, db=db, json_=True)) == {'v': 1, 'items': [], 'has_more': False, 'next': None}, args
     status = ok('status', db=db)
     for text in ['no agents. Join with: agentbus --as NAME join', 'no claims', 'no facts', 'no messages']:
         assert '\n  '+text+'\n' in status, status
@@ -158,12 +158,12 @@ def errors():
     error('schema_refused','who',db=db)
     db = fresh('busy')
     c = sqlite3.connect(db); c.execute('SELECT * FROM agents').fetchall()
-    try: assert error('busy','who',db=db)['bus'] == str(db)
+    try: assert error('busy','claims',db=db)['bus'] == str(db)  # a write open; who reads beside it
     finally: c.close()
     # A failure after commit/output preparation must suppress queued off-roster notices.
     p = run('--as','a','post','committed','--to','absent',db=db,json_=True,closed=True)
     assert p.returncode != 0 and p.stdout == ''
-    assert len(p.stderr.splitlines()) == 1 and json.loads(p.stderr)['error']['code'] == 'internal', p.stderr
+    assert len(p.stderr.splitlines()) == 1 and json.loads(p.stderr)['error']['code'] == 'output_failed', p.stderr
 check('7 structured errors: all codes, fields, status, empty stdout and hostile text', errors)
 
 def late_error():
@@ -184,10 +184,10 @@ except SystemExit as e:
     with tempfile.TemporaryDirectory() as cwd:
         p = subprocess.run([sys.executable, '-c', shim, bin_], cwd=cwd,
                            env=dict(base, HOME=cwd, AGENTBUS_DB=str(db)), capture_output=True, text=True, timeout=30)
-    assert p.returncode != 0 and len(json.loads(p.stdout)) == 1, p
+    assert p.returncode != 0 and len(json.loads(p.stdout)['items']) == 1, p
     assert len(p.stderr.splitlines()) == 1, p.stderr
-    assert json.loads(p.stderr)['error']['code'] == 'internal', p.stderr
-    assert len(json.loads(ok('--as','b','inbox','--peek',json_=True,db=db))) == 2
+    assert json.loads(p.stderr)['error']['code'] == 'ack_failed', p.stderr
+    assert len(json.loads(ok('--as','b','inbox','--peek',json_=True,db=db))['items']) == 2
 check('7b late inbox failure has one JSON diagnostic and leaves messages unread', late_error)
 
 def retries():
@@ -209,7 +209,8 @@ def retries():
         try: c.execute("INSERT INTO messages(ts,sender,body,request_id) VALUES('t','a','other','token')")
         except sqlite3.IntegrityError: pass
         else: raise AssertionError('unique sender/request_id index missing')
-    assert len(json.loads(ok('read',db=db,json_=True))) == 5
+    assert len(json.loads(ok('read',db=db,json_=True))['items']) == 5
 check('8 idempotent retry, payload conflicts, sender scope, unique index and closed stdout', retries)
 if failures: sys.exit(1)
 PY
+echo "All round 11 tests passed"

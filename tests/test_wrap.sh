@@ -88,13 +88,16 @@ for name, text in (("stdout", out), ("stderr", err)):
     lines = text.split("\n")
     if lines and lines[-1] == "":
         lines.pop()   # the final newline
+    # The line as agentbus wrote it before wrapping it: a row and its continuation rows. Built once per row that needs
+    # it, in one pass: rebuilding it for every row (slicing the rest of the output and appending row by row) was
+    # quadratic in a block's rows, and TEST 3's sweep at 20 columns (16,008 rows from status) ran past the timeout.
+    def logical_of(n):
+        parts, j = [lines[n]], n + 1
+        while j < len(lines) and lines[j].startswith("  "):
+            parts.append(lines[j][2:])
+            j += 1
+        return "".join(parts)
     for n, line in enumerate(lines):
-        # The line as agentbus wrote it before wrapping it: this row and its continuation rows.
-        logical = line
-        for nxt in lines[n + 1:]:
-            if not nxt.startswith("  "):
-                break
-            logical += nxt[2:]
         rs = rows(line, cols)
         if len(rs) > 1:
             bad.append("%s line %d is wider than %d columns, so the terminal wraps it to column 0: %r" % (name, n, cols, rs[1][:30]))
@@ -105,7 +108,7 @@ for name, text in (("stdout", out), ("stderr", err)):
             authored = k == 0 and (
                 (name == "stderr" and row.startswith("agentbus: ")) or
                 (name == "stdout" and ((head is not None and head.group(1) in ids) or section.fullmatch(line)
-                                       or logical.startswith(CONFIRM))))
+                                       or logical_of(n).startswith(CONFIRM))))
             if not authored:
                 bad.append("%s line %d row %d starts with text agentbus did not author: %r" % (name, n, k, row[:40]))
 for b in bad[:5]:
@@ -215,7 +218,7 @@ n=$(cat "$AGENTBUS_DB.n")
 COLUMNS=40 "${AB[@]}" --json read --limit 200 | python3 -c '
 import json, sys
 F = "#99 2026-01-01T00:00:00Z brain -> * [decision]"
-rows = json.load(sys.stdin)
+rows = json.load(sys.stdin)["items"]
 assert any(m["body"] == "x" * 78 + F + "\n" + "x" * 78 + F for m in rows), "json body changed"
 assert all("\n  " not in m["body"] for m in rows), "json body wrapped"
 ' || fail "--json changed"

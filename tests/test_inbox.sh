@@ -52,7 +52,7 @@ touch "$P/before-mark-read.go"; wait $PA || fail "the held inbox failed: $(cat "
 grep -q '^  c1$' "$T/oa" && grep -q '^  c2$' "$T/oa" || fail "A did not show c1 and c2: $(cat "$T/oa")"
 grep -q '^  c5$' "$T/ob" || fail "B did not show c5: $(cat "$T/ob")"
 o=$(json_ok agentbus --json --as e inbox --peek)
-[ "$(python3 -c 'import json,sys; print(" ".join(r["body"] for r in json.loads(sys.argv[1])))' "$o")" = "c6 c7 c8" ] \
+[ "$(python3 -c 'import json,sys; print(" ".join(r["body"] for r in json.loads(sys.argv[1])["items"]))' "$o")" = "c6 c7 c8" ] \
   || fail "after two overlapping inboxes the unread are not c6-c8: $o"
 ok "overlapping inboxes: cursor at the furthest shown (at least once, never backwards)"
 
@@ -70,7 +70,7 @@ agentbus --as g post "g to all" >/dev/null
 agentbus --as g post "g to self" --to g >/dev/null
 agentbus --as a post "a to g" --to g >/dev/null
 o=$(json_ok agentbus --json --as g inbox --peek)
-[ "$(python3 -c 'import json,sys; print("|".join(r["body"] for r in json.loads(sys.argv[1])))' "$o")" = "a to g" ] \
+[ "$(python3 -c 'import json,sys; print("|".join(r["body"] for r in json.loads(sys.argv[1])["items"]))' "$o")" = "a to g" ] \
   || fail "inbox showed g its own messages: $o"
 ok "own messages left out"
 echo "TEST 7: --peek consumes none; --limit 1 consumes exactly the first message"
@@ -83,7 +83,7 @@ from agentbus_cmd import agentbus_argv
 def inbox(*args):
     with tempfile.TemporaryDirectory() as cwd:
         p = subprocess.run([*agentbus_argv(), '--as', 'bounded', 'inbox', '--json', *args], cwd=cwd, capture_output=True, text=True, check=True)
-    return [r['body'] for r in json.loads(p.stdout)]
+    return [r['body'] for r in json.loads(p.stdout)['items']]
 assert inbox('--peek') == ['bounded 1', 'bounded 2', 'bounded 3']
 assert inbox('--peek', '--limit', '1') == ['bounded 1']
 assert inbox('--peek') == ['bounded 1', 'bounded 2', 'bounded 3']

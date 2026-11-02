@@ -37,7 +37,7 @@ for cmd in "post -" "ctx set k -" "log add note -"; do
   printf 'late input for %s\n' "$cmd" >&3; exec 3>&-
   wait $P1 || fail "$cmd failed after its input arrived: $(cat "$T/e1")"
 done
-[ "$(outof agentbus --json read | python3 -c 'import json,sys; print(sum(r["body"]=="late input for post -" for r in json.load(sys.stdin)))')" = 1 ] || fail "stdin body not posted"
+[ "$(outof agentbus --json read | python3 -c 'import json,sys; print(sum(r["body"]=="late input for post -" for r in json.load(sys.stdin)["items"]))')" = 1 ] || fail "stdin body not posted"
 [ "$(outof agentbus --json ctx get k | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')" = "late input for ctx set k -" ] || fail "stdin ctx value not set"
 ok "stdin is read before the bus is opened"
 
@@ -69,7 +69,7 @@ while not os.path.exists(sys.argv[3]) and os.path.isdir(os.path.dirname(sys.argv
     time.sleep(0.05)
 PY2
 wait_for "$T/held"
-expect_fail "stayed busy for 15 seconds. Close any sqlite3 shell or dashboard holding it open, then retry." agentbus who
+expect_fail "stayed busy for 15 seconds. Close any sqlite3 shell or dashboard holding it open, then retry." agentbus claims   # a write open (who only reads, beside it)
 touch "$T/release"; wait $HOLD
 outof agentbus who >/dev/null
 ok "busy error names any process, and the bus works once the client closes"
@@ -104,7 +104,7 @@ grep -q '^== last 10 messages$' "$T/o4" || fail "status lost its later sections"
 o=$(outof agentbus who --limit 3)
 [ "$(grep -c '^  ' <<<"$o")" = 4 ] && grep -qx "  ... $((total - 3)) more (use --limit)" <<<"$o" || fail "who --limit 3: $o"
 [ "$(njson env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who 2>"$T/e4")" = 500 ] || fail "--json who not capped at 500"
-grep -q "$((total - 500)) more not shown (use --limit)" "$T/e4" || fail "--json who did not say rows were left out: $(cat "$T/e4")"
+[ "$(env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["has_more"])')" = True ] || fail "--json who did not say rows were left out"
 [ "$(njson env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who --limit -1 2>/dev/null)" = "$total" ] || fail "--limit -1 is not every row"
 ok "status with $total agents took ${took}s, capped at 500 rows, while another agent posted"
 
@@ -129,7 +129,8 @@ db, pdir = sys.argv[1:3]
 env = dict(os.environ, AGENTBUS_DB=db, AGENTBUS_TEST_PAUSE="after-open=" + pdir)
 open(os.path.join(pdir, "after-open.go"), "w").close()   # mark when the bus is held, never stop
 bad = []
-for args in (["--json", "who"], ["--json", "status"]):
+# post to an absent name is the --json command that still writes a stderr notice (listings carry has_more instead)
+for args in (["--json", "--as", "a", "post", "x", "--to", "nobody"],):
     r, w = os.pipe()
     fl = fcntl.fcntl(w, fcntl.F_GETFL)
     fcntl.fcntl(w, fcntl.F_SETFL, fl | os.O_NONBLOCK)
@@ -150,7 +151,7 @@ for args in (["--json", "who"], ["--json", "status"]):
             sys.exit("%s never held the bus (rc %s)" % (args, p.poll()))
         time.sleep(0.02)
     time.sleep(0.5)                          # past the listing, at its notice
-    q = subprocess.run([*agentbus_argv(), "--as", "b", "post", "while %s was stuck on stderr" % args[1]],
+    q = subprocess.run([*agentbus_argv(), "--as", "b", "post", "while %s was stuck on stderr" % args[3]],
                        env=dict(os.environ, AGENTBUS_DB=db), capture_output=True, timeout=30)
     if p.poll() is not None:
         bad.append("%s was not stuck on its stderr, so this proved nothing (rc %s)" % (args, p.returncode))
@@ -163,7 +164,7 @@ PY
 P="$T/pause5"; mkdir -p "$P"
 r=$(python3 "$T/fullerr.py" "$D5/bus.db" "$P")
 [ "$r" = ok ] || fail "a post failed (or the stuck command was not stuck) while a --json notice waited on a full stderr: $r"
-ok "--json who and status with a full stderr: another agent's post landed meanwhile"
+ok "--json post with a stderr notice and a full stderr: another agent's post landed meanwhile"
 
 echo "TEST 6: nothing is written, cleaned or formatted while a bus is open"
 # Bug it catches: show() cleaned its fields when called (a 100k ctx value cleaned with the lock
@@ -322,7 +323,7 @@ grep -q '^  to e 499$' <<<"$o" && ! grep -q '^  to e 500$' <<<"$o" || fail "inbo
 o=$(outof agentbus --as e inbox --limit 30)
 [ "$(grep -c '^  to e ' <<<"$o")" = 30 ] && grep -q '^  to e 500$' <<<"$o" && grep -q '^  to e 529$' <<<"$o" || fail "second inbox did not start at the first unshown message"
 o=$(json_ok agentbus --json --as e inbox --peek)
-[ "$(python3 -c 'import json,sys; j=json.loads(sys.argv[1]); print(len(j), j[0]["body"])' "$o")" = "70 to e 530" ] || fail "--peek after the capped reads: $o"
+[ "$(python3 -c 'import json,sys; j=json.loads(sys.argv[1])["items"]; print(len(j), j[0]["body"])' "$o")" = "70 to e 530" ] || fail "--peek after the capped reads: $o"
 o=$(outof agentbus --as e inbox --limit -1)
 [ "$(grep -c '^  to e ' <<<"$o")" = 70 ] || fail "inbox --limit -1 did not show the remaining 70"
 [ "$(outof agentbus --as e inbox)" = "inbox empty" ] || fail "inbox not empty after every message was shown"
@@ -361,11 +362,11 @@ te=$(best "$D8/empty.db"); tp=$(best "$D8/plain.db")
 python3 -c 'import sys; sys.exit(0 if float(sys.argv[2]) - float(sys.argv[1]) < 0.3 else 1)' "$te" "$tp" || fail "400k normal claims added $(python3 -c "print(round($tp-$te,2))")s to an open (${te}s without)"
 nodd() { python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("SELECT COUNT(*) FROM claims WHERE resource GLOB ?", ("./*",)).fetchone()[0])' "$D8/odd.db"; }
 t0=$(python3 -c 'import time; print(time.time())')
-AGENTBUS_DB="$D8/odd.db" agentbus who >/dev/null
+AGENTBUS_DB="$D8/odd.db" agentbus ctx get >/dev/null
 took=$(python3 -c 'import sys,time; print("%.2f" % (time.time() - float(sys.argv[1])))' "$t0")
 [ "$(nodd)" = 399500 ] || fail "one open normalised $((400000 - $(nodd))) claims, not at most 500"
 python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$took" || fail "an open with 400k claims to normalise took ${took}s"
-AGENTBUS_DB="$D8/odd.db" agentbus who >/dev/null
+AGENTBUS_DB="$D8/odd.db" agentbus ctx get >/dev/null
 [ "$(nodd)" = 399000 ] || fail "the next open did not normalise the next 500"
 ok "an open with 400k claims costs ${tp}s (${te}s with none); 400k to normalise: 500 per open, ${took}s"
 export AGENTBUS_DB="$T/bus.db"

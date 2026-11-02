@@ -270,7 +270,7 @@ PY
 for f in bus.db-journal bus.db-wal; do
   read -r rc took <<<"$(python3 "$T/fifo_at.py" before-connect "$T/bus/$f")"
   grep -q Traceback "$T/err" && fail "$f: traceback: $(cat "$T/err")"
-  [ "$rc" = 1 ] || fail "$f: a FIFO planted before the connect did not end the command (rc $rc, ${took}s): $(cat "$T/err")"
+  [ "$rc" = 3 ] || fail "$f: a FIFO planted before the connect did not end the command (rc $rc, ${took}s): $(cat "$T/err")"
   python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 2 + 3 else 1)' "$took" || fail "$f: took ${took}s with a 2 s budget"
   # A hot -journal is opened blocking, so the watchdog ends it. SQLite refuses a FIFO at -wal by
   # itself (3.54 on macOS: "unable to open database file"; Homebrew's builds: "disk I/O error");

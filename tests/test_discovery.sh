@@ -16,7 +16,7 @@ for d in "$R/src/deep" "$R2/src"; do
   [ "$got" = "$(real "$WS")/.agentbus/bus.db" ] || fail "workspace discovery from $d: $got"
 done
 (cd "$R" && agentbus --as a post "shared workspace" >/dev/null)
-got=$(cd "$R2" && agentbus --json read | python3 -c 'import json,sys; print("|".join(r["body"] for r in json.load(sys.stdin)))')
+got=$(cd "$R2" && agentbus --json read | python3 -c 'import json,sys; print("|".join(r["body"] for r in json.load(sys.stdin)["items"]))')
 [ "$got" = "shared workspace" ] || fail "repos did not share messages"
 [ ! -e "$R/.agentbus" ] && [ ! -e "$R2/.agentbus" ] || fail "discovery created a repo bus"
 ok "repo subfolders share their workspace bus"
@@ -37,13 +37,19 @@ echo "TEST 3: nested buses, --up on either side, and a chain that does not creat
 agentbus init "$R" > "$T/nested-init"
 grep -qxF "outer bus: $(real "$WS")" "$T/nested-init" || fail "outer bus notice missing"
 o=$(cd "$R" && json_ok agentbus buses --json)
-python3 -c 'import json,sys; rows=json.loads(sys.argv[1]); assert rows == [
- {"level":0,"directory":sys.argv[2],"exists":False},
- {"level":1,"directory":sys.argv[3],"exists":True}], rows' "$o" "$(real "$R")" "$(real "$WS")" || fail "buses chain: $o"
+# copy_version: the folder copy's VERSION when it is a release (an installed tool, or a checkout without git),
+# null when it names a source commit (this checkout under git); stale is false either way, the copy being this tool.
+python3 -c 'import json,re,sys; rows=json.loads(sys.argv[1])["items"]
+def copy(d):
+    v = open(d + "/.agentbus/VERSION").read().strip()
+    return None if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})? .*", v) else v
+assert rows == [
+ {"level":0,"directory":sys.argv[2],"exists":False,"copy_version":copy(sys.argv[2]),"stale":False},
+ {"level":1,"directory":sys.argv[3],"exists":True,"copy_version":copy(sys.argv[3]),"stale":False}], rows' "$o" "$(real "$R")" "$(real "$WS")" || fail "buses chain: $o"
 [ ! -e "$R/.agentbus/bus.db" ] || fail "buses created a database"
 o=$(cd "$R" && outof agentbus buses)
-grep -qxF "  0  $(real "$R")  bus.db not created" <<<"$o" || fail "nearest human row missing: $o"
-grep -qxF "  1  $(real "$WS")  bus.db exists" <<<"$o" || fail "outer human row missing: $o"
+grep -qE "^  0  $(real "$R")  bus.db not created  copy [^ ]" <<<"$o" || fail "nearest human row missing: $o"
+grep -qE "^  1  $(real "$WS")  bus.db exists  copy [^ ]" <<<"$o" || fail "outer human row missing: $o"
 mkdir "$R/other"
 got=$(cd "$R/other" && busof)
 [ "$got" = "$(real "$R")/.agentbus/bus.db" ] || fail "nested repo did not win: $got"
@@ -58,7 +64,7 @@ done
 (cd "$R" && agentbus --up 1 --as b join >/dev/null && agentbus --as b claim same/path --up 1 >/dev/null)
 [ "$(cd "$R" && njson agentbus --json read)" = 0 ] || fail "outer messages leaked in"
 (cd "$R" && agentbus --as a post "repo only" >/dev/null)
-got=$(cd "$R" && agentbus --up 1 --json read | python3 -c 'import json,sys; print("|".join(r["body"] for r in json.load(sys.stdin)))')
+got=$(cd "$R" && agentbus --up 1 --json read | python3 -c 'import json,sys; print("|".join(r["body"] for r in json.load(sys.stdin)["items"]))')
 [ "$got" = "shared workspace" ] || fail "inner message leaked out"
 ok "nearest wins, --up selects the outer bus, messages and claims stay separate"
 
@@ -122,7 +128,7 @@ echo "TEST 7: explicit database overrides discovery and --up, including buses"
 got=$(cd "$P/sub" && AGENTBUS_DB="$T/explicit.db" agentbus --up 99 --json status | python3 -c 'import json,sys; print(json.load(sys.stdin)["bus"])')
 [ "$got" = "$T/explicit.db" ] || fail "explicit database did not win: $got"
 o=$(cd "$P/sub" && AGENTBUS_DB="$T/explicit.db" json_ok agentbus buses --up 99 --json)
-python3 -c 'import json,sys; assert json.loads(sys.argv[1]) == [{"level":0,"directory":sys.argv[2],"exists":True}]' "$o" "$T" || fail "explicit buses: $o"
+python3 -c 'import json,sys; assert json.loads(sys.argv[1])["items"] == [{"level":0,"directory":sys.argv[2],"exists":True,"copy_version":None,"stale":False}]' "$o" "$T" || fail "explicit buses: $o"
 ok "explicit database bypasses the planted parent and --up"
 
 echo "TEST 8: concurrent first use after init"

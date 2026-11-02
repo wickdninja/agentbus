@@ -171,9 +171,9 @@ after=$("$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.ex
 [ "$(cursor_snapshot)" = "$cursors_before" ] || fail "watch moved an inbox cursor"
 # The original handoff remains unread after one-shot and live watch; then inbox consumes it.
 o=$(json_ok agentbus --as codex inbox --peek --json)
-printf '%s' "$o" | "$PY" -c 'import json,sys; assert [m["body"] for m in json.load(sys.stdin)] == ["add a live watch view"]'
+printf '%s' "$o" | "$PY" -c 'import json,sys; assert [m["body"] for m in json.load(sys.stdin)["items"]] == ["add a live watch view"]'
 o=$(json_ok agentbus --as codex inbox --json)
-printf '%s' "$o" | "$PY" -c 'import json,sys; assert [m["body"] for m in json.load(sys.stdin)] == ["add a live watch view"]'
+printf '%s' "$o" | "$PY" -c 'import json,sys; assert [m["body"] for m in json.load(sys.stdin)["items"]] == ["add a live watch view"]'
 [ "$(njson agentbus --as codex inbox --peek --json)" = 0 ] || fail "inbox did not consume the handoff"
 ok "watch is read-only, even under a name"
 
@@ -254,3 +254,61 @@ first = [colours(a["name"]) for a in snap["agents"][:8]]
 assert len(set(first)) == 8 and 31 not in first, first
 PY
 ok "40, 60, 80 and 120 columns, with and without emoji: every row fits, the newest messages show, cut sections point at their command"
+
+echo "TEST 9 (pin): watch --once and watch --json on a refused bus exit 3 with the error, never empty sections"
+RB="$T/refused/bus.db"; mkdir -p "$T/refused"
+AGENTBUS_DB="$RB" agentbus --as a post "kept" >/dev/null
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("ALTER TABLE messages ADD COLUMN extra TEXT"); c.commit(); c.close()' "$RB"
+rc=0; o=$(AGENTBUS_DB="$RB" "${AB[@]}" watch --once 2>"$T/err") || rc=$?
+[ "$rc" = 3 ] || fail "watch --once on a refused bus exited $rc"
+grep -qF "extra column extra" "$T/err" || fail "watch --once did not say why: $(cat "$T/err")"
+if grep -qF "no one yet" <<<"$o" || grep -qF "quiet so far" <<<"$o"; then fail "watch --once drew empty sections: $o"; fi
+rc=0; o=$(AGENTBUS_DB="$RB" "${AB[@]}" watch --json 2>"$T/err") || rc=$?
+[ "$rc" = 3 ] && [ -z "$o" ] || fail "watch --json on a refused bus: rc $rc, stdout $o"
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["code"]=="schema_refused", e' "$T/err" || fail "watch --json error: $(cat "$T/err")"
+ok "watch --once and --json on a refused bus exit 3 with the error"
+
+echo "TEST 10: the live view of a bus it cannot read says so and names the fix, instead of drawing empty sections"
+NB="$HOME/newerbus/bus.db"; mkdir -p "$HOME/newerbus"
+AGENTBUS_DB="$NB" agentbus --as a post "kept" >/dev/null
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=5"); c.close()' "$NB"
+"$PY" - "$RB" "$NB" <<'PY' || fail "live watch on an unreadable bus"
+import fcntl, os, pty, select, struct, subprocess, sys, termios, time
+sys.path.insert(0, os.environ["TESTS_DIR"])
+from agentbus_cmd import agentbus_argv
+
+def frame_of(db, want):
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
+    env = dict(os.environ, AGENTBUS_DB=db)
+    env.pop("COLUMNS", None)
+    p = subprocess.Popen([*agentbus_argv(), "watch", "--interval", "0.5"], stdin=slave, stdout=slave, stderr=slave,
+                         env=env, preexec_fn=os.setsid)
+    buf, end = b"", time.time() + 15
+    while time.time() < end and want.encode() not in buf:
+        r, _, _ = select.select([master], [], [], 0.05)
+        if r:
+            buf += os.read(master, 65536)
+    os.write(master, b"q")
+    end = time.time() + 10
+    while p.poll() is None and time.time() < end:  # keep draining, or a full pty blocks its write
+        r, _, _ = select.select([master], [], [], 0.05)
+        if r:
+            buf += os.read(master, 65536)
+    assert p.wait(timeout=1) == 0
+    os.close(master); os.close(slave)
+    return buf.decode("utf-8", "replace")
+
+out = frame_of(sys.argv[1], "Retrying every 0.5s.")
+for want in ("not readable", "This bus could not be read, so the sections below are not drawn.",
+             "bus schema is not agentbus's: table messages differs (extra column extra)", "Retrying every 0.5s.", "q quit"):
+    assert want in out, f"refused bus frame lacks {want!r}: {out[-1500:]!r}"
+for bad in ("no one yet", "quiet so far", "Agents", "Messages"):
+    assert bad not in out, f"refused bus frame drew {bad!r}"
+out = frame_of(sys.argv[2], "from a newer install")
+for want in ("could not be read", "this bus is newer than this copy of agentbus (schema 5, this copy knows 1).",
+             "  Run: agentbus upgrade ~/newerbus from a newer install"):
+    assert want in out.replace("\r\n", "\n"), f"newer bus frame lacks {want!r}: {out[-1500:]!r}"
+assert "no one yet" not in out
+PY
+ok "a refused bus shows \"could not be read\" and the fix line, not \"no one yet\""

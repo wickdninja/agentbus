@@ -1,0 +1,200 @@
+[
+  {
+    "name": "ctx history returns an empty list",
+    "file": "bin/agentbus",
+    "find": "rows, more = capped\\(con, \"SELECT \\* FROM context_history WHERE key=\\? AND id<\\? ORDER BY id DESC\", \\(a\\.key, before\\), a\\.limit\\)",
+    "replace": "rows, more = [], 0",
+    "count": 1,
+    "run": "tests/test_workflow_handoff.sh",
+    "expect": "stdout differs from: agentbus ctx history"
+  },
+  {
+    "name": "watch_snapshot advances inbox cursors",
+    "file": "bin/agentbus",
+    "find": "        con = open_bus\\(path, strict, read_only=read_only\\)\\n",
+    "replace": "        con = open_bus(path, strict)\\n        con.execute(\"UPDATE cursors SET last_read_id=(SELECT COALESCE(MAX(id),0) FROM messages)\")\\n        con.commit()\\n",
+    "count": 1,
+    "run": "tests/test_watch.sh",
+    "expect": "watch moved an inbox cursor"
+  },
+  {
+    "name": "inbox marks read before writing output",
+    "file": "bin/agentbus",
+    "find": "a\\._after = lambda c: mark_read\\(c, name, bcast, upto\\)",
+    "replace": "mark_read(con, name, bcast, upto)",
+    "count": 1,
+    "run": "tests/test_inbox.sh",
+    "expect": "marked messages read"
+  },
+  {
+    "name": "mark_read can move a cursor backwards",
+    "file": "bin/agentbus",
+    "find": "last_read_id=MAX\\(last_read_id, \\?\\)",
+    "replace": "last_read_id=?",
+    "count": 1,
+    "run": "tests/test_inbox.sh",
+    "expect": "unread are not c6-c8"
+  },
+  {
+    "name": "claim ignores a held folder above the path",
+    "file": "bin/agentbus",
+    "find": "forms \\+= \\[folder, folder \\+ \"/\"\\]",
+    "replace": "forms += [folder, folder + \"/\"] if i == len(parts) else []",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "expected failure but succeeded: agentbus --as f2 claim pkg/tests"
+  },
+  {
+    "name": "claim ignores claims held inside the folder",
+    "file": "bin/agentbus",
+    "find": "    out\\.append\\(\\(\"resource >= \\? AND resource < \\?\", \\[s \\+ \"/\", s \\+ \"0\"\\]\\)\\)",
+    "replace": "    pass",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "expected failure but succeeded: agentbus --as f1 claim lib/"
+  },
+  {
+    "name": "listings drop rows whose name or key holds a newline",
+    "file": "bin/agentbus",
+    "find": "        for r in rows:\n            print\\(formatter\\(clean_row\\(r\\)\\)\\)",
+    "replace": "        for r in rows:\n            if any(\"\\\\n\" in str(r.get(k)) for k in (\"name\", \"agent\", \"sender\", \"resource\", \"key\")):\n                continue\n            print(formatter(clean_row(r)))",
+    "count": 1,
+    "run": "tests/test_security.sh",
+    "expect": "view shows no escaped"
+  },
+  {
+    "name": "post stores no reply_to",
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\), name, a\\.to, a\\.kind, a\\.topic, body, a\\.reply_to, a\\.request_id\\)\\)",
+    "replace": "(now(), name, a.to, a.kind, a.topic, body, None, a.request_id))",
+    "count": 1,
+    "run": "tests/test_workflow_handoff.sh",
+    "expect": "stdout differs from: agentbus --as planner inbox"
+  },
+  {
+    "name": "claim keeps claims held by names off the roster",
+    "file": "bin/agentbus",
+    "find": "            n_released \\+= con\\.execute\\(f\"DELETE FROM claims WHERE \\{stale\\}\", params \\+ \\[name, t\\]\\)\\.rowcount",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_workflow_crash_recovery.sh",
+    "expect": "does not list the auto-release"
+  },
+  {
+    "name": "join ignores a live-looking name without --takeover",
+    "file": "bin/agentbus",
+    "find": "if row and not a\\.takeover:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_workflow_crash_recovery.sh",
+    "expect": "exit 0, wanted 1: agentbus --as w1 join"
+  },
+  {
+    "name": "--up 1 selects the nearest bus",
+    "file": "bin/agentbus",
+    "find": "        if level == up:\\n            return directory",
+    "replace": "        if level == 0:\\n            return directory",
+    "count": 1,
+    "run": "tests/test_workflow_nested_buses.sh",
+    "expect": "agentbus --up 1 --as a join"
+  },
+  {
+    "name": "message header omits the reply link",
+    "file": "bin/agentbus",
+    "find": "        head \\+= f\" re #\\{r\\['reply_to'\\]\\}\"",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_workflow_handoff.sh",
+    "expect": "stdout differs from: agentbus --as planner inbox"
+  },
+  {
+    "name": "upgrade skips installing the new copy",
+    "file": "bin/agentbus",
+    "find": "    old, new = install_after_migration\\(root, schema_old, schema_new, backup\\)\\n    if a\\.json:",
+    "replace": "    old = new = \"0.1.0\"\n    if a.json:",
+    "count": 1,
+    "run": "tests/test_workflow_upgrade.sh",
+    "expect": "VERSION equals a fresh init's"
+  },
+  {
+    "name": "handoff grader ignores the inbox order",
+    "file": "scripts/agent-eval/graders.py",
+    "find": "elif b_edit and b_inbox\\[0\\] > b_edit\\[0\\]:",
+    "replace": "elif False:",
+    "count": 1,
+    "run": "tests/test_eval_graders.sh",
+    "expect": "handoff: inbox after the first edit: wanted fail, got pass"
+  },
+  {
+    "name": "conflict grader ignores a held claim",
+    "file": "scripts/agent-eval/graders.py",
+    "find": "            if held is not None:",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_eval_graders.sh",
+    "expect": "conflict: early forbidden edit"
+  },
+  {
+    "name": "grader passes an empty trace",
+    "file": "scripts/agent-eval/graders.py",
+    "find": "    if not events:\\n        return False, \\[\\\"empty trace\\\"\\]\\n    handoffs",
+    "replace": "    handoffs",
+    "count": 1,
+    "run": "tests/test_eval_graders.sh",
+    "expect": "handoff: empty trace"
+  },
+  {
+    "name": "agent-eval counts a failed attempt as a pass",
+    "file": "scripts/agent-eval/run.py",
+    "find": "passed \\+= 1 if ok else 0",
+    "replace": "passed += 1",
+    "count": 1,
+    "run": "tests/test_eval_harness.sh",
+    "expect": "the cell did not fail"
+  },
+  {
+    "name": "ctx set records no history",
+    "file": "bin/agentbus",
+    "find": "            con\\.execute\\(\"INSERT INTO context_history\\(key,value,updated_by,updated_at\\) VALUES\\(\\?,\\?,\\?,\\?\\)\", \\(a\\.key, value, name, t\\)\\)",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_workflow_mixed_versions.sh",
+    "expect": "fact history across versions"
+  },
+  {
+    "name": "who leaves the role out",
+    "file": "bin/agentbus",
+    "find": "return \\[r\\['name'\\], r\\['role'\\], r\\['tool'\\]",
+    "replace": "return [r['name'], None, r['tool']",
+    "count": 1,
+    "run": "tests/test_security.sh",
+    "expect": "view shows no escaped r\\x0aFORGED role in: status"
+  },
+  {
+    "name": "no_bus exits 1 instead of 3",
+    "file": "bin/agentbus",
+    "find": "\"no_bus\": \\{\"exit\": 3,",
+    "replace": "\"no_bus\": {\"exit\": 1,",
+    "count": 1,
+    "run": "tests/test_exit_codes.sh",
+    "expect": "exit-code mapping differs from the contract"
+  },
+  {
+    "name": "a backup is published without its byte-for-byte check",
+    "file": "bin/agentbus",
+    "find": "or not _same_bytes\\(con\\.pin, out, size, deadline\\):",
+    "replace": "or False:",
+    "count": 1,
+    "run": "tests/test_schema.sh",
+    "expect": "a corrupted copy: exit 0, not 3 (backup_failed)"
+  },
+  {
+    "name": "setup overwrites an edited SKILL.md without saving it",
+    "file": "bin/agentbus",
+    "find": "backup = existing is not None and not unedited",
+    "replace": "backup = False",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "FAIL: update line: the edited SKILL.md was not saved as a .bak"
+  }
+]

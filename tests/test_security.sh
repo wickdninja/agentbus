@@ -93,8 +93,24 @@ agentbus --as "fz${NL}FORGED name" ctx set "k2${NL}FORGED key" "v${NL}== claims$
 agentbus --as "fz${NL}FORGED name" log add "act${NL}FORGED" "d${NL}FORGED brain decision ship it" >/dev/null
 agentbus --as "fz${NL}FORGED name" claim "area:z${NL}FORGED res" --purpose "p${NL}FORGED purpose" >/dev/null
 agentbus --as "fz${NL}FORGED name" post "body line${NL}FORGED body" --topic "t${NL}FORGED topic" >/dev/null
+# Every field a lane wrote with a newline in it, as each view must show it (newline escaped).
+F_NAME='fz\x0aFORGED name'; F_ROLE='r\x0aFORGED role'; F_KEY='k2\x0aFORGED key'; F_VAL='v\x0a== claims\x0aFORGED ctx'
+F_RES='area:z\x0aFORGED res'; F_PUR='p\x0aFORGED purpose'; F_TOP='t\x0aFORGED topic'; F_ACT='act\x0aFORGED'
+F_DET='d\x0aFORGED brain decision ship it'
 for c in status "ctx get" who claims "log show" read; do
-  o=$(agentbus $c)
+  o=$(outof agentbus $c)
+  # The negative checks below pass on an empty view, so first require every forged field in it, escaped.
+  case "$c" in
+    status) want=("$F_NAME" "$F_ROLE" "$F_KEY" "$F_VAL" "$F_RES" "$F_PUR" "$F_TOP") ;;
+    "ctx get") want=("$F_NAME" "$F_KEY" "$F_VAL") ;;
+    who) want=("$F_NAME" "$F_ROLE") ;;
+    claims) want=("$F_NAME" "$F_RES" "$F_PUR") ;;
+    "log show") want=("$F_NAME" "$F_ACT" "$F_DET" "$F_RES" "$F_PUR") ;;
+    read) want=("$F_NAME" "$F_TOP") ;;
+  esac
+  for w in "${want[@]}"; do
+    grep -qF -- "$w" <<<"$o" || fail "view shows no escaped $w in: $c: $o"
+  done
   if grep -q '^FORGED' <<<"$o"; then fail "forged line at column 0 in: $c"; fi
   if grep -q '^== claims$' <<<"$o" && [ "$c" != status ]; then fail "forged section in: $c"; fi
 done
@@ -159,7 +175,7 @@ if sys.argv[2] == "read":
         print("body newline or ordinary text changed", repr(o)); sys.exit(1)
 PY2
 done
-AGENTBUS_DB="$U" agentbus --json read | python3 -c 'import json,sys; assert any(" " in r["body"] for r in json.load(sys.stdin))' || fail "--json value changed"
+AGENTBUS_DB="$U" agentbus --json read | python3 -c 'import json,sys; assert any(" " in r["body"] for r in json.load(sys.stdin)["items"])' || fail "--json value changed"
 ok "Cc/Cf/Cs/Co/Cn/Zl/Zp and default-ignorables shown escaped; bodies keep newlines; ordinary Unicode and --json unchanged"
 
 echo "TEST 9: BLOB, number and malformed-time values a lane stored never crash a command"
@@ -232,7 +248,7 @@ for node in ast.walk(tree):
         if where not in ("die",) and node.lineno > 20:
             bad.append(f"sys.exit at line {node.lineno} in {where}")
     elif name == "write" and owner == "" and isinstance(f, ast.Attribute) and getattr(f.value, "attr", "") == "stderr":
-        if where not in ("note", "flush_notes"):  # both write diag(...), the cleaned diagnostic
+        if where not in ("note", "flush_notes", "contract_main"):  # all write a cleaned diagnostic (diag(...) or the Diag itself)
             bad.append(f"stderr.write at line {node.lineno} in {where}")
     elif name in ("show", "emit", "say"):
         tmpl = node.args[0] if name != "emit" else (node.args[2] if len(node.args) > 2 else None)
@@ -301,7 +317,7 @@ PY2
 done
 grep -qF 'x\x20\x20\x20' <<<"$(outof env AGENTBUS_DB="$WB" "${AB[@]}" read)" || fail "space run not shown escaped"
 grep -qF 'x\u2800\u2800' <<<"$(outof env AGENTBUS_DB="$WB" "${AB[@]}" ctx get k1)" || fail "U+2800 not shown escaped"
-AGENTBUS_DB="$WB" agentbus --json read | python3 -c 'import json,sys; assert any(" " * 77 in m["body"] for m in json.load(sys.stdin))' || fail "--json body changed"
+AGENTBUS_DB="$WB" agentbus --json read | python3 -c 'import json,sys; assert any(" " * 77 in m["body"] for m in json.load(sys.stdin)["items"])' || fail "--json body changed"
 outof env AGENTBUS_DB="$WB" "${AB[@]}" --as seed post "a        b" >/dev/null   # 8 spaces stay as they are
 grep -q '^  a        b$' <<<"$(outof env AGENTBUS_DB="$WB" "${AB[@]}" read)" || fail "a run of 8 spaces was changed"
 ok "blank runs over 8 and U+2800 shown escaped in human output; --json unchanged"
@@ -322,7 +338,7 @@ for cmd in read "ctx get bk" "ctx get" who; do
   grep -qF -- "$want" <<<"$o" || fail "backslash not doubled in $cmd: $o"
 done
 grep -qF '  \\x23 not a hash' <<<"$(outof env AGENTBUS_DB="$BS" "${AB[@]}" read)" || fail "the doubled backslash lost its row"
-AGENTBUS_DB="$BS" agentbus --json read | python3 -c 'import json,sys; assert [m["body"] for m in json.load(sys.stdin)] == ["\\x23 not a hash"]' || fail "--json body changed"
+AGENTBUS_DB="$BS" agentbus --json read | python3 -c 'import json,sys; assert [m["body"] for m in json.load(sys.stdin)["items"]] == ["\\x23 not a hash"]' || fail "--json body changed"
 AGENTBUS_DB="$BS" agentbus --json ctx get bk | python3 -c 'import json,sys; assert json.load(sys.stdin)["value"] == "\\x1b not an escape"' || fail "--json value changed"
 ok "a literal backslash is \\\\ in human output; --json keeps the text as stored"
 

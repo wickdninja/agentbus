@@ -18,7 +18,7 @@ ok "post names recipients and kinds; absent names get a stderr notice; JSON reta
 before=$(agentbus --as codex --json inbox --peek)
 after=$(agentbus inbox --peek --as codex --json)
 [ -n "$before" ] && [ "$before" = "$after" ] || fail "identity placement differs"
-printf '%s' "$after" | "$PY" -c 'import json,sys; r=json.load(sys.stdin); assert [m["id"] for m in r]==[1,2,4]' || fail "wrong identity inbox"
+printf '%s' "$after" | "$PY" -c 'import json,sys; r=json.load(sys.stdin)["items"]; assert [m["id"] for m in r]==[1,2,4]' || fail "wrong identity inbox"
 unset AGENTBUS_DB
 agentbus init "$T" >/dev/null
 mkdir "$T/inner"; agentbus init "$T/inner" >/dev/null
@@ -32,6 +32,7 @@ printf '%s\n%s' "$before" "$after" > "$T/rosters"
 import json, pathlib, sys
 text=pathlib.Path(sys.argv[1]).read_text(); dec=json.JSONDecoder()
 a, end=dec.raw_decode(text); b=dec.decode(text[end:])
+a, b = a['items'], b['items']
 assert len(a)==len(b)==1 and a[0]['name']=='worker'
 for row in (a[0], b[0]): row.pop('last_seen')
 assert a==b
@@ -40,12 +41,12 @@ PY
 agentbus ctx --up 1 --as worker set k value >/dev/null
 [ "$(agentbus ctx get k --up 1 --as worker)" = '  value' ] || fail "nested flags overwrite globals"
 agentbus log --up 1 --as worker add check detail >/dev/null
-outof agentbus log show --up 1 --json | "$PY" -c 'import json,sys; assert any(r["detail"]=="detail" for r in json.load(sys.stdin))' || fail "nested log flags"
+outof agentbus log show --up 1 --json | "$PY" -c 'import json,sys; assert any(r["detail"]=="detail" for r in json.load(sys.stdin)["items"])' || fail "nested log flags"
 ok "identity and bus level before and after commands, including ctx/log actions"
 
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as claude claim src/api/ --purpose review >/dev/null
-exp=$(agentbus --json claims | "$PY" -c 'import json,sys; print(json.load(sys.stdin)[0]["expires_at"])')
+exp=$(agentbus --json claims | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["expires_at"])')
 expect_fail "src/api/ is claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
 expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"

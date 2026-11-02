@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `agentbus schema [COMMAND]` prints the machine contract: `--json` gives every command's arguments, result shape, error codes, retry rule and exit codes, plus the shared objects and environment variables; without `--json` it prints a one-screen table. Each subcommand's `--help` now ends with its JSON result and retry line.
+- Every `--json` error carries `retryable` (boolean). New error codes: `name_active` (a join refused because the name is in use; it was `bad_input`), `bus_unavailable`, `ack_failed` and `output_failed`. Every refusal now has a specific code; none reports `internal`.
+- `status --json` and `watch --json` carry `omitted`: the number of rows each section left out (`agents`, `context`, `claims`, `messages`), `0` when complete.
+- `join --json` carries `agentbus` (the running copy's version) and `contract` (the JSON contract version, `1`).
+- `release RESOURCE --if-held` succeeds, releasing nothing, when you do not hold the claim, for cleanup scripts.
+- `--before NEXT` on `read`, `log show` and `ctx history`, and `--after NEXT` on `inbox --peek`, continue a listing from the `next` cursor of the previous page.
+- `scripts/gen_reference.py` writes the JSON, error, exit-code, retry and environment tables of `docs/reference.md` from the same registry (`--check` fails when they are stale).
+- Bus schema versions: `PRAGMA user_version` holds the bus's schema version (1, the v0.1.0 shape). A new bus is stamped 1; a v0.1.0 bus is adopted by the stamp alone, with no other write.
+- `schema_older` and `schema_newer` errors: an older copy meeting a newer bus refuses and writes nothing, naming the fix.
+- Migrations with a verified backup: a newer agentbus opening an older bus copies `bus.db` to `.agentbus/backups/bus-v<old>-<UTC time>.db` (0600, checked, newest 5 kept), then migrates, verifies and stamps it in one transaction that a failed check rolls back. `backup_failed` when the copy cannot be made; the bus is then unchanged. The bus must pass `quick_check` and the copy must match it byte for byte; a migration gets 9 s so agents waiting on the bus always get it. When `upgrade` replaced the copy, the old copy is kept beside the backup. Restoring both is documented in `docs/how-to/upgrade.md`.
+- `agentbus upgrade --all DIR [--depth N] [--dry-run] [--json]`: upgrades the copy and the database of every bus folder under DIR, one line per bus (upgraded, current, skipped when the copy is newer, failed), and exits 1 when any failed (with `--json`, the `items_failed` error on stderr lists the failed rows). `upgrade DIR` also migrates the bus and reports the schema change and backup (`schema_old`, `schema_new` and `backup` under `--json`).
+- A Ctrl-C once `upgrade` has migrated a bus is the `interrupted` error with `committed: true`, naming the migration (`schema N -> M`), its backup and the command that finishes the job (`directory`, `backup`, `migrations`, `rerun` under `--json`). `committed` is also true once `init`, `upgrade` or `setup` has written a file (a copy, `VERSION`, the exclude rule, a config file or its backup); an interrupted error then names those files (`changed`).
+- Stale-copy notice: `join`, `status` and `buses` from the installed tool say on stderr when the bus folder's copy is an older release, and name `agentbus upgrade DIR` for that folder. Never with `--json`, never from the bus's own copy; `AGENTBUS_NO_UPDATE_NOTICE=1` turns it off. `buses` shows each copy's version; `buses --json` rows gain `copy_version` and `stale`.
+- `bus_unavailable` also covers a bus file agentbus refuses to touch (a link, a hard link, another owner, the wrong type), named in the message.
+- New error codes: `copy_newer` (a folder's copy is newer than the tool; `upgrade` and `init` never downgrade it), `schema_corrupt` (a `user_version` no release writes) and `items_failed` (some buses of `upgrade --all` or files of `setup` failed; stdout holds the whole result).
+- One entry point, `cli()`: the installed command (`agentbus = "agentbus:cli"`) and `bin/agentbus` both run it, so an unexpected error under `--json` is a JSON `internal` error either way.
+- Read-only opens: `watch`, `upgrade --dry-run`, and `who`, `status` and `read` run without a name on a current bus change no data or schema: they never create, stamp or migrate a bus, and run with `query_only`. They open the bus as every command does, so they may finish SQLite's recovery of a crashed writer's journal (folding its committed -wal frames into bus.db). `upgrade --dry-run` applies no upgrade and writes no copy or backup. On a folder with no bus.db yet `who`, `status` and `read` create it, and on an older bus they migrate it after a backup, like every other command. On a bus `watch` cannot read, the live view says so and names the fix instead of drawing empty sections.
+- `agentbus setup claude|codex` installs the skill for Claude Code or the agentbus block in Codex's `AGENTS.md`, with `--scope`, `--dry-run`, `--uninstall` and `--json`. A refused or failed file exits 1 with the `items_failed` error; a change that saved a backup names it (`backup`). See [Set up your agents](docs/how-to/setup.md).
+- `agentbus skill` prints the bundled skill; `agentbus skill --agents-md` prints the `AGENTS.md` block. Both work without a bus.
+
+### Changed (breaking, contract version 1)
+
+- Listings return an envelope under `--json`: `who`, `inbox`, `read`, `claims`, `ctx get` (without a key), `ctx history`, `log show` and `buses`. Before: a bare array, `[{"name": "a", ...}]`, with truncation announced only as prose on stderr. After: `{"v": 1, "items": [{"name": "a", ...}], "has_more": false, "next": null}`. `items` is the old array with the same rows and order; `has_more` is `true` when `--limit` left rows out (so `inbox --limit 0 --json` is no longer an unmarked `[]` while messages wait); `next` is a cursor for `ctx history`, `read`, `log show` and `inbox --peek`, used with the new `--before NEXT` (and `--after NEXT` for `inbox --peek`). The `N more not shown` line on stderr is gone. Scripts that read a bare array must read `.items`; a bare `[...]` from a listing means a 0.1.x copy.
+- One exit-code mapping, the same with and without `--json`: `0` success; `1` the command ran and refused (a claim conflict, a missing message, a name in use); `2` usage (bad arguments, unknown commands, a missing identity, invalid values); `3` the bus is unavailable or unsafe (no bus, busy, a refused schema, an unsafe folder); `4` internal error. Before: argparse errors exited 2 without `--json` and 1 with it, unknown commands exited 1, no bus and busy exited 1, and a crash exited 1 with a traceback. Scripts that test `$? -eq 1` for bad input or a missing bus must test 2 or 3.
+- Joining a name that was active in the last 30 minutes fails with `name_active` (exit 1, with `agent` and `last_seen_min`). Before: `bad_input`.
+- `ctx set` and `goal` report `unchanged`: setting the value already stored writes no history row (and no log row for `goal`) and returns `"unchanged": true` with the stored `updated_by`, `updated_at` (`set_by`, `set_at`). Before: every call appended a history row. Every `ctx set` and `goal` result now carries the `unchanged` key.
+- `inbox` failing to mark messages read (`ack_failed`) exits 3, with the complete messages on stdout; before, it exited 1 and the error code was `internal`. Its message no longer says "above".
+- `status --json` no longer prints `N more agents not shown (use --limit)` notices on stderr; its `omitted` object carries the counts.
+- Every error carries `committed` (the command's change was saved before the failure; `retryable` is false once it saved database rows, unless the command had `--request-id`; `init`, `upgrade`'s copy and `setup` change only files and stay retryable), Ctrl-C is the `interrupted` error (exit 130 in both modes, JSON on stderr under `--json`), and option abbreviations such as `--js` are usage errors (exit 2) instead of being guessed. A stdout that cannot encode the text is `output_failed` (exit 1); before it was reported as bad input (exit 2).
+- `leave` and `release --all` write no log row when there was nothing to leave or release, so repeating them is clean.
+- The skill moved from `skill/SKILL.md` to `skills/agentbus/SKILL.md` and now ends with `<!-- agentbus:managed -->`. `skill/SKILL.md` stays as a link to it, so the old README line (`ln -s "$PWD/skill" ~/.claude/skills/agentbus`) keeps working from a clone; `agentbus setup claude` replaces such a link with a real folder.
+- README install lines pin a release tag.
+
+### Tests
+
+- Workflow tests replay whole multi-agent sessions (handoff, crash recovery, nested buses, first run, upgrade, mixed versions, setup, migration) through the installed command, mutation checks (`bash tests/test_mutations.sh`) show the tests notice broken behaviour, and `scripts/agent-eval.sh` measures whether Claude Code and Codex agents complete the protocol ([docs/evals/README.md](docs/evals/README.md)).
+
 ## 0.1.0 - 2026-11-01
 
 Initial release: a workspace bus in any directory, shared by its repos and linked worktrees. Buses nest; --up selects an outer bus and buses lists the chain. AGENTBUS_DB assigns an explicit bus to sandboxed lanes.

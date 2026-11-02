@@ -33,5 +33,22 @@ for v in "AGENTBUS_CMD=/x/agentbus --flag" "AGENTBUS_BIN=/m/agentbus"; do
 done
 rc=0; AGENTBUS_DB="$HOME/.agentbus-program/.agentbus/bus.db" bash -c '. "$1/lib.sh"' _ "$TESTS_DIR" >/dev/null 2>&1 || rc=$?
 [ "$rc" = 99 ] || fail "lib.sh did not exit 99 for a bus under ~/.agentbus-program/ (rc $rc)"
+# AGENTBUS_CMD can be a bare command name: lib.sh defines a shell function agentbus(), and a bare `agentbus`
+# in AB would call that function forever. AB[0] must resolve to the file on PATH.
+mkdir "$T/bare"; printf '#!/bin/sh\necho "bare agentbus ran: $*"\n' > "$T/bare/agentbus"; chmod 755 "$T/bare/agentbus"
+got=$(env PATH="$T/bare:$PATH" AGENTBUS_CMD=agentbus bash -c '. "$1/lib.sh"; agentbus who' _ "$TESTS_DIR" 2>&1 | head -n 3) || true
+[ "$got" = "bare agentbus ran: who" ] || fail "AGENTBUS_CMD=agentbus (a bare name) did not run the command on PATH: $got"
+# lib.sh keeps every temp file a test makes under one folder and removes it at exit, even when the test's own trap does not.
+root=$(bash -c '. "$1/lib.sh"; trap "true" EXIT; d=$(mktemp -d); touch "$d/x"; f=$(mktemp); case "$d" in "$TMPDIR"/*) ;; *) echo "mktemp -d ignored TMPDIR: $d" >&2; exit 1 ;; esac; echo "$TESTS_TMPROOT"' _ "$TESTS_DIR") || fail "lib.sh temp handling failed"
+[ -n "$root" ] && [ ! -e "$root" ] || fail "lib.sh left its temp folder behind: $root"
+# Every test file ends by saying it passed: an `All ... tests passed` line, or an ok line. (run_all.sh does not
+# depend on it; a person reading the end of a run does.)
+for f in "$TESTS_DIR"/test_*.sh; do
+  last=$(grep -v '^[[:space:]]*$' "$f" | tail -n 1)
+  case "$last" in
+    'echo "All '*' passed'*|'echo "All mutations killed'*|'all_passed "All '*|'ok "'*) ;;
+    *) fail "$(basename "$f") does not end with an All ... passed line or an ok line: $last" ;;
+  esac
+done
 ok "no direct CLI launches in tests; AB and agentbus_argv() honour AGENTBUS_CMD and AGENTBUS_BIN; lib.sh refuses the program bus"
 echo "All launch path tests passed"

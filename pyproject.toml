@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.18"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -21,7 +21,7 @@ classifiers = [
 Homepage = "https://github.com/wickdninja/agentbus"
 
 [project.scripts]
-agentbus = "agentbus:main"
+agentbus = "agentbus:cli"
 
 # bin/agentbus is the single self-contained file `init` copies into repos. The wheel ships that same
 # file as the top-level module agentbus.py, so the installed command and a repo copy are one file.
@@ -35,4 +35,4 @@ bypass-selection = true
 "bin/agentbus" = "agentbus.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["bin/agentbus", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "pyproject.toml", "skill/", "docs/", "examples/", "tests/"]
+include = ["bin/agentbus", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "RELEASING.md", "pyproject.toml", "skills/", ".claude-plugin/", "hooks/", "scripts/", "docs/", "examples/", "tests/"]

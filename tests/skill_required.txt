@@ -1,0 +1,20 @@
+# Sentences the skill must keep, one per line: KIND|CAP|PHRASE
+#   KIND  s = the sentence containing PHRASE, p = the paragraph containing it
+#   CAP   the most bytes that sentence or paragraph may take (the stream's allotment)
+#   PHRASE is found verbatim in skills/agentbus/SKILL.md
+# 02 owns the byte budget (SKILL.md at most 4800 bytes). Each stream adds its own line in its PR.
+# Allotments still to be filled, in bytes: 03 hooks paragraph 200; the 0.1.x version rule 150 (a bare
+# [...] listing means a 0.1.x copy).
+# 01's line is 120 (planned 80): it names the fix, agentbus upgrade DIR, for all three signals; the next
+# sentence (110) says the user runs it from the installed agentbus, not the project copy. 4,423 bytes now,
+# so the two open allotments still fit under 4,800.
+s|26|<!-- agentbus:managed -->
+s|100|Omit --as to look without counting as present.
+s|130|Claims compare exactly, case included; use the spelling shown by git ls-files.
+s|140|the claim itself is the check
+s|140|Do not truncate a consuming inbox with head
+s|80|A nonzero exit does not imply rollback.
+s|120|tell the user to run agentbus upgrade DIR; never edit the bus.
+s|110|They run it from the installed agentbus, not this copy; on schema_newer, this copy is older than the bus.
+s|100|With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug.
+s|100|Listings return {items, has_more, next}; if has_more, call again or raise --limit.

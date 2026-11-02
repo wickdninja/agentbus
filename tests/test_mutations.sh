@@ -1,0 +1,107 @@
+#!/bin/bash
+set -euo pipefail
+# Mutation checks: every entry in tests/mutations.json breaks one behaviour of bin/agentbus on
+# purpose (scripts/mutate.py) and the named test file must fail against the broken copy. Also checks
+# the harness itself: a stale pattern fails loudly, a mutation that survives fails the run, a test
+# that is not there yet is skipped with a printed line, and a harmless change survives a real test
+# (so a kill means the behaviour broke, not the shadow tree). Ends: All mutations killed (N).
+. "$(dirname "$0")/lib.sh"
+ROOT="$TESTS_DIR/.."
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+M="$PY $ROOT/scripts/mutate.py"
+VER=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$ROOT/bin/agentbus")   # the line most entries below mutate
+[ -n "$VER" ] || fail "no __version__ line in bin/agentbus"
+# Test files the harness runs. Each passes on the real bin/agentbus; ones that "see the mutation" fail when the copy
+# they are handed carries the marker (so a kill proves AGENTBUS_BIN is the mutated copy).
+printf '#!/bin/bash\nexit 0\n' > "$T/passes.sh"
+printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then echo "FAIL: marker seen"; exit 1; fi\n' > "$T/marker.sh"
+printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then echo "FAIL: marker seen"; exit 1; fi\n' > "$T/other.sh"
+printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then exit 127; fi\n' > "$T/nofail.sh"
+printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then sleep 30; fi\n' > "$T/slow.sh"
+printf '#!/bin/bash\necho "FAIL: always"; exit 1\n' > "$T/broken.sh"
+printf '#!/bin/bash\necho "SKIP: needs a thing"; exit 77\n' > "$T/skips.sh"   # skip-ok: throwaway test file
+# entry NAME RUN FIND COUNT EXPECT [REPLACE]: a one-entry mutations file at $T/m.json.
+entry() {
+  "$PY" - "$T/m.json" "$1" "$2" "$3" "$4" "$5" "${6:-__version__ = \"$VER\"  # MUTATION-MARKER}" <<'PY'
+import json, sys
+path, name, run, find, count, expect, replace = sys.argv[1:8]
+json.dump([{"name": name, "file": "bin/agentbus", "find": find, "replace": replace, "count": int(count), "run": run, "expect": expect}], open(path, "w"))
+PY
+}
+F="^__version__ = \"$VER\"\$"
+status() { local rc=0; MUTATE_TIMEOUT="${MUTATE_TIMEOUT:-60}" $M --mutations "$T/m.json" "$1" >"$T/out" 2>&1 || rc=$?; echo "$rc"; }
+
+echo "TEST 1: a test that passes unmutated and fails on the broken copy, for the stated reason, kills the mutation"
+entry "kill" "$T/marker.sh" "$F" 1 "marker seen"
+[ "$(status kill)" = 0 ] && grep -q '^KILLED kill: .*FAIL: marker seen' "$T/out" || fail "a failing test did not kill: $(cat "$T/out")"
+ok "killed, and AGENTBUS_BIN names the mutated copy"
+
+echo "TEST 2: a mutation that survives fails the run"
+entry "survive" "$T/passes.sh" "$F" 1 "x"
+[ "$(status survive)" = 1 ] && grep -q '^SURVIVED survive' "$T/out" || fail "a passing test was not reported as a survivor: $(cat "$T/out")"
+ok "survivor exits 1"
+
+echo "TEST 3: a test that fails for another reason, crashes, or times out is not a kill"
+entry "wrong" "$T/other.sh" "$F" 1 "a different reason"
+[ "$(status wrong)" = 1 ] && grep -q '^WRONG wrong: .*failed for another reason' "$T/out" || fail "wrong reason counted as a kill: $(cat "$T/out")"
+entry "crash" "$T/nofail.sh" "$F" 1 "x"
+[ "$(status crash)" = 2 ] && grep -q '^CRASHED crash: .*exited 127 with no FAIL line' "$T/out" || fail "a crash (exit 127, no FAIL line) counted as a kill: $(cat "$T/out")"
+entry "slow" "$T/slow.sh" "$F" 1 "x"
+[ "$(MUTATE_TIMEOUT=2 status slow)" = 1 ] && grep -q '^TIMEOUT slow: ' "$T/out" && ! grep -q '^KILLED' "$T/out" || fail "a timeout counted as a kill: $(cat "$T/out")"
+ok "WRONG, CRASHED and TIMEOUT are their own statuses and not kills"
+
+echo "TEST 4: a test that fails before any mutation is BROKEN, never a kill (a missing interpreter looks like a kill otherwise)"
+entry "broken" "$T/broken.sh" "$F" 1 "always"
+[ "$(status broken)" = 2 ] && grep -q '^BROKEN broken: .*fails before any mutation' "$T/out" || fail "a baseline failure counted as a kill: $(cat "$T/out")"
+entry "noint" "tests/test_init.sh" "$F" 1 "init failed" "__version__ = \"$VER\"  # a comment"
+rc=0; PYTHON=/nonexistent/python3 $M --mutations "$T/m.json" noint >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 2 ] && grep -q '^BROKEN noint' "$T/out" && ! grep -q '^KILLED' "$T/out" || fail "a comment-only mutation under a missing interpreter was a kill (rc $rc): $(cat "$T/out")"
+entry "skips" "$T/skips.sh" "$F" 1 "x"
+[ "$(status skips)" = 2 ] && grep -q '^SKIP skips: .*skips unmutated (needs a thing)' "$T/out" && grep -q 'nothing ran' "$T/out" || fail "a skipping baseline was not reported: $(cat "$T/out")"
+ok "broken and skipped baselines handled"
+
+echo "TEST 5: a mutation whose pattern no longer matches fails the run instead of passing silently"
+entry "stale-none" "$T/marker.sh" '^this line does not exist$' 1 "x"
+[ "$(status stale-none)" = 2 ] && grep -q '^STALE stale-none: pattern matched 0 times' "$T/out" || fail "no match was not stale: $(cat "$T/out")"
+entry "stale-count" "$T/marker.sh" "$F" 2 "x"
+[ "$(status stale-count)" = 2 ] && grep -q '^STALE stale-count: pattern matched 1 times' "$T/out" || fail "wrong count was not stale: $(cat "$T/out")"
+entry "stale-same" "$T/marker.sh" "$F" 1 "x" "__version__ = \"$VER\""
+[ "$(status stale-same)" = 2 ] && grep -q '^STALE stale-same: the replacement changes nothing' "$T/out" || fail "a no-op replacement was not stale: $(cat "$T/out")"
+entry "stale-regex" "$T/marker.sh" '(' 1 "x"
+[ "$(status stale-regex)" = 2 ] || fail "a bad regex was not stale"
+ok "stale mutations exit 2"
+
+echo "TEST 5b: an entry with an empty expect is refused (it would accept any failure as a kill)"
+entry "no-expect" "$T/marker.sh" "$F" 1 " "
+[ "$(status no-expect)" = 2 ] && grep -q 'has an empty expect' "$T/out" || fail "an empty expect was accepted: $(cat "$T/out")"
+ok "empty expect refused"
+
+echo "TEST 6: an unknown name is a usage error; a test file that does not exist yet is skipped with a line"
+entry "known" "$T/marker.sh" "$F" 1 "x"
+[ "$(status nope)" = 2 ] || fail "unknown name did not exit 2"
+entry "later" "$T/does-not-exist.sh" "$F" 1 "x"
+"$PY" - "$T/m.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d[0]["after"] = "ws99"; json.dump(d, open(sys.argv[1], "w"))
+PY
+[ "$(status later)" = 2 ] && grep -q "^SKIP later: .*does-not-exist.sh does not exist yet (after ws99)" "$T/out" && grep -q 'nothing ran' "$T/out" || fail "a missing test file was not skipped and reported: $(cat "$T/out")"
+ok "unknown name and not-yet-existing test handled"
+
+echo "TEST 7: a harmless change survives a real test (the shadow tree runs the real suite)"
+"$PY" - "$T/m.json" "$F" "$VER" <<'PY'
+import json, sys
+json.dump([{"name": "harmless", "file": "bin/agentbus", "find": sys.argv[2], "replace": '__version__ = "%s"  # harmless' % sys.argv[3], "count": 1, "run": "tests/test_init.sh", "expect": "x"}], open(sys.argv[1], "w"))
+PY
+[ "$(status harmless)" = 1 ] && grep -q '^SURVIVED harmless' "$T/out" || fail "a harmless change did not survive tests/test_init.sh: $(cat "$T/out")"
+ok "tests/test_init.sh passes on a copy with a comment added"
+
+echo "TEST 8: every mutation in tests/mutations.json is killed"
+rc=0; MUTATE_TIMEOUT=400 $M --all >"$T/all.out" 2>&1 || rc=$?
+cat "$T/all.out"
+[ "$rc" = 0 ] || fail "a mutation survived, was killed for another reason, crashed, timed out or went stale (exit $rc)"
+n=$(grep -c '^KILLED ' "$T/all.out")
+[ "$n" -ge 1 ] || fail "no mutation ran"
+[ "$(grep -c '^SURVIVED \|^STALE \|^WRONG \|^CRASHED \|^TIMEOUT \|^BROKEN ' "$T/all.out")" = 0 ] || fail "a mutation was not a clean kill"
+# A skipped entry is an untested mutation: say so, and let run_all count this file as skipped.
+while IFS= read -r line; do skip_part "${line#SKIP }"; done < <(grep '^SKIP ' "$T/all.out")
+all_passed "All mutations killed ($n)"

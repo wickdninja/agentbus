@@ -30,10 +30,10 @@ all in one SQLite file. No server. No dependencies.
 **1. Install**
 
 ```bash
-uv tool install git+https://github.com/wickdninja/agentbus
+uv tool install git+https://github.com/wickdninja/agentbus@v0.1.0
 ```
 
-or `pipx install git+https://github.com/wickdninja/agentbus`.
+or `pipx install git+https://github.com/wickdninja/agentbus@v0.1.0`.
 
 **2. Add a bus to a repo, or to a folder of repos**
 
@@ -110,6 +110,8 @@ Full diagrams and their sources: [docs/workflow.md](docs/workflow.md)
 | **Codex**, or anything that reads `AGENTS.md` | Add: *Coordinate with other agents through `.agentbus/bin/agentbus`; follow `/path/to/agentbus/skill/SKILL.md`.* |
 
 The skill tells an agent when to join, check its inbox, claim files and hand off.
+
+From v0.2.0 one command does this without a clone: see [Set up your agents](docs/how-to/setup.md).
 
 <br>
 
