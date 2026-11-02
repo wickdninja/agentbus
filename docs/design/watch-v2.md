@@ -14,7 +14,7 @@ How to read it:
 One at a time, recommended answer first. Each has a fallback that only changes colour or a glyph, not the layout.
 
 1. **Header bar in bus yellow** (bold black on yellow, SGR `1;30;43`) instead of v0.1.0's reverse video (`1;7`). It ties the view to the yellow bus in the README art and marks the top of the screen at a glance. Fallback: `1;7`.
-2. **🚌 before `agentbus` in the header when emoji are on.** One glyph, the project's mascot; it costs 3 columns and is the first thing dropped below 72 columns when the header is tight. Fallback: no glyph.
+2. **🚌 before `agentbus` in the header when emoji are on.** One glyph, the project's mascot; it costs 3 columns and is dropped, right after the folder name, when the header cannot fit (at 40 columns). Fallback: no glyph.
 3. **Three new section icons for the detail views:** 🧵 Thread, 📜 History, 🔗 Mentioned in, plus one icon per error state (🚧 refused or newer, ⏳ busy, 🌱 no bus). Same rule as v0.1.0's icons: single wide code points, shown only with emoji on. Fallback: titles without icons in detail and error views.
 4. **A filter that leaves a section empty collapses it to its title row** (`Agents  0 of 3 ... no match`), so the matching messages get the rows. The runbook draft gave each empty section a `no match` row. Fallback: the draft's extra row.
 5. **Claim detail lists the messages that name the claim** (`Mentioned in`, the last 5 whose body contains the resource). It answers "why is this claimed?" without leaving the view; 06 needs one bounded read-only query. Fallback: drop the list.
