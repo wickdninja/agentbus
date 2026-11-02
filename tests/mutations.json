@@ -196,5 +196,14 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "FAIL: update line: the edited SKILL.md was not saved as a .bak"
+  },
+  {
+    "name": "run_all's cap kills only the file, not its process group",
+    "file": "tests/run_capped.py",
+    "find": "        os\\.killpg\\(proc\\.pid, signal\\.SIGKILL\\)",
+    "replace": "        proc.kill()",
+    "count": 1,
+    "run": "tests/test_docs.sh",
+    "expect": "outlived the cap"
   }
 ]

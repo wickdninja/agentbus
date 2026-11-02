@@ -54,13 +54,13 @@ rc=0; env -u AGENTBUS_NO_SKIP bash "$RUNNER" --keep-going "$T/tests/test_tmp.sh"
 ok "TMPDIR leftover caught and attributed"
 
 echo "TEST 3c: with no git of its own the checkout check still runs: no .git at all, and a copy inside another repo"
-mkdir -p "$T/nogit/tests"; cp "$RUNNER" "$T/nogit/tests/run_all.sh"; echo keep > "$T/nogit/tests/data.txt"
+mkdir -p "$T/nogit/tests"; cp "$RUNNER" "$T/nogit/tests/run_all.sh"; cp "$TESTS_DIR/run_capped.py" "$T/nogit/tests/"; echo keep > "$T/nogit/tests/data.txt"
 printf '#!/bin/bash\necho changed > "%s/tests/data.txt"\n' "$T/nogit" > "$T/nogit/tests/test_leak.sh"
 rc=0; env -u AGENTBUS_NO_SKIP bash "$T/nogit/tests/run_all.sh" >"$T/out" 2>&1 || rc=$?
 [ "$rc" = 1 ] && grep -q "test_leak.sh (isolation: it changed the checkout" "$T/out" || fail "a change in a tree without git passed (rc $rc): $(cat "$T/out")"
 g() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
 mkdir -p "$T/parent/child/tests"; git -C "$T/parent" init -q
-cp "$RUNNER" "$T/parent/child/tests/run_all.sh"; echo keep > "$T/parent/child/tests/data.txt"
+cp "$RUNNER" "$TESTS_DIR/run_capped.py" "$T/parent/child/tests/"; echo keep > "$T/parent/child/tests/data.txt"
 g "$T/parent" add .; g "$T/parent" commit -q -m init
 printf '#!/bin/bash\necho more >> "%s/tests/data.txt"\n' "$T/parent/child" > "$T/parent/child/tests/test_leak.sh"
 rc=0; env -u AGENTBUS_NO_SKIP bash "$T/parent/child/tests/run_all.sh" >"$T/out" 2>&1 || rc=$?
@@ -76,7 +76,7 @@ ok "checkout check works without git, inside another repo, and on a file that wa
 echo "TEST 3f: a syntax error in tests/lib.sh, tests/workflow_lib.sh or a test file fails the run before any file runs"
 # Bug it catches: a broken lib.sh was sourced, bash carried on past the error, and the run printed ALL TESTS PASSED.
 for broken in lib.sh workflow_lib.sh test_ok.sh; do
-  rm -rf "$T/syn"; mkdir -p "$T/syn/tests"; cp "$RUNNER" "$TESTS_DIR/lib.sh" "$TESTS_DIR/workflow_lib.sh" "$T/syn/tests/"
+  rm -rf "$T/syn"; mkdir -p "$T/syn/tests"; cp "$RUNNER" "$TESTS_DIR/run_capped.py" "$TESTS_DIR/lib.sh" "$TESTS_DIR/workflow_lib.sh" "$T/syn/tests/"
   printf '#!/bin/bash\n. "$(dirname "$0")/lib.sh"\nok fine\n' > "$T/syn/tests/test_ok.sh"
   printf '\nif then fi (\n' >> "$T/syn/tests/$broken"
   rc=0; env -u AGENTBUS_NO_SKIP bash "$T/syn/tests/run_all.sh" >"$T/out" 2>&1 || rc=$?
