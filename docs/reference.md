@@ -53,7 +53,26 @@ The goal is the context key `goal`, so `ctx history goal` lists every version. `
 
 ## Watch
 
-`agentbus watch` redraws in place until `q`, `Esc` or `Ctrl-C`. `--interval` sets 0.2 to 60 seconds, `--once` prints one frame, and `--json` prints one snapshot. Piped output also prints one frame. It needs 40 columns. `NO_COLOR` turns colour off.
+`agentbus watch` redraws in place until `q` (from the main view) or `Ctrl-C`. `--interval` sets 0.2 to 60 seconds, `--once` prints one frame, and `--json` prints one snapshot. Piped output, `TERM=dumb` and an unset `TERM` also print one frame. It needs 40 columns. `NO_COLOR` turns colour off. Watch only reads: no key marks a message read or changes a claim, and `y` writes only to the terminal.
+
+| Key | Main view | Detail | Help | Filter input |
+|---|---|---|---|---|
+| `j` `k`, Down Up | move in the focused section; in Messages while following, `k` selects the newest and pauses | select a related row, or scroll | scroll | text |
+| `g` `G`, Home End | first, last row; `G` follows again | top, bottom | top, bottom | text |
+| PgUp PgDn, Ctrl-u Ctrl-d | a page, half a page | scroll | scroll | ignored |
+| Tab, Shift-Tab, `1` to `4` | next, previous section; Agents, Claims, Facts, Messages | | | ignored, digits are text |
+| Enter | open the selected row (the newest message while following) | open the selected related row on top | | keep the filter |
+| `t` | | show or hide a message's thread | | text |
+| `y` | copy the selected id, name, resource or key (OSC 52) | copy the reply command, name, resource or value | | text |
+| `/` | filter: `from:NAME to:NAME kind:KIND topic:NAME`, or words | close the details, filter | | text |
+| `p` | pause the whole view, or follow again | | | text |
+| `r` | read the bus now | read the bus and this detail again | read now | text |
+| `?` | help | help | close | text |
+| Esc | clear a kept filter, else nothing | back one level | back | clear and close |
+| `q` | quit | back one level | back | text |
+| Ctrl-C | quit | quit | quit | quit |
+
+`kind:` takes a kind's start or its short code (`hand`, `ask`, `ans`, `dec`, `ALRT`, `done`, `note`), which narrow rows show. Watch holds the newest 200 rows of each section; a filtered section with more says `N of newest 200`, and `agentbus read` (or `who`, `claims`, `ctx get`) reads the rest. A detail reads at most the newest 5000 messages. A busy bus keeps the last frame and adds `waiting · Ns old` to the header; a bus it cannot read (refused, newer, gone) replaces the frame with the reason and the fix, and the view comes back as it was once the bus reads again. A watch left running after its bus copy was upgraded says `restart for X.Y.Z`. `AGENTBUS_ASCII=1`, `TERM=linux` or a terminal that draws `●` two columns wide switch watch's marks to ASCII. SIGTERM ends it like `q`; SIGHUP exits `129`; both restore the terminal. Walkthrough: [Watch your agents](how-to/watch.md).
 
 On a terminal, watch shows emoji: a role per agent (🧠 brain or lead, ✋ lane, hand or implementer, 🧪 tests, 🔍 review, 📚 docs, 🚀 ops, 🎨 design, 🙋 human, 🤖 otherwise), a kind per message (🤝 handoff, ❓ question, 💬 answer, ✅ done, 🧭 decision, 🚨 alert, 📝 note) and a section icon (👥 🔒 📌 💬). `AGENTBUS_NO_EMOJI=1` turns them off. They never appear when stdout is not a terminal.
 
@@ -109,7 +128,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `log show` | `{"v": integer, "items": [LogEntry], "has_more": boolean, "next": string or null}` |
 | `status` | `{"bus": string, "goal": null or Goal, "agents": [Agent], "context": [Fact], "claims": [Claim], "messages": [Message], "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}` |
 | `goal` | `null or a Goal` |
-| `watch` | `{"bus": string, "directory": string, "agents": [{"name": string, "role": string or null, "last_seen": string, "joined_at": string}], "claims": [{"resource": string, "agent": string, "purpose": string or null, "expires_at": string}], "goal": null or Goal, "context": [Fact], "messages": [{"id": integer, "ts": string, "sender": string, "recipient": string, "kind": string, "body": string, "reply_to": integer or null}], "counts": {"agents": integer, "claims": integer, "messages": integer}, "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}` |
+| `watch` | `{"bus": string, "directory": string, "agents": [{"name": string, "role": string or null, "last_seen": string, "joined_at": string}], "claims": [{"resource": string, "agent": string, "purpose": string or null, "expires_at": string}], "goal": null or Goal, "context": [Fact], "messages": [{"id": integer, "ts": string, "sender": string, "recipient": string, "kind": string, "topic": string or null, "body": string, "reply_to": integer or null}], "unread": object, "counts": {"agents": integer, "claims": integer, "messages": integer}, "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}` |
 | `buses` | `{"v": integer, "items": [BusLevel], "has_more": boolean, "next": string or null}` |
 | `init` | `{"directory": string, "copy": string, "old": string, "new": string, "exclude_added": boolean, "gitignore_rule": boolean, "outer": string or null}` |
 | `upgrade` | `{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}` |
@@ -249,6 +268,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `AGENTBUS_AGENT` | Your agent identity; --as overrides it. | unset |
 | `NO_COLOR` | Turns colour off in watch. | unset |
 | `AGENTBUS_NO_EMOJI` | Turns emoji off in watch. | unset |
+| `AGENTBUS_ASCII` | Draws watch's own marks in ASCII, with emoji off (also under TERM=linux). | unset |
 | `COLUMNS` | Width human output is wrapped to. | the terminal width, else 80 |
 <!-- /generated:env -->
 
