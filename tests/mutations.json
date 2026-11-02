@@ -205,5 +205,14 @@
     "count": 1,
     "run": "tests/test_docs.sh",
     "expect": "outlived the cap"
+  },
+  {
+    "name": "deletes zero the pages they free (secure_delete on)",
+    "file": "bin/agentbus",
+    "find": "con\\.execute\\(\"PRAGMA secure_delete=FAST\"\\)",
+    "replace": "con.execute(\"PRAGMA secure_delete=ON\")",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "the freed pages were zeroed"
   }
 ]

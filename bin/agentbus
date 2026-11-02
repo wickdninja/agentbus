@@ -2166,6 +2166,10 @@ def _connect_watched(path, fd, st, before, owned, read_only=False, query_s=None)
         # memory and never opens -shm, so a planted -shm link is never touched.
         con.execute("PRAGMA locking_mode=EXCLUSIVE")
         con.execute("PRAGMA temp_store=MEMORY")  # statement journals and sorts never touch disk
+        # Debian and Ubuntu build SQLite with SECURE_DELETE on: every page a delete frees is zeroed, so
+        # releasing 500 planted 1 MB claim names wrote 600 MB to the -wal and the checkpoint, with the bus
+        # held. FAST still zeroes deleted cells on the pages a delete writes anyway, and adds no I/O.
+        con.execute("PRAGMA secure_delete=FAST")
         _test_pause("before-first-read")
         # The first read is a plain read: SQLite reads the header itself and opens -wal if the
         # file is WAL. (Setting a journal mode before it would make SQLite convert a WAL file

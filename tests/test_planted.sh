@@ -11,14 +11,27 @@ secs() { python3 -c 'import time; print(time.time())'; }
 since() { python3 -c 'import sys,time; print("%.2f" % (time.time() - float(sys.argv[1])))' "$1"; }
 under() { python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < float(sys.argv[2]) else 1)' "$1" "$2"; }
 # plant DB PYTHON-CODE: rows written straight into the bus, as a lane would (c is the connection).
+# The rows are on disk before plant returns: written with synchronous=OFF and never synced, the GBs a test
+# plants sit in the page cache, and the next fsync on that disk (an honest post's commit) waits for the
+# kernel to write all of them. On a slow CI disk that took over 8 s for TEST 1 (the post was in fdatasync
+# on bus.db-wal, at cd220e0 and 054e928 alike), a stall of the machine's disk, not a hold the planted rows
+# make agentbus take. What this file checks is the second: so the lane's write is finished first.
 plant() {
   python3 - "$1" "$2" <<'PY'
-import sqlite3, sys
+import os, sqlite3, sys
 c = sqlite3.connect(sys.argv[1], isolation_level=None)
 c.execute("PRAGMA synchronous=OFF")
 c.execute("BEGIN")
 exec(sys.argv[2])
 c.execute("COMMIT")
+busy = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]  # every row into bus.db, bus.db-wal emptied
+assert busy == 0, "the planted rows could not be checkpointed into bus.db"
+c.close()
+fd = os.open(sys.argv[1], os.O_RDONLY)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
 PY
 }
 # measured DB BOUND ARGS...: run ARGS on DB while another agent posts. What must hold is safety, not
@@ -120,6 +133,26 @@ if n == 0:
 PY
   ok "release --all stopped cleanly $STOPPED after ${t1}s, nothing half-done; another agent posted meanwhile"
 fi
+
+echo "TEST 3b: a release of planted 1 MB names does not write the freed pages (SQLite built with SECURE_DELETE)"
+# Debian and Ubuntu (so GitHub's Linux runners) build SQLite with SECURE_DELETE on, which zeroes every page a delete
+# frees: releasing 500 planted 1 MB names wrote 600 MB to bus.db-wal with the bus held, and on a slow disk
+# the command outlived the hold watchdog and the next agent's post. agentbus sets secure_delete=FAST. Measured at the
+# commit pause, where the pages the release dirtied have already spilled into bus.db-wal. On a build without
+# SECURE_DELETE (Homebrew, macOS's own) the freed pages are never written either way.
+D3b="$T/b3b.db"; AGENTBUS_DB="$D3b" agentbus --as honest join --tool t >/dev/null
+plant "$D3b" 'big = "n" * (1 << 20)
+for i in range(100):
+    c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("r%03d" % i + big, "honest", "p", "2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z"))'
+P3b="$T/pause3b"; mkdir -p "$P3b"
+AGENTBUS_TEST_PAUSE="commit=$P3b" AGENTBUS_DB="$D3b" "${AB[@]}" --as honest release --all >"$T/o3b" 2>"$T/e3b" & R=$!
+wait_for "$P3b/commit.reached"
+wal=$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]) if os.path.exists(sys.argv[1]) else 0)' "$D3b-wal")
+touch "$P3b/commit.go"
+wait $R || fail "release --all failed: $(cat "$T/e3b")"
+grep -qx "released 100 claims" "$T/o3b" || fail "release --all output: $(head -c 200 "$T/o3b")"
+[ "$wal" -lt $((20 << 20)) ] || fail "release --all of 100 planted 1 MB names wrote $wal bytes to bus.db-wal before its commit (the freed pages were zeroed)"
+ok "release --all of 100 MB of planted names: $wal bytes in bus.db-wal at the commit"
 
 echo "TEST 4: claim refuses a resource over 1024 characters; a refusal naming a planted name is cut"
 D4="$T/b4.db"; AGENTBUS_DB="$D4" agentbus --as honest join --tool t >/dev/null

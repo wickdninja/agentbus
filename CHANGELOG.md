@@ -37,9 +37,14 @@
 - The skill moved from `skill/SKILL.md` to `skills/agentbus/SKILL.md` and now ends with `<!-- agentbus:managed -->`. `skill/SKILL.md` stays as a link to it, so the old README line (`ln -s "$PWD/skill" ~/.claude/skills/agentbus`) keeps working from a clone; `agentbus setup claude` replaces such a link with a real folder.
 - README install lines pin a release tag.
 
+### Fixed
+
+- Deleting claims no longer rewrites the freed pages. SQLite as Debian and Ubuntu build it zeroes every page a delete frees, so `release --all` or `leave` over 500 planted 1 MB claim names wrote about 600 MB with the bus held and could outlive the hold watchdog, making the next agent's command wait. agentbus now sets `secure_delete=FAST`: deleted cells are still zeroed on the pages the delete writes, with no extra I/O.
+
 ### Tests
 
 - Workflow tests replay whole multi-agent sessions (handoff, crash recovery, nested buses, first run, upgrade, mixed versions, setup, migration) through the installed command, mutation checks (`bash tests/test_mutations.sh`) show the tests notice broken behaviour, and `scripts/agent-eval.sh` measures whether Claude Code and Codex agents complete the protocol ([docs/evals/README.md](docs/evals/README.md)).
+- `tests/run_all.sh` caps every file on every machine (its own helper, `tests/run_capped.py`, kills the file's whole process group and fails it with rc 124); before, the cap needed `timeout` or `gtimeout` and was off on macOS runners.
 
 ## 0.1.0 - 2026-11-01
 
