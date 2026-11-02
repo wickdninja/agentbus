@@ -358,7 +358,7 @@ hook Stop "$(payload stop_hook_active session_id="\"$SID1\"")"; quiet || fail "S
 STOP; quiet || fail "Stop for the same claims a second time: rc $RC out $OUT"
 ab --as "$N" claim c.txt >/dev/null; STOP; grep -qF "you still hold 3 claims" <<<"$(text_of)" || fail "Stop after a new claim: rc $RC out $OUT"
 ab --as "$N" post "partial" --kind note >/dev/null; ab --as "$N" claim d.txt >/dev/null; STOP; [ -n "$OUT" ] || fail "a note counted as a handoff: Stop went quiet"
-ab --as "$N" post "all done" --kind done >/dev/null; ab --as "$N" claim e.txt >/dev/null; STOP; quiet || fail "Stop after a done post: rc $RC out $OUT"
+ab --as "$N" claim e.txt >/dev/null; ab --as "$N" post "all done" --kind done >/dev/null; STOP; quiet || fail "Stop after a done post: rc $RC out $OUT"
 ok "Stop: once per set of claims and session; quiet after done; no decision key"
 
 echo
