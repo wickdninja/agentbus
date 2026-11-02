@@ -108,13 +108,14 @@ array(setup['changes'], path=str, action=str, detail=str)
 j('--as', 'b', 'claim', 'watch-fixture')
 for after in (False, True):
     for once in ((), ('--once',)):
-        snap = shape(j('watch', *once, after=after), bus=str, directory=str, goal=dict, agents=list, claims=list, context=list, messages=list, counts=dict, omitted=dict)
+        snap = shape(j('watch', *once, after=after), bus=str, directory=str, goal=dict, agents=list, claims=list, context=list, messages=list, unread=dict, counts=dict, omitted=dict)
         shape(snap['omitted'], agents=int, context=int, claims=int, messages=int)
         shape(snap['counts'], agents=int, claims=int, messages=int)
         array(snap['agents'], name=str, role=(str, null), last_seen=str, joined_at=str)
         array(snap['claims'], resource=str, agent=str, purpose=null, expires_at=str)
         array(snap['context'], **fact)
-        array(snap['messages'], **{k: v for k, v in message.items() if k != 'topic'})
+        array(snap['messages'], **message)  # topic too (watch v2, additive)
+        assert snap['unread'] == {'b': 0}, snap['unread']
         assert any(m['body'] == 'ans' and m['reply_to'] == qid for m in snap['messages'])
 assert seen == inventory(parser), ('untested parser commands', inventory(parser) - seen, 'extra', seen - inventory(parser))
 print('PASS: every parser subcommand prints one JSON value with exact keys and types')
