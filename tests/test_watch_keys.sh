@@ -302,7 +302,7 @@ def wrap_linear():
     wl = g["wrap_lines"]
     def cost(n):
         best = 9.0
-        for _ in range(3):
+        for _ in range(7):  # best of 7: a timing check must not trip on a busy machine
             t0 = time.perf_counter()
             wl.__wrapped__("w" * n, 57)
             best = min(best, time.perf_counter() - t0)
