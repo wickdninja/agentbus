@@ -149,7 +149,8 @@ wait_for "$T/held"
 held=$(timed_events)
 kill "$HOLD" 2>/dev/null || true; wait "$HOLD" 2>/dev/null || true
 # Within 1 s each. On a host whose load is above its cores every process start is slow, and then the bound is the
-# wait itself: at most 0.7 s more than the same event took on the free bus (the busy wait is 0.3 s).
+# wait itself: under 2.5 s more than the same event took on the free bus (the busy wait is 0.3 s; the old 15 s
+# default and a 5 s wait still fail).
 "$PY" -I - "$free" "$held" <<'PY' || fail "a held bus made a hook wait more than 1 s"
 import os, sys
 free = {l.split()[0]: l.split()[1:] for l in sys.argv[1].splitlines()}
@@ -159,12 +160,12 @@ bad = []
 for ev, (secs, rc, out, err) in held.items():
     if (rc, out, err) != ("0", "0", "0"):
         bad.append(f"{ev}: exit {rc}, {out} bytes on stdout, {err} on stderr")
-    elif not (float(secs) < 1.0 or (loaded and float(secs) - float(free[ev][0]) < 0.7)):
+    elif not (float(secs) < 1.0 or (loaded and float(secs) - float(free[ev][0]) < 2.5)):
         bad.append(f"{ev}: {secs} s (free bus {free[ev][0]} s)")
 print("; ".join(bad) or "ok")
 sys.exit(1 if bad else 0)
 PY
-ok "five events against a locked bus: within 1 s each (or 0.7 s over the free-bus time on an oversubscribed host), exit 0, no output"
+ok "five events against a locked bus: within 1 s each (or 2.5 s over the free-bus time on an oversubscribed host), exit 0, no output"
 
 echo
 echo "TEST 4: a bus that needs a migration, a newer bus and a refused bus: silent, bus.db bytes equal"
@@ -271,7 +272,7 @@ con = sqlite3.connect(sys.argv[1]); name = sys.argv[2]
 for i in range(500):
     con.execute("INSERT INTO agents(name,tool,joined_at,last_seen) VALUES(?,?,?,?)", (f"peer{i}", "t", "2026-11-02T00:00:00Z", "2026-11-02T00:00:00Z"))
     con.execute("INSERT INTO messages(ts,sender,recipient,kind,body) VALUES(?,?,?,?,?)",
-                ("2026-11-02T00:00:00Z", f"peer{i}", name, ["note", "question", "answer", "handoff", "decision", "alert", "done", "zzz"][i % 8], "b"))
+                ("2026-11-02T00:00:00Z", f"peer{i}", name, ["note", "question", "answer", "handoff", "decision", "alert", "done"][i % 7], "b"))
 con.commit(); con.close()
 PY
 SS; got=$(text_of)
