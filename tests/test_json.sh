@@ -11,7 +11,8 @@ import os as _os, sys as _sys
 _sys.path.insert(0, _os.environ["TESTS_DIR"])
 from agentbus_cmd import agentbus_argv
 bin_, tmp = sys.argv[1:]
-parser = runpy.run_path(bin_, run_name='agentbus_test')['build_parser']()
+json_module = runpy.run_path(bin_, run_name='agentbus_test')
+parser = json_module['build_parser']()
 def inventory(p, prefix=()):
     result = set()
     for action in p._actions:
@@ -116,7 +117,8 @@ for after in (False, True):
         array(snap['context'], **fact)
         array(snap['messages'], **{k: v for k, v in message.items() if k != 'topic'})
         assert any(m['body'] == 'ans' and m['reply_to'] == qid for m in snap['messages'])
-assert seen == inventory(parser), ('untested parser commands', inventory(parser) - seen, 'extra', seen - inventory(parser))
+visible = inventory(parser) - {(h,) for h in json_module['CONTRACT']['hidden']}  # hidden commands (hook) have no JSON result
+assert seen == visible, ('untested parser commands', visible - seen, 'extra', seen - visible)
 print('PASS: every parser subcommand prints one JSON value with exact keys and types')
 # Both shared-option placements must work, including nested actions.
 shape(j('--as', 'a', 'join', after=True), joined=str, bus=str, goal=dict, agentbus=str, contract=int)
