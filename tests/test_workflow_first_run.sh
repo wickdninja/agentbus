@@ -66,7 +66,8 @@ ok "bus state"
 
 echo "STEP 5: a person can watch it"
 w=$(COLUMNS=100 agentbus watch --once)
-grep -q '^ agentbus .* 2 agents · 0 claims · 2 messages$' <<<"$w" || fail "watch header: $(sed -n 1p <<<"$w")"
+# The header counts what needs a person (watch v2): a handoff and its done, no alert, no open question.
+grep -q '^ agentbus .* 0 alerts · 0 open questions$' <<<"$w" || fail "watch header: $(sed -n 1p <<<"$w")"
 grep -q '^Agents  2$' <<<"$w" && grep -q '^Messages  2$' <<<"$w" || fail "watch counts: $w"
 grep -q 'handoff.*auth refactor is yours' <<<"$w" || fail "watch lacks the handoff: $w"
 ok "watch --once shows two agents and two messages"
