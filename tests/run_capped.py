@@ -3,15 +3,14 @@
 The cap must hold on every machine, so it does not depend on an optional binary (GitHub's macOS
 runners have no `timeout`). COMMAND starts in its own process group (a new session); when it outlives
 SECONDS, the whole group gets SIGTERM, then SIGKILL after a short grace, and this exits 124 as GNU
-timeout does. A SIGINT, SIGTERM or SIGHUP sent to this process ends the group the same way and exits
-128 + the signal. Otherwise the exit status is COMMAND's (128 + N when a signal N ended it).
+timeout does. A SIGINT, SIGTERM or SIGHUP sent to this process ends the group the same way, then this
+process dies of that signal. Otherwise the exit status is COMMAND's (128 + N when a signal N ended it).
 Standard library only, Python 3.9 and later.
 """
 import os
 import signal
 import subprocess
 import sys
-import time
 
 GRACE_S = 2.0  # between SIGTERM and SIGKILL
 
@@ -54,6 +53,9 @@ def main(argv):
         for s in forwarded:  # one cleanup, however many signals arrive meanwhile
             signal.signal(s, signal.SIG_IGN)
         end_group(proc)
+        # Die of the same signal, so a shell running this (run_all.sh) sees a Ctrl-C and stops too.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
         os._exit(128 + signum)
 
     for s in forwarded:
