@@ -196,5 +196,59 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "FAIL: update line: the edited SKILL.md was not saved as a .bak"
+  },
+  {
+    "name": "doctor opens the bus for writing",
+    "file": "bin/agentbus",
+    "find": "open_bus\\(ctx\\.db, ctx\\.strict, read_only=True, busy_wait=DOCTOR_BUSY_WAIT_S\\)",
+    "replace": "open_bus(ctx.db, ctx.strict, read_only=False, busy_wait=DOCTOR_BUSY_WAIT_S)",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
+  },
+  {
+    "name": "doctor exits 0 when a check failed",
+    "file": "bin/agentbus",
+    "find": "    if fail:\\n        bad = \\[",
+    "replace": "    if False:\\n        bad = [",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "a newer bus must exit 1"
+  },
+  {
+    "name": "doctor treats an older copy as newer",
+    "file": "bin/agentbus",
+    "find": "    if theirs < mine:\\n        parent = ",
+    "replace": "    if theirs > mine:\\n        parent = ",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "output lacks: 0.1.0 here, 0.2.0 installed"
+  },
+  {
+    "name": "doctor waits five seconds for a busy bus",
+    "file": "bin/agentbus",
+    "find": "^DOCTOR_BUSY_WAIT_S = 0\\.3 ",
+    "replace": "DOCTOR_BUSY_WAIT_S = 5.0 ",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "FAIL: busy"
+  },
+  {
+    "name": "doctor discovery starts git",
+    "file": "bin/agentbus",
+    "find": "    cwd = os\\.path\\.realpath\\(os\\.getcwd\\(\\)\\)\\n    d = cwd\\n    while True:\\n        dotgit",
+    "replace": "    cwd = os.path.realpath(os.getcwd())\\n    repo_info(cwd)\\n    d = cwd\\n    while True:\\n        dotgit",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor ran git"
+  },
+  {
+    "name": "doctor names upgrade DIR instead of upgrade --all for an older copy",
+    "file": "bin/agentbus",
+    "find": "f\"agentbus upgrade --all \\{parent\\}\"",
+    "replace": "f\"agentbus upgrade {parent}\"",
+    "count": 1,
+    "run": "tests/test_version_policy.sh",
+    "expect": "doctor entry copy (warn, '0.1.0 here, 0.2.0 installed') is not as documented"
   }
 ]

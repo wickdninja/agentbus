@@ -116,6 +116,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `schema` | `{"contract": integer, "agentbus": string, "commands": object, "objects": object, "error_fields": object, "errors": object, "exit_codes": object, "env": object}` |
 | `skill` | `{"text": string}` |
 | `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved)}]}` |
+| `doctor` | `{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" \| "warn" \| "fail" \| "n/a", "detail": string, "fix": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0` |
 <!-- /generated:results -->
 
 Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; timestamps are UTC strings in JSON.
@@ -132,6 +133,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `Goal` | `goal`, `set_by`, `set_at`, `unchanged` (optional) |
 | `BusLevel` | `level`, `directory`, `exists`, `copy_version`, `stale` |
 | `UpgradeRow` | `directory`, `status`, `old`, `new`, `schema_old`, `schema_new`, `backup`, `error` |
+| `DoctorCheck` | `id`, `status`, `detail`, `fix`, `scope` (optional) |
 <!-- /generated:objects -->
 
 `watch --json` returns once, with or without `--once`; its row projections differ from `status`. Data written directly through SQLite can have other types; JSON renders BLOBs and non-finite numbers as strings.
@@ -236,6 +238,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `schema` | safe | repeat freely |
 | `skill` | safe | repeat freely |
 | `setup` | idempotent | a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object |
+| `doctor` | safe | repeat freely |
 <!-- /generated:retry -->
 
 `post --request-id TOKEN` makes a retry by the same sender return the original message ID with `duplicate: true`. Body, recipient, kind, topic and reply target must match; a different payload gives `request_id_reused`. Tokens belong to their sender and remain on the message row. Without a token each post creates a message.
