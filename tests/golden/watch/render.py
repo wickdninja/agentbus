@@ -54,17 +54,62 @@ def frame_text(rows, height):
     return "".join(r + "\n" for r in rows)
 
 
+def fixture_bus(g, fx_detail, snap):
+    """An in-memory bus holding what fixture.json says the detail queries can read: every message in
+    detail.messages (and the snapshot's own), the claims with their claimed_at, the facts and their history.
+    bin/agentbus's own SCHEMA, so the detail SQL (watch_detail_rows) runs exactly as on a real bus."""
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.executescript(g["SCHEMA"])
+    msgs = {m["id"]: m for m in fx_detail.get("messages", [])}
+    msgs.update({m["id"]: m for m in snap["messages"]})
+    for i in sorted(msgs):
+        m = msgs[i]
+        con.execute("INSERT INTO messages(id, ts, sender, recipient, kind, topic, body, reply_to) VALUES(?,?,?,?,?,?,?,?)",
+                    (m["id"], m["ts"], m["sender"], m["recipient"], m["kind"], m.get("topic"), m["body"], m["reply_to"]))
+    for a in snap["agents"]:
+        con.execute("INSERT INTO agents(name, role, joined_at, last_seen) VALUES(?,?,?,?)",
+                    (a["name"], a["role"], a["joined_at"], a["last_seen"]))
+    for c in snap["claims"]:
+        con.execute("INSERT INTO claims(resource, agent, purpose, claimed_at, expires_at) VALUES(?,?,?,?,?)",
+                    (c["resource"], c["agent"], c["purpose"],
+                     fx_detail.get("claimed_at", {}).get(c["resource"], c["expires_at"]), c["expires_at"]))
+    for x in snap["context"]:
+        con.execute("INSERT INTO context(key, value, updated_by, updated_at) VALUES(?,?,?,?)",
+                    (x["key"], x["value"], x["updated_by"], x["updated_at"]))
+    for k, hist in fx_detail.get("context_history", {}).items():
+        for h in reversed(hist):  # stored oldest first, as ctx set writes them
+            con.execute("INSERT INTO context_history(key, value, updated_by, updated_at) VALUES(?,?,?,?)",
+                        (k, h["value"], h["updated_by"], h["updated_at"]))
+    return con
+
+
+def detail_data(g, view, snap, held, fx_detail):
+    """watch_detail_rows for the view's open detail, on the fixture bus as of the snapshot on screen."""
+    d = view.detail
+    if view.mode != "detail" or not d:
+        return None
+    shown = held if (view.paused and held is not None) else snap
+    con = fixture_bus(g, fx_detail, shown)
+    top = max((m["id"] for m in shown["messages"]), default=0)
+    if d["section"] == "messages":
+        top = max(top, d["key"])
+    return g["watch_detail_rows"](con, d["section"], d["key"], top)
+
+
 def render_v2(g, e, snap, held, detail, paint, t_now):
     """06: adjust this call to match `render`; the inputs are fixed by fixture.json. `held` is the frozen
-    snapshot of a paused view (None otherwise); paint carries emoji and the ASCII glyph set."""
+    snapshot of a paused view (None otherwise); paint carries emoji and the ASCII glyph set. `detail` is the
+    fixture's detail data; the open detail's rows come from it through bin/agentbus's own detail SQL."""
     view = g["View"]()
     v = e["view"]
     for k, val in v.items():
         if k not in ("error", "stale", "fresh"):
             setattr(view, k, val)
     rows = g["render"](view, snap, e["where"], (e["cols"], e["rows"]), t_now, paint,
-                       error=v["error"], stale=v["stale"], fresh=set(v["fresh"]), live=e["live"], detail=detail,
-                       held=held)
+                       error=v["error"], stale=v["stale"], fresh=set(v["fresh"]), live=e["live"],
+                       detail=detail_data(g, view, snap, held, detail), held=held)
     return frame_text(rows, e["rows"])
 
 

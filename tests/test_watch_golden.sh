@@ -91,8 +91,9 @@ pending = {l.strip() for l in (g / "PENDING").read_text(encoding="utf-8").splitl
 assert pending == missing, ("now reproduced, remove from PENDING", sorted(pending - missing),
                             "not reproduced, add to PENDING", sorted(missing - pending))
 print(len(got) - len(missing), "reproduced,", len(missing), "pending")
+assert not pending, ("06 (issue #8) reproduces every golden; PENDING must stay empty", sorted(pending))
 PY
-ok "PENDING names exactly the goldens the current renderer does not reproduce"
+ok "PENDING is empty: bin/agentbus reproduces every golden byte for byte"
 
 echo "TEST 6: a frame depends on the entry's t_now and where, never on HOME or the wall clock"
 HOME="$T/h2" "$PY" "$G/render.py" "$BIN" "$G/fixture.json" --shift-clock >"$T/r2.json" || fail "render adapter failed"
