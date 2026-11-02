@@ -236,7 +236,7 @@
   {
     "name": "PreToolUse nudges about an unclaimed path every time",
     "file": "bin/agentbus",
-    "find": "if own or not isinstance\\(payload.get\\(\"session_id\"\\), str\\) or not hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\):",
+    "find": "if own or not peers or not isinstance\\(payload.get\\(\"session_id\"\\), str\\) or not hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\):",
     "replace": "if own:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -263,8 +263,8 @@
   {
     "name": "setup claude records a PATH lookup instead of the tool's absolute path",
     "file": "bin/agentbus",
-    "find": "        return word\\(argv0\\)\\n",
-    "replace": "        return \"agentbus\"\n",
+    "find": "return word\\(sys\\.executable\\) \\+ \" \" \\+ word\\(self_path\\(\\)\\)",
+    "replace": "return \"agentbus\"",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "settings.json lacks five tagged entries, or lost an existing hook or key"
@@ -277,5 +277,95 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "missing line:   = hooks   provided by the agentbus plugin; not added"
+  },
+  {
+    "name": "a SessionStart write open creates a bus nobody made",
+    "file": "bin/agentbus",
+    "find": "            hook_open\\(path, strict, True\\)\\.close\\(\\)",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a planted bus folder with no bus.db"
+  },
+  {
+    "name": "a hook trusts a .agentbus that git tracks",
+    "file": "bin/agentbus",
+    "find": "if directory is None or not hook_untracked\\(directory\\):",
+    "replace": "if directory is None:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a committed bus without init's exclude rule"
+  },
+  {
+    "name": "hook text endorses the bus copy in the project",
+    "file": "bin/agentbus",
+    "find": "if is_repo_local_copy\\(\\) and os\\.path\\.realpath\\(copy\\) == self_path\\(\\):",
+    "replace": "if True:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the hook text does not name agentbus"
+  },
+  {
+    "name": "Stop reminds on every turn",
+    "file": "bin/agentbus",
+    "find": "    if not hook_nudge_once\\(payload\\[\"session_id\"\\], \"stop:\" \\+ hashlib[^\\n]*\\n        return None\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "Stop for the same claims a second time"
+  },
+  {
+    "name": "PreToolUse nudges a session that is alone on the bus",
+    "file": "bin/agentbus",
+    "find": " or not peers or ",
+    "replace": " or ",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a nudge to a session alone on the bus"
+  },
+  {
+    "name": "/clear leaves the bus and strands the name",
+    "file": "bin/agentbus",
+    "find": "if payload\\.get\\(\"reason\"\\) == \"clear\" and process_name == name:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd clear released the name or its claims mid-task"
+  },
+  {
+    "name": "agents not seen for 30 minutes are counted",
+    "file": "bin/agentbus",
+    "find": "agents = con\\.execute\\(\"SELECT COUNT\\(\\*\\) FROM agents WHERE last_seen>=\\?\", \\(hook_cutoff\\(\\),\\)\\)",
+    "replace": "agents = con.execute(\"SELECT COUNT(*) FROM agents WHERE ?=?\", (\"a\", \"a\"))",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "stale agents were counted"
+  },
+  {
+    "name": "an older or newer bus makes the hooks silent without a notice",
+    "file": "bin/agentbus",
+    "find": "raise HookNotice\\(refusal\\(e\\)\\[\"code\"\\]\\)",
+    "replace": "raise",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a bus that needs a migration was not left alone"
+  },
+  {
+    "name": "per-session memory is never pruned",
+    "file": "bin/agentbus",
+    "find": "        hook_state_prune\\(\\)\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "per-session memory was not pruned by age"
+  },
+  {
+    "name": "setup trusts the plugin files over claude plugin list",
+    "file": "bin/agentbus",
+    "find": "return claude_plugin_from_files\\(\\) if asked is None else asked",
+    "replace": "return claude_plugin_from_files()",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a project-scope plugin install did not stop setup adding its own hooks"
   }
 ]

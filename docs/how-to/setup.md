@@ -37,7 +37,7 @@ dry run: nothing was written.
 | `setup claude` | `~/.claude/skills/agentbus/SKILL.md` and the `hooks` of `~/.claude/settings.json` (or under `CLAUDE_CONFIG_DIR`) | `./.claude/skills/agentbus/SKILL.md` and `./.claude/settings.json` |
 | `setup codex` | `~/.codex/AGENTS.md` (or under `CODEX_HOME`) | `./AGENTS.md` |
 
-The hooks are five entries, each ending in `# agentbus:managed`; your other hooks and settings stay. If the agentbus plugin is already installed it provides the hooks, so setup adds only the skill and says `provided by the agentbus plugin; not added`. [Claude Code](claude-code.md) describes what the hooks do.
+The hooks are five entries, each ending in `# agentbus:managed`; your other hooks and settings stay. If the agentbus plugin is already installed and enabled (setup asks `claude plugin list --json`, and reads Claude Code's plugin files only when there is no `claude` to ask) it provides the hooks, so setup adds only the skill and says `provided by the agentbus plugin; not added`. [Claude Code](claude-code.md) describes what the hooks do.
 
 Nothing else is written. New folders are private (0700) and new files owner-only (0600).
 
