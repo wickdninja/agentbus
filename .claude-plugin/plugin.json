@@ -1,0 +1,18 @@
+{
+  "name": "agentbus",
+  "version": "0.2.0.dev0",
+  "description": "A shared inbox for the coding agents in your workspace: messages, file claims and shared facts in one SQLite file.",
+  "author": {
+    "name": "Nate Ross"
+  },
+  "homepage": "https://github.com/wickdninja/agentbus",
+  "repository": "https://github.com/wickdninja/agentbus",
+  "license": "MIT",
+  "keywords": [
+    "agents",
+    "coordination",
+    "multi-agent",
+    "handoff",
+    "claims"
+  ]
+}
