@@ -1,0 +1,15 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000001",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/aaaaaaaa-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "d169f00f-1570-4895-a0f6-24fa2c9ec2bd",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "CANARY-SS-7, CANARY-UPS-8, CANARY-PTU-9; printenv HOOKTEST_VAR: ss1",
+  "background_tasks": [],
+  "session_crons": []
+}

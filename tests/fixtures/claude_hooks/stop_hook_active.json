@@ -1,0 +1,15 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000007",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/aaaaaaaa-0000-4000-8000-000000000007.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "e27347dd-58c1-4bc3-941b-7f54ebdfd392",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": true,
+  "last_assistant_message": "The stop hook said \"STOP-EXIT2-STDERR keep going.\" I didn't see it before my last reply, so my earlier \"no hook messages\" was only true for what I could see then. I checked `hello.txt` and it contains `hi`. The original task is complete, so I'm not sure what to keep going on. Tell me what you want next.",
+  "background_tasks": [],
+  "session_crons": []
+}

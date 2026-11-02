@@ -1,0 +1,197 @@
+{
+  "claude_code_version": "2.1.316",
+  "accepted_output_shapes": {
+    "SessionStart_additionalContext": {
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "SessionStart",
+          "additionalContext": "CANARY-SS-7 agentbus test context"
+        }
+      },
+      "observed": "model quoted CANARY-SS-7 verbatim in its reply (run r1, claude -p)"
+    },
+    "UserPromptSubmit_additionalContext": {
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "UserPromptSubmit",
+          "additionalContext": "CANARY-UPS-8 agentbus test context"
+        }
+      },
+      "observed": "model quoted CANARY-UPS-8 (run r1)"
+    },
+    "PreToolUse_additionalContext": {
+      "stdout": {
+        "hookSpecificOutput": {
+          "hookEventName": "PreToolUse",
+          "additionalContext": "CANARY-PTU-9 agentbus test context"
+        }
+      },
+      "observed": "model quoted CANARY-PTU-9; the Write ran (tool result: File created successfully); exit 0 with no permissionDecision does not change the permission flow (run r1)"
+    },
+    "Stop_systemMessage": {
+      "stdout": {
+        "systemMessage": "CANARY-STOP-SYSMSG shown to user"
+      },
+      "observed": "stream-json emitted {type:system,subtype:informational,content:'Stop says: CANARY-STOP-SYSMSG shown to user',level:notice}; the turn ended normally, no continuation (run r1)"
+    },
+    "SessionEnd_systemMessage": {
+      "stdout": {
+        "systemMessage": "CANARY-SE-SYSMSG"
+      },
+      "observed": "no message emitted in the stream; docs say SessionEnd discards JSON output (DOCS-ONLY for the discard, absence VERIFIED in r1)"
+    }
+  },
+  "exit_code_runs": {
+    "r3_plugin_p_with_or_true_PreToolUse_exit2": [
+      {
+        "subtype": "hook_response",
+        "hook_name": "SessionStart:startup",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "UserPromptSubmit",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "PreToolUse:Write",
+        "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"CANARY-PTU-R3\"}}",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "Stop",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "result": "The Write succeeded (hello.txt created with \"hi\"), and step 2 printed only CLAUDE_CODE_SESSION_ID."
+      }
+    ],
+    "r4_plugin_q_SessionStart_exit2_UserPromptSubmit_exit2_SessionEnd_exit2": [
+      {
+        "subtype": "hook_response",
+        "hook_name": "SessionStart:startup",
+        "stdout": "",
+        "stderr": "SS-STDERR-2",
+        "exit_code": 2,
+        "outcome": "error"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "UserPromptSubmit",
+        "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"CANARY-R4\"}}",
+        "stderr": "UPS-BLOCK-STDERR",
+        "exit_code": 2,
+        "outcome": "error"
+      },
+      {
+        "subtype": "informational",
+        "content": "UserPromptSubmit operation blocked by hook:\n[python3 \"/home/user/scratch/plugin-q/hooklog.py\" UserPromptSubmit]: UPS-BLOCK-STDERR\nThis hook comes from the hookcap-q@inline plugin.\n\nOriginal prompt: say hi"
+      },
+      {
+        "result": "UserPromptSubmit operation blocked by hook:\n[python3 \"/home/user/scratch/plugin-q/hooklog.py\" UserPromptSubmit]: UPS-BLOCK-STDERR\nThis hook comes from the hookcap-q@inline plugin.\n\nOriginal prompt: say hi"
+      }
+    ],
+    "r5_plugin_q_PreToolUse_exit2": [
+      {
+        "subtype": "hook_response",
+        "hook_name": "SessionStart:startup",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "UserPromptSubmit",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "PreToolUse:Write",
+        "stdout": "",
+        "stderr": "PTU-BLOCK-STDERR reason text",
+        "exit_code": 2,
+        "outcome": "error"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "Stop",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "result": "The Write did not work: a PreToolUse hook from the hookcap-q@inline plugin blocked it, so hello.txt was not created. The hook message was: \"PreToolUse:Write hook error: [python3 .../plugin-q/hooklog.py PreToolUse]: PTU-BLOCK-STDERR reason text. This hook comes from the hookcap-q@inline plugin.\""
+      }
+    ],
+    "r6_plugin_q_PreToolUse_exit1_Stop_exit2_once": [
+      {
+        "subtype": "hook_response",
+        "hook_name": "SessionStart:startup",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "UserPromptSubmit",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "PreToolUse:Write",
+        "stdout": "",
+        "stderr": "PTU-EXIT1-STDERR",
+        "exit_code": 1,
+        "outcome": "error"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "Stop",
+        "stdout": "",
+        "stderr": "STOP-EXIT2-STDERR keep going",
+        "exit_code": 2,
+        "outcome": "error"
+      },
+      {
+        "subtype": "hook_response",
+        "hook_name": "Stop",
+        "stdout": "",
+        "stderr": "",
+        "exit_code": 0,
+        "outcome": "success"
+      },
+      {
+        "result": "The stop hook said \"STOP-EXIT2-STDERR keep going.\" I didn't see it before my last reply, so my earlier \"no hook messages\" was only true for what I could see then. I checked `hello.txt` and it contains `hi`. The original task is complete, so I'm not sure what to keep going on. Tell me what you want next."
+      }
+    ]
+  },
+  "stop_exit2_continues_conversation": "r6: Stop exit 2 + stderr made the model run another turn; second Stop payload carried stop_hook_active=true (fixture stop_hook_active.json)",
+  "sessionend_timeout_run_r2": {
+    "hook_sleep_seconds": 3,
+    "hooks_json_timeout_seconds": 5,
+    "stderr_of_claude": "SessionEnd hook [python3 \"${CLAUDE_PLUGIN_ROOT}/hooklog.py\" SessionEnd 2>/dev/null || true] failed: Hook cancelled",
+    "work_after_sleep_completed": false
+  }
+}

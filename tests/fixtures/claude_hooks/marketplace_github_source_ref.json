@@ -1,0 +1,12 @@
+{
+  "name": "agentbus",
+  "owner": {"name": "Nate Ross"},
+  "description": "agentbus plugin marketplace",
+  "plugins": [
+    {
+      "name": "agentbus",
+      "description": "Shared inbox for coding agents",
+      "source": {"source": "github", "repo": "wickdninja/agentbus", "ref": "v0.2.0"}
+    }
+  ]
+}
