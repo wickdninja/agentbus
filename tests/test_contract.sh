@@ -396,6 +396,7 @@ step("skill", "skill", "--agents-md")
 # a dry run writes nothing; the config folders point into this test's own temp folder all the same
 step("setup", "setup", "claude", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("setup", "setup", "codex", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
+step("hooks", "hooks", "codex")
 LISTINGS = ["who", "inbox", "read", "claims", "ctx get", "ctx history", "log show", "buses"]
 if NEEDS_ENVELOPE:
     step("who", "who")

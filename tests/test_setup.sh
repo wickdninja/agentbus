@@ -998,4 +998,190 @@ export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
 ok "enclosing work tree, .AGENTBUS, another spelling and a tracked directory link are refused; an untracked directory link is fine"
 
 echo
+echo "TEST: codex hooks: setup codex adds the block and four tagged hooks, keeps existing hooks and keys, and a second run changes nothing"
+reset
+mkdir -p "$HOME/.codex"; CH="$HOME/.codex/hooks.json"
+"$PY" -I - "$CH" <<'PY'
+import json, sys
+json.dump({"note": "mine", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}],
+                                     "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo post"}]}]}},
+          open(sys.argv[1], "w"), indent=2)
+PY
+cp "$CH" "$T/ch.orig"
+run_setup codex
+[ "$RC" = 0 ] || fail "codex hooks install: exit $RC: $OUT"
+has "agentbus setup codex (user)"
+has "  + ~/.codex/AGENTS.md   added the agentbus block ($BLOCK_LINES lines)"
+grep -qF "  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop); the file as it was is saved as hooks.json.agentbus-" <<<"$OUT" || { echo "$OUT" >&2; fail "codex hooks install line"; }
+has "done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the agentbus entries."
+has "next: cd your-repo && agentbus init ."
+"$PY" -I - "$CH" "$T/ch.orig" <<'PY' || fail "hooks.json lacks four tagged entries, or lost an existing hook or key"
+import json, os, shlex, sys
+now = json.load(open(sys.argv[1])); orig = json.load(open(sys.argv[2]))
+hooks = now.pop("hooks")
+assert now == {k: v for k, v in orig.items() if k != "hooks"}, now
+assert hooks["PostToolUse"] == orig["hooks"]["PostToolUse"], hooks["PostToolUse"]
+assert hooks["Stop"][0] == orig["hooks"]["Stop"][0] and len(hooks["Stop"]) == 2, hooks["Stop"]
+want = {"SessionStart": None, "UserPromptSubmit": None, "PreToolUse": "apply_patch|Edit|Write", "Stop": None}
+assert sorted(hooks) == sorted(set(want) | {"PostToolUse"}), sorted(hooks)
+for event, matcher in want.items():
+    groups = [g for g in hooks[event] if any(h["command"].endswith(" # agentbus:managed") for h in g["hooks"])]
+    assert len(groups) == 1 and groups[0].get("matcher") == matcher and len(groups[0]["hooks"]) == 1, (event, groups)
+    h = groups[0]["hooks"][0]
+    assert h["type"] == "command" and h["timeout"] == 5, h
+    words = shlex.split(h["command"])
+    tool = words[:words.index("hook")]
+    assert os.path.isabs(tool[0]) or os.path.isabs(tool[-1]), tool
+    assert h["command"].endswith(f" hook codex {event} 2>/dev/null || true # agentbus:managed"), h["command"]
+PY
+[ "$(mode "$CH")" = 644 ] || fail "an existing hooks.json changed mode: $(mode "$CH")"
+h1=$(hash_tree "$HOME")
+run_setup codex
+has "  = ~/.codex/AGENTS.md   unchanged"
+has "  = ~/.codex/hooks.json   unchanged"
+has "done. Nothing to change."
+lacks "type /hooks"
+[ "$(hash_tree "$HOME")" = "$h1" ] || fail "a second codex hooks run changed a file"
+ok "AGENTS.md block plus four tagged hooks, existing hooks and keys kept, a rerun changes nothing"
+
+echo
+echo "TEST: codex hooks: a dry run writes nothing, a fresh install makes a private hooks.json, and the trust line is printed verbatim"
+reset
+h0=$(hash_tree "$HOME")
+run_setup codex --dry-run
+[ "$RC" = 0 ] || fail "codex dry run: exit $RC: $OUT"
+has "  + would add 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop) to ~/.codex/hooks.json"
+has "dry run: nothing was written."
+[ "$(hash_tree "$HOME")" = "$h0" ] || fail "a codex dry run wrote"
+run_setup codex
+[ "$RC" = 0 ] || fail "codex fresh install: exit $RC: $OUT"
+has "  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)"
+grep -qxF "done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the agentbus entries." <<<"$OUT" || { echo "$OUT" >&2; fail "trust line"; }
+[ "$(mode "$HOME/.codex/hooks.json")" = 600 ] && [ "$(mode "$HOME/.codex")" = 700 ] || fail "fresh hooks.json modes"
+[ -z "$(ls "$HOME/.codex" | grep -F .bak || true)" ] || fail "a fresh install made a backup"
+run_setup codex --json
+"$PY" -I - "$OUT" <<'PY' || fail "codex --json lacks the hooks change"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["target"] == "codex" and [c["action"] for c in d["changes"]] == ["unchanged", "unchanged"], d
+PY
+ok "dry run: nothing written; fresh install 0600 in 0700; trust line exact; --json lists both files"
+
+echo
+echo "TEST: codex hooks: uninstall gives parsed-JSON equality with the original plus an edit made after install"
+reset; mkdir -p "$HOME/.codex"; CH="$HOME/.codex/hooks.json"
+printf '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}]}, "z": 1}\n' >"$CH"; cp "$CH" "$T/ch.orig"
+run_setup codex >/dev/null
+"$PY" -I - "$CH" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["model"] = "x"; d["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": "echo late"}]})
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+run_setup codex --uninstall
+[ "$RC" = 0 ] || fail "codex hooks uninstall: exit $RC: $OUT"
+has "  - ~/.codex/hooks.json   removed the agentbus hooks; the file as it was is saved as $(ls "$HOME/.codex" | grep '^hooks.json.agentbus-' | tail -1)"
+lacks "trust"
+"$PY" -I - "$CH" "$T/ch.orig" <<'PY' || fail "codex uninstall did not leave the original plus the user's edit"
+import json, sys
+now = json.load(open(sys.argv[1])); orig = json.load(open(sys.argv[2]))
+orig["model"] = "x"; orig["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": "echo late"}]})
+assert now == orig, (now, orig)
+PY
+grep -q 'agentbus' "$HOME/.codex/AGENTS.md" && fail "the AGENTS.md block is still there after uninstall"
+reset; run_setup codex >/dev/null; run_setup codex --uninstall >/dev/null
+[ "$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1])))' "$HOME/.codex/hooks.json")" = "{}" ] || fail "uninstalling from a file we made left something"
+ok "tagged entries gone, everything else (including the edit) kept"
+
+echo
+echo "TEST: codex hooks: an invalid hooks.json is refused and nothing is written; AGENTS.md past 32 KiB is refused with its message"
+reset; mkdir -p "$HOME/.codex"; printf '{ not json' >"$HOME/.codex/hooks.json"; cp "$HOME/.codex/hooks.json" "$T/ch.bad"
+run_setup codex
+[ "$RC" = 1 ] && grep -qF "is not valid JSON; not changed." <<<"$OUT" || fail "invalid hooks.json: exit $RC: $OUT"
+cmp -s "$HOME/.codex/hooks.json" "$T/ch.bad" || fail "invalid hooks.json was changed"
+[ ! -e "$HOME/.codex/AGENTS.md" ] || fail "the AGENTS.md block was written although hooks.json was refused"
+reset; mkdir -p "$HOME/.codex"
+"$PY" -c 'import sys; sys.stdout.write("x" * 32700 + "\n")' >"$HOME/.codex/AGENTS.md"; cp "$HOME/.codex/AGENTS.md" "$T/big.orig"
+run_setup codex
+[ "$RC" = 1 ] && grep -qF "AGENTS.md would exceed 32 KiB; shorten it or use --scope project" <<<"$OUT" || fail "oversize AGENTS.md: exit $RC: $OUT"
+cmp -s "$HOME/.codex/AGENTS.md" "$T/big.orig" || fail "an oversize AGENTS.md was changed"
+[ ! -e "$HOME/.codex/hooks.json" ] || fail "hooks.json was written although AGENTS.md was refused"
+"$PY" -c 'import sys; sys.stdout.write("x" * 32000 + "\n")' >"$HOME/.codex/AGENTS.md"
+run_setup codex; [ "$RC" = 0 ] || fail "an AGENTS.md that stays under 32 KiB was refused: $RC $OUT"
+run_setup codex --uninstall; [ "$RC" = 0 ] || fail "uninstall from a big AGENTS.md was refused: $RC $OUT"
+ok "invalid JSON and an oversize AGENTS.md are refused up front; under the cap installs and uninstalls"
+
+echo
+echo "TEST: codex hooks: an AGENTS.override.md that is not empty is reported, because Codex reads it instead of AGENTS.md"
+reset; mkdir -p "$HOME/.codex"; printf 'rules\n' >"$HOME/.codex/AGENTS.override.md"
+run_setup codex
+[ "$RC" = 0 ] || fail "override: exit $RC: $OUT"
+has "  ! ~/.codex/AGENTS.override.md   is not empty, so Codex reads it instead of AGENTS.md and ignores the agentbus block; empty or remove it"
+: >"$HOME/.codex/AGENTS.override.md"; run_setup codex
+lacks "AGENTS.override.md"
+ok "a non-empty override file is named; an empty one is not"
+
+echo
+echo "TEST: codex hooks: --scope project writes ./AGENTS.md and ./.codex/hooks.json under the current directory only"
+reset; h0=$(hash_tree "$HOME")
+run_setup codex --scope project
+[ "$RC" = 0 ] && [ -f "$W/AGENTS.md" ] && [ -f "$W/.codex/hooks.json" ] && [ "$h0" = "$(hash_tree "$HOME")" ] || fail "project hooks: exit $RC, $OUT"
+grep -qF ".codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)" <<<"$OUT" || fail "project hooks line: $OUT"
+ok "project scope: both files are under the work folder"
+
+echo
+echo "TEST: codex hooks: check reads text only, names the recorded executable, a user and project duplicate and the login shell, and says trust cannot be checked"
+reset; run_setup codex >/dev/null
+mkdir -p "$T/shells"
+printf '#!/bin/sh\nexit 0\n' >"$T/shells/quiet"; printf '#!/bin/sh\necho "welcome back, fortune of the day"\nexit 0\n' >"$T/shells/noisy"; chmod +x "$T/shells/quiet" "$T/shells/noisy"
+rows() { SHELL="${SHELLFOR:-$T/shells/quiet}" "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$HOME/.codex/hooks.json" "$1" <<'PY'
+import json, runpy, shlex, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_check")
+sys.argv[0] = shlex.split(json.load(open(sys.argv[2]))["hooks"]["Stop"][0]["hooks"][0]["command"])[0]
+for r in m["CodexHooksPiece"]().check(sys.argv[3]):
+    print(r[0], r[1], r[2] if r[0] in ("codex_trust", "codex_login_shell") else "")
+PY
+}
+got=$(cd "$W" && rows user)
+[ "$got" = "$(printf 'codex_hooks ok \ncodex_hooks_tool ok \ncodex_login_shell ok your login shell prints nothing at startup, so hook output stays clean\ncodex_trust ok Codex trust cannot be checked from outside Codex; type /hooks to confirm')" ] || fail "check after install: $got"
+got=$(cd "$W" && SHELLFOR="$T/shells/noisy" rows user)
+grep -qx "codex_login_shell problem $T/shells/noisy prints text at startup (33 bytes), which Codex puts in front of each hook's output and breaks it" <<<"$got" || fail "check with a login shell that prints: $got"
+! grep -qF "fortune" <<<"$got" || fail "check printed what the login shell wrote"
+(cd "$W" && "${AB[@]}" setup codex --scope project >/dev/null)
+got=$(cd "$W" && rows user); grep -qx "codex_hooks_duplicate problem " <<<"$got" || fail "check with user and project hooks both present: $got"
+rm -rf "$W/.codex"
+# a hooks file can be a project's: check looks at the executable it names and never starts it
+mkdir -p "$T/planted"; printf '#!/bin/sh\ntouch "%s"\n' "$T/canary-check" >"$T/planted/agentbus"; chmod +x "$T/planted/agentbus"
+"$PY" -I - "$HOME/.codex/hooks.json" "$T/planted/agentbus" <<'PY'
+import json, re, sys
+d = json.load(open(sys.argv[1]))
+for groups in d["hooks"].values():
+    for g in groups:
+        for h in g["hooks"]:
+            h["command"] = re.sub(r"^.*? hook codex", "'" + sys.argv[2] + "' hook codex", h["command"])
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+got=$(cd "$W" && rows user)
+[ ! -e "$T/canary-check" ] || fail "check started the executable a hooks file names"
+grep -qx "codex_hooks_tool ok " <<<"$got" || fail "check with a planted executable: $got"
+"$PY" -I - "$HOME/.codex/hooks.json" <<'PY'
+import json, re, sys
+d = json.load(open(sys.argv[1]))
+for groups in d["hooks"].values():
+    for g in groups:
+        for h in g["hooks"]:
+            h["command"] = re.sub(r"^.*? hook codex", "'/nonexistent/agentbus' hook codex", h["command"])
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+got=$(cd "$W" && rows user); grep -qx "codex_hooks_tool problem " <<<"$got" || fail "check with a missing executable: $got"
+ok "check: ok after install, with the login shell and trust rows; a noisy login shell, a missing executable and a doubled install are problems; nothing the file names is started"
+
+echo
+echo "TEST: setup help says what setup installs for both targets"
+help=$("${AB[@]}" setup --help | tr -s ' \n' '  ')
+grep -qF "the skill and hooks for Claude Code, the AGENTS.md block and hooks for Codex" <<<"$help" || fail "setup help does not mention the hooks: $help"
+grep -qF "claude (skill and hooks) or codex (AGENTS.md block and hooks)" <<<"$help" || fail "setup target help does not mention the hooks: $help"
+"${AB[@]}" --json schema | grep -qF "Install the skill and hooks for Claude Code, or the AGENTS.md block and hooks for Codex" || fail "the setup entry of schema does not mention the hooks"
+ok "setup --help and schema name the hooks"
+
+echo
 echo "All setup tests passed"

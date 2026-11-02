@@ -657,7 +657,10 @@ CONTRACT = {
                        _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"}, "objects": {"type": "object"},
                            "error_fields": {"type": "object"}, "errors": {"type": "object"}, "exit_codes": {"type": "object"}, "env": {"type": "object"}}), base=_PLAIN_ERRORS),
         "skill": _cmd("Print the bundled skill, or with --agents-md the AGENTS.md block", _o({"text": _STR}), base=_PLAIN_ERRORS),
-        "setup": _cmd("Install the skill for Claude Code or the AGENTS.md block for Codex",
+        "hooks": _cmd("Print the hooks an agent harness needs (claude, codex)", _o({"hooks": {"type": "object"}}), ["bad_input"],
+                      text='{"hooks": {EVENT: [{"matcher": string (optional), "hooks": [{"type": string, "timeout": integer, "command": string}]}]}}',
+                      base=_PLAIN_ERRORS),
+        "setup": _cmd("Install the skill and hooks for Claude Code, or the AGENTS.md block and hooks for Codex",
                       _o({"target": _STR, "scope": _STR, "dry_run": _BOOL,
                           "changes": _list(_o({"path": _STR, "detail": _STR, "action": {"type": "string", "enum": [
                               "installed", "updated", "replaced_link", "unchanged", "removed", "skipped", "refused"]},
@@ -5690,14 +5693,17 @@ def cmd_setup(a):
         show("done.")
     elif all(c.action == "unchanged" for c in done):
         show("done. Nothing to change.")
+    elif codex_done_line(target, done):
+        show("done. {}", codex_done_line(target, done))
+        show("next: cd your-repo && agentbus init .")
     else:
         show("done. Start a new {} session to load {}.", SETUP_NAMES[target], "them" if target == "claude" else "it")
         show("next: cd your-repo && agentbus init .")
 
 
 def register_setup(sub):
-    s = sub("setup", help="Teach your agent to use agentbus: install the skill for Claude Code or the block for Codex")
-    s.add_argument("target", choices=sorted(SETUP_TARGETS), help="claude (skill) or codex (AGENTS.md block)")
+    s = sub("setup", help="Teach your agent to use agentbus: the skill and hooks for Claude Code, the AGENTS.md block and hooks for Codex")
+    s.add_argument("target", choices=sorted(SETUP_TARGETS), help="claude (skill and hooks) or codex (AGENTS.md block and hooks)")
     s.add_argument("--scope", choices=("user", "project"), default="user",
                    help="user: your own config (default); project: files under the current directory")
     s.add_argument("--dry-run", action="store_true", help="Show what would change; write nothing")
@@ -5716,7 +5722,9 @@ REGISTER_COMMANDS.append(register_setup)
 # running a copy found in the project; opens are read-only except SessionStart's join and SessionEnd's
 # leave, none migrates, and a busy or unreadable bus is silent; what reaches the model is tool-authored
 # text, counts and enums, never a goal, message, purpose, path or name a peer wrote.
-# A handler returns (context, notice) for its dialect to render; HOOK_DIALECTS holds one renderer each.
+# A handler returns (context, notice) for its dialect to render. HOOK_DIALECTS holds what differs per harness
+# (Claude Code, Codex): the name prefix, the roster tool, the events it runs, how it names the files an edit
+# touches; the handlers and the output shape are the same for both.
 # A hook never creates a bus (a folder without an initialised bus.db is silent) and refuses a .agentbus that git
 # tracks: a clone can commit a whole bus, with a copy of the tool the model would be told to run. The hook text
 # names the installed command, `agentbus`, and a bus copy only when the hook itself runs from that copy.
@@ -5737,7 +5745,8 @@ HOOK_KIND_PLURAL = {"note": "notes", "question": "questions", "answer": "answers
                     "decision": "decisions", "alert": "alerts", "done": "done", "other": "other"}
 HOOK_STATE_KEEP_S = 7 * 86400  # per-session memory older than this is removed
 HOOK_INDEX_MAX = 128 << 20  # the largest git index read (a bigger one is not read: the hook stays silent)
-HOOK_DERIVED_RE = re.compile(r"claude-[0-9a-f]{8}")
+HOOK_STATE = {"dialect": "claude"}  # hook_run sets it from `hook DIALECT EVENT`; the handlers read it through hook_dialect()
+HOOK_TARGETS_MAX = 20  # files of one edit that are checked against claims
 HOOK_NOTICES = {
     "schema_older": "agentbus: this folder's bus was made by an older agentbus, so the hooks are off for it. Run: agentbus upgrade DIR",
     "schema_newer": "agentbus: this folder's bus is newer than this agentbus, so the hooks are off for it. Update agentbus (or the plugin), then start a new session.",
@@ -5760,13 +5769,19 @@ def hook_exit_now(msg, code, grace=None):
     os._exit(0)
 
 
+def hook_dialect():
+    return HOOK_DIALECTS[HOOK_STATE["dialect"]]
+
+
 def hook_derived_name(session_id):
-    return "claude-" + hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:8]
+    return hook_dialect()["prefix"] + hashlib.sha256(session_id.encode("utf-8", "replace")).hexdigest()[:8]
 
 
 def hook_process_id():
-    """Claude Code's own process id (CLAUDE_PID in every hook's environment), or None."""
-    m = re.fullmatch(r"\d{1,10}", os.environ.get("CLAUDE_PID", ""))
+    """The harness's own process id (Claude Code's CLAUDE_PID, in every hook's environment), or None: Codex has none,
+    and a CLAUDE_PID inherited from a Claude Code that started Codex is not Codex's."""
+    var = hook_dialect()["pid_env"]
+    m = re.fullmatch(r"\d{1,10}", os.environ.get(var, "")) if var else None
     return m.group(0) if m else None
 
 
@@ -5834,7 +5849,7 @@ def hook_session_name(session_id):
     if not isinstance(session_id, str) or not session_id:
         return None
     text = hook_state_get(hook_state_key(session_id, ".name"))
-    return text.strip() if text and HOOK_DERIVED_RE.fullmatch(text.strip()) else None
+    return text.strip() if text and hook_dialect()["derived"].fullmatch(text.strip()) else None
 
 
 def hook_identity(payload):
@@ -5859,7 +5874,7 @@ def hook_start_name(payload, name):
     source, pid = payload.get("source"), hook_process_id()
     if source in ("clear", "fork") and pid:
         held = hook_state_get(f"proc-{pid}.name")
-        if held and HOOK_DERIVED_RE.fullmatch(held.strip()):
+        if held and hook_dialect()["derived"].fullmatch(held.strip()):
             return held.strip()
     return name
 
@@ -6225,9 +6240,9 @@ def hook_join(con, name, takeover):
             """INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen)
                VALUES(?,?,?,?,?,?,?,?)
                ON CONFLICT(name) DO UPDATE SET tool=excluded.tool, cwd=excluded.cwd, last_seen=excluded.last_seen""",
-            (name, "claude-code", None, cwd_text(), None, None, t, t))
+            (name, hook_dialect()["tool"], None, cwd_text(), None, None, t, t))
         ensure_cursor(con, name)
-        log(con, name, "join", json.dumps({"tool": "claude-code", "model": None, "branch": None, "role": None}))
+        log(con, name, "join", json.dumps({"tool": hook_dialect()["tool"], "model": None, "branch": None, "role": None}))
     return True
 
 
@@ -6242,8 +6257,10 @@ def hook_leave(con, name):
 
 def hook_export_name(name):
     """Make the model's own shell commands run as `name`: append the export to CLAUDE_ENV_FILE (Claude Code
-    runs that file before its Bash tool; later hook processes do not see it)."""
-    path = os.environ.get("CLAUDE_ENV_FILE")
+    runs that file before its Bash tool; later hook processes do not see it). Codex has no such file: its agent
+    is told the name in the context text and passes --as."""
+    var = hook_dialect()["env_file"]
+    path = os.environ.get(var) if var else None
     if not path or not os.path.isabs(path):
         return
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | NOFOLLOW, 0o600)
@@ -6280,7 +6297,8 @@ def hook_session_start(payload):
         if pid and (payload.get("source") not in ("clear", "fork", "compact") or hook_state_get(f"proc-{pid}.name") is None):
             hook_state_put(f"proc-{pid}.name", name)
         hook_export_name(name)
-    if os.environ.get("CLAUDE_PLUGIN_ROOT") and hook_duplicate_hooks() and hook_nudge_once(sid, "notice:duplicate"):
+    var = hook_dialect()["plugin_env"]
+    if var and os.environ.get(var) and hook_duplicate_hooks() and hook_nudge_once(sid, "notice:duplicate"):
         notice = HOOK_NOTICES["duplicate"]
     tool = hook_tool(db)
     base = (f"{max(agents, 1)} agent{' is' if agents == 1 else 's are'} on it, {hook_unread_text(unread)}"
@@ -6345,28 +6363,56 @@ def hook_nudge_once(session_id, key):
         os.close(fd)
 
 
-def hook_edit_target(payload, db):
-    """The path of the file a tool call edits, relative to the bus directory, or None when there is none
-    or it lies outside the bus directory (or inside .agentbus itself)."""
+def hook_claude_paths(payload):
+    """The one path Claude Code's edit tools name (file_path, or notebook_path for NotebookEdit), as written."""
     tool_input = payload.get("tool_input")
     raw = next((tool_input[k] for k in HOOK_PATH_KEYS if isinstance(tool_input, dict)
                 and isinstance(tool_input.get(k), str) and tool_input[k]), None)
-    if raw is None or "\0" in raw:
-        return None
-    if not os.path.isabs(raw):
-        raw = os.path.join(os.getcwd(), raw)
-    target = os.path.join(os.path.realpath(os.path.dirname(raw)), os.path.basename(raw))
-    rel = os.path.relpath(target, os.path.realpath(bus_directory(db)))
-    if rel in (".", "..", ".agentbus") or rel.startswith("../") or rel.startswith(".agentbus/"):
-        return None
-    return norm_resource(rel, strict=False)
+    return [raw] if raw else []
+
+
+def hook_codex_paths(payload):
+    """The files a Codex apply_patch names, as written (absolute or relative to the payload's cwd). Only lines
+    that start with a marker count: a line of a file's own text starts with +, - or a space, so patched text
+    cannot name a file. Split on a newline alone: other line separators are text."""
+    if payload.get("tool_name") != "apply_patch":
+        return []
+    tool_input = payload.get("tool_input")
+    text = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(text, str):
+        return []
+    paths = []
+    for line in text[:CODEX_PATCH_MAX].split("\n"):
+        for marker in CODEX_PATCH_MARKERS:
+            if line.startswith(marker) and line[len(marker):].strip():
+                paths.append(line[len(marker):].rstrip("\r").strip())
+    return paths
+
+
+def hook_edit_targets(payload, db):
+    """The files a tool call edits, relative to the bus directory: those that lie inside it (and not inside
+    .agentbus itself), at most HOOK_TARGETS_MAX, each once."""
+    out = []
+    for raw in hook_dialect()["paths"](payload)[:HOOK_TARGETS_MAX]:
+        if "\0" in raw:
+            continue
+        if not os.path.isabs(raw):
+            raw = os.path.join(os.getcwd(), raw)
+        target = os.path.join(os.path.realpath(os.path.dirname(raw)), os.path.basename(raw))
+        rel = os.path.relpath(target, os.path.realpath(bus_directory(db)))
+        if rel in (".", "..", ".agentbus") or rel.startswith("../") or rel.startswith(".agentbus/"):
+            continue
+        rel = norm_resource(rel, strict=False)
+        if rel not in out:
+            out.append(rel)
+    return out
 
 
 def hook_pre_tool_use(payload):
     ident = hook_identity(payload)
     found = hook_find_bus(payload) if ident else None
-    rel = hook_edit_target(payload, found[0]) if found else None
-    if rel is None:
+    rels = hook_edit_targets(payload, found[0]) if found else []
+    if not rels:
         return None
     name = ident[0]
     t = now()
@@ -6374,15 +6420,19 @@ def hook_pre_tool_use(payload):
     on_roster = "EXISTS (SELECT 1 FROM agents WHERE agents.name=claims.agent)"
     con = hook_open(found[0], found[1], read_only=True)
     try:
-        held = own = False
+        held, unclaimed = False, []
         peers = con.execute("SELECT 1 FROM agents WHERE name<>? AND last_seen>=? LIMIT 1", (name, hook_cutoff())).fetchone() is not None
-        for where, params in overlap_filters(rel):
-            if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent<>? AND {on_roster} LIMIT 1",
-                           (*params, t, name)).fetchone():
-                held = True
-            if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent=? LIMIT 1",
-                           (*params, t, name)).fetchone():
-                own = True
+        for rel in rels:
+            own = False
+            for where, params in overlap_filters(rel):
+                if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent<>? AND {on_roster} LIMIT 1",
+                               (*params, t, name)).fetchone():
+                    held = True
+                if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent=? LIMIT 1",
+                               (*params, t, name)).fetchone():
+                    own = True
+            if not own:
+                unclaimed.append(rel)
     finally:
         con.close()
     copy = hook_tool(found[0])
@@ -6390,8 +6440,8 @@ def hook_pre_tool_use(payload):
         return (f"agentbus: a claim under a different name covers this file. See who and why: {copy} claims. "
                 "Claims are advisory; ask the holder or work elsewhere."), None
     # Alone on the bus there is nobody to claim against: no nudge.
-    if own or not peers or not isinstance(payload.get("session_id"), str) or not hook_nudge_once(payload["session_id"], rel):
-        return None
+    if not peers or not isinstance(payload.get("session_id"), str) or not any([hook_nudge_once(payload["session_id"], rel) for rel in unclaimed]):
+        return None  # a list, not a generator: every new path is remembered, one message covers them
     return f"agentbus: this file has no claim. Claim it first: {copy} claim PATH --purpose WHY", None
 
 
@@ -6459,9 +6509,10 @@ HOOK_HANDLERS = {
 }
 
 
-def hook_render_claude(event, context, notice):
-    """Claude Code's JSON for one event: context goes in hookSpecificOutput.additionalContext (the events
-    that take it), a user-visible notice in systemMessage. Never a decision."""
+def hook_render(event, context, notice):
+    """The JSON for one event, the same for Claude Code and Codex (docs/design/codex-hook-contract.md section 3):
+    context goes in hookSpecificOutput.additionalContext (the events that take it), a user-visible notice in
+    systemMessage (the only thing Stop may print). Never decision, continue, permissionDecision or exit 2."""
     out = {}
     if context and event in HOOK_CONTEXT_EVENTS:
         out["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": context}
@@ -6470,9 +6521,25 @@ def hook_render_claude(event, context, notice):
     return out or None
 
 
-# One renderer per harness, keyed by the dialect word in `agentbus hook DIALECT EVENT`.
+CODEX_PATCH_MARKERS = ("*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: ")
+CODEX_PATCH_MAX = 1 << 18  # bytes of a patch read for file names
+
+
+def hook_dialect_spec(prefix, tool, events, paths, pid_env=None, env_file=None, plugin_env=None):
+    """What differs per harness. prefix: a derived name is it + 8 hex of sha256(session id). tool: what the roster
+    shows. events: the ones this harness is told to run (any other is silent). paths: the files an edit names.
+    pid_env, env_file, plugin_env: the Claude Code environment variables for its process id, its shell
+    environment file and the plugin's root; Codex has none."""
+    return {"prefix": prefix, "derived": re.compile(re.escape(prefix) + r"[0-9a-f]{8}"), "tool": tool, "events": events,
+            "paths": paths, "pid_env": pid_env, "env_file": env_file, "plugin_env": plugin_env}
+
+
+# One entry per harness, keyed by the dialect word in `agentbus hook DIALECT EVENT`.
 HOOK_DIALECTS = {
-    "claude": hook_render_claude,
+    "claude": hook_dialect_spec("claude-", "claude-code", ("SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "SessionEnd"),
+                                hook_claude_paths, "CLAUDE_PID", "CLAUDE_ENV_FILE", "CLAUDE_PLUGIN_ROOT"),
+    # Codex has a SessionEnd event but no hook runs for it here: a Codex session never runs leave from a hook.
+    "codex": hook_dialect_spec("codex-", "codex", ("SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"), hook_codex_paths),
 }
 
 
@@ -6488,9 +6555,10 @@ def hook_read_payload():
 
 def hook_run(argv):
     dialect, event = (argv + ["", ""])[:2]
-    render, handler = HOOK_DIALECTS.get(dialect), HOOK_HANDLERS.get(event)
-    if render is None or handler is None:
+    spec, handler = HOOK_DIALECTS.get(dialect), HOOK_HANDLERS.get(event)
+    if spec is None or handler is None or event not in spec["events"]:
         return
+    HOOK_STATE["dialect"] = dialect
     global _HOOK_GUARD
     guard = _HOOK_GUARD = threading.Timer(HOOK_END_LIMIT_S if event == "SessionEnd" else HOOK_LIMIT_S, os._exit, (0,))
     guard.daemon = True
@@ -6505,7 +6573,7 @@ def hook_run(argv):
         sid = payload.get("session_id")
         shown = event in ("SessionStart", "UserPromptSubmit") and isinstance(sid, str) and hook_nudge_once(sid, "notice:" + str(e))
         result = (None, HOOK_NOTICES[str(e)]) if shown else None
-    out = render(event, *result) if result else None
+    out = hook_render(event, *result) if result else None
     if out:
         sys.stdout.write(json.dumps(out, separators=(",", ":")) + "\n")
 
@@ -6541,7 +6609,8 @@ REGISTER_COMMANDS.append(register_hook)
 # its hooks.json already provides them, and this piece adds nothing.
 CLAUDE_HOOK_EVENTS = (("SessionStart", "startup|resume|clear|compact|fork"), ("UserPromptSubmit", None),
                       ("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit"), ("Stop", None), ("SessionEnd", None))
-CLAUDE_HOOK_TIMEOUT = {"SessionEnd": 2}  # Claude Code gives SessionEnd hooks 1.5 s whatever is set; the rest 5 s
+HOOK_ENTRY_TIMEOUT = {"SessionEnd": 2}  # Claude Code gives SessionEnd hooks 1.5 s whatever is set; every other entry gets 5 s
+# (Codex's own default is 600 s and its hooks run one after another)
 CLAUDE_PLUGIN_NOTE = "hooks   provided by the agentbus plugin; not added"
 
 
@@ -6738,10 +6807,11 @@ def claude_plugin_provides_hooks(ask=True):
     return claude_plugin_from_files(user=asked is None)
 
 
-def claude_hook_tool():
+def hook_tool_word():
     """The running installed tool as one quoted shell word that needs no PATH lookup: sys.argv[0] made absolute when
     it is an executable file whose first line names an absolute interpreter (a pip or pipx command), else this
-    interpreter and this file."""
+    interpreter and this file. Recorded when hooks are written (setup, `agentbus hooks`), never looked up when a hook
+    runs: Claude Code and Codex both start the command from a shell whose PATH may differ."""
     def word(path):
         return "'" + path.replace("'", "'\\''") + "'"
     argv0 = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
@@ -6755,33 +6825,33 @@ def claude_hook_tool():
     return word(argv0 or self_path())
 
 
-class ClaudeHooksPiece(JsonEntriesPiece):
-    def __init__(self):
-        super().__init__("claude_hooks", lambda scope: os.path.join(setup_config_dir("claude", scope), "settings.json"),
-                         self.entries)
-        self.ask = True  # False while check() runs: nothing is started
+class HooksPiece(JsonEntriesPiece):
+    """The hooks of one harness, as tagged entries in its JSON hooks file: each runs `agentbus hook DIALECT EVENT`
+    with the installed tool's absolute path. A harness is a subclass with its events and file; the rest (the
+    entries, the plan text, the read-only check) is shared."""
+    events = ()  # ((event, matcher or None), ...) in the order they are written
 
-    @staticmethod
-    def entries(scope):
-        tool = claude_hook_tool()
-        return [(event, matcher, {"type": "command", "timeout": CLAUDE_HOOK_TIMEOUT.get(event, 5),
-                                  "command": f"{tool} hook claude {event} 2>/dev/null || true {MANAGED_TAG}"})
-                for event, matcher in CLAUDE_HOOK_EVENTS]
+    def __init__(self, dialect, path_for):
+        super().__init__(f"{dialect}_hooks", path_for, self.entries)
+        self.dialect = dialect
+
+    def entries(self, scope):
+        tool = hook_tool_word()
+        return [(event, matcher, {"type": "command", "timeout": HOOK_ENTRY_TIMEOUT.get(event, 5),
+                                  "command": f"{tool} hook {self.dialect} {event} 2>/dev/null || true {MANAGED_TAG}"})
+                for event, matcher in self.events]
 
     def plan(self, scope, uninstall=False):
-        if not uninstall and claude_plugin_provides_hooks(ask=self.ask):
-            return [Change(self.path_for(scope), "unchanged", "provided by the agentbus plugin; not added",
-                           line=CLAUDE_PLUGIN_NOTE)]
         changes = super().plan(scope, uninstall)
-        count = f"{len(CLAUDE_HOOK_EVENTS)} hooks"
-        names = f"{count} ({', '.join(e for e, _ in CLAUDE_HOOK_EVENTS)})"
+        count = f"{len(self.events)} hooks"
+        names = f"{count} ({', '.join(e for e, _ in self.events)})"
         for c in changes:
             if c.action in ("installed", "updated"):
                 c.line, c.would = c.line.replace(count, names, 1), c.would.replace(count, names, 1)
         return changes
 
     def recorded_commands(self, scope):
-        """The tagged hook commands in the settings file, [] when it is missing or unreadable."""
+        """The tagged hook commands in the hooks file, [] when it is missing or unreadable."""
         raw = setup_read(self.path_for(scope))
         try:
             hooks = json.loads(raw.decode("utf-8")).get("hooks", {}) if raw else {}
@@ -6790,18 +6860,26 @@ class ClaudeHooksPiece(JsonEntriesPiece):
         return [h["command"] for groups in hooks.values() if isinstance(groups, list) for g in groups
                 if isinstance(g, dict) and isinstance(g.get("hooks"), list) for h in g["hooks"] if self.tagged(h)]
 
+    def check_provided(self, scope, commands):
+        """Rows that end the check early (hooks provided elsewhere), or None."""
+        return None
+
+    def check_entries(self, scope):
+        return super().check(scope)
+
+    def check_more(self, scope, commands):
+        """Rows after the executable's, for a hooks file that has agentbus hooks."""
+        return []
+
     def check(self, scope):
-        """Reads text only. The settings file may be a project's (a clone can commit one), so nothing it names is
+        """Reads text only. The hooks file may be a project's (a clone can commit one), so nothing it names is
         ever run: the executable is looked at, not started."""
         commands = self.recorded_commands(scope)
-        if not commands and claude_plugin_provides_hooks(ask=False):
-            return [(self.id, "ok", "the agentbus plugin provides the hooks", "")]
-        self.ask = False
-        try:
-            rows = super().check(scope)
-        finally:
-            self.ask = True
-        fix = "agentbus setup claude" + (" --scope project" if scope == "project" else "")
+        rows = self.check_provided(scope, commands)
+        if rows is not None:
+            return rows
+        rows = self.check_entries(scope)
+        fix = f"agentbus setup {self.dialect}" + (" --scope project" if scope == "project" else "")
         if not commands:
             return rows
         import shlex
@@ -6810,21 +6888,189 @@ class ClaudeHooksPiece(JsonEntriesPiece):
             tool = words[:words.index("hook")]
             script = tool[-1]
         except (ValueError, IndexError):
-            return rows + [("claude_hooks_tool", "problem", "a hook command is not in the form setup writes", fix)]
+            return rows + [(f"{self.id}_tool", "problem", "a hook command is not in the form setup writes", fix)]
         text = setup_read(script, follow=True)
         version = re.search(rb'(?m)^__version__ = "([^"]+)"', text) if text else None
         if text is None or not os.access(script, os.R_OK) or not os.path.basename(script).startswith("agentbus"):
-            rows.append(("claude_hooks_tool", "problem", f"the hooks run {script}, which is not an agentbus executable", fix))
+            rows.append((f"{self.id}_tool", "problem", f"the hooks run {script}, which is not an agentbus executable", fix))
         else:
-            rows.append(("claude_hooks_tool", "ok", f"the hooks run {script}" + (f" ({version.group(1).decode()})" if version else ""), fix))
+            rows.append((f"{self.id}_tool", "ok", f"the hooks run {script}" + (f" ({version.group(1).decode()})" if version else ""), fix))
+        return rows + self.check_more(scope, commands)
+
+
+class ClaudeHooksPiece(HooksPiece):
+    events = CLAUDE_HOOK_EVENTS
+
+    def __init__(self):
+        super().__init__("claude", lambda scope: os.path.join(setup_config_dir("claude", scope), "settings.json"))
+        self.ask = True  # False while check() runs: nothing is started
+
+    def plan(self, scope, uninstall=False):
+        if not uninstall and claude_plugin_provides_hooks(ask=self.ask):
+            return [Change(self.path_for(scope), "unchanged", "provided by the agentbus plugin; not added",
+                           line=CLAUDE_PLUGIN_NOTE)]
+        return super().plan(scope, uninstall)
+
+    def check_provided(self, scope, commands):
+        if not commands and claude_plugin_provides_hooks(ask=False):
+            return [(self.id, "ok", "the agentbus plugin provides the hooks", "")]
+        return None
+
+    def check_entries(self, scope):
+        self.ask = False
+        try:
+            return super().check_entries(scope)
+        finally:
+            self.ask = True
+
+    def check_more(self, scope, commands):
         if claude_plugin_provides_hooks(ask=False):
-            rows.append(("claude_hooks_duplicate", "problem", "the agentbus plugin and setup both register hooks",
-                         "agentbus setup claude --uninstall"))
-        return rows
+            return [("claude_hooks_duplicate", "problem", "the agentbus plugin and setup both register hooks",
+                     "agentbus setup claude --uninstall")]
+        return []
 
 
 if not os.environ.get("AGENTBUS_TEST_SETUP_NO_HOOKS"):  # test hook: tests of the skill piece number the pieces
     SETUP_TARGETS["claude"].append(ClaudeHooksPiece())
+
+
+# ---- setup codex: the AGENTS.md size guard, the override report, the hooks piece, and `agentbus hooks` ----
+# Codex needs the user to trust the hooks (/hooks); setup says so and never does it: Codex keeps its trust in its own
+# config.toml, keyed by a hash only Codex computes (docs/design/codex-hook-contract.md section 6).
+CODEX_HOOK_EVENTS = (("SessionStart", None), ("UserPromptSubmit", None), ("PreToolUse", "apply_patch|Edit|Write"), ("Stop", None))
+CODEX_TRUST_LINE = "Codex ignores hooks until you trust them: start codex, type /hooks, and approve the agentbus entries."
+CODEX_TRUST_UNCHECKED = "Codex trust cannot be checked from outside Codex; type /hooks to confirm"
+CODEX_AGENTS_MAX = 32 * 1024  # Codex's default AGENTS.md budget (project_doc_max_bytes), shared by the whole chain
+
+
+def codex_hooks_path(scope):
+    """~/.codex/hooks.json (CODEX_HOME), or ./.codex/hooks.json: the project's own folder, not the user's."""
+    if scope == "project":
+        return os.path.join(os.getcwd(), ".codex", "hooks.json")
+    return os.path.join(setup_config_dir("codex", "user"), "hooks.json")
+
+
+class CodexAgentsPiece(TextBlockPiece):
+    """The AGENTS.md block, refused when the file it makes passes Codex's 32 KiB budget (Codex drops text
+    past it). The budget is shared by every AGENTS.md on the path, so this guards the one file we write."""
+    scope = "user"
+
+    def plan(self, scope, uninstall=False):
+        self.scope = scope
+        return super().plan(scope, uninstall)
+
+    def _change(self, path, st, raw, new, verb, lines_n, backup=False):
+        if verb != "removed" and len(new.encode("utf-8")) > CODEX_AGENTS_MAX:
+            msg = "{path} AGENTS.md would exceed 32 KiB; shorten it" + ("" if self.scope == "project" else " or use --scope project")
+            return Change(path, "refused", msg.replace("{path}", path), line=msg)
+        return super()._change(path, st, raw, new, verb, lines_n, backup)
+
+
+class CodexOverridePiece:
+    """Codex reads AGENTS.override.md instead of AGENTS.md in the same folder when it is not empty, so the block
+    would be ignored. Writes nothing; says so when that file is there."""
+    id = "agents_override"
+
+    def path(self, scope):
+        return os.path.join(setup_config_dir("codex", scope), "AGENTS.override.md")
+
+    def _active(self, scope):
+        st = setup_lstat(self.path(scope))
+        return st is not None and not stat.S_ISDIR(st.st_mode) and st.st_size > 0
+
+    def plan(self, scope, uninstall=False):
+        path = self.path(scope)
+        if uninstall or not self._active(scope):
+            return []
+        msg = "{path}   is not empty, so Codex reads it instead of AGENTS.md and ignores the agentbus block; empty or remove it"
+        return [Change(path, "skipped", "Codex reads this file instead of AGENTS.md", line=msg)]
+
+    def apply(self, change):
+        pass
+
+    def remove(self, scope):
+        return []
+
+    def check(self, scope):
+        if self._active(scope):
+            return [(self.id, "problem", f"{tilde(self.path(scope))} makes Codex ignore the agentbus block in AGENTS.md",
+                     "empty or remove that file")]
+        return []
+
+
+def codex_login_shell_row():
+    """Codex starts every hook as `$SHELL -lc COMMAND` (or /bin/sh), so anything the user's login profile prints reaches
+    Codex in front of the hook's JSON and breaks it (docs/design/codex-hook-contract.md section 1). Starts that shell
+    once with a command that does nothing, from the home folder with no input, and says how much it printed, never what."""
+    shell = os.environ.get("SHELL")
+    if not (shell and os.path.isabs(shell) and os.access(shell, os.X_OK)):
+        shell = "/bin/sh"
+    home = os.path.expanduser("~")
+    try:
+        run = subprocess.run([shell, "-lc", "true"], capture_output=True, stdin=subprocess.DEVNULL, timeout=10,
+                             cwd=home if os.path.isdir(home) else os.sep)
+    except (OSError, subprocess.SubprocessError):
+        return ("codex_login_shell", "ok", f"{shell} could not be tried; if Codex shows garbled hook output, make its startup files print nothing", "")
+    if run.stdout:
+        return ("codex_login_shell", "problem",
+                f"{shell} prints text at startup ({len(run.stdout)} bytes), which Codex puts in front of each hook's output and breaks it",
+                "make your shell profile print nothing unless it runs in a terminal (a test such as [ -t 1 ] or [[ -o interactive ]])")
+    return ("codex_login_shell", "ok", "your login shell prints nothing at startup, so hook output stays clean", "")
+
+
+class CodexHooksPiece(HooksPiece):
+    """Four tagged hook entries in Codex's hooks.json. Codex runs none of them until the user trusts them in /hooks."""
+    events = CODEX_HOOK_EVENTS
+
+    def __init__(self):
+        super().__init__("codex", codex_hooks_path)
+
+    def check_more(self, scope, commands):
+        rows = []
+        other = self.path_for("user" if scope == "project" else "project")
+        if other != self.path_for(scope) and self.recorded_commands("user" if scope == "project" else "project"):
+            rows.append(("codex_hooks_duplicate", "problem", f"{tilde(other)} also has agentbus hooks, so each event runs twice",
+                         "agentbus setup codex --uninstall, in the scope you do not want"))
+        return rows + [codex_login_shell_row(), ("codex_trust", "ok", CODEX_TRUST_UNCHECKED, "")]
+
+
+SETUP_TARGETS["codex"][0] = CodexAgentsPiece("codex", "AGENTS.md", AGENTS_SNIPPET)
+SETUP_TARGETS["codex"].append(CodexOverridePiece())
+if not os.environ.get("AGENTBUS_TEST_SETUP_NO_HOOKS"):
+    SETUP_TARGETS["codex"].append(CodexHooksPiece())
+
+
+def codex_done_line(target, done):
+    """The closing line of `setup codex` when it wrote hooks: the one step left is the user's, in Codex."""
+    if target == "codex" and any(c.action in ("installed", "updated") and os.path.basename(c.path) == "hooks.json" for c in done):
+        return CODEX_TRUST_LINE
+    return None
+
+
+# `agentbus hooks TARGET` prints the hooks a harness needs, for people who keep their hook files in dotfiles.
+HOOKS_PRINTERS = {"claude": ClaudeHooksPiece, "codex": CodexHooksPiece}
+
+
+def cmd_hooks(a):
+    if is_repo_local_copy():
+        die("hooks runs from the installed agentbus, not a project copy: the printed commands must name the "
+            f"installed tool. Run: agentbus hooks {a.target}", "bad_input")
+    piece = HOOKS_PRINTERS[a.target]()
+    doc = piece.merge({}, piece.entries("user"))
+    if a.json:
+        print_json(doc)
+    else:
+        write_out(json.dumps(doc, indent=2) + "\n")  # not wrapped to the terminal: it is a file's content
+
+
+def register_hooks(sub):
+    s = sub("hooks", help="Print the hooks your agent needs: codex (hooks.json) or claude (the hooks block of settings.json)")
+    s.add_argument("target", choices=sorted(HOOKS_PRINTERS),
+                   help="codex: a hooks.json document (Codex runs the hooks only after you trust them with /hooks); "
+                        "claude: the hooks block for .claude/settings.json")
+
+
+REGISTER_COMMANDS.append(register_hooks)
 
 # ==== doctor ====
 
@@ -6851,6 +7097,7 @@ NO_DB_COMMANDS = {
     "schema": cmd_schema,
     "skill": cmd_skill,
     "setup": cmd_setup,
+    "hooks": cmd_hooks,
     "hook": lambda a: cmd_hook_early(a.rest),  # only reached when options come before the word hook
 }
 # Commands answered before argument parsing: handler(argv_after_the_command) -> exit status.

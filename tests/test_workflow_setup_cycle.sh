@@ -85,7 +85,8 @@ ok "rerun wrote nothing"
 echo "STEP 5: the Codex block is added after the user's text, and the user's later edit outside it survives a rerun"
 say "agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
-done. Start a new Codex session to load it.
+  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
+done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the agentbus entries.
 next: cd your-repo && agentbus init ." agentbus setup codex
 head -c "$(wc -c <"$T/agents.orig")" "$X/AGENTS.md" | cmp -s - "$T/agents.orig" || fail "the user's AGENTS.md text was changed"
 [ "$(grep -c '^<!-- agentbus:begin -->$' "$X/AGENTS.md")" = 1 ] && [ "$(grep -c '^<!-- agentbus:end -->$' "$X/AGENTS.md")" = 1 ] || fail "markers: $(cat "$X/AGENTS.md")"

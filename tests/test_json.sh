@@ -106,6 +106,7 @@ assert shape(j('skill'), text=str)['text'].startswith('---\nname: agentbus\n')
 assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbus\n')
 setup = shape(j('setup', 'claude', '--dry-run'), target=str, scope=str, dry_run=bool, changes=list)
 array(setup['changes'], path=str, action=str, detail=str)
+assert set(shape(j('hooks', 'codex'), hooks=dict)['hooks']) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'}
 j('--as', 'b', 'claim', 'watch-fixture')
 for after in (False, True):
     for once in ((), ('--once',)):

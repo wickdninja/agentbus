@@ -31,7 +31,7 @@ Task 4.1 of workstream 04 (issue #6). This is the contract the Codex dialect, th
 | Timeout | default 600 s; `timeout` in seconds per handler | DOCS-ONLY |
 | Concurrency | matching hooks for one event start concurrently | DOCS-ONLY; two-at-once seen in run 2 |
 
-Consequences: `... 2>/dev/null || true # agentbus:managed` is valid (a shell parses it). The shell is a login shell, so the user's profile runs before the hook (latency, see Plan implications).
+Consequences: `... 2>/dev/null || true # agentbus:managed` is valid (a shell parses it). The shell is a login shell, so the user's profile runs before the hook (latency, see Plan implications). Whatever the profile prints on stdout comes before the hook's JSON; the generated command cannot prevent that, so `setup`'s check starts the login shell once with a command that does nothing and reports how many bytes it printed (`codex_login_shell`), and `scripts/e2e_codex.sh` asserts a silent hook prints nothing through the login shell.
 
 ## 2. Payloads (stdin, one JSON object)
 

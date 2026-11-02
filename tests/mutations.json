@@ -236,8 +236,8 @@
   {
     "name": "PreToolUse nudges about an unclaimed path every time",
     "file": "bin/agentbus",
-    "find": "if own or not peers or not isinstance\\(payload.get\\(\"session_id\"\\), str\\) or not hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\):",
-    "replace": "if own or not peers:",
+    "find": "if not peers or not isinstance\\(payload\\.get\\(\"session_id\"\\), str\\) or not any\\(\\[hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\) for rel in unclaimed\\]\\):",
+    "replace": "if not peers or not unclaimed:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "second unclaimed nudge for the same path"
@@ -317,8 +317,8 @@
   {
     "name": "PreToolUse nudges a session that is alone on the bus",
     "file": "bin/agentbus",
-    "find": " or not peers or ",
-    "replace": " or ",
+    "find": "if not peers or not isinstance\\(payload",
+    "replace": "if not isinstance(payload",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "a nudge to a session alone on the bus"
@@ -565,5 +565,167 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "reached through a tracked directory link"
+  },
+  {
+    "name": "a Codex payload without a session id gets a name made from its cwd",
+    "file": "bin/agentbus",
+    "find": "derived = hook_derived_name\\(sid\\) if isinstance\\(sid, str\\) and sid else None",
+    "replace": "derived = hook_derived_name(sid if isinstance(sid, str) and sid else str(payload.get(\"cwd\")))",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "an empty session id"
+  },
+  {
+    "name": "a Codex SessionEnd leaves the roster",
+    "file": "bin/agentbus",
+    "find": "\"codex-\", \"codex\", \\(\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"\\), hook_codex_paths\\)",
+    "replace": "\"codex-\", \"codex\", (\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\", \"SessionEnd\"), hook_codex_paths)",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Codex SessionEnd left the roster or released a claim"
+  },
+  {
+    "name": "a patch's Move to target is not checked against claims",
+    "file": "bin/agentbus",
+    "find": "\"\\*\\*\\* Delete File: \", \"\\*\\*\\* Move to: \"\\)",
+    "replace": "\"*** Delete File: \")",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Move to target"
+  },
+  {
+    "name": "a patched line that looks like a file marker counts as a file",
+    "file": "bin/agentbus",
+    "find": "if line\\.startswith\\(marker\\) and",
+    "replace": "if marker in line and",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a patched line that looks like a file marker"
+  },
+  {
+    "name": "the Codex Stop output carries a block decision",
+    "file": "bin/agentbus",
+    "find": "        out\\[\"systemMessage\"\\] = notice\n",
+    "replace": "        out[\"systemMessage\"] = notice\n        if event == \"Stop\":\n            out[\"decision\"] = \"block\"\n",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "Stop JSON shape (a decision or other key)"
+  },
+  {
+    "name": "a Codex hook writes CLAUDE_ENV_FILE",
+    "file": "bin/agentbus",
+    "find": "\"codex-\", \"codex\", \\(\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"\\), hook_codex_paths\\)",
+    "replace": "\"codex-\", \"codex\", (\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"), hook_codex_paths, None, \"CLAUDE_ENV_FILE\")",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Codex hook wrote CLAUDE_ENV_FILE"
+  },
+  {
+    "name": "a Codex session joins the roster as claude-code",
+    "file": "bin/agentbus",
+    "find": "hook_dialect_spec\\(\"codex-\", \"codex\",",
+    "replace": "hook_dialect_spec(\"codex-\", \"claude-code\",",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "the roster shows the wrong tool for a Codex session"
+  },
+  {
+    "name": "the printed Codex hooks have the default 600 s timeout",
+    "file": "bin/agentbus",
+    "find": "\"timeout\": HOOK_ENTRY_TIMEOUT\\.get\\(event, 5\\)",
+    "replace": "\"timeout\": HOOK_ENTRY_TIMEOUT.get(event, 600)",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "hooks codex printed JSON that does not hold the four absolute tagged commands"
+  },
+  {
+    "name": "hooks codex runs from a project copy",
+    "file": "bin/agentbus",
+    "find": "(def cmd_hooks\\(a\\):\\n)    if is_repo_local_copy\\(\\):",
+    "replace": "\\1    if False:",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "hooks codex from a project copy"
+  },
+  {
+    "name": "setup codex grows an AGENTS.md past 32 KiB",
+    "file": "bin/agentbus",
+    "find": "if verb != \"removed\" and len\\(new\\.encode\\(\"utf-8\"\\)\\) > CODEX_AGENTS_MAX:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "oversize AGENTS.md"
+  },
+  {
+    "name": "setup codex does not say how to trust the hooks",
+    "file": "bin/agentbus",
+    "find": "^CODEX_TRUST_LINE = .*$",
+    "replace": "CODEX_TRUST_LINE = \"Start a new Codex session to load it.\"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line: done. Codex ignores hooks until you trust them"
+  },
+  {
+    "name": "setup codex ignores a non-empty AGENTS.override.md",
+    "file": "bin/agentbus",
+    "find": "return st is not None and not stat\\.S_ISDIR\\(st\\.st_mode\\) and st\\.st_size > 0",
+    "replace": "return False",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line:   ! ~/.codex/AGENTS.override.md"
+  },
+  {
+    "name": "a Codex session writes the process name file of the Claude Code that started it",
+    "file": "bin/agentbus",
+    "find": "\"codex-\", \"codex\", \\(\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"\\), hook_codex_paths\\)",
+    "replace": "\"codex-\", \"codex\", (\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"), hook_codex_paths, \"CLAUDE_PID\")",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Codex session wrote the process name file of Claude Code's process"
+  },
+  {
+    "name": "a Codex session is shown the Claude Code duplicate-hooks notice",
+    "file": "bin/agentbus",
+    "find": "\"codex-\", \"codex\", \\(\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"\\), hook_codex_paths\\)",
+    "replace": "\"codex-\", \"codex\", (\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"), hook_codex_paths, None, None, \"CLAUDE_PLUGIN_ROOT\")",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Codex session was shown Claude Code's duplicate-hooks notice"
+  },
+  {
+    "name": "hooks claude prints the Codex hooks",
+    "file": "bin/agentbus",
+    "find": "HOOKS_PRINTERS = \\{\"claude\": ClaudeHooksPiece,",
+    "replace": "HOOKS_PRINTERS = {\"claude\": CodexHooksPiece,",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "hooks claude does not match what setup claude writes"
+  },
+  {
+    "name": "setup codex check does not notice a login shell that prints",
+    "file": "bin/agentbus",
+    "find": "    if run\\.stdout:\\n",
+    "replace": "    if False:\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with a login shell that prints"
+  },
+  {
+    "name": "check starts the executable a hooks file names",
+    "file": "bin/agentbus",
+    "find": "        text = setup_read\\(script, follow=True\\)\\n",
+    "replace": "        try:\n            subprocess.run([*tool, \"--version\"], capture_output=True, cwd=os.sep)\n        except OSError:\n            pass\n        text = setup_read(script, follow=True)\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check started the executable a hooks file names"
+  },
+  {
+    "name": "setup help does not mention the hooks",
+    "file": "bin/agentbus",
+    "find": "help=\"Teach your agent to use agentbus: the skill and hooks for Claude Code, the AGENTS.md block and hooks for Codex\"",
+    "replace": "help=\"Teach your agent to use agentbus: install the skill for Claude Code or the block for Codex\"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup help does not mention the hooks"
   }
 ]
