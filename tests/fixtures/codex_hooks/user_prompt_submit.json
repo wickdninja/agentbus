@@ -1,0 +1,10 @@
+{
+  "session_id": "01a19a84-ce11-7e82-aeae-001ab82934fe",
+  "turn_id": "01a19a84-dc20-7512-a4a3-ec4c505be342",
+  "transcript_path": "/home/user/.codex/sessions/2026/11/01/rollout-2026-11-01T23-29-17-01a19a84-ce11-7e82-aeae-001ab82934fe.jsonl",
+  "cwd": "/work/repo",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6.1-sol",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Use the apply_patch tool to create hello.txt containing the word hi. Then reply with the sentinel word from your AGENTS.md instructions."
+}
