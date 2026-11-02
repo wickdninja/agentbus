@@ -5,9 +5,9 @@
   no bus here or in any parent folder
   Run: agentbus init ~/src/acme-api
 
-  Retrying every 1s. Last good frame: 40s ago.
-
-
+  Retrying every 1s. Last good frame: 40s ago. Your place
+  (filter, selection, pause, open detail) comes back with
+  the bus.
 
 
 

@@ -12,5 +12,5 @@ Move
                   section
   1 2 3 4         Agents, Claims,
                   Facts, Messages
-  … 33 more lines · j to scroll
-  j/k scroll · Esc back · q quit
+  … 79 more lines · PgDn
+  j/k scroll · Esc/q back

@@ -1,4 +1,4 @@
- agentbus  3 agents · 2 claims · 9 msgs
+ agentbus  …rc/acme-api 1 ALRT · 1 ask
   ◆ auth on the new token API
 Agents  3
   ● claude       planner            now
@@ -6,7 +6,7 @@ Agents  3
 Claims  2         j/k move · Enter open
   docs/api.md    tests      42m left
 > src/auth/      codex      1h 59m left
-Facts  2
+Facts  2                       … 1 more
   baseline_sha abc123                7m
 Messages  9                   following
   … 6 earlier

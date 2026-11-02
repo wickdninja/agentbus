@@ -1,0 +1,155 @@
+{
+ "about": "Behaviour cases for watch v2 (issue #7 revision 2). 'mock' cases run in docs/design/watch_v2_mock.py --behaviour and 06 ports them to bin/agentbus; '06' cases need the live loop and are 06's to write in tests/test_watch_keys.sh.",
+ "cases": [
+  {
+   "name": "pause-rollover",
+   "from": "astra 1; brain 2",
+   "runs": "mock",
+   "checks": "Paused on #9, a snapshot of #10-#209 arrives: #9 stays selected and visible, the title says +200 new, at 40x16 to 100x30; a filter while paused searches the frozen records; resume shows the newest."
+  },
+  {
+   "name": "selection-never-hidden",
+   "from": "opus 1; brain 4",
+   "runs": "mock",
+   "checks": "Every row of every section selected at 40x16 to 100x30, with and without emoji: exactly one > row, and no '0 more', '0 earlier' or '0 later'."
+  },
+  {
+   "name": "kind-codes",
+   "from": "opus 3; brain 7",
+   "runs": "mock",
+   "checks": "kind:ask equals kind:question, kind:ALRT equals kind:alert; the error lists the codes and stays after Enter."
+  },
+  {
+   "name": "filter-coverage",
+   "from": "opus 2, 14, 15; astra 2; brain 3",
+   "runs": "mock",
+   "checks": "kind:alert on 209 messages: 0 of newest 200, 9 older not searched, n/a for the other sections; topic:, everyone and to:all."
+  },
+  {
+   "name": "long-input",
+   "from": "astra 3",
+   "runs": "mock",
+   "checks": "An 80-character filter, kept and typed, at 40, 60 and 100 columns: the footer fits and keeps Esc clear, ? help, q quit; the input scrolls to its cursor."
+  },
+  {
+   "name": "detail-wraps",
+   "from": "astra 3, 4; brain 5",
+   "runs": "mock",
+   "checks": "16-character names and six-digit ids wrap by field at 40 and 60 columns; a 93-character resource is whole."
+  },
+  {
+   "name": "thread-limits",
+   "from": "astra 4; brain 5",
+   "runs": "mock",
+   "checks": "A message with 25 ancestors and 25 replies: 20 of each, labelled, with the route to the rest."
+  },
+  {
+   "name": "wrap-linear",
+   "from": "astra 6; brain 9",
+   "runs": "mock",
+   "checks": "Wrapping twice the text costs under 3 times as much (one unbroken word), and is cached by text and width."
+  },
+  {
+   "name": "busy-keeps-frame",
+   "from": "opus 4; brain 6",
+   "runs": "mock",
+   "checks": "Busy: every row but the header equals the frame before, the header says waiting · 27s old; also in a detail."
+  },
+  {
+   "name": "claim-holder-idle",
+   "from": "opus 5; astra 5",
+   "runs": "mock",
+   "checks": "Claim detail shows the holder's real activity dot: ○ codex · implementer · seen 6m ago."
+  },
+  {
+   "name": "ascii-only",
+   "from": "opus 9; astra 7; brain 8",
+   "runs": "mock",
+   "checks": "Every ASCII-mode frame is pure ASCII (so ambiguous-width settings cannot move a column)."
+  },
+  {
+   "name": "summary-and-agents",
+   "from": "opus 6, 13; brain 1",
+   "runs": "mock",
+   "checks": "The header says 1 alert · 1 open question (1 ALRT · 1 ask narrow); agents show 2 unread · holds src/auth/; following says k browse."
+  },
+  {
+   "name": "detail-marks",
+   "from": "opus 7, 17; astra 4; brain 5, Missing",
+   "runs": "mock",
+   "checks": "The open message is marked *, nothing is selected on open, the reply command shows, Esc/q back replaces q quit, an ancestor outside the 200 can be selected, and a nested detail says where back goes."
+  },
+  {
+   "name": "mentions-instr",
+   "from": "opus 12; brain 9",
+   "runs": "mock",
+   "checks": "A resource with _ matches only itself (instr, not LIKE)."
+  },
+  {
+   "name": "busy-q-under-250ms",
+   "from": "opus 4; brain 6",
+   "runs": "06",
+   "checks": "Another process holds an EXCLUSIVE lock on bus.db; q in a running watch exits in under 250 ms + 100 ms slack, with termios restored; the frame before the lock stays on screen with waiting · Ns old."
+  },
+  {
+   "name": "input-never-waits-on-sql",
+   "from": "astra 6; brain 9",
+   "runs": "06",
+   "checks": "While a read is blocked on the lock, 20 keys each redraw in under 100 ms (the read runs off the input loop)."
+  },
+  {
+   "name": "detail-queries-on-open-and-r",
+   "from": "opus 12; brain 9",
+   "runs": "06",
+   "checks": "With a detail open for 5 ticks, watch_detail runs once; r runs it once more."
+  },
+  {
+   "name": "scan-bounded",
+   "from": "opus 12; astra 6; brain 9",
+   "runs": "06",
+   "checks": "On a 20000-message bus every detail query reads at most the newest 5000 (EXPLAIN QUERY PLAN uses the id range) and the lists say in newest 5000."
+  },
+  {
+   "name": "esc-and-q-back-one-level",
+   "from": "opus 7, 8; brain 5",
+   "runs": "06",
+   "checks": "Overview, Enter on #7, j, Enter on #9: Esc shows #7, q shows the overview byte for byte, q quits."
+  },
+  {
+   "name": "pause-freezes-display",
+   "from": "astra 7; brain 2",
+   "runs": "06",
+   "checks": "Paused for 10 ticks while messages arrive: no row changes but the +N new title; ages do not tick."
+  },
+  {
+   "name": "pause-rollover-pty",
+   "from": "astra 1",
+   "runs": "06",
+   "checks": "The pause-rollover case through a pty: pause on #9, post 200 messages, #9 still selected; resize keeps it."
+  },
+  {
+   "name": "view-survives-errors",
+   "from": "opus 4; brain 6",
+   "runs": "06",
+   "checks": "Filter, select, pause, open a detail; refuse the bus, then repair it: the same frame comes back."
+  },
+  {
+   "name": "copy-osc52",
+   "from": "opus Missing; brain 1",
+   "runs": "06",
+   "checks": "y on #9 in detail writes ESC ] 52 ; c ; base64(reply command) BEL and the copied footer; nothing in bus.db changes."
+  },
+  {
+   "name": "ascii-auto",
+   "from": "opus 9; brain 8",
+   "runs": "06",
+   "checks": "TERM=linux and AGENTBUS_ASCII=1 each give the ascii goldens; a terminal that reports ● two columns wide (cursor position probe at start) does too."
+  },
+  {
+   "name": "header-sgr",
+   "from": "opus 10; brain 8",
+   "runs": "06",
+   "checks": "The header bar is SGR 30;43 (no 1), and 7 under TERM=linux or AGENTBUS_ASCII; the error reason has no SGR 2."
+  }
+ ]
+}

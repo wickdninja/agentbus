@@ -8,9 +8,9 @@
   Run: agentbus upgrade ~/src/acme-api
 
   Retrying every 1s. Last good frame:
-  none.
-
-
+  none. Your place (filter, selection,
+  pause, open detail) comes back with
+  the bus.
 
 
   r retry now · ? help · q quit

@@ -11,14 +11,14 @@ Move
   1 2 3 4         Agents, Claims, Facts, Messages
 
 Look closer
-  Enter           open the selected row; a message opens
-                  with its thread
+  Enter           open the selected row; in a detail, open
+                  the selected related row
   t               show or hide the thread of an open
                   message
-  /               filter: from:NAME to:NAME kind:KIND, or
-                  any words
-  p               pause the messages, or follow them again
-  r               read the bus now
-  Esc             back: closes a detail, the filter or this
-  … 15 more lines · j to scroll
-  j/k scroll · Esc back · q quit
+  y               copy the selected id, or in a message its
+                  reply command (OSC 52; if paste fails,
+                  the footer says where it is on screen)
+  /               filter: from:NAME to:NAME kind:KIND
+                  topic:NAME, or any words
+  … 37 more lines · PgDn
+  j/k scroll · Esc/q back

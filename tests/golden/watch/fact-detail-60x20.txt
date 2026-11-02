@@ -1,9 +1,9 @@
- agentbus  ~/src/acme-api                             fact
-  ◆ auth on the new token API                   · nate · 2h
+ agentbus  ~/src/acme-api                fact baseline_sha
+  ◆ auth on the new token API                     nate · 2h
 
   key       baseline_sha
   value     abc123
-  set by    codex, 16:37, 7m ago
+  set by    ○ codex · implementer · seen 6m ago · set 16:37
 
 History  2                                     newest first
   16:37  codex        abc123
@@ -17,4 +17,4 @@ History  2                                     newest first
 
 
 
-  j/k scroll · Esc back · ? help · q quit
+  j/k select · Enter open · y copy · Esc/q back · ? help

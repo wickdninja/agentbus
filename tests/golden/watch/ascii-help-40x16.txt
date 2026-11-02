@@ -1,0 +1,16 @@
+ agentbus  ~/src/acme-api         keys
+  watch only reads the bus. It never
+  marks a message read and never
+  changes a claim.
+
+Move
+  j k  Down Up    one row
+  g G  Home End   first, last row
+  PgUp PgDn       one page
+  Ctrl-u Ctrl-d   half a page
+  Tab  Shift-Tab  next, previous
+                  section
+  1 2 3 4         Agents, Claims,
+                  Facts, Messages
+  ... 79 more lines - PgDn
+  j/k scroll - Esc/q back

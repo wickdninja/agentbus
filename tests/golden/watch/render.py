@@ -23,8 +23,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 DEFAULT_VIEW = {"mode": "overview", "focus": "messages", "sel": {}, "paused": False, "frozen": {},
-                "pending": 0, "filter": "", "filter_input": False, "detail": None, "scroll": 0,
-                "fresh": [], "error": None, "stale": None}
+                "filter": "", "filter_input": False, "detail": None, "scroll": 0,
+                "fresh": [], "error": None, "stale": None, "copied": None}
 SHIFT = timedelta(days=400)
 
 
@@ -54,21 +54,23 @@ def frame_text(rows, height):
     return "".join(r + "\n" for r in rows)
 
 
-def render_v2(g, e, snap, detail, paint, t_now):
-    """06: adjust this call to match `render`; the inputs are fixed by fixture.json."""
+def render_v2(g, e, snap, held, detail, paint, t_now):
+    """06: adjust this call to match `render`; the inputs are fixed by fixture.json. `held` is the frozen
+    snapshot of a paused view (None otherwise); paint carries emoji and the ASCII glyph set."""
     view = g["View"]()
     v = e["view"]
     for k, val in v.items():
         if k not in ("error", "stale", "fresh"):
             setattr(view, k, val)
     rows = g["render"](view, snap, e["where"], (e["cols"], e["rows"]), t_now, paint,
-                       error=v["error"], stale=v["stale"], fresh=set(v["fresh"]), live=e["live"], detail=detail)
+                       error=v["error"], stale=v["stale"], fresh=set(v["fresh"]), live=e["live"], detail=detail,
+                       held=held)
     return frame_text(rows, e["rows"])
 
 
 def render_v01(g, e, snap, paint, t_now):
     v = e["view"]
-    if any(v.get(k) != DEFAULT_VIEW[k] for k in DEFAULT_VIEW if k != "fresh"):
+    if e.get("ascii") or any(v.get(k) != DEFAULT_VIEW[k] for k in DEFAULT_VIEW if k != "fresh"):
         return None
     rows = g["render_watch"](snap, e["where"], e["cols"], e["rows"], set(v["fresh"]), t_now, paint, live=e["live"])
     return frame_text(rows, e["rows"])
@@ -84,8 +86,11 @@ def main():
         snap = json.loads(json.dumps(fx["snapshots"][e["snapshot"]]))
         t_now = datetime.strptime(e["t_now"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         paint = g["Paint"](False, e["emoji"])
+        if e.get("ascii"):
+            paint.ascii = True  # 06: AGENTBUS_ASCII, TERM=linux or an ambiguous-wide terminal
         if "render" in g and "View" in g:
-            out[e["name"]] = render_v2(g, e, snap, fx["detail"], paint, t_now)
+            held = fx["snapshots"][e["held"]] if e.get("held") else None
+            out[e["name"]] = render_v2(g, e, snap, held, fx["detail"], paint, t_now)
         else:
             out[e["name"]] = render_v01(g, e, snap, paint, t_now)
     json.dump(out, sys.stdout, ensure_ascii=False, sort_keys=True)

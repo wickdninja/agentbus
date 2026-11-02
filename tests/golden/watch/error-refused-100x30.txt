@@ -4,8 +4,8 @@
   bus schema is not agentbus's: table messages differs (no column request_id)
   Run: agentbus upgrade ~/src/acme-api
 
-  Retrying every 1s. Last good frame: none.
-
+  Retrying every 1s. Last good frame: none. Your place (filter, selection, pause, open detail)
+  comes back with the bus.
 
 
 

@@ -1,9 +1,9 @@
- agentbus  ~/src/acme-api     3 agents · 2 claims · 9 msgs
-  ◆ auth on the new token API                   · nate · 2h
+ agentbus  ~/src/acme-api                   1 ALRT · 1 ask
+  ◆ auth on the new token API                     nate · 2h
 Agents  3
-  ● claude       planner                                now
-  ○ codex        implementer                             6m
-  ● tests        tester                                 now
+  ● claude       planner     1 unread                   now
+  ○ codex        implementer 2 unread · holds src/aut…   6m
+  ● tests        tester      holds docs/api.md          now
 Claims  2                             j/k move · Enter open
   docs/api.md         tests      42m left
 > src/auth/           codex      1h 59m left
@@ -11,9 +11,9 @@ Facts  2
   baseline_sha   abc123                                  7m
   runtime        python 3.9+                            14m
 Messages  9                                       following
-  #1  claude→every… note Kickoff: auth moves to the n…   1h
+  #1  claude→all    note Kickoff: auth moves to the n…   1h
   #2  claude→codex  hand Take src/auth/: swap the ses…   1h
-  #3  tests→every…  ALRT CI on main is red since a1b2…   1h
+  #3  tests→all     ALRT CI on main is red since a1b2…   1h
   #4  claude→codex  dec  Keep the refresh path. Token…   1h
   #5  codex→claude  done Refresh path done, tests… ↵+1  11m
   #6  tests→codex   ask  Is the 401 body part of the …   9m

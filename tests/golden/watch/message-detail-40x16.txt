@@ -1,7 +1,8 @@
  agentbus  ~/src/acme-api   message #7
   ◆ auth on the new token API
 
-  #7  codex → tests  answer  ↳ re #6
+  #7  codex → tests  answer  ↳#6
+  topic auth
   16:37 · 7m ago
 
     Plain text for now. A test will pin
@@ -9,8 +10,7 @@
     and the handler returns the same
     body for every 401.
 
-Thread  3                    t hides it
-  #6  tests→codex   ask  Is the 4…   9m
-> #7  codex→tests   ans  Plain te…   7m
-  #9  tests→claude  ask  Which si…  now
-  Esc back · ? help · q quit
+  reply     agentbus --as NAME post
+            --to codex --reply-to 7
+  … 6 more lines · PgDn
+  j/k select · Esc/q back · ? help

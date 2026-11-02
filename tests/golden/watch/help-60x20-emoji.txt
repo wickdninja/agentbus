@@ -11,10 +11,10 @@ Move
   1 2 3 4         Agents, Claims, Facts, Messages
 
 Look closer
-  Enter           open the selected row; a message opens
-                  with its thread
+  Enter           open the selected row; in a detail, open
+                  the selected related row
   t               show or hide the thread of an open
                   message
-  /               filter: from:NAME to:NAME kind:KIND, or
-  … 24 more lines · j to scroll
-  j/k scroll · Esc back · q quit
+  y               copy the selected id, or in a message its
+  … 46 more lines · PgDn
+  j/k scroll · Esc/q back

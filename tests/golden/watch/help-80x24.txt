@@ -8,17 +8,17 @@ Move
   Tab  Shift-Tab  next, previous         1 2 3 4         Agents, Claims, Facts,
 
 Look closer
-  Enter           open the selected row; a message opens with its thread
+  Enter           open the selected row; in a detail, open the selected related
+                  row
   t               show or hide the thread of an open message
-  /               filter: from:NAME to:NAME kind:KIND, or any words
-  p               pause the messages, or follow them again
+  y               copy the selected id, or in a message its reply command (OSC
+                  52; if paste fails, the footer says where it is on screen)
+  /               filter: from:NAME to:NAME kind:KIND topic:NAME, or any words
+  p               pause the whole view, or follow again
   r               read the bus now
-  Esc             back: closes a detail, the filter or this page
-  q  Ctrl-C       quit (Esc never quits)
+  Esc  q          back one level: a detail, the filter or this page; q quits
+                  from the overview
+  Ctrl-C          quit from anywhere
 
-Marks
-  ●   seen in the last 5 minutes         ○   quiet for 5 minutes or more
-  >   selected row                       ▌   new in the last 3 seconds
-  ◆   the team's goal                    ↳#6 a reply to message 6
-  … 5 more lines · j to scroll
-  j/k scroll · Esc back · q quit
+  … 23 more lines · PgDn
+  j/k scroll · Esc/q back

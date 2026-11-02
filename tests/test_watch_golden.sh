@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # watch v2 golden frames (issue #7): the approved text of every watch state, pinned. The goldens in
 # tests/golden/watch/ come from docs/design/watch_v2_mock.py and the fixture beside them; PENDING lists
-# the goldens bin/agentbus does not reproduce yet (06 empties it).
+# the goldens bin/agentbus does not reproduce yet (06 empties it); behaviour.json lists the behaviour
+# cases (revision 2), of which the mock runs its own here.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -53,19 +54,22 @@ for e in fx["goldens"]:
         assert len(phys(line, e["cols"])) == 1, (e["name"], i, "wraps")
         assert line == line.rstrip(), (e["name"], i, "trailing space")
         assert not any(ord(c) < 0x20 or 0x7f <= ord(c) < 0xa0 for c in line), (e["name"], i, "control character")
-        assert line == "" or line.startswith((" ", ">", "▌", "/", "Agents", "Claims", "Facts", "Messages", "Thread",
-                                              "History", "Mentioned in", "Move", "Look closer", "Marks", "Kinds",
-                                              "Roles", "watch needs")) or line[0] in "👥🔒📌💬🧵📜🔗", \
+        assert line == "" or line.startswith((" ", ">", "*", "▌", "|", "/", "Agents", "Claims", "Facts", "Messages",
+                                              "Thread", "History", "Mentioned in", "Move", "Look closer", "Marks",
+                                              "Words", "Kinds", "Roles", "watch needs")) or line[0] in "👥🔒📌💬🧵📜🔗", \
             (e["name"], i, "a row starts with text agentbus did not write", line[:20])
+        if e.get("ascii"):
+            assert all(ord(c) < 128 for c in line), (e["name"], i, "an ASCII-mode row has a non-ASCII character", line)
 PY
-ok "every golden frame has its declared height and no row wider than its width; every golden row is one physical row on the terminal oracle"
+ok "every golden frame has its declared height and no row wider than its width; every golden row is one physical row on the terminal oracle; ASCII goldens are pure ASCII"
 
-echo "TEST 3: no em-dash in the goldens, the fixture, the design doc or its HTML"
+echo "TEST 3: no em-dash in the goldens, the fixture, the design doc, its addendum or its HTML"
 python3 - "$G" "$ROOT" <<'PY' || fail "em-dash"
 import pathlib, sys
 g, root = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-paths = list(g.iterdir()) + [root / "docs/design/watch-v2.md", root / "docs/design/watch-v2.html",
-                             root / "docs/design/watch_v2_mock.py", root / "scripts/check_frames.py"]
+paths = [p for p in g.iterdir() if p.is_file()] + [root / "docs/design/watch-v2-build-addendum.md",
+                                                     root / "docs/design/watch-v2.md", root / "docs/design/watch-v2.html",
+                                                     root / "docs/design/watch_v2_mock.py", root / "scripts/check_frames.py"]
 for p in paths:
     assert chr(0x2014) not in p.read_text(encoding="utf-8"), p
 PY
@@ -103,5 +107,18 @@ out=$(python3 "$ROOT/scripts/check_frames.py" "$ROOT/docs/design/watch-v2.md") |
 if python3 "$ROOT/scripts/check_frames.py" "$G/check_frames_bad.md" >"$T/bad.out"; then fail "check_frames passed a bad frame"; fi
 grep -q "too-wide row is" "$T/bad.out" && grep -q "too-tall has 3 rows" "$T/bad.out" || { cat "$T/bad.out"; fail "check_frames missed a bad frame"; }
 ok "check_frames accepts the design doc and fails a too-wide and a too-tall frame"
+
+echo "TEST 8: the behaviour cases the design mock can run pass (pause rollover, 40x16 selection, kind:ask, busy frame, ...)"
+python3 - "$G" <<'PY' || fail "behaviour.json"
+import json, pathlib, sys
+cases = json.load(open(pathlib.Path(sys.argv[1]) / "behaviour.json", encoding="utf-8"))["cases"]
+names = {c["name"] for c in cases}
+for want in ("pause-rollover", "selection-never-hidden", "kind-codes", "busy-q-under-250ms"):
+    assert want in names, ("behaviour.json lacks the falsifying case", want)
+assert all(c["runs"] in ("mock", "06") and c["checks"] for c in cases), "a case without runs or checks"
+PY
+python3 "$ROOT/docs/design/watch_v2_mock.py" --behaviour >"$T/beh.out" 2>&1 || { cat "$T/beh.out"; fail "a behaviour case failed"; }
+tail -1 "$T/beh.out" | grep -q "behaviour cases passed" || { cat "$T/beh.out"; fail "behaviour run did not finish"; }
+ok "$(tail -1 "$T/beh.out")"
 
 echo "All watch golden tests passed"

@@ -1,4 +1,4 @@
- 🚌 agentbus  ~/src/acme-api  0 agents · 0 claims · 0 msgs
+ 🚌 agentbus  ~/src/acme-api                0 ALRT · 0 ask
   🎯 no goal yet · agentbus --as NAME goal "..."
 
 👥 Agents  0
@@ -10,11 +10,11 @@
 📌 Facts  0
   none yet
 
-💬 Messages  0                                    following
+💬 Messages  0                      following · k to browse
   quiet so far
 
 
 
 
 
-  j/k move · Enter open · / filter · ? help · q quit
+  k browse · Enter open · / filter · ? help · q quit

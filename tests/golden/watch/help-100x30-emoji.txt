@@ -7,24 +7,24 @@ Move
   Tab  Shift-Tab  next, previous section           1 2 3 4         Agents, Claims, Facts, Messages
 
 Look closer
-  Enter           open the selected row; a message opens with its thread
+  Enter           open the selected row; in a detail, open the selected related row
   t               show or hide the thread of an open message
-  /               filter: from:NAME to:NAME kind:KIND, or any words
-  p               pause the messages, or follow them again
+  y               copy the selected id, or in a message its reply command (OSC 52; if paste fails,
+                  the footer says where it is on screen)
+  /               filter: from:NAME to:NAME kind:KIND topic:NAME, or any words
+  p               pause the whole view, or follow again
   r               read the bus now
-  Esc             back: closes a detail, the filter or this page
-  q  Ctrl-C       quit (Esc never quits)
+  Esc  q          back one level: a detail, the filter or this page; q quits from the overview
+  Ctrl-C          quit from anywhere
 
 Marks
   ●   seen in the last 5 minutes   ○   quiet for 5 minutes or more  >   selected row
-  ▌   new in the last 3 seconds    🎯  the team's goal              ↳#6 a reply to message 6
-  ↵+1 one more line; Enter shows it
+  *   the record open in a detail  ▌   new in the last 3 seconds    🎯  the team's goal
+  ↳#6 a reply to message 6         ↵+1 one more line; Enter shows it
 
-Kinds  the short form is used under 72 columns
-  🤝 hand handoff   ❓ ask question   💬 ans answer   ✅ done   🧭 dec decision   🚨 ALRT alert
-  📝 note
-
-Roles  matched on words in the role
-  🧠 brain, lead, planner   ✋ hand, implementer   🧪 tests   🔍 review   📚 docs   🚀 ops, release
-  🎨 design   🙋 human   🤖 anyone else
-  j/k scroll · Esc back · q quit
+Words
+  following          the newest messages, as they arrive
+  paused at 16:44    the whole view is frozen as it was then; +N new counts what came since
+  … N earlier        rows above the window; … N later, … N more: rows not shown
+  … 14 more lines · PgDn
+  j/k scroll · Esc/q back

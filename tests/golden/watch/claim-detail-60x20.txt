@@ -1,8 +1,8 @@
- agentbus  ~/src/acme-api                            claim
-  ◆ auth on the new token API                   · nate · 2h
+ agentbus  ~/src/acme-api                  claim src/auth/
+  ◆ auth on the new token API                     nate · 2h
 
   claim     src/auth/
-  held by   ● codex · implementer
+> held by   ○ codex · implementer · seen 6m ago
   purpose   token refactor
   claimed   15:30, 1h ago
   expires   18:43, 1h 59m left
@@ -17,4 +17,4 @@ Mentioned in  2                       messages that name it
 
 
 
-  j/k scroll · Esc back · ? help · q quit
+  j/k select · Enter open · y copy · Esc/q back · ? help

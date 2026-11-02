@@ -5,8 +5,8 @@
      This watch is agentbus 0.2.0; the bus needs a newer one.
      Run: agentbus upgrade ~/src/acme-api from a newer install
 
-     Retrying every 1s. Last good frame: none.
-
+     Retrying every 1s. Last good frame: none. Your place (filter, selection, pause, open detail)
+     comes back with the bus.
 
 
 
