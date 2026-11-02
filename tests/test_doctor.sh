@@ -58,7 +58,14 @@ def tree(*roots):
             for n in sorted(files + dirs):
                 p = os.path.join(d, n)
                 st = os.lstat(p)
-                h.update(p.encode()); h.update(oct(st.st_mode).encode()); h.update(str(st.st_mtime_ns).encode())
+                # SQLite makes an empty bus.db-wal when it opens a WAL database, and on some builds leaves it: that
+                # empty file is the read-only open's own doing (CHANGELOG, "Read-only opens"), so it is not counted.
+                # Folders are listed by name, not mtime, for the same reason. Every other file: mode, mtime and bytes.
+                if n.endswith("-wal") and st.st_size == 0:
+                    continue
+                h.update(p.encode()); h.update(oct(st.st_mode).encode())
+                if not os.path.isdir(p) or os.path.islink(p):
+                    h.update(str(st.st_mtime_ns).encode())
                 if os.path.islink(p):
                     h.update(os.readlink(p).encode())
                 elif os.path.isfile(p):

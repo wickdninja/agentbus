@@ -41,7 +41,7 @@ A status is `ok`, `warn`, `fail` or `n/a` (nothing to check on this machine). A 
 
 ## What doctor never does
 
-It reads files and prints. It does not write, fix, migrate or install anything, and it prints the fix instead of running it. It does not run any program it finds: not a hook, not the bus folder's copy of agentbus, not even `git` (it finds a linked worktree's main checkout by reading `.git`). It makes no network call, so it cannot tell you a newer release exists. The bus is opened read-only and waits 0.3 seconds, so a bus another program holds shows as `busy` rather than hanging.
+It reads files and prints. It does not write, fix, migrate or install anything, and it prints the fix instead of running it. It does not run any program it finds: not a hook, not the bus folder's copy of agentbus, not even `git` (it finds a linked worktree's main checkout by reading `.git`). It makes no network call, so it cannot tell you a newer release exists. The bus is opened read-only and waits 0.3 seconds, so a bus another program holds shows as `busy` rather than hanging. (Opening a bus can make SQLite create an empty `bus.db-wal` file beside it, as every read-only command does; nothing in the bus changes.)
 
 ## Reading a line
 

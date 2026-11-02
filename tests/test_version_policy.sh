@@ -45,7 +45,14 @@ def tree(*roots):
             for n in sorted(files + dirs):
                 p = os.path.join(d, n)
                 st = os.lstat(p)
-                h.update(p.encode()); h.update(oct(st.st_mode).encode()); h.update(str(st.st_mtime_ns).encode())
+                # SQLite makes an empty bus.db-wal when it opens a WAL database, and on some builds leaves it: that
+                # empty file is the read-only open's own doing (CHANGELOG, "Read-only opens"), so it is not counted.
+                # Folders are listed by name, not mtime, for the same reason. Every other file: mode, mtime and bytes.
+                if n.endswith("-wal") and st.st_size == 0:
+                    continue
+                h.update(p.encode()); h.update(oct(st.st_mode).encode())
+                if not os.path.isdir(p) or os.path.islink(p):
+                    h.update(str(st.st_mtime_ns).encode())
                 if os.path.islink(p):
                     h.update(os.readlink(p).encode())
                 elif os.path.isfile(p):
@@ -361,8 +368,6 @@ for f in $(declare -F | awk '{print $3}' | grep '^row_[0-9]'); do
   case " $ids " in *" ${f#row_} "*) ;; *) fail "function $f has no row in the table" ;; esac
 done
 
-all_passed "All version policy tests passed"
-
 # Where the epic's version policy (plans/00-epic.md) and the code disagree; the rows above follow the code:
 #  - rule 3: the skill is to say a bare [...] listing means a 0.1.x copy and to name `agentbus upgrade --all PARENT_DIR`. The shipped
 #    skill says "Listings return {items, has_more, next}" and "run agentbus upgrade DIR" (tests/skill_required.txt still lists the
@@ -371,3 +376,5 @@ all_passed "All version policy tests passed"
 #    bus stamped 2 whose tables still have the v1 shape (it never reads user_version).
 #  - rule 4: hooks do not exist yet; their cells wait for streams 03 and 04 (row 13).
 #  - the matrix row for "upgrade run from a project copy is refused" exits 1 from the 0.1.0 copy and 2 (bad_input) from the new one.
+
+all_passed "All version policy tests passed"
