@@ -242,6 +242,15 @@ def run_all(picked, jobs, root=ROOT):
     try:
         for f in [pool.submit(baseline, e, root) for e in first]:
             f.result()
+        # A baseline that failed while other test files ran beside it may only have been starved (the timing tests keep
+        # fixed budgets): run each such file once more with the machine to itself before it makes its entries BROKEN.
+        for e in first:
+            key = (root, e["run"])
+            if _baselines.get(key, "").startswith("bad:") and jobs > 1:
+                first_try = _baselines.pop(key)
+                again = baseline(e, root)
+                print(f"NOTE {e['run']}: failed beside other files ({first_try[4:100]}); run alone: "
+                      + ("ok" if again == "ok" else again[:100]), file=sys.stderr, flush=True)
         pending = []
         for e, st in zip(picked, steps):
             if st[0] == "baseline":
