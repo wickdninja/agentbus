@@ -461,8 +461,8 @@
   {
     "name": "SessionEnd re-reads the index before it leaves",
     "file": "bin/agentbus",
-    "find": "joined_db = \\(hook_state_get\\(hook_state_key\\(sid, \"\\.bus\"\\)\\) or \"\"\\)\\.strip\\(\\) or None",
-    "replace": "joined_db = None",
+    "find": "joined_id = tuple\\(joined_id\\) if isinstance\\(joined_id, list\\)",
+    "replace": "joined_id = None if True or isinstance(joined_id, list)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd with a 1M-entry index did not leave"
@@ -524,8 +524,8 @@
   {
     "name": "SessionEnd trusts any bus once its session has joined one",
     "file": "bin/agentbus",
-    "find": "same = bool\\(joined_db\\) and os\\.path\\.samefile\\(path, joined_db\\)",
-    "replace": "same = bool(joined_db)",
+    "find": "same = joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
+    "replace": "same = joined_id is not None",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd wrote to a tracked bus in another project"
@@ -542,7 +542,7 @@
   {
     "name": "setup compares a .agentbus folder name case-sensitively",
     "file": "bin/agentbus",
-    "find": "unicodedata\\.normalize\\(\"NFC\", os\\.path\\.basename\\(here\\)\\)\\.casefold\\(\\) == \"\\.agentbus\"",
+    "find": "os\\.path\\.basename\\(here\\)\\.casefold\\(\\) == \"\\.agentbus\"",
     "replace": "os.path.basename(here) == \".agentbus\"",
     "count": 1,
     "run": "tests/test_setup.sh",
@@ -565,5 +565,32 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "reached through a tracked directory link"
+  },
+  {
+    "name": "SessionEnd trusts a bus.db of the same device whatever its inode",
+    "file": "bin/agentbus",
+    "find": "\\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
+    "replace": "st.st_dev == joined_id[0]",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd wrote to a tracked bus in another project"
+  },
+  {
+    "name": "setup stops at the innermost work tree",
+    "file": "bin/agentbus",
+    "find": "(            if d != os\\.sep and os\\.path\\.lexists\\(os\\.path\\.join\\(d, \"\\.git\"\\)\\):\\n                roots\\.append\\(d\\))",
+    "replace": "\\1\\n                break",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "outer one of two nested work trees"
+  },
+  {
+    "name": "a test pause point is honoured for any folder",
+    "file": "bin/agentbus",
+    "find": "    if not \\(os\\.path\\.isabs\\(d\\) and os\\.path\\.isdir\\(d\\)\\):\\n        return[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "stopped or broke the hook"
   }
 ]

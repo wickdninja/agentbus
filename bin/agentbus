@@ -962,9 +962,11 @@ def _test_pause(point):
     spec = next((x for x in os.environ.get("AGENTBUS_TEST_PAUSE", "").split(";") if x.startswith(point + "=")), "")
     if not spec:
         return
+    d = spec.split("=", 1)[1]
+    if not (os.path.isabs(d) and os.path.isdir(d)):
+        return  # a pause point names an existing absolute folder; anything else (empty, relative) does nothing
     if _HOOK_GUARD is not None:
         _HOOK_GUARD.cancel()  # a hook held at a test pause is not a hung hook
-    d = spec.split("=", 1)[1]
     mark = os.path.join(d, point + ".reached")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW
     try:
@@ -6120,7 +6122,7 @@ def hook_untracked(directory):
         return False
 
 
-def hook_find_bus(payload, joined_db=None):
+def hook_find_bus(payload, joined_id=None):
     """(database path, strict folder check) from AGENTBUS_DB or discovery from the payload's cwd, or None.
     Unlike the commands, this never runs git, never writes outside the bus (no exclude rule), never runs a copy,
     and skips a .agentbus that git tracks (an AGENTBUS_DB is a dispatcher's own choice and is not second-guessed)."""
@@ -6135,11 +6137,13 @@ def hook_find_bus(payload, joined_db=None):
         if directory is None:
             return None
         path, strict = os.path.join(directory, ".agentbus", "bus.db"), True
-        # joined_db: the bus this session's own SessionStart joined, after the check. Leaving only undoes that join, and
-        # must not depend on re-reading a huge index inside SessionEnd's 1.5 s. It counts only for that very file: a
-        # session whose working directory moved to another project gets the full check there.
+        # joined_id: (device, inode) of the bus.db this session's own SessionStart joined, after the check. Leaving only
+        # undoes that join, and must not depend on re-reading a huge index inside SessionEnd's 1.5 s. It counts only for
+        # that very file, looked at without following a link (a link has an inode of its own, never the recorded one): a
+        # session whose working directory moved to another project, a bus.db recreated or a link planted gets the full check.
         try:
-            same = bool(joined_db) and os.path.samefile(path, joined_db)
+            st = os.lstat(path)
+            same = joined_id is not None and (st.st_dev, st.st_ino) == tuple(joined_id)
         except OSError:
             same = False
         if not (same or hook_untracked(directory)):
@@ -6275,7 +6279,8 @@ def hook_session_start(payload):
     if derived:
         hook_state_prune()
         hook_state_put(hook_state_key(sid, ".name"), name)
-        hook_state_put(hook_state_key(sid, ".bus"), os.path.realpath(db))
+        st = os.lstat(db)
+        hook_state_put(hook_state_key(sid, ".bus"), json.dumps([st.st_dev, st.st_ino]))
         pid = hook_process_id()
         if pid and (payload.get("source") not in ("clear", "fork", "compact") or hook_state_get(f"proc-{pid}.name") is None):
             hook_state_put(f"proc-{pid}.name", name)
@@ -6434,8 +6439,12 @@ def hook_session_end(payload):
     process_name = (hook_state_get(f"proc-{pid}.name") or "").strip() if pid else ""
     if payload.get("reason") == "clear" and process_name == name:
         return None  # /clear starts a new session in this process, which keeps the name, its claims and its mail
-    joined_db = (hook_state_get(hook_state_key(sid, ".bus")) or "").strip() or None
-    found = hook_find_bus(payload, joined_db=joined_db)
+    try:
+        joined_id = json.loads(hook_state_get(hook_state_key(sid, ".bus")) or "null")
+        joined_id = tuple(joined_id) if isinstance(joined_id, list) and len(joined_id) == 2 and all(isinstance(x, int) for x in joined_id) else None
+    except ValueError:
+        joined_id = None
+    found = hook_find_bus(payload, joined_id=joined_id)
     if not found:
         return None
     con = hook_open(found[0], found[1], read_only=False)
@@ -6602,9 +6611,10 @@ def claude_tracked_in_index(exe):
 
 def claude_in_project(real, cwd, home):
     """True when the real path of a claude is inside what the working directory belongs to: the directory itself, its
-    ancestors below the home folder (a project root need not be a git repository), the work tree enclosing it (a `.git`
+    ancestors below the home folder (a project root need not be a git repository), every work tree enclosing it (a `.git`
     found walking up, below the home folder), a bus folder or a folder named .agentbus. Compared by file identity
-    (os.path.samefile) and by name after Unicode NFC and case folding, so another spelling of a folder on a
+    (os.path.samefile) and by case-folded name (the target is plain ASCII, so Unicode normalization cannot change it; folding
+    also catches look-alike letters such as a long s), so another spelling of a folder on a
     case-insensitive file system is the same folder."""
     def same(a, b):
         try:
@@ -6623,15 +6633,14 @@ def claude_in_project(real, cwd, home):
         here = parent
     roots = list(up) if under_home else up[:1]
     if not under_home:
-        for d in up:
+        for d in up:    # every enclosing work tree, the outer ones of nested trees too
             if d != os.sep and os.path.lexists(os.path.join(d, ".git")):
                 roots.append(d)
-                break
     roots += list(walk_buses(cwd))
     roots = [r for r in roots if r != os.sep]
     here = real
     while here != os.path.dirname(here):
-        if unicodedata.normalize("NFC", os.path.basename(here)).casefold() == ".agentbus":
+        if os.path.basename(here).casefold() == ".agentbus":
             return True
         if any(same(here, r) for r in roots):
             return True
@@ -6642,7 +6651,7 @@ def claude_in_project(real, cwd, home):
 def claude_trusted_binary():
     """The claude executable setup may start, or None. Found on an absolute PATH entry (or named by
     AGENTBUS_CLAUDE_BIN), and used only when nothing the project controls could be it. Refused: a real path inside
-    the working directory, any ancestor of it below the home folder, the work tree enclosing it, a bus folder or a
+    the working directory, any ancestor of it below the home folder, every work tree enclosing it, a bus folder or a
     folder named .agentbus (claude_in_project); tracked in the index of the work tree that holds it (the file or a
     symlink on the way to it, file or directory; an index that cannot be read counts as tracking it; ignored or untracked
     files, such as Homebrew's Caskroom or node_modules, are fine); or whose file or folders (the PATH entry's, the real
