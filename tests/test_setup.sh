@@ -972,6 +972,10 @@ export AGENTBUS_CLAUDE_BIN=
 reset; OP="$T/outproj"; rm -rf "$OP"; mkdir -p "$OP/sub" "$OP/node_modules/.bin"; git -C "$OP" init -q; mkclaude "$OP/node_modules/.bin/claude"
 setup_in "$OP/sub" "$OP/node_modules/.bin:$PATH"
 ! ran || fail "setup started a claude inside the work tree enclosing the working directory (a repository outside HOME)"
+# nested work trees outside HOME: the outer one's untracked tools/ is refused too, not only the innermost tree's files
+reset; rm -rf "$T/outer"; mkdir -p "$T/outer/inner/src" "$T/outer/tools"; git -C "$T/outer" init -q; git -C "$T/outer/inner" init -q; mkclaude "$T/outer/tools/claude"
+setup_in "$T/outer/inner/src" "$T/outer/tools:$PATH"
+! ran || fail "setup started a claude under the outer one of two nested work trees"
 # a folder named .agentbus in any case, anywhere
 reset; mkdir -p "$T/pj3/.AGENTBUS/bin"; mkclaude "$T/pj3/.AGENTBUS/bin/claude"
 setup_in "$W" "$T/pj3/.AGENTBUS/bin:$PATH"

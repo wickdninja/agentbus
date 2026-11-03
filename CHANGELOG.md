@@ -17,6 +17,7 @@
 - `agentbus upgrade --all DIR [--depth N] [--dry-run] [--json]`: upgrades the copy and the database of every bus folder under DIR, one line per bus (upgraded, current, skipped when the copy is newer, failed), and exits 1 when any failed (with `--json`, the `items_failed` error on stderr lists the failed rows). `upgrade DIR` also migrates the bus and reports the schema change and backup (`schema_old`, `schema_new` and `backup` under `--json`).
 - A Ctrl-C once `upgrade` has migrated a bus is the `interrupted` error with `committed: true`, naming the migration (`schema N -> M`), its backup and the command that finishes the job (`directory`, `backup`, `migrations`, `rerun` under `--json`). `committed` is also true once `init`, `upgrade` or `setup` has written a file (a copy, `VERSION`, the exclude rule, a config file or its backup); an interrupted error then names those files (`changed`).
 - Stale-copy notice: `join`, `status` and `buses` from the installed tool say on stderr when the bus folder's copy is an older release, and name `agentbus upgrade DIR` for that folder. Never with `--json`, never from the bus's own copy; `AGENTBUS_NO_UPDATE_NOTICE=1` turns it off. `buses` shows each copy's version; `buses --json` rows gain `copy_version` and `stale`.
+- A command stopped by the 8 s hold limit while a write was being saved can no longer say the write was not saved: its outcome is not known. The error says the write may or may not have been saved, carries `committed: true` (a repeat needs the write's `--request-id`) and, under `--json`, `outcome_unknown: true`. A stop at any other moment is unchanged. The hold is 8 s unless the process is blocked on a stalled disk, where it lasts as long as the stall.
 - `bus_unavailable` also covers a bus file agentbus refuses to touch (a link, a hard link, another owner, the wrong type), named in the message.
 - New error codes: `copy_newer` (a folder's copy is newer than the tool; `upgrade` and `init` never downgrade it), `schema_corrupt` (a `user_version` no release writes) and `items_failed` (some buses of `upgrade --all` or files of `setup` failed; stdout holds the whole result).
 - One entry point, `cli()`: the installed command (`agentbus = "agentbus:cli"`) and `bin/agentbus` both run it, so an unexpected error under `--json` is a JSON `internal` error either way.
@@ -30,6 +31,8 @@
 
 - `agentbus watch` is a view to keep open: `Tab` and `j`/`k` move through every section, `Enter` opens any row (a message's whole body, its thread and its reply command; an agent, a claim or a fact with its history), `/` filters by sender, recipient, kind, topic or words, `p` pauses the whole view, `y` copies an id or a reply command (OSC 52), and `?` lists every key. The header counts open alerts and questions; agents show their unread messages and what they hold. It works at 40 columns, without colour or emoji, in ASCII (`AGENTBUS_ASCII=1`, `TERM=linux`) and prints one frame under `TERM=dumb`. A busy bus keeps the last frame; a refused bus names the fix and the view comes back as it was. It restores the terminal after `q`, Ctrl-C, SIGTERM and SIGHUP (exit 129), and says `restart for X.Y.Z` after its bus copy is upgraded. See [Watch your agents](docs/how-to/watch.md).
 - `watch --json` messages carry `topic`, and the snapshot carries `unread` (messages waiting per listed agent, read from the cursors without moving them).
+
+- `init DIR` creates a folder that does not exist, with its parents (`mkdir -p`), and says so. A path whose nearest existing parent is not a writable directory, or that is a file, is `bad_input`, with nothing created.
 
 ### Changed (breaking, contract version 1)
 
@@ -47,6 +50,7 @@
 
 ### Fixed
 
+- Agent names (`--as`, `AGENTBUS_AGENT`), `post --to` and `--topic`, `read --topic`, `ctx` keys and claim resources refuse control characters and bidirectional overrides with `bad_input` (exit 2); the message and `error.field` name the field and the character is shown as `U+XXXX`. Rows an older bus already holds are still read and shown escaped.
 - Deleting claims no longer rewrites the freed pages. SQLite as Debian and Ubuntu build it zeroes every page a delete frees, so `release --all` or `leave` over 500 planted 1 MB claim names wrote about 600 MB with the bus held and could outlive the hold watchdog, making the next agent's command wait. agentbus now sets `secure_delete=FAST`: deleted cells are still zeroed on the pages the delete writes, with no extra I/O.
 
 ### Tests

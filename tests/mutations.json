@@ -596,8 +596,8 @@
   {
     "name": "SessionEnd re-reads the index before it leaves",
     "file": "bin/agentbus",
-    "find": "joined_db = \\(hook_state_get\\(hook_state_key\\(sid, \"\\.bus\"\\)\\) or \"\"\\)\\.strip\\(\\) or None",
-    "replace": "joined_db = None",
+    "find": "joined_id = tuple\\(joined_id\\) if isinstance\\(joined_id, list\\)",
+    "replace": "joined_id = None if True or isinstance(joined_id, list)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd with a 1M-entry index did not leave"
@@ -659,8 +659,8 @@
   {
     "name": "SessionEnd trusts any bus once its session has joined one",
     "file": "bin/agentbus",
-    "find": "same = bool\\(joined_db\\) and os\\.path\\.samefile\\(path, joined_db\\)",
-    "replace": "same = bool(joined_db)",
+    "find": "same = joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
+    "replace": "same = joined_id is not None",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd wrote to a tracked bus in another project"
@@ -677,7 +677,7 @@
   {
     "name": "setup compares a .agentbus folder name case-sensitively",
     "file": "bin/agentbus",
-    "find": "unicodedata\\.normalize\\(\"NFC\", os\\.path\\.basename\\(here\\)\\)\\.casefold\\(\\) == \"\\.agentbus\"",
+    "find": "os\\.path\\.basename\\(here\\)\\.casefold\\(\\) == \"\\.agentbus\"",
     "replace": "os.path.basename(here) == \".agentbus\"",
     "count": 1,
     "run": "tests/test_setup.sh",
@@ -772,6 +772,150 @@
     "count": 1,
     "run": "tests/test_doctor.sh",
     "expect": "hooks row: status fail, detail with 'the agentbus plugin and setup both register hooks'"
+  },
+  {
+    "name": "control characters pass the input boundary",
+    "file": "bin/agentbus",
+    "find": "    refuse_control_inputs\\(a\\)\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "exit 0, want 2"
+  },
+  {
+    "name": "AGENTBUS_AGENT is not checked for control characters",
+    "file": "bin/agentbus",
+    "find": "refuse_control\\(k, os\\.environ\\.get\\(k\\)\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "AGENTBUS_AGENT: exit 0, want 2"
+  },
+  {
+    "name": "bidi overrides are not control characters",
+    "file": "bin/agentbus",
+    "find": "or c in _BIDI\\)",
+    "replace": ")",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "exit 0, want 2"
+  },
+  {
+    "name": "init refuses a missing folder again",
+    "file": "bin/agentbus",
+    "find": "    made = make_target\\(root\\)\\n",
+    "replace": "    made = []\\n    if not os.path.isdir(root):\\n        die(f\"not a directory: {root}\", \"bad_input\")\\n",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "init on a missing folder failed instead of creating it"
+  },
+  {
+    "name": "init creates a folder under an unwritable parent",
+    "file": "bin/agentbus",
+    "find": "    if not os\\.access\\(near, os\\.W_OK \\| os\\.X_OK\\):\\n",
+    "replace": "    if False:\\n",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "unwritable parent"
+  },
+  {
+    "name": "SessionEnd trusts a bus.db of the same device whatever its inode",
+    "file": "bin/agentbus",
+    "find": "\\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
+    "replace": "st.st_dev == joined_id[0]",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd wrote to a tracked bus in another project"
+  },
+  {
+    "name": "setup stops at the innermost work tree",
+    "file": "bin/agentbus",
+    "find": "(            if d != os\\.sep and os\\.path\\.lexists\\(os\\.path\\.join\\(d, \"\\.git\"\\)\\):\\n                roots\\.append\\(d\\))",
+    "replace": "\\1\\n                break",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "outer one of two nested work trees"
+  },
+  {
+    "name": "a test pause point is honoured for any folder",
+    "file": "bin/agentbus",
+    "find": "    if not \\(os\\.path\\.isabs\\(d\\) and os\\.path\\.isdir\\(d\\)\\):\\n        return[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "stopped or broke the hook"
+  },
+  {
+    "name": "the index shortcut says untracked whatever the file holds",
+    "file": "bin/agentbus",
+    "find": " or want\\[:-1\\] in low:",
+    "replace": ":",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "wait_exit never gives up on a stalled command",
+    "file": "tests/lib.sh",
+    "find": "if \\[ \"\\$SECONDS\" -ge \"\\$end\" \\]; then kill_tree \"\\$pid\"; fail \"\\$what: still running",
+    "replace": "if [ \"$SECONDS\" -ge 999999999 ]; then kill_tree \"$pid\"; fail \"$what: still running",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "hung to the cap with a command that never finishes"
+  },
+  {
+    "name": "wait_marker keeps waiting on a command that already exited",
+    "file": "tests/lib.sh",
+    "find": "    if ! kill -0 \"\\$pid\" 2>/dev/null; then\\n      WAIT_RC=0; wait \"\\$pid\" \\|\\| WAIT_RC=\\$\\?\\n      \\[ -e \"\\$file\" \\]",
+    "replace": "    if false; then\\n      WAIT_RC=0; wait \"$pid\" || WAIT_RC=$?\\n      [ -e \"$file\" ]",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "the early exit was not named"
+  },
+  {
+    "name": "the commit is not marked while rows are pending",
+    "file": "bin/agentbus",
+    "find": "_IN_COMMIT = \\(\"own\" if record else \"setup\"\\) if pending else None",
+    "replace": "_IN_COMMIT = None",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "committed is not true"
+  },
+  {
+    "name": "a stop during a commit still says the change was saved before it",
+    "file": "bin/agentbus",
+    "find": " and not self\\.fields\\.get\\(\"outcome_unknown\"\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "human message says the change was saved"
+  },
+  {
+    "name": "a stop during a commit keeps the not-saved message",
+    "file": "bin/agentbus",
+    "find": "        if committing and why_committing:\\n            why = why_committing\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "message does not say the write may have been saved"
+  },
+  {
+    "name": "a stop during setup commit counts the command's change as committed",
+    "file": "bin/agentbus",
+    "find": "if committing == \"own\":",
+    "replace": "if committing:",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "committed is not false for a refresh of last_seen"
+  },
+  {
+    "name": "TEST 2 waits on its output command with no deadline",
+    "file": "tests/test_lock_hold.sh",
+    "find": "wait_exit \"\\$P1\" \"\\$E\" \"\\$cmd after its output was read\"",
+    "replace": "wait \"$P1\" || WAIT_RC=$?; WAIT_RC=${WAIT_RC:-0}",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "hung to the cap with a command that never finishes its output"
   },
   {
     "name": "launcher never reads or writes the bytecode cache",
