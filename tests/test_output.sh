@@ -226,7 +226,7 @@ day = ok(db, "--as", "a", "claim", "src/b.py", "--ttl-min", "1500")
 if not re.search(r"claimed src/b\.py for 1d 1h \(until [A-Z][a-z]{2} \d{1,2} \d\d:\d\d\)", day):
     fail("a claim past today does not give the day: %r" % day)
 error, p = refused(db, "--as", "b", "claim", "src/a.py")
-if error["code"] != "claim_conflict" or not re.search(r"claimed by a until \d\d:\d\d \(edit\)", error["message"]):
+if error["code"] != "claim_conflict" or not re.search(r"claimed by a until \d\d:\d\d \(purpose: \"edit\"\)", error["message"]):
     fail("the conflict message does not use HH:MM: %r" % error["message"])
 if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", error["expires_at"]):
     fail("the error field expires_at is not the stored ISO time: %r" % error)
