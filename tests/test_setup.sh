@@ -6,6 +6,8 @@ set -euo pipefail
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export HOME="$T/home"; mkdir -p "$HOME"
 unset CLAUDE_CONFIG_DIR CODEX_HOME AGENTBUS_TEST_SETUP_FAIL AGENTBUS_TEST_SETUP_JSON
+# The tests below are about the skill piece and the engine; the hooks piece has its own section at the end.
+export AGENTBUS_TEST_SETUP_NO_HOOKS=1
 W="$T/work"; mkdir -p "$W"
 # Every fixed FAIL text in this file belongs to one assertion, so a FAIL line (and a mutation's expect in
 # tests/mutations.json) points at exactly one place. Bug it catches: three asserts all failed with "update line".
@@ -43,7 +45,7 @@ run_setup claude
 [ "$RC" = 0 ] || fail "exit $RC: $OUT"
 has "agentbus setup claude (user)"
 has "  + ~/.claude/skills/agentbus/SKILL.md   installed, $SIZE bytes"
-has "done. Start a new Claude Code session to load it."
+has "done. Start a new Claude Code session to load them."
 has "next: cd your-repo && agentbus init ."
 agentbus skill | cmp -s - "$SKILL_DIR/SKILL.md" || fail "the installed file is not what agentbus skill prints"
 [ "$(mode "$SKILL_DIR/SKILL.md")" = 600 ] || fail "SKILL.md mode $(mode "$SKILL_DIR/SKILL.md")"
@@ -636,6 +638,364 @@ for js in (True, False):
 PY
 AGENTBUS_TEST_SETUP_JSON="$T/hooks-intr.json" run_setup claude; [ "$RC" = 0 ] && [ -f "$T/hooks-intr.json" ] || fail "the rerun did not finish an interrupted setup: $RC $OUT"
 ok "an interrupted setup says committed, stays retryable, names the files and the rerun, and the rerun finishes it"
+
+echo
+echo "TEST: hooks: setup claude adds five tagged entries with the recorded absolute path, keeps existing hooks and keys, and a second run changes nothing"
+unset AGENTBUS_TEST_SETUP_NO_HOOKS AGENTBUS_TEST_SETUP_JSON
+reset
+mkdir -p "$HOME/.claude"; S="$HOME/.claude/settings.json"
+"$PY" -I - "$S" <<'PY'
+import json, sys
+json.dump({"theme": "dark", "env": {"A": "1"},
+           "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}],
+                     "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo post"}]}]}},
+          open(sys.argv[1], "w"), indent=2)
+PY
+cp "$S" "$T/s.orig"
+run_setup claude
+[ "$RC" = 0 ] || fail "hooks install: exit $RC: $OUT"
+has "  + ~/.claude/skills/agentbus/SKILL.md   installed, $SIZE bytes"
+grep -qF "  + ~/.claude/settings.json   added 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd); the file as it was is saved as settings.json.agentbus-" <<<"$OUT" || { echo "$OUT" >&2; fail "hooks install line"; }
+has "done. Start a new Claude Code session to load them."
+"$PY" -I - "$S" "$T/s.orig" <<'PY' || fail "settings.json lacks five tagged entries, or lost an existing hook or key"
+import json, os, shlex, subprocess, sys
+now = json.load(open(sys.argv[1])); orig = json.load(open(sys.argv[2]))
+hooks = now.pop("hooks")
+assert now == {k: v for k, v in orig.items() if k != "hooks"}, now
+assert hooks["PostToolUse"] == orig["hooks"]["PostToolUse"], hooks["PostToolUse"]
+assert hooks["Stop"][0] == orig["hooks"]["Stop"][0] and len(hooks["Stop"]) == 2, hooks["Stop"]
+want = {"SessionStart": "startup|resume|clear|compact|fork", "UserPromptSubmit": None, "PreToolUse": "Edit|Write|MultiEdit|NotebookEdit", "Stop": None, "SessionEnd": None}
+assert sorted(hooks) == sorted(set(want) | {"PostToolUse"}), sorted(hooks)
+for event, matcher in want.items():
+    groups = [g for g in hooks[event] if any(h["command"].endswith(" # agentbus:managed") for h in g["hooks"])]
+    assert len(groups) == 1 and groups[0].get("matcher") == matcher and len(groups[0]["hooks"]) == 1, (event, groups)
+    h = groups[0]["hooks"][0]
+    assert h["type"] == "command" and h["timeout"] == (2 if event == "SessionEnd" else 5), h
+    words = shlex.split(h["command"])
+    tool = words[:words.index("hook")]
+    assert os.path.isabs(tool[0]) or os.path.isabs(tool[-1]), tool
+    assert h["command"].endswith(f" hook claude {event} 2>/dev/null || true # agentbus:managed"), h["command"]
+    assert h["command"].startswith("'"), h["command"]  # the executable is quoted, never looked up on PATH
+    ran = subprocess.run([*tool, "--version"], capture_output=True, text=True, cwd="/")
+    assert ran.returncode == 0 and ran.stdout.startswith("agentbus "), (tool, ran)
+assert not any(e.startswith("Subagent") for e in hooks), sorted(hooks)
+PY
+h1=$(hash_tree "$HOME")
+run_setup claude
+has "  = ~/.claude/settings.json   unchanged"
+[ "$(hash_tree "$HOME")" = "$h1" ] || fail "a second hooks run changed a file"
+ok "five tagged entries with the recorded executable, existing hooks and keys kept, a rerun changes nothing"
+
+echo
+echo "TEST: hooks: the registered command needs no PATH (absolute interpreter), and exits 0 when its executable is gone"
+mkdir -p "$W/hproj"; (cd "$W/hproj" && git init -q && "${AB[@]}" init . >/dev/null && "${AB[@]}" who >/dev/null)
+printf '{"session_id":"aaaaaaaa-0000-4000-8000-000000000001","cwd":"%s","source":"startup"}' "$W/hproj" >"$T/hp.json"
+cmd=$("$PY" -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["hooks"]["SessionStart"][0]["hooks"][0]["command"])' "$S")
+RC=0; got=$(cd "$W/hproj" && env -i HOME="$HOME" TMPDIR="$TMPDIR" PATH=/nonexistent /bin/sh -c "$cmd" <"$T/hp.json" 2>&1) || RC=$?
+[ "$RC" = 0 ] && grep -qF "you are on this folder's bus as claude-" <<<"$got" || fail "the registered command with an empty PATH: exit $RC, output: $got"
+gone=$("$PY" -I -c 'import re,sys; print(re.sub(r"^.*? hook claude", "/nonexistent/agentbus hook claude", sys.argv[1]))' "$cmd")
+RC=0; got=$(cd "$W/hproj" && env -i HOME="$HOME" TMPDIR="$TMPDIR" PATH=/usr/bin:/bin /bin/sh -c "$gone" <"$T/hp.json" 2>&1) || RC=$?
+[ "$RC" = 0 ] && [ -z "$got" ] || fail "the registered command with its executable gone: exit $RC, output: $got"
+ok "no PATH lookup: the recorded interpreter and tool answer; || true keeps a missing executable at exit 0"
+
+echo
+echo "TEST: hooks: uninstall gives parsed-JSON equality with the original plus a user edit made in between"
+"$PY" -I - "$S" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["model"] = "opus"; d["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": "echo late"}]})
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+run_setup claude --uninstall
+[ "$RC" = 0 ] || fail "hooks uninstall: exit $RC: $OUT"
+"$PY" -I - "$S" "$T/s.orig" <<'PY' || fail "uninstall did not leave the original plus the user's edit"
+import json, sys
+now = json.load(open(sys.argv[1])); orig = json.load(open(sys.argv[2]))
+orig["model"] = "opus"; orig["hooks"]["Stop"].append({"hooks": [{"type": "command", "command": "echo late"}]})
+assert now == orig, (now, orig)
+PY
+ok "tagged entries gone, everything else (including the edit) kept"
+
+echo
+echo "TEST: hooks: an invalid settings.json is refused and left byte-identical"
+printf '{ not json' >"$S"; cp "$S" "$T/s.bad"
+run_setup claude
+[ "$RC" = 1 ] && grep -qF "is not valid JSON; not changed." <<<"$OUT" || fail "invalid settings.json: exit $RC: $OUT"
+cmp -s "$S" "$T/s.bad" || fail "invalid settings.json was changed"
+[ ! -e "$HOME/.claude/skills/agentbus" ] || fail "the skill was written although the hooks file was refused"
+ok "refused, nothing written"
+
+echo
+echo "TEST: hooks: an installed agentbus plugin provides the hooks, so only the skill is added"
+reset
+mkdir -p "$HOME/.claude/plugins"
+"$PY" -I - "$HOME/.claude/plugins/installed_plugins.json" "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" agentbus@agentbus <<'PY'
+import json, sys
+d = json.load(open(sys.argv[2])); entry = next(iter(d["plugins"].values()))
+d["plugins"] = {sys.argv[3]: entry}
+json.dump(d, open(sys.argv[1], "w"))
+PY
+run_setup claude
+[ "$RC" = 0 ] || fail "plugin present: exit $RC: $OUT"
+has "  = hooks   provided by the agentbus plugin; not added"
+has "  + ~/.claude/skills/agentbus/SKILL.md   installed, $SIZE bytes"
+[ ! -e "$HOME/.claude/settings.json" ] || fail "hooks were added although the plugin provides them"
+# a plugin Claude Code has switched off provides nothing; one of another name is not agentbus
+printf '{"enabledPlugins": {"agentbus@agentbus": false}}' >"$HOME/.claude/settings.json"
+run_setup claude; grep -qF "  + ~/.claude/settings.json   added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "a disabled plugin still counted"; }
+reset; mkdir -p "$HOME/.claude/plugins"; cp "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" "$HOME/.claude/plugins/installed_plugins.json"
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "another plugin's id counted as agentbus"; }
+reset; mkdir -p "$HOME/.claude/plugins"; printf 'not json' >"$HOME/.claude/plugins/installed_plugins.json"
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "an unreadable plugin record stopped setup"; }
+ok "installed and enabled: skill only; disabled, another name or unreadable: hooks added"
+
+echo
+echo "TEST: hooks: check reports the entry, the recorded executable and a plugin duplicate"
+reset; run_setup claude >/dev/null
+rows() { "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$S" <<'PY'
+import json, runpy, shlex, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_check")
+# check runs inside the tool, whose argv[0] is the executable setup recorded
+sys.argv[0] = shlex.split(json.load(open(sys.argv[2]))["hooks"]["Stop"][0]["hooks"][0]["command"])[0]
+for r in m["ClaudeHooksPiece"]().check("user"):
+    print(r[0], r[1])
+PY
+}
+got=$(rows); [ "$got" = "$(printf 'claude_hooks ok\nclaude_hooks_tool ok')" ] || fail "check after install: $got"
+"$PY" -I - "$S" <<'PY'
+import json, re, sys
+d = json.load(open(sys.argv[1]))
+for groups in d["hooks"].values():
+    for g in groups:
+        for h in g["hooks"]:
+            h["command"] = re.sub(r"^('[^']*' ?)+(?= hook)", "'/nonexistent/agentbus'", h["command"])
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+got=$(rows); grep -qx "claude_hooks_tool problem" <<<"$got" || fail "check with a missing executable: $got"
+run_setup claude >/dev/null; mkdir -p "$HOME/.claude/plugins"
+"$PY" -I - "$HOME/.claude/plugins/installed_plugins.json" "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" agentbus@agentbus <<'PY'
+import json, sys
+d = json.load(open(sys.argv[2])); entry = next(iter(d["plugins"].values()))
+d["plugins"] = {sys.argv[3]: entry}
+json.dump(d, open(sys.argv[1], "w"))
+PY
+got=$(rows); grep -qx "claude_hooks_duplicate problem" <<<"$got" || fail "check with the plugin and setup hooks both present: $got"
+ok "check: ok after install; a missing executable and a plugin duplicate are problems"
+
+echo
+echo "TEST: hooks: --scope project writes ./.claude/settings.json under the current directory only"
+reset; run_setup claude --scope project
+[ "$RC" = 0 ] && [ -f "$W/.claude/settings.json" ] && [ ! -e "$HOME/.claude/settings.json" ] || fail "project hooks: exit $RC, $OUT"
+grep -qF "  + .claude/settings.json" <<<"$OUT" || grep -qF "settings.json   added 5 hooks" <<<"$OUT" || fail "project hooks line: $OUT"
+ok "project scope: the settings file is under the work folder"
+
+echo
+echo "TEST: hooks: check never runs what settings.json names (a project's settings file can be a clone's)"
+reset; mkdir -p "$W/.claude"
+cat >"$T/canary.sh" <<SH
+#!/bin/sh
+touch "$T/CANARY"
+SH
+chmod +x "$T/canary.sh"
+"$PY" -I - "$W/.claude/settings.json" "$T/canary.sh" <<'PY'
+import json, sys
+json.dump({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": f"{sys.argv[2]} hook claude Stop # agentbus:managed"}]}]}}, open(sys.argv[1], "w"))
+PY
+got=$(cd "$W" && "$PY" -I - "${AGENTBUS_BIN:-$BIN}" <<'PY'
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_check")
+for r in m["ClaudeHooksPiece"]().check("project"):
+    print(r[0], r[1])
+PY
+)
+[ ! -e "$T/CANARY" ] || fail "check ran the command a settings file named"
+grep -qx "claude_hooks_tool problem" <<<"$got" || fail "check of a hostile settings file: $got"
+ok "the executable is looked at, never started"
+
+echo
+echo "TEST: hooks: setup asks claude plugin list --json first (every scope), and the plugin files only when there is no answer"
+mkdir -p "$T/stub"
+cat >"$T/stub/claude" <<'SH'
+#!/bin/sh
+[ "$1 $2 $3" = "plugin list --json" ] || exit 64
+[ -z "$STUB_EXIT" ] || exit "$STUB_EXIT"
+cat "$STUB_LIST"
+SH
+chmod +x "$T/stub/claude"
+export AGENTBUS_CLAUDE_BIN="$T/stub/claude"
+stub() { printf '%s' "$1" >"$T/stub.list"; export STUB_LIST="$T/stub.list"; }
+reset; stub '[{"id":"agentbus@agentbus","version":"0.2.0","scope":"project","enabled":true,"projectEnabled":true}]'
+run_setup claude; has "  = hooks   provided by the agentbus plugin; not added"
+[ ! -e "$HOME/.claude/settings.json" ] || fail "a project-scope plugin install did not stop setup adding its own hooks"
+reset; stub '[{"id":"agentbus@agentbus","scope":"user","enabled":false}]'
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "claude listed a disabled plugin and it still counted"; }
+reset; stub '[{"id":"other@market","scope":"user","enabled":true}]'
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "another plugin counted as agentbus"; }
+# the answer is claude's even when the plugin files disagree
+reset; stub '[]'; mkdir -p "$HOME/.claude/plugins"
+"$PY" -I - "$HOME/.claude/plugins/installed_plugins.json" "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" agentbus@agentbus <<'PY'
+import json, sys
+d = json.load(open(sys.argv[2])); entry = next(iter(d["plugins"].values()))
+d["plugins"] = {sys.argv[3]: entry}
+json.dump(d, open(sys.argv[1], "w"))
+PY
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "the plugin files overruled claude's own list"; }
+# no usable answer (claude fails, or prints something else): the files decide
+STUB_EXIT=3 run_setup claude; grep -qF "provided by the agentbus plugin" <<<"$OUT" || { echo "$OUT" >&2; fail "a failing claude did not fall back to the plugin files"; }
+stub 'not json'; reset; mkdir -p "$HOME/.claude/plugins"; printf 'not json' >"$HOME/.claude/plugins/installed_plugins.json"
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "nonsense from claude and from the files stopped setup"; }
+# the files, project scope: installed, and switched on by the project's own settings
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
+reset; mkdir -p "$HOME/.claude/plugins" "$W/.claude"
+"$PY" -I - "$HOME/.claude/plugins/installed_plugins.json" "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" agentbus@agentbus <<'PY'
+import json, sys
+d = json.load(open(sys.argv[2])); entry = dict(next(iter(d["plugins"].values()))[0], scope="project")
+d["plugins"] = {sys.argv[3]: [entry]}
+json.dump(d, open(sys.argv[1], "w"))
+PY
+run_setup claude; grep -qF "added 5 hooks" <<<"$OUT" || { echo "$OUT" >&2; fail "a project-scope install nobody switched on counted"; }
+printf '{"enabledPlugins": {"agentbus@agentbus": true}}' >"$W/.claude/settings.json"
+run_setup claude; grep -qF "provided by the agentbus plugin" <<<"$OUT" || { echo "$OUT" >&2; fail "a project-scope install switched on by the project was missed"; }
+ok "claude's list first (project, disabled, other name, overruling the files); the files only without an answer"
+
+echo
+echo "TEST: hooks: setup records an absolute interpreter, so the registered command does not search PATH"
+reset; run_setup claude >/dev/null
+"$PY" -I - "$HOME/.claude/settings.json" <<'PY' || fail "a recorded command does not start with an absolute interpreter and script"
+import json, os, shlex, sys
+for groups in json.load(open(sys.argv[1]))["hooks"].values():
+    for g in groups:
+        words = shlex.split(g["hooks"][0]["command"])
+        tool = words[:words.index("hook")]
+        assert all(os.path.isabs(w) and os.path.exists(w) for w in tool), tool
+PY
+ok "absolute paths only"
+
+echo
+echo "TEST: hooks: setup starts claude only from a trusted place and from the home folder; check starts nothing"
+reset; git -C "$W" init -q; export AGENTBUS_CLAUDE_BIN=
+mkdir -p "$W/node_modules/.bin" "$T/ok" "$T/gw"
+mkclaude() { printf '#!/bin/sh\necho "$PWD $*" >>"%s"\necho '"'"'[{"id":"agentbus@agentbus","enabled":true}]'"'"'\n' "$T/claude.log" >"$1"; chmod 755 "$1"; }
+mkclaude "$W/node_modules/.bin/claude"; mkclaude "$T/ok/claude"; mkclaude "$T/gw/claude"
+ran() { [ -s "$T/claude.log" ]; }
+tried() {  # tried PATH LABEL: setup with that PATH; the log says whether a claude was started
+  rm -f "$T/claude.log"; PATH="$1" run_setup claude
+  [ "$RC" = 0 ] || fail "$2: setup exit $RC: $OUT"
+}
+tried "$W/node_modules/.bin:$PATH" "a claude inside the repo"
+! ran || fail "setup started a claude that lives inside the working directory's repo"
+grep -qF "added 5 hooks" <<<"$OUT" || fail "without a trusted claude the plugin files were not used"
+reset; git -C "$W" init -q; mkdir -p "$W/node_modules/.bin"; mkclaude "$W/node_modules/.bin/claude"
+(cd "$W" && rm -f "$T/claude.log" && PATH="node_modules/.bin:$PATH" "${AB[@]}" setup claude >/dev/null 2>&1) || fail "setup with a relative PATH entry failed"
+! ran || fail "setup started a claude found through a relative PATH entry"
+rm -rf "$W/.git"; reset; mkdir -p "$W/node_modules/.bin"; mkclaude "$W/node_modules/.bin/claude"
+tried "$W/node_modules/.bin:$PATH" "a claude under the working directory, no repository"
+! ran || fail "setup started a claude that lives under the working directory"
+chmod 775 "$T/gw/claude"; reset
+tried "$T/gw:$PATH" "a group-writable claude"
+! ran || fail "setup started a group-writable claude"
+mkdir -p "$T/gwdir"; mkclaude "$T/gwdir/claude"; chmod 775 "$T/gwdir"; reset
+tried "$T/gwdir:$PATH" "a claude in a group-writable folder"
+! ran || fail "setup started a claude in a group-writable folder"
+reset
+tried "$T/ok:$PATH" "a trusted claude"
+ran || fail "setup did not start a trusted claude"
+"$PY" -I - "$T/claude.log" "$HOME" <<'PY' || fail "claude was not started from the home folder with plugin list --json"
+import os, sys
+line = open(sys.argv[1]).read().strip()
+cwd, args = line.split(" ", 1)
+assert os.path.realpath(cwd) == os.path.realpath(sys.argv[2]) and args == "plugin list --json", line
+PY
+grep -qF "provided by the agentbus plugin" <<<"$OUT" || fail "a trusted claude's answer was not used"
+# check reads files only
+rm -f "$T/claude.log"; reset; run_setup claude >/dev/null
+(cd "$W" && PATH="$T/ok:$PATH" "$PY" -I - "${AGENTBUS_BIN:-$BIN}" <<'PY'
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_check")
+m["ClaudeHooksPiece"]().check("user"); m["ClaudeHooksPiece"]().check("project")
+PY
+)
+! ran || fail "check started claude"
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
+ok "claude: absolute PATH entries only, outside the project and its buses, not writable by others, run from HOME; check never starts it"
+
+echo
+echo "TEST: hooks: a claude under any project root below HOME, or tracked in its work tree's index, is not started"
+export AGENTBUS_CLAUDE_BIN=
+setup_in() {  # setup_in CWD PATH: setup claude from CWD with that PATH; the log says whether a claude was started
+  rm -f "$T/claude.log"; RC=0; OUT=$(cd "$1" && PATH="$2" "${AB[@]}" setup claude 2>&1) || RC=$?
+  [ "$RC" = 0 ] || fail "setup in $1: exit $RC: $OUT"
+}
+reset; mkdir -p "$HOME/tarball/sub" "$HOME/tarball/node_modules/.bin"; mkclaude "$HOME/tarball/node_modules/.bin/claude"
+setup_in "$HOME/tarball/sub" "$HOME/tarball/node_modules/.bin:$PATH"
+! ran || fail "setup started a claude under an ancestor project root of the working directory (no git repository)"
+reset; mkdir -p "$HOME/proj" "$HOME/.local/bin"; mkclaude "$HOME/.local/bin/claude"
+setup_in "$HOME/proj" "$HOME/.local/bin:$PATH"
+ran || fail "setup refused a claude in the home folder's own bin, outside the project and not in a repository"
+gitq() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
+# a dotfiles home: an untracked claude is fine, one the home's index lists is not (from the project or from HOME itself)
+reset; git -C "$HOME" init -q; mkdir -p "$HOME/bin" "$HOME/proj"; mkclaude "$HOME/bin/claude"
+setup_in "$HOME/proj" "$HOME/bin:$PATH"
+ran || fail "setup refused an untracked claude in a dotfiles home"
+gitq "$HOME" add -f bin/claude
+setup_in "$HOME/proj" "$HOME/bin:$PATH"
+! ran || fail "setup started a claude tracked in the index of a home folder that is a git repository"
+setup_in "$HOME" "$HOME/bin:$PATH"
+! ran || fail "setup run from a git home folder started a claude its index lists"
+# a work tree elsewhere (Homebrew's prefix is one): Caskroom/ and node_modules/ are untracked there
+WT="$T/wt"; rm -rf "$WT"; mkdir -p "$WT/Caskroom/claude/1.0" "$WT/bin"; git -C "$WT" init -q
+printf 'readme\n' >"$WT/README"; gitq "$WT" add README      # the index lists something, just not the claude
+mkclaude "$WT/Caskroom/claude/1.0/claude"; ln -s ../Caskroom/claude/1.0/claude "$WT/bin/claude"
+reset
+setup_in "$W" "$WT/bin:$PATH"
+ran || fail "setup refused a claude that is untracked in an unrelated work tree (symlinked from its bin)"
+grep -qF "provided by the agentbus plugin" <<<"$OUT" || fail "an untracked work-tree claude's answer was not used"
+gitq "$WT" add -f Caskroom/claude/1.0/claude
+setup_in "$W" "$WT/bin:$PATH"
+! ran || fail "setup started a claude tracked in the index of its work tree"
+gitq "$WT" update-index --force-remove Caskroom/claude/1.0/claude; gitq "$WT" add -f bin/claude
+mkdir -p "$T/outbin"; ln -sf "$WT/bin/claude" "$T/outbin/claude"     # the PATH entry is outside the work tree; the tracked link is a hop on the way in
+setup_in "$W" "$T/outbin:$PATH"
+! ran || fail "setup started a claude reached through a tracked symlink hop"
+gitq "$WT" update-index --force-remove bin/claude
+setup_in "$W" "$WT/bin:$PATH"
+ran || fail "setup refused the work-tree claude after nothing was tracked any more"
+printf 'garbage, not an index' >"$WT/.git/index"
+setup_in "$W" "$WT/bin:$PATH"
+! ran || fail "setup started a claude in a work tree whose index is a corrupt index (it must count as tracked)"
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
+ok "no claude under the working directory's ancestors below HOME or tracked in its work tree's index (itself, a symlink hop, or an unreadable index); untracked ones (Caskroom, node_modules, a dotfiles home) are trusted"
+
+echo
+echo "TEST: hooks: the enclosing work tree, other spellings of a folder, and a tracked directory link all keep a claude from starting"
+export AGENTBUS_CLAUDE_BIN=
+# a repository outside HOME: the working directory is a subfolder, the claude sits in the repository's node_modules (untracked)
+reset; OP="$T/outproj"; rm -rf "$OP"; mkdir -p "$OP/sub" "$OP/node_modules/.bin"; git -C "$OP" init -q; mkclaude "$OP/node_modules/.bin/claude"
+setup_in "$OP/sub" "$OP/node_modules/.bin:$PATH"
+! ran || fail "setup started a claude inside the work tree enclosing the working directory (a repository outside HOME)"
+# a folder named .agentbus in any case, anywhere
+reset; mkdir -p "$T/pj3/.AGENTBUS/bin"; mkclaude "$T/pj3/.AGENTBUS/bin/claude"
+setup_in "$W" "$T/pj3/.AGENTBUS/bin:$PATH"
+! ran || fail "setup started a claude inside a folder named .AGENTBUS"
+# another spelling of the working directory's repository, where the file system treats the spellings alike
+mkdir -p "$T/CaseProbe"
+if [ -d "$T/caseprobe" ]; then
+  reset; CP="$T/capsproj"; rm -rf "$CP"; mkdir -p "$CP/sub" "$CP/node_modules/.bin"; git -C "$CP" init -q; mkclaude "$CP/node_modules/.bin/claude"
+  setup_in "$CP/sub" "$T/CAPSPROJ/node_modules/.bin:$PATH"
+  ! ran || fail "setup started a claude reached through another spelling of the repository's path"
+  echo "checked another spelling of a path (case-insensitive file system)"
+else
+  echo "case-sensitive file system: another spelling of a path names another folder here; the identity comparison is the same code as the plain case above"
+fi
+# a directory link that the index lists: tools -> real; real/claude itself is untracked
+reset; WT2="$T/wt2"; rm -rf "$WT2"; mkdir -p "$WT2/real"; git -C "$WT2" init -q; mkclaude "$WT2/real/claude"; ln -s real "$WT2/tools"
+gitq "$WT2" add tools
+setup_in "$W" "$WT2/tools:$PATH"
+! ran || fail "setup started a claude reached through a tracked directory link"
+gitq "$WT2" update-index --force-remove tools
+setup_in "$W" "$WT2/tools:$PATH"
+ran || fail "setup refused a claude behind a directory link that nothing tracks"
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
+ok "enclosing work tree, .AGENTBUS, another spelling and a tracked directory link are refused; an untracked directory link is fine"
 
 echo
 echo "All setup tests passed"

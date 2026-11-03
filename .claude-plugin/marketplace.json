@@ -1,0 +1,18 @@
+{
+  "name": "agentbus",
+  "owner": {
+    "name": "Nate Ross"
+  },
+  "description": "agentbus: a shared inbox for the coding agents in your workspace",
+  "plugins": [
+    {
+      "name": "agentbus",
+      "description": "Join the folder's bus when a session starts, show unread messages, nudge before editing a claimed file, leave when the session ends.",
+      "source": {
+        "source": "github",
+        "repo": "wickdninja/agentbus",
+        "ref": "main"
+      }
+    }
+  ]
+}

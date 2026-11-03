@@ -64,16 +64,19 @@ fresh nofiles; git -C "$D" rm -rq .claude-plugin; commit; check
 # and pins; a tag still needs its exact version, and a dev tag is not a release tag.
 devfix() { fresh "$1"; edit "$D/bin/agentbus" '__version__ = "0.2.0"' '__version__ = "0.2.0.dev0"'; edit "$D/.claude-plugin/plugin.json" '"0.2.0"' '"0.2.0.dev0"'
   edit "$D/CHANGELOG.md" $'## 0.2.0 - 2026-11-20\n\nthings\n\n' ''
-  edit "$D/README.md" 'agentbus@v0.2.0' 'agentbus@v0.1.0'; edit "$D/docs/how-to/setup.md" 'agentbus@v0.2.0' 'agentbus@v0.1.0'; }
-devfix dev; git -C "$D" rm -rq .claude-plugin/marketplace.json; commit; check
+  edit "$D/README.md" 'agentbus@v0.2.0' 'agentbus@v0.1.0'; edit "$D/docs/how-to/setup.md" 'agentbus@v0.2.0' 'agentbus@v0.1.0'
+  edit "$D/.claude-plugin/marketplace.json" '"ref": "v0.2.0"' '"ref": "main"'; }   # between releases the marketplace points at main, which exists
+devfix dev; commit; check
 [ "$RC" = 0 ] && [ "$OUT" = "release check passed: 0.2.0.dev0" ] || fail "an untagged dev build: exit $RC: $OUT"
+devfix devref; edit "$D/.claude-plugin/marketplace.json" '"ref": "main"' '"ref": "v0.2.0"'; commit; check
+expect_fail_with "a dev build whose marketplace names a tag that does not exist yet" "source ref is v0.2.0, not main"
 check --tag v0.2.0
 expect_fail_with "a final tag on a dev version" "the tag v0.2.0 does not match __version__ 0.2.0.dev0"
 check --tag v0.2.0.dev0
 expect_fail_with "a dev tag" "is not a release tag (vX.Y.Z or vX.Y.ZrcN)"
-devfix devpin; git -C "$D" rm -rq .claude-plugin/marketplace.json; edit "$D/README.md" 'agentbus@v0.1.0`' 'agentbus@v0.2.0`'; commit; check
+devfix devpin; edit "$D/README.md" 'agentbus@v0.1.0`' 'agentbus@v0.2.0`'; commit; check
 expect_fail_with "a dev build pinning an unreleased tag" "must pin @v0.1.0"
-devfix devlog; git -C "$D" rm -rq .claude-plugin/marketplace.json; edit "$D/CHANGELOG.md" '## 0.1.0 - 2026-11-01' '## 0.2.0 - 2026-11-20'; commit; check
+devfix devlog; edit "$D/CHANGELOG.md" '## 0.1.0 - 2026-11-01' '## 0.2.0 - 2026-11-20'; commit; check
 expect_fail_with "a dev build with a dated heading for an unreleased version" "heading is for 0.2.0, not 0.1.0"
 ok "clean passes; rc tag passes; absent plugin files are skipped; a dev version passes untagged and never on a tag"
 

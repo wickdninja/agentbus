@@ -9,6 +9,9 @@ unset AGENTBUS_DB AGENTBUS_AGENT
 # Nor may a test reach the caller's real Claude Code or Codex config: setup honours both variables, so a caller
 # who exported either would get its skill or AGENTS.md block written there. A test that wants one sets it itself.
 unset CODEX_HOME CLAUDE_CONFIG_DIR
+# Setup asks `claude plugin list --json` whether the plugin is installed. A test never starts the real claude: this names
+# no executable (setup then reads the plugin files), and a test that wants an answer points it at a stub it wrote.
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
 # Human output is hard-wrapped to COLUMNS (else the terminal, else 80). Tests that grep long human
 # lines run unwrapped, whatever terminal started them; tests/test_wrap.sh sets COLUMNS per call.
 export COLUMNS=4096

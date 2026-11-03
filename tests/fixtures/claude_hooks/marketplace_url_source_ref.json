@@ -1,0 +1,11 @@
+{
+  "name": "capmkt",
+  "owner": {"name": "Nate Ross"},
+  "plugins": [
+    {
+      "name": "agentbus-cap",
+      "description": "scratch",
+      "source": {"source": "url", "url": "file:///home/user/scratch/mrepo", "ref": "v0.0.1"}
+    }
+  ]
+}

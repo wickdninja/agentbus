@@ -164,6 +164,7 @@ def help_(*args):
 
 top = help_()
 commands = set(re.search(r'\{([^}]+)\}', top).group(1).split(','))
+commands -= set(runpy.run_path(bin_, run_name='agentbus_test')['CONTRACT']['hidden'])  # hidden commands have no help
 assert len(commands) >= 14, top
 helps = {(): top}
 for cmd in commands:
@@ -223,7 +224,8 @@ assert links and all(link.startswith('https://github.com/wickdninja/agentbus/blo
 
 # Inventory comes from argparse itself, including nested ctx/log actions. A table entry for a
 # nested action covers its parent; a future command/action must acquire its own documented row.
-parser = runpy.run_path(bin_, run_name='agentbus_docs')['build_parser']()
+docs_module = runpy.run_path(bin_, run_name='agentbus_docs')
+parser = docs_module['build_parser']()
 def inventory(p, prefix=()):
     found = set()
     for action in p._actions:
@@ -239,7 +241,7 @@ for cell in re.findall(r'^\| ([^|]+) \|', table, re.M):
     for form in re.findall(r'`([^`]+)`', cell):
         tokens = tuple(form.split())
         documented.update(tokens[:i] for i in range(1, len(tokens) + 1))
-assert inventory(parser) <= documented, ('missing JSON table commands', inventory(parser) - documented)
+assert inventory(parser) - {(h,) for h in docs_module['CONTRACT']['hidden']} <= documented, ('missing JSON table commands', inventory(parser) - documented)  # hidden commands (hook) are not documented
 for snippet in re.findall(r'`([^`]+)`', skill):
     if snippet in ('agentbus', 'AGENTBUS_DB', '.agentbus/bin/agentbus'):
         continue

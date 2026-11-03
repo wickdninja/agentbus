@@ -53,7 +53,8 @@ doc = ok("schema")
 objects, commands = doc["objects"], doc["commands"]
 
 # ---- the parser and the registry list the same commands ----
-parser = runpy.run_path(bin_, run_name="agentbus_test")["build_parser"]()
+module = runpy.run_path(bin_, run_name="agentbus_test")
+parser = module["build_parser"]()
 def leaves(p, prefix=()):
     found = []
     for action in p._actions:
@@ -63,6 +64,7 @@ def leaves(p, prefix=()):
                 found.extend(inner or [prefix + (name,)])
     return found
 parser_commands = {" ".join(path) for path in leaves(parser)} | {"schema"}
+parser_commands -= set(module["CONTRACT"]["hidden"])  # commands the parser has that `schema` leaves out (hook)
 assert doc["contract"] == 1 and isinstance(doc["agentbus"], str), doc["contract"]
 assert set(commands) == parser_commands, ("registry vs parser", sorted(set(commands) ^ parser_commands))
 print("PASS: schema --json has an entry for every subcommand in the parser and none for a command that does not exist")

@@ -18,3 +18,4 @@ s|120|tell the user to run agentbus upgrade DIR; never edit the bus.
 s|110|They run it from the installed agentbus, not this copy; on schema_newer, this copy is older than the bus.
 s|100|With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug.
 s|100|Listings return {items, has_more, next}; if has_more, call again or raise --limit.
+p|200|Hooks: with the agentbus plugin or setup, a hook message gives your exact name

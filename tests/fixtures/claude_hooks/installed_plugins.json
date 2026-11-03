@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "plugins": {
+    "agentbus-cap@capmkt": [
+      {
+        "scope": "user",
+        "installPath": "/home/user/scratch/cfg/plugins/cache/capmkt/agentbus-cap/0.0.1",
+        "version": "0.0.1",
+        "installedAt": "2026-11-02T04:32:41.586Z",
+        "lastUpdated": "2026-11-02T04:32:41.586Z",
+        "gitCommitSha": "1d071912ac171a0d2c528cbe0eed4da1123d778e"
+      }
+    ]
+  }
+}

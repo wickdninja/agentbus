@@ -331,5 +331,374 @@
     "count": 1,
     "run": "tests/test_doctor.sh",
     "expect": "doctor changed a file under HOME or the project"
+  },
+  {
+    "name": "a hook makes a lane's name (AGENTBUS_AGENT) leave when its session ends",
+    "file": "bin/agentbus",
+    "find": "if not ident or not ident\\[1\\] or payload.get\\(\"reason\"\\) not in HOOK_END_REASONS:",
+    "replace": "if not ident or payload.get(\"reason\") not in HOOK_END_REASONS:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd left a name set by AGENTBUS_AGENT"
+  },
+  {
+    "name": "SessionStart takes over a name another live session holds",
+    "file": "bin/agentbus",
+    "find": "hook_join\\(con, name, takeover=derived\\)",
+    "replace": "hook_join(con, name, takeover=True)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionStart took over a live name"
+  },
+  {
+    "name": "a hook uses an AGENTBUS_AGENT outside the allowed pattern",
+    "file": "bin/agentbus",
+    "find": "return \\(env, False\\) if HOOK_NAME_RE.fullmatch\\(env\\) else None",
+    "replace": "return (env, False)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "unsafe AGENTBUS_AGENT"
+  },
+  {
+    "name": "a hook exits 1",
+    "file": "bin/agentbus",
+    "find": "os\\._exit\\(0\\)  # not SystemExit",
+    "replace": "os._exit(1)  # not SystemExit",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "rc 1"
+  },
+  {
+    "name": "PreToolUse nudges about an unclaimed path every time",
+    "file": "bin/agentbus",
+    "find": "if own or not peers or not isinstance\\(payload.get\\(\"session_id\"\\), str\\) or not hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\):",
+    "replace": "if own or not peers:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "second unclaimed nudge for the same path"
+  },
+  {
+    "name": "a message of an unknown kind is counted under its own name",
+    "file": "bin/agentbus",
+    "find": "key = kind if isinstance\\(kind, str\\) and kind in KINDS else \"other\"",
+    "replace": "key = kind",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "unknown kind:"
+  },
+  {
+    "name": "a hook waits five seconds for a busy bus",
+    "file": "bin/agentbus",
+    "find": "^HOOK_BUSY_S = 0\\.3",
+    "replace": "HOOK_BUSY_S = 5.0",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a held bus made a hook wait longer than its bound"
+  },
+  {
+    "name": "setup claude records a PATH lookup instead of the tool's absolute path",
+    "file": "bin/agentbus",
+    "find": "return word\\(sys\\.executable\\) \\+ \" \" \\+ word\\(self_path\\(\\)\\)",
+    "replace": "return \"agentbus\"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "settings.json lacks five tagged entries, or lost an existing hook or key"
+  },
+  {
+    "name": "setup claude adds hooks although the plugin provides them",
+    "file": "bin/agentbus",
+    "find": "if not uninstall and claude_plugin_provides_hooks\\(ask=self\\.ask\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line:   = hooks   provided by the agentbus plugin; not added"
+  },
+  {
+    "name": "a SessionStart write open creates a bus nobody made",
+    "file": "bin/agentbus",
+    "find": "            hook_open\\(path, strict, True\\)\\.close\\(\\)",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a planted bus folder with no bus.db"
+  },
+  {
+    "name": "a hook trusts a .agentbus that git tracks",
+    "file": "bin/agentbus",
+    "find": "        if not \\(same or hook_untracked\\(directory\\)\\):",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "hook text endorses the bus copy in the project",
+    "file": "bin/agentbus",
+    "find": "if is_repo_local_copy\\(\\) and os\\.path\\.realpath\\(copy\\) == self_path\\(\\):",
+    "replace": "if True:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionStart text differs"
+  },
+  {
+    "name": "Stop reminds on every turn",
+    "file": "bin/agentbus",
+    "find": "    if not hook_nudge_once\\(payload\\[\"session_id\"\\], \"stop:\" \\+ hashlib[^\\n]*\\n        return None\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "Stop for the same claims a second time"
+  },
+  {
+    "name": "PreToolUse nudges a session that is alone on the bus",
+    "file": "bin/agentbus",
+    "find": " or not peers or ",
+    "replace": " or ",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a nudge to a session alone on the bus"
+  },
+  {
+    "name": "/clear leaves the bus and strands the name",
+    "file": "bin/agentbus",
+    "find": "if payload\\.get\\(\"reason\"\\) == \"clear\" and process_name == name:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd clear released the name or its claims mid-task"
+  },
+  {
+    "name": "agents not seen for 30 minutes are counted",
+    "file": "bin/agentbus",
+    "find": "agents = con\\.execute\\(\"SELECT COUNT\\(\\*\\) FROM agents WHERE last_seen>=\\?\", \\(hook_cutoff\\(\\),\\)\\)",
+    "replace": "agents = con.execute(\"SELECT COUNT(*) FROM agents WHERE ?=?\", (\"a\", \"a\"))",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "stale agents were counted"
+  },
+  {
+    "name": "an older or newer bus makes the hooks silent without a notice",
+    "file": "bin/agentbus",
+    "find": "raise HookNotice\\(refusal\\(e\\)\\[\"code\"\\]\\)",
+    "replace": "raise",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a bus that needs a migration was not left alone"
+  },
+  {
+    "name": "per-session memory is never pruned",
+    "file": "bin/agentbus",
+    "find": "        hook_state_prune\\(\\)\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "per-session memory was not pruned by age"
+  },
+  {
+    "name": "setup trusts the plugin files over claude plugin list",
+    "file": "bin/agentbus",
+    "find": "return claude_plugin_from_files\\(user=asked is None\\)",
+    "replace": "return claude_plugin_from_files()",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "the plugin files overruled claude's own list"
+  },
+  {
+    "name": "a hook treats every .agentbus as untracked",
+    "file": "bin/agentbus",
+    "find": "return not hook_index_tracks\\(repo, prefix\\)",
+    "replace": "return True",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "a hook ignores the shared index of a split index",
+    "file": "bin/agentbus",
+    "find": "        names \\+= more\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a split index was used"
+  },
+  {
+    "name": "setup starts a claude that lives inside the project",
+    "file": "bin/agentbus",
+    "find": "if claude_in_project\\(real, os\\.path\\.realpath\\(os\\.getcwd\\(\\)\\), home\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude that lives inside the working directory's repo"
+  },
+  {
+    "name": "setup starts claude from the project folder",
+    "file": "bin/agentbus",
+    "find": "cwd=home if os\\.path\\.isdir\\(home\\) else os\\.sep\\)",
+    "replace": "cwd=os.getcwd())",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "claude was not started from the home folder with plugin list --json"
+  },
+  {
+    "name": "check may start claude",
+    "file": "bin/agentbus",
+    "find": "        self\\.ask = False\\n        try:",
+    "replace": "        self.ask = True\n        try:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check started claude"
+  },
+  {
+    "name": "the hook memory file is updated without a lock",
+    "file": "bin/agentbus",
+    "find": "        fcntl\\.flock\\(fd, fcntl\\.LOCK_EX\\)\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "parallel hooks lost memory updates"
+  },
+  {
+    "name": "a dead process's name is never pruned",
+    "file": "bin/agentbus",
+    "find": "\\(m and not hook_pid_alive\\(int\\(m\\.group\\(1\\)\\)\\)\\)",
+    "replace": "False",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a dead process's name was kept"
+  },
+  {
+    "name": "the memory file outlives the session",
+    "file": "bin/agentbus",
+    "find": "        hook_state_drop\\(hook_state_key\\(payload\\[\"session_id\"\\], \"\\.seen\"\\)\\)[^\\n]*\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the memory file outlived the session"
+  },
+  {
+    "name": "the index answer is never remembered",
+    "file": "bin/agentbus",
+    "find": "if \\(isinstance\\(saved, dict\\) and saved\\.get\\(\"stamp\"\\) == stamp",
+    "replace": "if False and (isinstance(saved, dict) and saved.get(\"stamp\") == stamp",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a cached answer was not used"
+  },
+  {
+    "name": "an index without a checksum is refused",
+    "file": "bin/agentbus",
+    "find": "data\\[-size:\\] == bytes\\(size\\) or ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "an untracked bus with a skipHash index was refused"
+  },
+  {
+    "name": "SessionEnd re-reads the index before it leaves",
+    "file": "bin/agentbus",
+    "find": "joined_db = \\(hook_state_get\\(hook_state_key\\(sid, \"\\.bus\"\\)\\) or \"\"\\)\\.strip\\(\\) or None",
+    "replace": "joined_db = None",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd with a 1M-entry index did not leave"
+  },
+  {
+    "name": "setup trusts a claude under an ancestor project root",
+    "file": "bin/agentbus",
+    "find": "roots = list\\(up\\) if under_home else up\\[:1\\]",
+    "replace": "roots = up[:1]",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude under an ancestor project root"
+  },
+  {
+    "name": "setup trusts a claude tracked in its work tree's index",
+    "file": "bin/agentbus",
+    "find": "if claude_tracked_in_index\\(exe\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude tracked in the index of a home folder"
+  },
+  {
+    "name": "setup trusts a claude reached through a tracked symlink",
+    "file": "bin/agentbus",
+    "find": "            links\\.append\\(here\\)\\n",
+    "replace": "            pass\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude reached through a tracked symlink hop"
+  },
+  {
+    "name": "setup trusts a claude in a work tree whose index cannot be read",
+    "file": "bin/agentbus",
+    "find": "            except \\(OSError, ValueError, MemoryError\\):\\n                return True",
+    "replace": "            except (OSError, ValueError, MemoryError):\n                indexes[key] = []",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a corrupt index"
+  },
+  {
+    "name": "setup refuses every claude in a work tree",
+    "file": "bin/agentbus",
+    "find": "            if n == rel or \\(n\\.endswith\\(b\"/\"\\) and rel\\.startswith\\(n\\)\\):\\n                return True",
+    "replace": "            if True:\n                return True",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup refused a claude that is untracked in an unrelated work tree"
+  },
+  {
+    "name": "an index with no entries is taken for a damaged one",
+    "file": "bin/agentbus",
+    "find": "len\\(data\\) >= 12 \\+ size and",
+    "replace": "len(data) > 12 + size and",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "an index with no entries was taken for a damaged one"
+  },
+  {
+    "name": "SessionEnd trusts any bus once its session has joined one",
+    "file": "bin/agentbus",
+    "find": "same = bool\\(joined_db\\) and os\\.path\\.samefile\\(path, joined_db\\)",
+    "replace": "same = bool(joined_db)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd wrote to a tracked bus in another project"
+  },
+  {
+    "name": "setup ignores the work tree enclosing the working directory",
+    "file": "bin/agentbus",
+    "find": "if d != os\\.sep and os\\.path\\.lexists\\(os\\.path\\.join\\(d, \"\\.git\"\\)\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "enclosing the working directory"
+  },
+  {
+    "name": "setup compares a .agentbus folder name case-sensitively",
+    "file": "bin/agentbus",
+    "find": "unicodedata\\.normalize\\(\"NFC\", os\\.path\\.basename\\(here\\)\\)\\.casefold\\(\\) == \"\\.agentbus\"",
+    "replace": "os.path.basename(here) == \".agentbus\"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "inside a folder named .AGENTBUS"
+  },
+  {
+    "name": "setup compares project folders without file identity",
+    "file": "bin/agentbus",
+    "find": "if any\\(same\\(here, r\\) for r in roots\\):",
+    "replace": "if any(False for r in roots):",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude that lives inside the working directory's repo"
+  },
+  {
+    "name": "setup ignores a directory link on the way to the claude",
+    "file": "bin/agentbus",
+    "find": "            links\\.append\\(here\\)\\n",
+    "replace": "            if not todo:\n                links.append(here)\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "reached through a tracked directory link"
   }
 ]

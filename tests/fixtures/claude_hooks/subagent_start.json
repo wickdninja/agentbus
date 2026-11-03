@@ -1,0 +1,9 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000004",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/aaaaaaaa-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "21799fd5-b1b3-426a-bd10-44254ccc9490",
+  "agent_id": "a5fb4f9c0335de2e7",
+  "agent_type": "general-purpose",
+  "hook_event_name": "SubagentStart"
+}
