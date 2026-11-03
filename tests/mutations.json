@@ -1122,7 +1122,7 @@
     "replace": "if False:",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "an installer that changed nothing exited 0"
+    "expect": "unchanged:"
   },
   {
     "name": "update: a hung installer is killed without SIGTERM",
@@ -1413,6 +1413,636 @@
     "expect": "FAIL: ascii"
   },
   {
+    "name": "update: any local release-named wheel counts as this repository",
+    "file": "bin/agentbus",
+    "find": "\\n                and os\\.path\\.realpath\\(os\\.path\\.dirname\\(path\\)\\) == os\\.path\\.realpath\\(os\\.path\\.join\\(cache_dir\\(\\), \"downloads\"\\)\\)\\)",
+    "replace": ")",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "a wheel with the release name from a folder update does not use"
+  },
+  {
+    "name": "update: a hook set up through a link to this install is rewritten",
+    "file": "bin/agentbus",
+    "find": "    linked = len\\(tool\\) == 1 and os\\.path\\.realpath\\(first\\) == os\\.path\\.realpath\\(entry\\) and os\\.access\\(first, os\\.X_OK\\)",
+    "replace": "    linked = False",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "update rewrote a hook set up through a link to this install"
+  },
+  {
+    "name": "update: a different installed version is accepted",
+    "file": "bin/agentbus",
+    "find": "        if got != newer:",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "an installer that put another version in place was accepted"
+  },
+  {
+    "name": "update: Ctrl-C while downloading blames the installer",
+    "file": "bin/agentbus",
+    "find": "            if phase == \"download\":",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "Ctrl-C in the download talks about the installer"
+  },
+  {
+    "name": "update: a slow download says to wait until online",
+    "file": "bin/agentbus",
+    "find": "\\(no answer in time\\)\\. Nothing was installed\\. Try again: agentbus update",
+    "replace": "(no answer in time). Nothing was installed. When you are online, run: agentbus update",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "slow download message"
+  },
+  {
+    "name": "update: a refused redirect is reported as an HTTP status",
+    "file": "bin/agentbus",
+    "find": "\"redirect\": \"GitHub\\'s download pointed somewhere that is not GitHub, which agentbus refused\",",
+    "replace": "\"redirect\": \"GitHub answered with an error (HTTP 302)\",",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "redirect message:"
+  },
+  {
+    "name": "update: a hash mismatch does not end with the next command",
+    "file": "bin/agentbus",
+    "find": "/issues\\. Try again: agentbus update\"",
+    "replace": "/issues.\"",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "bad: the message does not end with the next command"
+  },
+  {
+    "name": "update: --dry-run shows an installer argv for a wheel that is not there",
+    "file": "bin/agentbus",
+    "find": "tool\\.update\\(\\{\"status\": \"dry_run\", \"argv\": None, \"download\": planned_download\\(plan\\)\\}\\)",
+    "replace": "tool.update({\"status\": \"dry_run\", \"argv\": plan[\"argv\"], \"download\": planned_download(plan)})",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "dry-run json shows an installer argv"
+  },
+  {
+    "name": "update: --check shows an installer argv for a wheel that is not there",
+    "file": "bin/agentbus",
+    "find": "\"argv\": None if plan\\[\"download\"\\] else plan\\[\"argv\"\\]",
+    "replace": "\"argv\": plan[\"argv\"]",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "check json shows an installer argv"
+  },
+  {
+    "name": "identity: post allowed without joining",
+    "file": "bin/agentbus",
+    "find": "        require_joined\\(con, name\\)\\n        if a\\.request_id is not None:",
+    "replace": "        if a.request_id is not None:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "unjoined write was not refused: post hello"
+  },
+  {
+    "name": "identity: ctx set allowed without joining",
+    "file": "bin/agentbus",
+    "find": "            require_joined\\(con, name\\)\\n            cur = con\\.execute\\(\\\"SELECT value, updated_by",
+    "replace": "            cur = con.execute(\"SELECT value, updated_by",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "unjoined write was not refused: ctx set k v"
+  },
+  {
+    "name": "identity: goal allowed without joining",
+    "file": "bin/agentbus",
+    "find": "            require_joined\\(con, name\\)\\n            cur = current_goal\\(con\\)",
+    "replace": "            cur = current_goal(con)",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "unjoined write was not refused: goal ship"
+  },
+  {
+    "name": "identity: log add allowed without joining",
+    "file": "bin/agentbus",
+    "find": "            require_joined\\(con, name\\)\\n            row_id = log",
+    "replace": "            row_id = log",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "unjoined write was not refused: log add note detail"
+  },
+  {
+    "name": "identity: unknown recipient gets no warning",
+    "file": "bin/agentbus",
+    "find": "    names = \\(\\[r\\[0\\]",
+    "replace": "    return []\n    names = ([r[0]",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "recipient_not_on_roster"
+  },
+  {
+    "name": "identity: did-you-mean never matches",
+    "file": "bin/agentbus",
+    "find": "n=3, cutoff=0\\.6\\)\\}\\]",
+    "replace": "n=3, cutoff=1.0)}]",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "recipient_not_on_roster"
+  },
+  {
+    "name": "identity: repeated --to silently keeps the last",
+    "file": "bin/agentbus",
+    "find": "metavar=\\\"NAME\\\", action=OneName,",
+    "replace": "metavar=\"NAME\",",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected bad_input but succeeded"
+  },
+  {
+    "name": "identity: join retry is refused as name_active",
+    "file": "bin/agentbus",
+    "find": "if isinstance\\(old, dict\\) and old\\.get\\(\\\"request_id\\\"\\) == a\\.request_id:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "command failed"
+  },
+  {
+    "name": "identity: join token reused with other flags replays",
+    "file": "bin/agentbus",
+    "find": "                if old != detail:",
+    "replace": "                if False:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected request_id_reused but succeeded"
+  },
+  {
+    "name": "identity: name_active suggests no name",
+    "file": "bin/agentbus",
+    "find": "                free = free_name\\(con, name\\)",
+    "replace": "                free = None",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "suggested_name"
+  },
+  {
+    "name": "identity: request id mismatch does not name the original",
+    "file": "bin/agentbus",
+    "find": " Original: \\{original\\}\\. \\\"",
+    "replace": " \"",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "Original"
+  },
+  {
+    "name": "identity: takeover wipes role, tool and model",
+    "file": "bin/agentbus",
+    "find": "if a\\.takeover else \\(lambda c: f\\\"excluded\\.\\{c\\}\\\"\\)",
+    "replace": "if False else (lambda c: f\"excluded.{c}\")",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "reviewer"
+  },
+  {
+    "name": "identity: ctx set goal allowed",
+    "file": "bin/agentbus",
+    "find": "a\\.key == GOAL_KEY:\\n        die\\(f\\\"\\{GOAL_KEY\\} is reserved",
+    "replace": "a.key == GOAL_KEY + \"x\":\n        die(f\"{GOAL_KEY} is reserved",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected bad_input but succeeded"
+  },
+  {
+    "name": "identity: status lists the goal as a fact",
+    "file": "bin/agentbus",
+    "find": "WHERE key<>\\? ORDER BY key\\\", \\(GOAL_KEY,\\), limit\\)",
+    "replace": "ORDER BY key\", (), limit)",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "!= \"goal\""
+  },
+  {
+    "name": "identity: leave always says was_joined",
+    "file": "bin/agentbus",
+    "find": "\\\"was_joined\\\": bool\\(gone\\)",
+    "replace": "\"was_joined\": True",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "was_joined"
+  },
+  {
+    "name": "identity: leave of an unknown name is silent",
+    "file": "bin/agentbus",
+    "find": "    if not gone:\\n        note\\(",
+    "replace": "    if False:\n        note(",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "stderr note"
+  },
+  {
+    "name": "identity: join accepts any name",
+    "file": "bin/agentbus",
+    "find": "not HOOK_NAME_RE\\.fullmatch\\(me\\(a\\)\\)",
+    "replace": "False",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected bad_input but succeeded"
+  },
+  {
+    "name": "identity: claim renewal logs every time",
+    "file": "bin/agentbus",
+    "find": "if not own or own\\[\\\"purpose\\\"\\] != purpose:",
+    "replace": "if True:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "repeats wrote log rows"
+  },
+  {
+    "name": "identity: claim with a new purpose is not logged",
+    "file": "bin/agentbus",
+    "find": "if not own or own\\[\\\"purpose\\\"\\] != purpose:",
+    "replace": "if not own:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "a changed purpose did not log"
+  },
+  {
+    "name": "identity: ctx set text hides the old value",
+    "file": "bin/agentbus",
+    "find": "        elif cur:\\n            emit\\(a, result, \\\"set \\{\\}: \\{\\} -> \\{\\}\\\"",
+    "replace": "        elif False:\n            emit(a, result, \"set {}: {} -> {}\"",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "changed:"
+  },
+  {
+    "name": "identity: ctx set text shows a whole long value",
+    "file": "bin/agentbus",
+    "find": "return one if len\\(one\\) <= n else one\\[:n - 3\\] \\+ \\\"\\.\\.\\.\\\"",
+    "replace": "return one",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "long value not cut"
+  },
+  {
+    "name": "identity: --limit -2 accepted",
+    "file": "bin/agentbus",
+    "find": "parser\\.add_argument\\(\\\"--limit\\\", type=limit_count,",
+    "replace": "parser.add_argument(\"--limit\", type=integer,",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected failure but succeeded"
+  },
+  {
+    "name": "identity: claim takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ request_id_arg\\(cl\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "identity: release takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ request_id_arg\\(rl\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "identity: goal takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ request_id_arg\\(gl\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "identity: leave takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "request_id_arg\\(sub\\(\"leave\",\\ help=\"Leave\\ the\\ roster\\ and\\ release\\ all\\ your\\ claims\"\\)\\)",
+    "replace": "sub(\"leave\", help=\"Leave the roster and release all your claims\")",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "identity: ctx set takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ request_id_arg\\(act\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "brief unread forgets where a broadcast history starts",
+    "file": "bin/agentbus",
+    "find": "\\(m\\.recipient='\\*' AND m\\.id>\\?\\)",
+    "replace": "(m.recipient='*' AND m.id>?-1000000)",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "FAIL: unread handoffs and alerts"
+  },
+  {
+    "name": "brief counts only direct answers, not answers to replies",
+    "file": "bin/agentbus",
+    "find": "JOIN thread t ON m\\.reply_to = t\\.id\\)",
+    "replace": "JOIN thread t ON m.reply_to = t.id AND t.root = t.id)",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "worker's open questions"
+  },
+  {
+    "name": "brief treats any reply as an answer",
+    "file": "bin/agentbus",
+    "find": "a\\.kind = 'answer'",
+    "replace": "a.id <> t.root",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "worker's open questions"
+  },
+  {
+    "name": "brief moves the inbox cursor",
+    "file": "bin/agentbus",
+    "find": "        unread = _brief_rows\\(rows\\)\\n",
+    "replace": "        unread = _brief_rows(rows)\n        con.execute(\"UPDATE cursors SET last_read_id=(SELECT COALESCE(MAX(id),0) FROM messages) WHERE agent=?\", (me_name,))\n        con.commit()\n",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "brief moved an inbox cursor"
+  },
+  {
+    "name": "brief without a name takes a write open",
+    "file": "bin/agentbus",
+    "find": "READ_ONLY_COMMANDS = \\(\"who\", \"status\", \"read\", \"brief\"\\)",
+    "replace": "READ_ONLY_COMMANDS = (\"who\", \"status\", \"read\")",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "brief without a name wrote to the bus"
+  },
+  {
+    "name": "brief lists my own facts as changed",
+    "file": "bin/agentbus",
+    "find": "where \\+= \" AND updated_by<>\\?\"",
+    "replace": "where += \" AND ?<>''\"",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "a worker who never read the inbox sees every fact"
+  },
+  {
+    "name": "brief changed facts ignore the last read",
+    "file": "bin/agentbus",
+    "find": "since = r\\[0\\] if r else None",
+    "replace": "since = None",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "facts.since is the time of the last message read"
+  },
+  {
+    "name": "brief does not shorten stored text",
+    "file": "bin/agentbus",
+    "find": "    text = \" \"\\.join\\(str\\(text\\)\\.split\\(\\)\\)\\n    return text if len\\(text\\) <= n else text\\[:n - 3\\]\\.rstrip\\(\\) \\+ \"\\.\\.\\.\"",
+    "replace": "    return str(text)",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "a hostile bus makes brief"
+  },
+  {
+    "name": "demo does not remove its directory",
+    "file": "bin/agentbus",
+    "find": "        shutil\\.rmtree\\(folder, ignore_errors=True\\)\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_demo.sh",
+    "expect": "the demo left files behind"
+  },
+  {
+    "name": "demo passes the caller's environment to its steps",
+    "file": "bin/agentbus",
+    "find": " if not k\\.startswith\\(\"AGENTBUS_\"\\)\\}\\n    home = ",
+    "replace": "}\n    home = ",
+    "count": 1,
+    "run": "tests/test_demo.sh",
+    "expect": "a test hook or the inherited bus reached the demo's steps"
+  },
+  {
+    "name": "demo does not clean up on SIGTERM",
+    "file": "bin/agentbus",
+    "find": "        old\\[sig\\] = signal\\.signal\\(sig, stop\\)",
+    "replace": "        old[sig] = signal.getsignal(sig)",
+    "count": 1,
+    "run": "tests/test_demo.sh",
+    "expect": "SIGTERM: exit"
+  },
+  {
+    "name": "demo ignores a step that fails",
+    "file": "bin/agentbus",
+    "find": "        if rc != want:\\n",
+    "replace": "        if False:\n",
+    "count": 1,
+    "run": "tests/test_demo.sh",
+    "expect": "an injected failure exited 0, not 4"
+  },
+  {
+    "name": "example drops the resolved relative AGENTBUS",
+    "file": "examples/two-agent-handoff.sh",
+    "find": "  if \\[\\[ \\$word == \\*/\\* && \\$word != /\\* && -e \\$word \\]\\]; then installed_bus\\[\\$i\\]=\\$PWD/\\$word; fi\\n",
+    "replace": "  :\n",
+    "count": 1,
+    "run": "tests/test_example.sh",
+    "expect": "the relative AGENTBUS form failed"
+  },
+  {
+    "name": "help CMD prints the root help instead of the command's",
+    "file": "bin/agentbus",
+    "find": "text,\\ label\\ =\\ node\\.format_help\\(\\),\\ \"\\ \"\\.join\\(path\\)\\ or\\ None",
+    "replace": "text, label = build_parser().format_help(), \" \".join(path) or None",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "differs from"
+  },
+  {
+    "name": "a usage error points at agentbus --help, not the command's",
+    "file": "bin/agentbus",
+    "find": "f\"See:\\ \\{see\\ or\\ '\\ '\\.join\\(cmd_words\\(self\\)\\)\\ \\+\\ '\\ \\-\\-help'\\}\"\\)",
+    "replace": "\"See: agentbus --help\")",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "not scoped to its command"
+  },
+  {
+    "name": "hook is listed among the commands",
+    "file": "bin/agentbus",
+    "find": "return\\ \\[n\\ for\\ n\\ in\\ sp\\.choices\\ if\\ n\\ not\\ in\\ hidden_commands\\(\\)\\]\\ if\\ sp\\ else\\ \\[\\]",
+    "replace": "return list(sp.choices) if sp else []",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "help ['hook']"
+  },
+  {
+    "name": "an unknown command is matched against hook too",
+    "file": "bin/agentbus",
+    "find": "unknown_command\\(value,\\ visible_choices\\(self\\),\\ self\\.cmd_path\\)",
+    "replace": "unknown_command(value, list(action.choices), self.cmd_path)",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "an unknown command suggests hook"
+  },
+  {
+    "name": "completion drops the fixed values of a flag (the kinds)",
+    "file": "bin/agentbus",
+    "find": "return\\ list\\(action\\.choices\\ or\\ notes\\.get\\(\"choices\"\\)\\ or\\ \\[\\]\\)\\ or\\ None",
+    "replace": "return list(action.choices or []) or None",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks the kind"
+  },
+  {
+    "name": "bare agentbus is an error, not the guide",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ return\\ GUIDE\\ \\+\\ \"\\\\n\\\\nSee:\\ agentbus\\ \\-\\-help\\\\n\",\\ None",
+    "replace": "        return None",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "bare agentbus: rc"
+  },
+  {
+    "name": "bare ctx and log print nothing",
+    "file": "bin/agentbus",
+    "find": "if\\ subparsers_of\\(group\\)\\ is\\ not\\ None\\ and\\ getattr\\(a,\\ \"action\",\\ None\\)\\ is\\ None:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "bare ctx: rc"
+  },
+  {
+    "name": "a plural count always says claims",
+    "file": "bin/agentbus",
+    "find": "return\\ f\"\\{n\\}\\ \\{word\\}\"\\ \\+\\ \\(\"\"\\ if\\ n\\ ==\\ 1\\ else\\ \"s\"\\)",
+    "replace": "return f\"{n} {word}s\"",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "release --all with one claim"
+  },
+  {
+    "name": "log show prints a join as its stored JSON",
+    "file": "bin/agentbus",
+    "find": "return\\ \"\\ \"\\.join\\(f\"\\{k\\}=\\{v\\}\"\\ for\\ k,\\ v\\ in\\ fields\\.items\\(\\)\\ if\\ v\\ not\\ in\\ \\(None,\\ \"\"\\)\\)\\ or\\ \"\\(no\\ details\\)\"",
+    "replace": "return text",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "log show: join is not readable"
+  },
+  {
+    "name": "log show keeps a dangling colon",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ text\\.endswith\\(\":\"\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ text\\[:\\-1\\]\\.rstrip\\(\\)\\\n",
+    "replace": "    pass\n",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "dangling colon"
+  },
+  {
+    "name": "a claim without a purpose is logged with a trailing colon",
+    "file": "bin/agentbus",
+    "find": "log\\(con,\\ name,\\ \"claim\",\\ f\"\\{res\\}\\ until\\ \\{exp\\}\"\\ \\+\\ \\(f\":\\ \\{purpose\\}\"\\ if\\ purpose\\ else\\ \"\"\\)\\)",
+    "replace": "log(con, name, \"claim\", f\"{res} until {exp}: {purpose or ''}\")",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "stores a dangling colon"
+  },
+  {
+    "name": "the identity error has no example",
+    "file": "bin/agentbus",
+    "find": "die\\(\"say\\ who\\ you\\ are\\ with\\ \\-\\-as\\ NAME\\ or\\ AGENTBUS_AGENT=NAME\\.\\ For\\ example:\\ \"\\ \\+\\ identity_example\\(args\\),\\ \"bad_input\"\\)",
+    "replace": "die(\"say who you are with --as NAME or AGENTBUS_AGENT=NAME\", \"bad_input\")",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks its next step"
+  },
+  {
+    "name": "release without a resource does not point at claims",
+    "file": "bin/agentbus",
+    "find": "see=\"agentbus\\ \\-\\-as\\ NAME\\ claims\"\\)",
+    "replace": "see=None)",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks its next step"
+  },
+  {
+    "name": "init does not suggest setup",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ not\\ setup_detected\\(\\):",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "init does not suggest setup"
+  },
+  {
+    "name": "ctx set takes --limit again",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ else:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ act\\.add_argument\\(\"\\-\\-limit\",\\ type=integer,\\ default=argparse\\.SUPPRESS,\\ metavar=\"N\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ help=f\"Maximum\\ facts",
+    "replace": "        if True:\n            act.add_argument(\"--limit\", type=integer, default=argparse.SUPPRESS, metavar=\"N\",\n                             help=f\"Maximum facts",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "still takes --limit"
+  },
+  {
+    "name": "a claim conflict shows its purpose bare",
+    "file": "bin/agentbus",
+    "find": "why\\ =\\ f'purpose:\\ \"\\{r\\[\"purpose\"\\]\\}\"'\\ if\\ r\\[\"purpose\"\\]\\ else\\ \"no\\ purpose\\ given\"",
+    "replace": "why = r[\"purpose\"] or \"no purpose given\"",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "does not show purpose"
+  },
+  {
+    "name": "a missing fact is a context key",
+    "file": "bin/agentbus",
+    "find": "f\"no\\ fact\\ named\\ \\{a\\.key\\}\\.\\ List\\ facts\\ with:\\ agentbus\\ ctx\\ get\"",
+    "replace": "f\"no context key {a.key}. List keys with: agentbus ctx get\"",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks its next step"
+  },
+  {
+    "name": "the inherited flags print twice",
+    "file": "bin/agentbus",
+    "find": "blocks\\.append\\(\"INHERITED\\ FLAGS\\\\n\"\\ \\+\\ help_table\\(list\\(INHERITED_FLAGS\\),\\ width\\)\\)",
+    "replace": "blocks.extend([\"INHERITED FLAGS\\\\n\" + help_table(list(INHERITED_FLAGS), width)] * 2)",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "inherited flags are not one short block"
+  },
+  {
+    "name": "an example no longer parses",
+    "file": "bin/agentbus",
+    "find": "\\(\"Claim\\ an\\ issue\",\\ \"agentbus\\ \\-\\-as\\ alice\\ claim\\ issue:42\"\\)",
+    "replace": "(\"Claim an issue\", \"agentbus --as alice claimm issue:42\")",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "example does not parse"
+  },
+  {
+    "name": "a message kind has no meaning",
+    "file": "bin/agentbus",
+    "find": "\"alert\":\\ \"Something\\ needs\\ attention\\ now\",",
+    "replace": "\"alert\": \"\",",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "gives kind alert no meaning"
+  },
+  {
+    "name": "a bad cursor does not say how to get one",
+    "file": "bin/agentbus",
+    "find": "f\"Get\\ one\\ with:\\ \\{first\\},\\ and\\ pass\\ the\\ next\\ it\\ prints\"",
+    "replace": "\"pass the next value\"",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks its next step"
+  },
+  {
     "name": "output: a pipe is hard-wrapped at 80 columns",
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ except\\ \\(OSError,\\ ValueError,\\ AttributeError\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ pass\\\n\\ \\ \\ \\ return\\ None\\\n\\\n\\\ndef\\ stdout_is_tty",
@@ -1600,5 +2230,14 @@
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "does not show ~ when HOME is a link"
+  },
+  {
+    "name": "upgrade --all waits fifteen seconds per busy bus",
+    "file": "bin/agentbus",
+    "find": "^UPGRADE_BUSY_WAIT_S = 5\\.0",
+    "replace": "UPGRADE_BUSY_WAIT_S = 15.0",
+    "count": 1,
+    "run": "tests/test_upgrade_all.sh",
+    "expect": "each bus gets 5 s at most"
   }
 ]

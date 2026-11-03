@@ -226,7 +226,7 @@ day = ok(db, "--as", "a", "claim", "src/b.py", "--ttl-min", "1500")
 if not re.search(r"claimed src/b\.py for 1d 1h \(until [A-Z][a-z]{2} \d{1,2} \d\d:\d\d\)", day):
     fail("a claim past today does not give the day: %r" % day)
 error, p = refused(db, "--as", "b", "claim", "src/a.py")
-if error["code"] != "claim_conflict" or not re.search(r"claimed by a until \d\d:\d\d \(edit\)", error["message"]):
+if error["code"] != "claim_conflict" or not re.search(r"claimed by a until \d\d:\d\d \(purpose: \"edit\"\)", error["message"]):
     fail("the conflict message does not use HH:MM: %r" % error["message"])
 if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", error["expires_at"]):
     fail("the error field expires_at is not the stored ISO time: %r" % error)
@@ -413,7 +413,7 @@ if "global_args" not in whole or [g["name"] for g in whole["global_args"]] != ["
 one = js(db, "schema", "post")
 if list(one["commands"]) != ["post"] or "Agent" in one["objects"] or "claim_conflict" in one["errors"] or "no_message" not in one["errors"]:
     fail("schema post is not trimmed to post: %r" % {k: list(v) for k, v in one.items() if isinstance(v, dict)})
-if len(json.dumps(one, separators=(",", ":"))) > 8000 or len(json.dumps(whole, separators=(",", ":"))) < 30000:
+if len(json.dumps(one, separators=(",", ":"))) > 10000 or len(json.dumps(whole, separators=(",", ":"))) < 30000:   # post carries the request id, the warning and the roster error since dx-id: 8.5 KB of a 54 KB schema
     fail("schema post should be a fraction of the full schema: %d vs %d" % (len(json.dumps(one)), len(json.dumps(whole))))
 many = js(db, "schema", "ctx")
 if set(many["commands"]) != {"ctx set", "ctx get", "ctx history"} or "Fact" not in many["objects"] or "FactVersion" not in many["objects"]:
@@ -429,10 +429,10 @@ for name, entry in index["commands"].items():
         fail("schema --index args differ for %s" % name)
     if any(e not in whole["commands"][name]["errors"] for e in entry["errors"]) or not set(index["common_errors"]) <= set(whole["errors"]):
         fail("schema --index names an error %s does not have" % name)
-if index["commands"]["post"]["errors"] != ["no_message", "request_id_reused"]:
+if index["commands"]["post"]["errors"] != ["no_message", "not_on_roster", "request_id_reused"]:
     fail("schema --index must keep a command's own error codes: %r" % index["commands"]["post"])
 text = ok(db, "schema", "--index")
-if "  post  body --to --kind --topic --reply-to --request-id  errors: no_message request_id_reused" not in text:
+if "  post  body --to --kind --topic --reply-to --request-id  errors: no_message not_on_roster request_id_reused" not in text:
     fail("schema --index in text: %r" % text[:300])
 error, p = refused(db, "schema", "--index", "post")
 if error["code"] != "bad_input":

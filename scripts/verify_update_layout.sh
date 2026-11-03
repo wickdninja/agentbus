@@ -16,7 +16,11 @@ unset -f agentbus   # lib.sh's helper runs the checkout; this script runs the IN
 W=$(mktemp -d); trap 'stop_servers; rm -rf "$W"' EXIT
 export HOME="$W/home"; mkdir -p "$HOME" "$W/srv"
 G=(git -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
-git clone -q "$ROOT" "$W/src"
+# A fresh repository from the checkout's committed files, not a clone of it: CI checks out one commit (a shallow clone),
+# and a repository cloned from that cannot be cloned again ("did not send all necessary objects").
+mkdir "$W/src"; git -C "$ROOT" archive HEAD | tar -x -C "$W/src"
+"${G[@]}" -C "$W/src" init -q; "${G[@]}" -C "$W/src" add -A; "${G[@]}" -C "$W/src" commit -q -m base
+PIPX=("$PY" -m pipx)   # as the package job installs and runs it (python3 -m pipx): a pipx command on PATH can belong to another python
 setver() { sed "s/^__version__ = .*/__version__ = \"$1\"/" "$W/src/bin/agentbus" >"$W/v" && cp "$W/v" "$W/src/bin/agentbus"; }
 setver 9.0.0; "${G[@]}" -C "$W/src" commit -qam v9.0.0; "${G[@]}" -C "$W/src" tag v9.0.0
 setver 9.1.0; "${G[@]}" -C "$W/src" commit -qam v9.1.0; "${G[@]}" -C "$W/src" tag v9.1.0
@@ -29,7 +33,7 @@ case "$tool" in
     BIN_DIR="$W/bin" ;;
   pipx)
     export PIPX_HOME="$W/pipx-home" PIPX_BIN_DIR="$W/bin"
-    pipx install -q "git+$URL@v9.0.0"
+    "${PIPX[@]}" install -q "git+$URL@v9.0.0"
     BIN_DIR="$W/bin" ;;
   *) echo "usage: verify_update_layout.sh uv|pipx" >&2; exit 2 ;;
 esac
@@ -53,16 +57,21 @@ assert d["tool"]["status"] == "manual" and d["tool"]["argv"] is None, d["tool"]
 want = {"uv": "uv tool install --force git+%s@v9.1.0", "pipx": "pipx install --force git+%s@v9.1.0"}[sys.argv[2]] % url
 assert d["tool"]["commands"] == [want], (d["tool"]["commands"], want)
 ' "$URL" "$tool" || { echo "FAIL: update --dry-run --json: $out" >&2; exit 1; }
-# The wheel route (what `update` itself installs): build the 9.0.0 wheel, install that local file with the real tool, and
-# require that `update` still recognises the install as this repository's (direct_url.json records the local wheel).
+# The wheel route (what `update` itself installs): build the 9.0.0 wheel and install that local file with the real tool.
+# Installed from the folder update downloads into (<cache>/downloads), `update` recognises the install as this
+# repository's. The same wheel installed from anywhere else is not: update must not replace a hand-built or fork wheel.
 git -C "$W/src" checkout -q v9.0.0
 (cd "$W/src" && uv build -q --wheel --out-dir "$W/wheel" >/dev/null)
 WHEEL=$(ls "$W"/wheel/agentbus-9.0.0-py3-none-any.whl)
-case "$tool" in
-  uv) uv tool install -q --force "$WHEEL" ;;
-  pipx) pipx install -q --force "$WHEEL" ;;
-esac
+install_wheel() {  # FILE
+  case "$tool" in
+    uv) uv tool install -q --force "$1" ;;
+    pipx) "${PIPX[@]}" install -q --force "$1" ;;
+  esac
+}
 rel_latest 9.1.0
+mkdir -p "$(cache_path)/downloads"; chmod 700 "$(cache_path)"; cp "$WHEEL" "$(cache_path)/downloads/"
+install_wheel "$(cache_path)/downloads/agentbus-9.0.0-py3-none-any.whl"
 out=$(cd "$W" && agentbus update --dry-run --json) || { echo "FAIL: update --dry-run on a wheel install failed" >&2; exit 1; }
 printf '%s' "$out" | "$PY" -I -c '
 import json, sys
@@ -70,8 +79,16 @@ d = json.load(sys.stdin)
 assert d["from"] == "9.0.0" and d["install"] == {"method": sys.argv[1], "url": "https://github.com/wickdninja/agentbus"}, d["install"]
 assert d["tool"]["status"] in ("dry_run", "manual"), d["tool"]
 if d["tool"]["status"] == "dry_run":
-    assert d["tool"]["argv"][-1].endswith("agentbus-9.1.0-py3-none-any.whl") and not any("git+" in a for a in d["tool"]["argv"]), d["tool"]
+    # the wheel does not exist yet, so there is no installer argv: the planned download is shown
+    assert d["tool"]["argv"] is None and d["tool"]["download"]["wheel"].endswith("/v9.1.0/agentbus-9.1.0-py3-none-any.whl"), d["tool"]
 ' "$tool" || { echo "FAIL: update did not recognise a release-wheel install: $out" >&2; exit 1; }
+install_wheel "$WHEEL"   # the same file from outside the downloads folder
+out=$(cd "$W" && agentbus update --dry-run --json) || { echo "FAIL: update --dry-run on a hand-installed wheel failed" >&2; exit 1; }
+printf '%s' "$out" | "$PY" -I -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d["install"]["method"] == "unknown" and d["tool"]["status"] == "manual", d
+' || { echo "FAIL: update would replace a wheel that was installed from outside its downloads folder: $out" >&2; exit 1; }
 if [ "$tool" = uv ]; then
   uv tool install -q --force "git+$URL@v9.1.0"
   [ "$(agentbus --version)" = "agentbus 9.1.0" ] || { echo "FAIL: install --force at the new tag did not move it" >&2; exit 1; }

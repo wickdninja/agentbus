@@ -76,8 +76,8 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
     "no_message": (1, False, ["id"]),
     "no_context_key": (1, False, ["key"]),
     "not_on_roster": (1, False, ["agent"]),
-    "name_active": (1, False, ["agent", "last_seen_min"]),
-    "request_id_reused": (1, False, ["request_id", "agent"]),
+    "name_active": (1, False, ["agent", "last_seen_min", "suggested_name"]),
+    "request_id_reused": (1, False, ["request_id", "agent", "original_id"]),
     "bad_input": (2, False, []),
     "no_bus": (3, False, []),
     "busy": (3, True, ["bus"]),
@@ -155,15 +155,15 @@ for name in ("who", "claims"):
 assert doc["errors"]["bad_input"]["optional_fields"] == ["field"] and "64 KB" in doc["errors"]["bad_input"]["meaning"]
 assert "pipe" in doc["env"]["COLUMNS"]["meaning"]
 trim = ok("schema", "post")
-assert set(trim["objects"]) == set() and set(trim["errors"]) <= set(doc["errors"]) and "claim_conflict" not in trim["errors"], trim.keys()
+assert set(trim["objects"]) == {"Warning"} and set(trim["errors"]) <= set(doc["errors"]) and "claim_conflict" not in trim["errors"], trim.keys()
 assert set(ok("schema", "ctx")["objects"]) == {"Fact", "FactVersion"}
 print("PASS: schema COMMAND prints one command's entry, with arguments read from the parser")
 
 # ---- the human table: one line per command ----
 p = run("schema")
 assert p.returncode == 0 and p.stdout, p
-assert re.search(r"^  post +\{id\} +retry: only with --request-id$", p.stdout, re.M), p.stdout
-assert len(p.stdout.splitlines()) <= 30, "one screen"
+assert re.search(r"^  post +\{id, warnings\} +retry: only with --request-id$", p.stdout, re.M), p.stdout
+assert len(p.stdout.splitlines()) <= 34, "one screen"   # 29 commands plus the header and the details line; was 30 before help, completion, brief, demo, update and doctor joined the table
 for name in commands:
     assert re.search(r"^  " + re.escape(name) + r"  ", p.stdout, re.M), (name, p.stdout)
 print("PASS: schema prints a one-screen table: command, result, retry")
@@ -175,7 +175,7 @@ for name, c in commands.items():
     last = [l for l in h.stdout.splitlines() if l.strip()][-1]
     assert last == c["help"], (name, last, c["help"])
     assert re.fullmatch(r"JSON result: .+\. Retry: .+\.", c["help"]), c["help"]
-assert commands["post"]["help"] == 'JSON result: {"id": integer}. Retry: only with --request-id.'
+assert commands["post"]["help"] == 'JSON result: {"id": integer, "warnings": [Warning]}. Retry: only with --request-id.'
 print("PASS: help text for each subcommand ends with its JSON result line")
 
 # ---- every die() carries a code (static check over the source) ----
@@ -238,9 +238,10 @@ expect("no_message", "--as", "a", "post", "hi", "--reply-to", "99", db=db)
 expect("no_context_key", "ctx", "get", "nope", db=db)
 expect("not_on_roster", "--as", "ghost", "claim", "x", db=db)
 e = expect("name_active", "--as", "a", "join", db=db)
-assert e["agent"] == "a" and isinstance(e["last_seen_min"], int), e
-ok("--as", "a", "post", "one", "--request-id", "tok", db=db)
-expect("request_id_reused", "--as", "a", "post", "two", "--request-id", "tok", db=db)
+assert e["agent"] == "a" and isinstance(e["last_seen_min"], int) and e["suggested_name"] == "a-2", e
+first = ok("--as", "a", "post", "one", "--request-id", "tok", db=db)
+e = expect("request_id_reused", "--as", "a", "post", "two", "--request-id", "tok", db=db)
+assert e["original_id"] == first["id"] and "Original: #%d" % first["id"] in e["message"], e
 expect("bad_input", "--as", "a", "post", "hi", "--kind", "fyi", db=db)
 expect("no_bus", "who")
 expect("internal", "who", db=db, env={"AGENTBUS_TEST_FAIL": "internal"})
@@ -425,6 +426,8 @@ step("log add", "--as", "a", "log", "add", "note", "detail")
 step("status", "status")
 step("watch", "watch")
 step("watch", "watch", "--once")
+step("brief", "brief")
+step("brief", "--as", "b", "brief")
 step("schema", "schema")
 step("schema", "schema", "post")
 step("schema", "schema", "--index")
@@ -444,8 +447,11 @@ step("init", "init", repo)
 step("upgrade", "upgrade", repo)
 step("upgrade", "upgrade", "--all", repo)
 step("upgrade", "upgrade", "--dry-run", repo)
+step("demo", "demo")
 step("skill", "skill")
 step("skill", "skill", "--agents-md")
+step("help", "help", "ctx", "set")
+step("completion", "completion", "bash")
 # a dry run writes nothing; the config folders point into this test's own temp folder all the same
 step("setup", "setup", "claude", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("setup", "setup", "codex", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
@@ -479,7 +485,7 @@ assert covered == set(commands), ("commands the workflow never ran", sorted(set(
 # a wrong result must fail validation: the validator is not vacuous
 assert validate({"id": "1"}, commands["post"]["result"], objects), "a string id passed"
 assert validate({}, commands["post"]["result"], objects), "a missing id passed"
-assert RESULTS["post"][3] == {"id": RESULTS["post"][2]["id"], "duplicate": True}, RESULTS["post"]
+assert RESULTS["post"][3] == {"id": RESULTS["post"][2]["id"], "duplicate": True, "warnings": []}, RESULTS["post"]
 print("PASS: every --json result of a scripted workflow of all commands validates against its schema")
 # ---- the tables of docs/reference.md are generated from the registry, and --check notices when they are not ----
 root = os.path.dirname(os.path.dirname(os.path.abspath(bin_)))

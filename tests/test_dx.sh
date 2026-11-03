@@ -12,7 +12,7 @@ agentbus join --as codex >/dev/null
 [ "$(agentbus post broadcast --as claude --kind answer)" = 'posted #2 to everyone [answer]' ] || fail "broadcast confirmation"
 [ "$(agentbus --as claude post queued --to absent 2>"$T/err")" = 'posted #3 to absent [note]' ] || fail "off-roster confirmation"
 [ "$(cat "$T/err")" = 'agentbus: absent is not on the roster; the message waits for that name.' ] || fail "off-roster notice"
-[ "$(json_ok agentbus --as claude post json --to codex --json | "$PY" -c 'import json,sys; assert json.load(sys.stdin)=={"id":4}; print("ok")')" = ok ] || fail "post JSON changed"
+[ "$(json_ok agentbus --as claude post json --to codex --json | "$PY" -c 'import json,sys; assert json.load(sys.stdin)=={"id":4,"warnings":[]}; print("ok")')" = ok ] || fail "post JSON changed"
 ok "post names recipients and kinds; absent names get a stderr notice; JSON retains id"
 
 before=$(agentbus --as codex --json inbox --peek)
@@ -52,8 +52,8 @@ import json, sys, time
 from datetime import datetime, timezone
 t = datetime.strptime(json.load(sys.stdin)["items"][0]["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
 print(t.strftime("%H:%M") if t.date() == datetime.now().date() else t.strftime("%b ") + str(t.day) + t.strftime(" %H:%M"))')
-expect_fail "src/api/ is claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
-expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
+expect_fail "src/api/ is claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
+expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"
 
 "$PY" - <<'PY'
@@ -70,7 +70,7 @@ def help_(*args):
     return text
 checks = {
     (): ['Coordinate agents in one local workspace: messages, file claims, and shared facts.', 'Your agent identity; overrides AGENTBUS_AGENT.', 'Select the Nth outer bus (default 0). AGENTBUS_DB takes precedence.', 'Print successful command results as JSON. Check exit status; errors use stderr.', 'Start:', 'Loop:', 'Finish:', 'Humans: agentbus watch', 'Env: AGENTBUS_AGENT', 'AGENTBUS_DB'],
-    ('post',): ['Messages wait for that name even if it has not joined.', 'does not choose the recipient.', 'Message kind: note, question, answer, handoff, decision, alert, done. Default: note.', 'Optional topic label, filterable with read --topic.'],
+    ('post',): ['A name not on the roster still gets the message, with a warning.', 'does not choose the recipient.', 'Message kind: note, question, answer, handoff, decision, alert, done. Default: note.', 'Optional topic label, filterable with read --topic.'],
     ('join',): ['Tool running this session.', 'Model running this session.', 'Working directory for this session.', 'Branch for this session.', 'What you do here (shown in who/watch).', 'Rejoin a name active'],
     ('release',): ['Resource to release; use the spelling from claims.'],
     ('ctx','set'): ['Set a shared fact and record its history.'],

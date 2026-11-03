@@ -38,15 +38,33 @@
 
 - `init DIR` creates a folder that does not exist, with its parents (`mkdir -p`), and says so. A path whose nearest existing parent is not a writable directory, or that is a file, is `bad_input`, with nothing created.
 
+- `post` to a name that has not joined still delivers, and now returns `warnings: [{"code": "recipient_not_on_roster", "name": ..., "did_you_mean": [...]}]` (always an array, empty when fine). In text the same warning is one line on stderr with the closest roster names. Warnings are registered in `schema --json` (`warnings`, `Warning`).
+- `join --request-id TOKEN` retries safely: the same name, flags and token return the first result with `duplicate: true` instead of `name_active`, and write nothing. The same token with different flags is `request_id_reused`.
+- `--request-id` on every write (`join`, `leave`, `claim`, `release`, `ctx set`, `goal`, beside `post`): one rule, a repeat never repeats the effect. Commands that are already safe to repeat accept it and do nothing different. `log add` has no token yet.
+- `request_id_reused` carries `original_id` and its message names the original and the way out (`Original: #5. Reuse the same body or pick a new --request-id.`). `name_active` carries `suggested_name` and the message offers it (`try alpha-2`).
+- `leave --json` carries `was_joined`; leaving a name that never joined (or already left) says so on stderr.
+- `join --takeover` keeps the tool, model and role it is not told again.
+- `ctx set` text shows what changed: `set mode: fast -> slow`.
+- `agentbus brief` is one call that tells an agent that has just joined what is going on, in under 400 tokens: the goal, who is here and what each holds and why, open questions (kind `question`, to you or everyone, no answer replying to them, directly or through a chain of replies), your unread handoffs and alerts, facts changed since your last inbox read, and a `next:` command. It only reads and never marks anything read. `--limit N` bounds each section; `--json` is a typed object (`BriefGoal`, `BriefAgent`, `BriefMessage`, `BriefFact`) with `omitted` counts. The skill now starts with `join`, then `brief`, one call fewer than `join`, `status`, `inbox`.
+- `agentbus demo` is a 30-second hands-off tour for a person: two scripted agents on a temporary bus (join, goal, a task, a claim, a refused conflicting claim, a handoff, `brief`, a release), each command printed as it runs, then an offer to open `watch` (`--watch` opens it directly, `--no-pause` skips the pauses). It never touches the bus of the folder it runs in and removes its directory on success, error, Ctrl-C and SIGTERM. `--json` runs the tour silently and reports each step.
+
 - `read --id N` shows one message whole (a `Message` under `--json`, not a listing); `no_message` when there is none, `bad_input` with `--since`, `--before` or `--topic`. Listings (`inbox`, `read`, `status`) cut a message body at 2 KB (2,048 bytes, on a character boundary) and mark the row `"body_truncated": true`; a body that fits has no such key. In text the cut row ends with `... cut at 2 KB. Full text: agentbus read --id N`.
 - A body over 64 KB is refused when it is sent: `bad_input` with `field` `body` (`post`), `value` (`ctx set`), `detail` (`log add`) or `text` (`goal`), and nothing is stored.
-- `schema COMMAND --json` carries only that command's entry and the objects and error codes it uses (`post` is about 7 KB, the full schema 60 KB); `schema --index` lists every command's argument names and its own error codes in under 3 KB (`--json` too). `schema --json` now lists `global_args` in its own result schema.
+- `schema COMMAND --json` carries only that command's entry and the objects and error codes it uses (`post` is about 9 KB, the full schema 60 KB); `schema --index` lists every command's argument names and its own error codes in under 3 KB (`--json` too). `schema --json` now lists `global_args` in its own result schema.
 - A paging cursor is short and versioned, `v1.r.3fa9c1.4021` (command, filter hash, row id), so a `next:` line fits 80 columns. Treat it as opaque.
 - In text, every cut listing says how many rows it left out and, on the next line, the exact command that shows more: `next: agentbus read --before v1.eyJ... --limit 20` (`--topic`, `--as` and `--up` kept; `inbox --peek` continues with `--after`).
 
 ### Changed (breaking, contract version 1)
 
 - GitHub Releases is the only release channel. The release workflow no longer has a PyPI job, `verify_published.sh` has no `--pypi`, and `scripts/release_check.py` refuses a final tag below the highest existing final tag (so GitHub's latest release is also the highest final version) and checks that `DIST_NAME` equals the project name in `pyproject.toml`.
+- Every write needs a name on the roster: `post`, `ctx set`, `goal` and `log add` under a name that has not joined (or has left) fail with `not_on_roster`, as `claim` always did. Before: they succeeded. Run `agentbus --as NAME join` first.
+- `post --to X --to Y` is `bad_input`. Before: the last `--to` won and the message went to one name without a word about the other. Post once per name, or leave `--to` off for everyone.
+- `goal` is a reserved fact key: `ctx set goal ...` is `bad_input` (`goal is reserved; use: agentbus goal TEXT`), and `status` and `ctx get` no longer list it among the facts. `ctx get goal` and `ctx history goal` still read it.
+- `join` accepts only names the hooks can print, `[A-Za-z0-9._-]{1,40}`; others are `bad_input` naming the rule. Names already on a bus keep working everywhere except `join`.
+- A claim renewal with the same purpose writes no log row; the first claim and a changed purpose still do.
+- `--limit` below `-1` is a usage error on `who`, `claims`, `inbox`, `ctx` and `log` (`-1` still means all).
+- `post --json` results carry `warnings`; `leave --json` results carry `was_joined`.
+
 - `watch`: `Esc` no longer quits (it goes back, or clears a filter) and `q` quits only from the main view; in a detail or help `q` goes back one level. Before: `q`, `Q` and `Esc` quit from anywhere. Use `q` from the main view or Ctrl-C.
 - Listings return an envelope under `--json`: `who`, `inbox`, `read`, `claims`, `ctx get` (without a key), `ctx history`, `log show` and `buses`. Before: a bare array, `[{"name": "a", ...}]`, with truncation announced only as prose on stderr. After: `{"v": 1, "items": [{"name": "a", ...}], "has_more": false, "next": null}`. `items` is the old array with the same rows and order; `has_more` is `true` when `--limit` left rows out (so `inbox --limit 0 --json` is no longer an unmarked `[]` while messages wait); `next` is a cursor for `ctx history`, `read`, `log show` and `inbox --peek`, used with the new `--before NEXT` (and `--after NEXT` for `inbox --peek`). The `N more not shown` line on stderr is gone. Scripts that read a bare array must read `.items`; a bare `[...]` from a listing means a 0.1.x copy.
 - One exit-code mapping, the same with and without `--json`: `0` success; `1` the command ran and refused (a claim conflict, a missing message, a name in use); `2` usage (bad arguments, unknown commands, a missing identity, invalid values); `3` the bus is unavailable or unsafe (no bus, busy, a refused schema, an unsafe folder); `4` internal error. Before: argparse errors exited 2 without `--json` and 1 with it, unknown commands exited 1, no bus and busy exited 1, and a crash exited 1 with a traceback. Scripts that test `$? -eq 1` for bad input or a missing bus must test 2 or 3.
@@ -66,6 +84,7 @@
 
 ### Fixed
 
+- `examples/two-agent-handoff.sh` resolves a relative `AGENTBUS` before it changes directory, so `AGENTBUS="python3 bin/agentbus" bash examples/two-agent-handoff.sh` from a clone works.
 - Agent names (`--as`, `AGENTBUS_AGENT`), `post --to` and `--topic`, `read --topic`, `ctx` keys and claim resources refuse control characters and bidirectional overrides with `bad_input` (exit 2); the message and `error.field` name the field and the character is shown as `U+XXXX`. Rows an older bus already holds are still read and shown escaped.
 - Deleting claims no longer rewrites the freed pages. SQLite as Debian and Ubuntu build it zeroes every page a delete frees, so `release --all` or `leave` over 500 planted 1 MB claim names wrote about 600 MB with the bus held and could outlive the hold watchdog, making the next agent's command wait. agentbus now sets `secure_delete=FAST`: deleted cells are still zeroed on the pages the delete writes, with no extra I/O.
 

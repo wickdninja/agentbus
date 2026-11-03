@@ -380,5 +380,6 @@ grep -q from-control "$T/out/got" || fail "control: the listener got nothing"
 # DNS on macOS goes through mDNSResponder's socket: the profile keeps it, and without the allow it is refused.
 nl "$PY" "$T/sockop.py" connect /private/var/run/mDNSResponder || fail "the profile refuses mDNSResponder's socket (DNS)"
 sock_denied "$T/narrow-no-dns-allow.sb" connect /private/var/run/mDNSResponder || fail "control: mDNSResponder reachable without the allow"
+nl "${AB[@]}" --as worker join >/dev/null || fail "narrow: join again after leaving (a write needs a name on the roster)"
 nl "${AB[@]}" --as worker post "after the socket probes" >/dev/null || fail "narrow: post after the socket probes"
 ok "unix-socket connect outside the grant denied, mDNSResponder allowed; without the rule the connect works"

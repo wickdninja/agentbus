@@ -60,7 +60,7 @@ def headers():
     assert m['fmt_msg'](row).removeprefix(m['HEAD']) == '#2 codex -> claude [done] re #1 · 15:19\n  done'
     row.update(ts='2026-10-31T20:19:27Z', recipient='*', reply_to=None)
     assert m['fmt_msg'](row).removeprefix(m['HEAD']) == '#2 codex -> everyone [done] · Oct 31 15:19\n  done'
-    db = fresh('headers'); ok('--as', 'a', 'post', 'hello', db=db)
+    db = fresh('headers'); ok('--as', 'a', 'join', db=db); ok('--as', 'a', 'post', 'hello', db=db)
     stored = json.loads(ok('read', db=db, json_=True))['items'][0]
     assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', stored['ts']), stored
     assert re.search(r'^#1 a -> everyone \[note\] · \d\d:\d\d$', ok('read', db=db), re.M)
@@ -126,7 +126,9 @@ def init():
     assert re.search(r'^installed agentbus (?:[0-9a-f]{7}|0\.1\.0)(?: \+dirty)? into '+re.escape(str(repo))+r'/\.agentbus/$', text, re.M), text
     assert f'added .agentbus/ to {repo}/.git/info/exclude (local only; the repo stays clean)\n' in text, text
     assert 'optional: add `.agentbus/` to .gitignore to share that rule\n' in text
-    assert text.endswith(f'next: cd {repo}\nnext: .agentbus/bin/agentbus --as YOUR_NAME join\n'), text
+    # no Claude Code or Codex setup is detected (a fresh HOME), so the setup commands follow the two steps
+    assert text.endswith(f'next: cd {repo}\nnext: .agentbus/bin/agentbus --as YOUR_NAME join\n'
+                         'next: agentbus setup claude (teaches Claude Code the protocol)\nnext: agentbus setup codex (teaches Codex the protocol)\n'), text
     assert not re.search(r'[0-9a-f]{40}', text), text
     assert 'outer bus:' not in text
     nested = repo/'nested'; nested.mkdir()
@@ -141,6 +143,7 @@ def errors():
     # resource can only come from an older bus: the hostile rows below are planted with SQLite.
     e = error('not_on_roster','--as','ghost','claim','x',db=db); assert e['agent'] == 'ghost'
     e = error('no_context_key','ctx','get','nokey',db=db); assert e['key'] == 'nokey'
+    ok('--as','a','join',db=db)
     e = error('no_message','--as','a','post','hi','--reply-to','99',db=db); assert e['id'] == 99
     e = error('not_held','--as','a','release','nothing',db=db); assert e['resource'] == 'nothing'
     error('no_bus','who')
@@ -161,7 +164,7 @@ def errors():
         c.execute('CREATE TABLE foreign_table(x)')
         c.commit()
     error('schema_refused','who',db=db)
-    db = fresh('busy')
+    db = fresh('busy'); ok('--as','a','join',db=db)
     c = sqlite3.connect(db); c.execute('SELECT * FROM agents').fetchall()
     try: assert error('busy','claims',db=db)['bus'] == str(db)  # a write open; who reads beside it
     finally: c.close()
@@ -173,6 +176,7 @@ check('7 structured errors: all codes, fields, status, empty stdout and hostile 
 
 def late_error():
     db = fresh('late-error')
+    ok('--as','a','join',db=db)
     for i in range(2): ok('--as','a','post',str(i),'--to','b',db=db)
     # Inbox must write before marking read. A later failure cannot retract stdout, but its
     # stderr must still be exactly one JSON error, without an earlier truncation notice.
@@ -197,18 +201,19 @@ check('7b late inbox failure has one JSON diagnostic and leaves messages unread'
 
 def retries():
     db = fresh('retries')
+    for n in ('a','b'): ok('--as',n,'join',db=db)
     args = ('--as','a','post','payload','--request-id','token')
-    assert json.loads(ok(*args,db=db,json_=True)) == {'id':1}
-    assert json.loads(ok(*args,db=db,json_=True)) == {'id':1,'duplicate':True}
+    assert json.loads(ok(*args,db=db,json_=True)) == {'id':1,'warnings':[]}
+    assert json.loads(ok(*args,db=db,json_=True)) == {'id':1,'duplicate':True,'warnings':[]}
     assert ok(*args,db=db) == 'posted #1 to everyone [note] (already posted)\n'
     for extra in [('changed',), ('payload','--to','b'), ('payload','--kind','done'),
                   ('payload','--topic','new'), ('payload','--reply-to','1')]:
         error('request_id_reused','--as','a','post',*extra,'--request-id','token',db=db)
-    assert json.loads(ok('--as','b','post','payload','--request-id','token',db=db,json_=True)) == {'id':2}
-    for expected in (3,4): assert json.loads(ok('--as','a','post','payload',db=db,json_=True)) == {'id':expected}
+    assert json.loads(ok('--as','b','post','payload','--request-id','token',db=db,json_=True)) == {'id':2,'warnings':[]}
+    for expected in (3,4): assert json.loads(ok('--as','a','post','payload',db=db,json_=True)) == {'id':expected,'warnings':[]}
     p = run('--as','a','post','once','--request-id','closed',db=db,closed=True)
     assert p.returncode != 0 and 'stdout is closed' in p.stderr, p
-    assert json.loads(ok('--as','a','post','once','--request-id','closed',db=db,json_=True)) == {'id':5,'duplicate':True}
+    assert json.loads(ok('--as','a','post','once','--request-id','closed',db=db,json_=True)) == {'id':5,'duplicate':True,'warnings':[]}
     with contextlib.closing(sqlite3.connect(db)) as c:
         assert c.execute('SELECT request_id FROM messages ORDER BY id').fetchall() == [('token',),('token',),(None,),(None,),('closed',)]
         try: c.execute("INSERT INTO messages(ts,sender,body,request_id) VALUES('t','a','other','token')")

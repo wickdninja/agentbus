@@ -125,7 +125,7 @@ echo "TEST 5: a --json notice into a stderr nobody drains does not hold the bus"
 # Bug it catches: under --json, who and status wrote "N more not shown" to stderr while the bus was
 # still open, so a full stderr pipe held the exclusive lock indefinitely and every other agent
 # failed busy.
-D5="$T/b5"; mkdir -p "$D5"; AGENTBUS_DB="$D5/bus.db" agentbus --as b join --tool t >/dev/null
+D5="$T/b5"; mkdir -p "$D5"; AGENTBUS_DB="$D5/bus.db" agentbus --as b join --tool t >/dev/null; AGENTBUS_DB="$D5/bus.db" agentbus --as a join >/dev/null
 python3 - "$D5/bus.db" <<'PY'
 import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])

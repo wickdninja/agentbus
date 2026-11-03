@@ -95,6 +95,26 @@ PY
 [ "$(status harmless)" = 1 ] && grep -q '^SURVIVED harmless' "$T/out" || fail "a harmless change did not survive tests/test_init.sh: $(cat "$T/out")"
 ok "tests/test_init.sh passes on a copy with a comment added"
 
+echo "TEST 7a: a test file that only fails while another runs beside it is run again alone before it is BROKEN, and a file that always fails still is"
+LOCK="$T/lockdir"
+for n in 1 2; do
+  printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then echo "FAIL: marker seen"; exit 1; fi\nmkdir "%s" 2>/dev/null || { echo "FAIL: contended"; exit 1; }\nsleep 3; rmdir "%s"\n' "$LOCK" "$LOCK" >"$T/contend$n.sh"
+done
+"$PY" - "$T/m3.json" "$T/contend1.sh" "$T/contend2.sh" "$F" "$VER" <<'PY'
+import json, sys
+path, c1, c2, find, ver = sys.argv[1:6]
+rep = '__version__ = "%s"  # MUTATION-MARKER' % ver
+json.dump([{"name": "contend-one", "file": "bin/agentbus", "find": find, "replace": rep, "count": 1, "run": c1, "expect": "marker seen"},
+           {"name": "contend-two", "file": "bin/agentbus", "find": find, "replace": rep, "count": 1, "run": c2, "expect": "marker seen"}], open(path, "w"))
+PY
+rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m3.json" -j 2 --all >"$T/contend.out" 2>"$T/contend.err" || rc=$?
+[ "$rc" = 0 ] && grep -q '^KILLED contend-one' "$T/contend.out" && grep -q '^KILLED contend-two' "$T/contend.out" || fail "a baseline starved by a file beside it made its entries BROKEN (rc $rc): $(cat "$T/contend.out")"
+grep -q '^NOTE .*contend[12].sh: failed beside other files .*contended.*; run alone: ok' "$T/contend.err" || fail "the re-run alone was not reported: $(cat "$T/contend.err")"
+entry "still-broken" "$T/broken.sh" "$F" 1 "always"
+rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m.json" -j 2 --all >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 2 ] && grep -q '^BROKEN still-broken: .*fails before any mutation' "$T/out" || fail "a file that always fails was not BROKEN after its re-run (rc $rc): $(cat "$T/out")"
+ok "contention is retried alone; a real failure stays BROKEN"
+
 echo "TEST 7b: two mutations run at once with -j 2 and still print in file order, one killed and one survived"
 # The first entry's test sleeps before it fails, so it finishes after the second: the lines must stay in file order.
 printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then sleep 3; echo "FAIL: marker seen"; exit 1; fi\n' > "$T/slowkill.sh"
@@ -114,6 +134,14 @@ rc=0; $M --mutations "$T/m2.json" -j 0 --all >"$T/par.out" 2>&1 || rc=$?
 rc=0; AGENTBUS_MUTATION_JOBS=abc $M --mutations "$T/m2.json" --all >"$T/par.out" 2>&1 || rc=$?
 [ "$rc" = 2 ] && grep -q 'AGENTBUS_MUTATION_JOBS must be' "$T/par.out" || fail "a bad AGENTBUS_MUTATION_JOBS was accepted: $(cat "$T/par.out")"
 ok "-j 2: file order, same summary line; bad job counts refused"
+
+echo "TEST 7c: every test the harness runs, baseline and mutated, starts outside the checkout"
+# A checkout sits under a folder that may hold a real bus; a command a test runs before its own cd would find it.
+CHK=$(cd "$ROOT" && pwd -P)
+printf '#!/bin/bash\ncase "$(pwd -P)" in "%s"|"%s"/*) echo "FAIL: cwd is under the checkout: $(pwd -P)"; exit 1;; esac\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then echo "FAIL: marker seen"; exit 1; fi\n' "$CHK" "$CHK" > "$T/cwd.sh"
+entry "cwd" "$T/cwd.sh" "$F" 1 "marker seen"
+[ "$(status cwd)" = 0 ] && grep -q '^KILLED cwd: .*FAIL: marker seen' "$T/out" || fail "a baseline or mutated run started under the checkout: $(cat "$T/out")"
+ok "baseline and mutated runs both start outside the checkout"
 
 echo "TEST 8: every mutation in tests/mutations.json is killed"
 rc=0; MUTATE_TIMEOUT=400 $M --all >"$T/all.out" 2>&1 || rc=$?

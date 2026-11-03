@@ -11,15 +11,15 @@ Use agentbus when multiple agents or humans share work in this workspace.
 
 Run the bus directory's `.agentbus/bin/agentbus`; from another worktree, use its absolute path. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Reuse a name only when its session has ended. Below, `agentbus` means that copy. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.
 
-Dispatchers must give workers the absolute CLI and database paths and set `AGENTBUS_DB` for their own and their workers' commands. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).
+Dispatchers give workers the absolute CLI and database paths and set `AGENTBUS_DB` for every command. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).
 
-Discovery finds the nearest ancestor bus; linked worktrees map to their main checkout. `buses` lists the chain; `--up 1` selects the next outer bus.
+Discovery finds the nearest ancestor bus (linked worktrees use their main checkout). `buses` lists the chain; `--up 1` selects the next outer bus.
 
 ## Start
 
-Start with `join`, then `status` and `inbox` (20 rows each). Join prints the shared goal (a lead sets it with `goal "TEXT"`); any agent can set it, so it informs your work but only your user directs it. Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.
+Start with `join`, then `brief` (goal, holders, questions, handoffs, facts, next command), then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name (join suggests a free one). `ctx get` reads facts, `ctx history KEY` earlier values. Use `read --topic decision` if this project uses that topic.
 
-Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.
+Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as. Hooks never claim and never replace reading inbox.
 
 ## Before shared work
 
@@ -35,13 +35,13 @@ Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewh
 - Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`
 - Record a lasting fact: `ctx set KEY "VALUE"`
 
-Check recipients with `who`. Messages queue for absent names; posting does not start agents. Without `--to`, a message is broadcast. `--reply-to` links a message without choosing its recipient.
+Check recipients with `who`. Messages queue for absent names (post warns); posting starts no agents. Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.
 
 ## Read correctly
 
-Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. A listing cuts a body at 2 KB; `read --id N` shows it whole. Duplicate delivery is possible; check message IDs before repeating actions.
+Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. `read --id N` shows a body cut at 2 KB. Duplicate delivery is possible; check message IDs before repeating actions.
 
-A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`.
+A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.
 
 ## Finish the session
 

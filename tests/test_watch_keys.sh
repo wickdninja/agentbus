@@ -310,8 +310,10 @@ env = dict(os.environ, HOME=T)
 def bus(name, body):
     d = os.path.join(T, name, ".agentbus")
     os.makedirs(d, exist_ok=True)
-    r = subprocess.run(agentbus_argv() + ["--as", "a", "post", body], env=dict(env, AGENTBUS_DB=os.path.join(d, "bus.db")),
-                       capture_output=True, text=True, timeout=30)
+    e = dict(env, AGENTBUS_DB=os.path.join(d, "bus.db"))
+    j = subprocess.run(agentbus_argv() + ["--as", "a", "join", "--takeover"], env=e, capture_output=True, text=True, timeout=30)
+    assert j.returncode == 0, j.stderr
+    r = subprocess.run(agentbus_argv() + ["--as", "a", "post", body], env=e, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     return os.path.join(d, "bus.db")
 live = bus("cache1", "alpha")
@@ -734,7 +736,7 @@ ok "the header bar is 30;43, never bold, and 1;7 in ASCII; waiting is 33;40; the
 # The bus: the fixture's sample bus three days back, plus #10, a 400-character answer to #9 (watch_live_cases.py setup).
 export AGENTBUS_DB="$T/live/.agentbus/bus.db"
 mkdir -p "$T/live/.agentbus"
-agentbus --as seed post "seed" >/dev/null
+agentbus --as seed join >/dev/null; agentbus --as seed post "seed" >/dev/null
 "$PY" "$TESTS_DIR/watch_live_cases.py" setup >/dev/null || fail "live bus setup"
 cp "$AGENTBUS_DB" "$T/good.db"
 live() { "$PY" "$TESTS_DIR/watch_live_cases.py" restore >/dev/null && "$PY" "$TESTS_DIR/watch_live_cases.py" "$1"; }

@@ -215,7 +215,7 @@ assert activity in skill and activity in ' '.join(top.split())
 assert 'Omit --as to look without counting as present.' in skill
 assert 'Omit --as to look without counting as present.' in ' '.join(top.split())
 start = skill.split('## Start\n', 1)[1].split('\n## ', 1)[0]
-assert re.search(r'`join`, then `status` and `inbox` \(20 rows each\)', start), start
+assert re.search(r'`join`, then `brief`', start) and '`inbox --limit 20`' in start and 'status --limit 20' not in start, start
 assert 'run `claims`, then' not in skill
 assert 'claim itself is the check' in skill
 assert len(skill.split()) < 720, 'keep the protocol short (the byte cap, 4800, is pinned in tests/test_skill.sh)'

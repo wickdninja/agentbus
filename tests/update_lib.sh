@@ -26,15 +26,23 @@ EOF
   openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1/key.pem" -out "$1/cert.pem" -days 2 -config "$1/ssl.cnf" >/dev/null 2>&1 \
     || fail "openssl could not mint the test certificate"
 }
-# start_server DIR: the fixture server, in the background; DIR/port holds its port when it is up.
+# start_server DIR: the fixture server, in the background. It writes its port to the named pipe DIR/ready when it is
+# listening, and this blocks on that one read (an event, not a poll); a server that dies first is noticed within a second.
 SERVER_PIDS=()
 start_server() {
   mint_cert "$1"
+  rm -f "$1/ready"; mkfifo "$1/ready"
+  exec 7<>"$1/ready"   # read and write end held here, so neither side blocks on opening the pipe
   "$PY" "$SERVER_PY" "$1" >"$1/server.out" 2>&1 &
-  SERVER_PIDS+=($!)
-  local w=0; while [ ! -s "$1/port" ]; do sleep 0.05; w=$((w+1)); [ $w -lt 200 ] || { cat "$1/server.out" >&2; fail "the fixture server did not start"; }; done
+  local pid=$! line="" waited=0
+  SERVER_PIDS+=($pid)
+  until read -r -t 1 -u 7 line; do
+    kill -0 "$pid" 2>/dev/null || { exec 7<&-; cat "$1/server.out" >&2; fail "the fixture server exited before it was listening"; }
+    waited=$((waited+1)); [ $waited -lt 120 ] || { exec 7<&-; cat "$1/server.out" >&2; fail "the fixture server did not start"; }
+  done
+  exec 7<&-
   : >"$1/requests.log"
-  SERVER="$1"; PORT=$(cat "$1/port")
+  SERVER="$1"; PORT=$line
 }
 stop_servers() { local p; for p in ${SERVER_PIDS[@]+"${SERVER_PIDS[@]}"}; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done; SERVER_PIDS=(); }
 # answer JSON: what the server says to the next requests; reqs: how many it has logged; the log's last line.
@@ -135,7 +143,7 @@ fi
 [ -z "${STUB_FAIL:-}" ] || { echo "stub installer failing" >&2; exit 1; }
 echo "stub installer output"
 if [ -z "${STUB_NOBUMP:-}" ]; then
-  v="${@: -1}"; v="${v##*/agentbus-}"; v="${v%%-py3-none-any.whl}"
+  v="${@: -1}"; v="${v##*/agentbus-}"; v="${v%%-py3-none-any.whl}"; v="${STUB_VERSION:-$v}"
   sed "s/^__version__ = .*/__version__ = \"$v\"/" "${STUB_FAKE:-$STUB_MODULE}" >"$STUB_MODULE.new" && mv "$STUB_MODULE.new" "$STUB_MODULE"
   rm -rf "$(dirname "$STUB_MODULE")/__pycache__"   # a same-size rewrite in the same second would be served from the old bytecode
 fi
@@ -158,7 +166,7 @@ else:
 if os.environ.get("STUB_FAIL"):
     sys.exit(1)
 if not os.environ.get("STUB_NOBUMP"):
-    v = os.path.basename(sys.argv[-1])[len("agentbus-"):-len("-py3-none-any.whl")]
+    v = os.environ.get("STUB_VERSION") or os.path.basename(sys.argv[-1])[len("agentbus-"):-len("-py3-none-any.whl")]
     p = os.environ["STUB_MODULE"]
     s = open(os.environ.get("STUB_FAKE") or p).read()
     open(p, "w").write(re.sub(r'(?m)^__version__ = .*$', '__version__ = "%s"' % v, s))
@@ -184,7 +192,7 @@ new_case() {
   unset XDG_CACHE_HOME XDG_STATE_HOME
   make_install "$C/fake" "$@"
   make_stubs "$C/stubs"; make_pip_stub "$SITE"
-  unset STUB_FAKE FAKE_LOG FAKE_SETUP STUB_FAIL STUB_NOBUMP STUB_HANG STUB_IGNORE_TERM STUB_STARTED   # a case starts with the real module and no fault
+  unset STUB_VERSION STUB_FAKE FAKE_LOG FAKE_SETUP STUB_FAIL STUB_NOBUMP STUB_HANG STUB_IGNORE_TERM STUB_STARTED   # a case starts with the real module and no fault
   export STUB_LOG="$C/stub.log" STUB_MODULE="$SITE/agentbus.py"
   : >"$STUB_LOG"
   export PATH="$C/stubs:/usr/bin:/bin"   # never the real uv or pipx

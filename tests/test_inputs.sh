@@ -30,7 +30,7 @@ before = snapshot()
 for args in [('ctx', 'set', '', 'value'), ('ctx', 'get', ''), ('ctx', 'history', '')]:
     p = run('--as', 'a', *args)
     assert p.returncode == 2 and p.stdout == '', (args, p)  # a usage error: exit 2
-    assert p.stderr == 'agentbus: KEY must not be empty. Omit KEY to list facts.\n', p.stderr
+    assert p.stderr == 'agentbus: KEY must not be empty. List facts with: agentbus ctx get\n', p.stderr
     assert snapshot() == before, (args, 'changed bus')
     # A missing bus must not be created by an invalid key either.
     with tempfile.TemporaryDirectory() as d:
@@ -44,7 +44,7 @@ assert p.returncode == 0, p.stderr
 rows = json.loads(p.stdout)['items']
 assert len(rows) == 1 and rows[0]['key'] == 'key' and rows[0]['value'] == 'value', rows
 for args, message in [
-    (('ctx', 'get', 'missing'), 'no context key missing. List keys with: agentbus ctx get'),
+    (('ctx', 'get', 'missing'), 'no fact named missing. List facts with: agentbus ctx get'),
     (('post', 'reply', '--reply-to', '99999'), 'no message #99999 to reply to. See recent ids with: agentbus read'),
     (('release', 'missing'), 'you do not hold missing. See your claims with: agentbus claims'),
 ]:
@@ -103,10 +103,11 @@ for args in 'post ""' 'post' 'ctx set ek ""' 'log add w ""' 'post "   "'; do
   echo "from stdin" > "$T/in"
   case "$1" in
     post) usage='post "text", or pipe text to post -.' ;;
-    ctx) usage='ctx set KEY "text", or pipe text to ctx set KEY -.' ;;
-    log) usage='log add ACTION "text", or pipe text to log add ACTION -.' ;;
+    ctx) usage='ctx set KEY needs a value. Use: agentbus --as NAME ctx set KEY "VALUE", or pipe text to ctx set KEY -.' ;;
+    log) usage='log add ACTION needs a detail. Use: agentbus --as NAME log add ACTION "DETAIL", or pipe text to log add ACTION -.' ;;
   esac
-  expect_fail "empty message. Use $usage" agentbus --as a "$@" < "$T/in"
+  case "$1" in post) usage="empty message. Use $usage" ;; esac
+  expect_fail "$usage" agentbus --as a "$@" < "$T/in"
 done
 [ "$(count "select count(*) from messages where body like '%from stdin%'")" = 0 ] || fail "an empty body posted stdin"
 [ "$(count "select count(*) from context where key='ek'")" = 0 ] || fail "an empty ctx value read stdin"

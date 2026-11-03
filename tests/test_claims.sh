@@ -347,7 +347,7 @@ assert d['claimed_at'] == '2001-02-03T04:05:06Z', d
 assert d['resource'] == 'renew' and d['agent'] == 'renew', d
 PY
   want='original purpose'; [ "$purpose" = preserve ] || want='new purpose'
-  expect_fail "($want). Do not edit it yet." agentbus --as rival claim renew/sub.py
+  expect_fail "(purpose: \"$want\"). Do not edit it yet." agentbus --as rival claim renew/sub.py
   agentbus --json claims | "$PY" -c 'import json,sys; r=next(r for r in json.load(sys.stdin)["items"] if r["resource"]=="renew"); assert r["purpose"]==sys.argv[1] and r["claimed_at"]=="2001-02-03T04:05:06Z"' "$want"
 done
 ok "renewal retains purpose and claimed_at; an explicit purpose replaces it in storage, JSON and conflicts"
