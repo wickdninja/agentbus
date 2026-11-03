@@ -111,6 +111,7 @@ echo "stub installer output"
 if [ -z "${STUB_NOBUMP:-}" ]; then
   v="${@: -1}"; v="${v##*@v}"
   sed "s/^__version__ = .*/__version__ = \"$v\"/" "${STUB_FAKE:-$STUB_MODULE}" >"$STUB_MODULE.new" && mv "$STUB_MODULE.new" "$STUB_MODULE"
+  rm -rf "$(dirname "$STUB_MODULE")/__pycache__"   # a same-size rewrite in the same second would be served from the old bytecode
 fi
 EOF
     chmod 755 "$1/$name"
@@ -130,6 +131,8 @@ if not os.environ.get("STUB_NOBUMP"):
     p = os.environ["STUB_MODULE"]
     s = open(os.environ.get("STUB_FAKE") or p).read()
     open(p, "w").write(re.sub(r'(?m)^__version__ = .*$', '__version__ = "%s"' % v, s))
+    import shutil
+    shutil.rmtree(os.path.join(os.path.dirname(p), "__pycache__"), ignore_errors=True)
 EOF
 }
 # ab ARGS: the fake install's entry script, from a neutral folder, with the environment of a script (no terminal).
@@ -174,5 +177,8 @@ jx() { "$PY" -I -c 'import json,sys; d=json.load(sys.stdin); print(eval(sys.argv
 tree_sum() { { find "$@" -type f 2>/dev/null || true; } | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(cksum <"$f")"; done | cksum; }
 # bus_version DIR: the bus folder's recorded copy version.
 bus_version() { cat "$1/.agentbus/VERSION"; }
+# reset_module: the installed module is the REAL script again at 0.2.0. Its compiled copy goes too: `python -I -m agentbus`
+# (what update runs) does write one, and a same-size rewrite within the same second would be served from it.
+reset_module() { sed 's/^__version__ = .*/__version__ = "0.2.0"/' "$UPDATE_SRC" >"$SITE/agentbus.py"; rm -rf "$SITE/__pycache__"; }
 # use_fake_module: the next stub install replaces the module with tests/fixtures/fake_agentbus.py (at the new version).
 use_fake_module() { export STUB_FAKE="$TESTS_DIR/fixtures/fake_agentbus.py" FAKE_LOG="$C/fake.log"; : >"$FAKE_LOG"; }

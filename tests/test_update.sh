@@ -128,7 +128,7 @@ out=$(ab update --no-setup "$C/src") || fail "update of a root failed: $out"
 [ "$(bus_version "$C/src/a")" = 0.3.0 ] && [ "$(bus_version "$C/src/b")" = 0.3.0 ] || fail "the root's buses were not upgraded: $out"
 grep -qF "$C/src" "$(state_path)/buses.json" || fail "the root was not remembered: $(cat "$(state_path)/buses.json")"
 (HOME="$C/otherhome" new_bus "$C/src/c")
-sed -i.bak 's/^__version__ = .*/__version__ = "0.2.0"/' "$SITE/agentbus.py"; rm -f "$SITE/agentbus.py.bak"
+reset_module
 ab update --no-setup --all-buses >/dev/null || fail "the second update failed"
 [ "$(bus_version "$C/src/c")" = 0.3.0 ] || fail "a later bus under the remembered root was missed"
 ok "roots come only from an explicit DIR and are used afterwards"
@@ -137,7 +137,7 @@ echo "TEST 10: an agent session is narrowed to the current bus, says why, and sk
 new_case scope uv; new_bus "$C/cur"; new_bus "$C/other"
 use_fake_module
 # reset_old: the installed module is the REAL script again at 0.2.0 (the stub installer replaces it with the fake one).
-reset_old() { sed 's/^__version__ = .*/__version__ = "0.2.0"/' "$UPDATE_SRC" >"$SITE/agentbus.py"; : >"$FAKE_LOG"; }
+reset_old() { reset_module; : >"$FAKE_LOG"; }
 exact_line() { echo "agent session ($1): upgrading this bus only and skipping setup. Run with --all-buses for the rest."; }
 for sig in CLAUDECODE CODEX_THREAD_ID CODEX_SANDBOX CODEX_SANDBOX_NETWORK_DISABLED; do
   reset_old
@@ -282,7 +282,7 @@ echo "TEST 18: a failed bus is items_failed with the whole result on stdout; the
 new_case itemfail uv; new_bus "$C/good"; new_bus "$C/bad"
 rm "$C/bad/.agentbus/bin/agentbus"; ln -s /bin/sh "$C/bad/.agentbus/bin/agentbus"
 ab update --json --no-setup --all-buses "$C/good" >/dev/null || fail "setup of the control"
-sed -i.bak 's/^__version__ = .*/__version__ = "0.2.0"/' "$SITE/agentbus.py"; rm -f "$SITE/agentbus.py.bak"
+reset_module
 ab update --json --no-setup "$C/bad" >"$C/out" 2>"$C/err" && fail "a failed bus exited 0"
 [ "$(errof <"$C/err")" = items_failed ] || fail "items_failed: $(cat "$C/err")"
 [ "$(jx 'd["to"]' <"$C/out")" = 0.3.0 ] && [ "$(jx 'd["buses"][0]["status"]' <"$C/out")" = failed ] || fail "whole result on stdout: $(cat "$C/out")"
