@@ -5975,6 +5975,8 @@ class KeyDecoder:
                 params = b[2:i].decode("ascii", "replace")
                 if final == "~":
                     return i + 1, _CSI_TILDE.get(params.split(";")[0])
+                if final == "R" and re.fullmatch(r"[0-9]+;[0-9]+", params):
+                    return i + 1, "CPR " + params  # a cursor position report: the start-up probe's answer
                 return i + 1, _CSI_FINAL.get(final)
             if nxt == 0x4f:  # SS3: ESC O X
                 if len(b) == 2:
@@ -6420,7 +6422,7 @@ def ambiguous_is_wide(stdin, out, select_mod):
         out.write("\r●\033[6n")
         out.flush()
     except (OSError, UnicodeError):
-        return False, b""
+        return False, b"", True
     got, end = b"", time.monotonic() + 0.1
     while time.monotonic() < end:
         ready, _, _ = select_mod.select([stdin], [], [], max(0.0, end - time.monotonic()))
@@ -6441,13 +6443,13 @@ def ambiguous_is_wide(stdin, out, select_mod):
                 out.flush()
             except OSError:
                 pass
-            return int(m.group(2)) - 1 >= 2, rest
+            return int(m.group(2)) - 1 >= 2, rest, True
     try:
         out.write("\r\033[K")
         out.flush()
     except OSError:
         pass
-    return False, got
+    return False, got, False  # no answer yet: a late one arrives as a "CPR" key and is applied then
 
 
 def cmd_watch(a, strict):
@@ -6615,6 +6617,7 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
     cache = {}  # (section, key) -> detail data, read on open and on r
     asked = set()  # (section, key) of detail reads queued or running
     decoder = KeyDecoder()
+    probing = [False]  # the ambiguous-width probe was sent and not yet answered
     out.write("\033[?1049h\033[?25l")
     out.flush()
     if stdin is not None:
@@ -6623,7 +6626,8 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
         entered.append(1)
     if stdin is not None:
         if not paint.ascii and (out.encoding or "").lower().replace("-", "") == "utf8":
-            wide, rest = ambiguous_is_wide(stdin, out, select)
+            wide, rest, answered = ambiguous_is_wide(stdin, out, select)
+            probing[0] = not answered
             if wide:
                 paint.ascii, paint.emoji = True, False
             if rest:
@@ -6652,6 +6656,12 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
         nonlocal view
         size = shutil.get_terminal_size()
         for key in keys:
+            if key.startswith("CPR "):  # the probe's answer, however late (a loaded machine): apply it once
+                if probing[0]:
+                    probing[0] = False
+                    if int(key.split(";")[1]) - 1 >= 2:
+                        paint.ascii, paint.emoji = True, False
+                continue
             d = view.detail
             data = cache.get((d["section"], d["key"])) if d else None
             view = step(view, key, snap, (size.columns, size.lines), datetime.now(timezone.utc), data, error)

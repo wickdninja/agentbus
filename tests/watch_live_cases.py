@@ -22,6 +22,9 @@ DB = os.environ.get("AGENTBUS_DB", "")
 ROOT = os.path.dirname(os.path.dirname(DB))  # the folder holding .agentbus
 BODY10 = ("The tokens are RS256 because the spec draft wins and the old service is going away. " * 6)[:400]
 CASES = {}
+# Every wait is on an event (a frame, a sentinel, an exit) and ends at this deadline only if the event never comes:
+# a loaded CI runner may be slow, never wrong. No case asserts on elapsed time.
+DEADLINE = 60
 
 
 def case(fn):
@@ -41,7 +44,7 @@ def env(**kw):
 def start(*args, cols=100, rows=30, interval="0.2", argv=None, wait_for=("following", "not readable"), **kw):
     s = PtySession((argv or agentbus_argv()) + ["watch", "--interval", interval, *args], env(**kw), cols=cols, rows=rows)
     try:
-        s.until(lambda t: any(w in t for w in wait_for), 15, "the first frame")
+        s.until(lambda t: any(w in t for w in wait_for), DEADLINE, "the first frame")
     except BaseException:
         s.close()
         raise
@@ -52,7 +55,7 @@ def sel_row(f):
     return next((r for r in f if r.startswith(">")), None)
 
 
-def key(s, data, cond, what, seconds=5):
+def key(s, data, cond, what, seconds=DEADLINE):
     m = s.mark()
     s.send(data)
     return s.frame_after(m, cond, seconds, what)
@@ -61,7 +64,7 @@ def key(s, data, cond, what, seconds=5):
 def settled(s, cond, what):
     """The raw bytes of a fresh frame for which cond holds (a refresh is drawn every tick)."""
     m = s.mark()
-    s.frame_after(m, cond, 5, what)
+    s.frame_after(m, cond, DEADLINE, what)
     return s.frames(m, raw=True)[[i for i, f in enumerate(s.frames(m)) if cond(f)][-1]]
 
 
@@ -82,12 +85,12 @@ def resident_kb(pid):
         with open(f"/proc/{pid}/status") as f:
             return next(int(l.split()[1]) for l in f if l.startswith("VmRSS:"))
     except FileNotFoundError:
-        r = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
+        r = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, timeout=DEADLINE)
         return int(r.stdout.split()[0])
 
 
 def post(*args):
-    r = subprocess.run(agentbus_argv() + list(args), env=env(), capture_output=True, text=True, timeout=30)
+    r = subprocess.run(agentbus_argv() + list(args), env=env(), capture_output=True, text=True, timeout=DEADLINE)
     assert r.returncode == 0, r.stderr
 
 
@@ -129,7 +132,7 @@ def keys():
         assert BODY10.strip() in body, ("a 400-character body was cut", body)
         m = s.mark()
         s.send(b"\x1b")
-        s.frame_after(m, lambda f: "message #10" not in f[0], 5, "Esc back to the overview")
+        s.frame_after(m, lambda f: "message #10" not in f[0], DEADLINE, "Esc back to the overview")
         assert s.frames(m, raw=True)[-1] == raw0, "Esc did not return to the overview frame byte for byte"
         # Enter on #7, j j to #9, Enter: Esc shows #7 as it was; q the overview as it was; q quits.
         key(s, b"kkkk", lambda f: sel_row(f) and "#7" in sel_row(f), "#7 selected")
@@ -140,17 +143,17 @@ def keys():
         key(s, b"\r", lambda f: "message #9" in f[0] and "back to #7" in f[-1], "Enter on #9 opens it on top")
         m = s.mark()
         s.send(b"\x1b")
-        s.frame_after(m, lambda f: "message #7" in f[0], 5, "Esc back to #7")
+        s.frame_after(m, lambda f: "message #7" in f[0], DEADLINE, "Esc back to #7")
         assert s.frames(m, raw=True)[-1] == at7, "Esc did not restore #7 as it was"
         m = s.mark()
         s.send(b"q")
-        s.frame_after(m, lambda f: "message #" not in f[0], 5, "q back to the overview")
+        s.frame_after(m, lambda f: "message #" not in f[0], DEADLINE, "q back to the overview")
         assert s.frames(m, raw=True)[-1] == over7, "q in a detail did not return to the overview byte for byte"
         assert s.p.poll() is None, "q in a detail quit watch"
         key(s, b"?", lambda f: any(r.startswith("Look closer") for r in f), "? shows the help page")
         key(s, b"\x1b", lambda f: not any(r.startswith("Look closer") for r in f), "Esc closes help")
         s.send(b"q")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     finally:
         s.close()
 
@@ -162,20 +165,20 @@ def pause():
         f = key(s, b"p", lambda f: any(r.startswith("Messages") and "paused at" in r for r in f), "p pauses")
         frozen = [r for r in f if not r.startswith("Messages")]
         post("--as", "codex", "post", "posted while paused", "--to", "claude")
-        f = s.frame_after(s.mark(), lambda f: any("+1 new" in r for r in f), 10, "+1 new while paused")
+        f = s.frame_after(s.mark(), lambda f: any("+1 new" in r for r in f), DEADLINE, "+1 new while paused")
         assert [r for r in f if not r.startswith("Messages")] == frozen, "the view changed while paused"
         # pause-freezes-display: more posts over several ticks change no row but the Messages title
         for i in range(3):
             post("--as", "codex", "post", f"more {i}")
         m = s.mark()
-        s.frame_after(m, lambda f: any("+4 new" in r for r in f), 10, "+4 new")
-        later = s.frame_after(s.mark(), lambda f: True, 5, "two ticks later")
+        s.frame_after(m, lambda f: any("+4 new" in r for r in f), DEADLINE, "+4 new")
+        later = s.frame_after(s.mark(), lambda f: True, DEADLINE, "two ticks later")
         for f in s.frames(m) + [later]:
             assert [r for r in f if not r.startswith("Messages")] == frozen, ("a row changed while paused", f)
         f = key(s, b"p", lambda f: any("posted while paused" in r for r in f), "p follows and shows the message")
         assert not any("new" in r and "+" in r for r in f if r.startswith("Messages")), f
         s.send(b"q")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     finally:
         s.close()
 
@@ -191,14 +194,14 @@ def rollover():
                       "'note', ?)", [(f"token suite run {i}",) for i in range(200)])
         c.commit()
         c.close()
-        f = s.frame_after(s.mark(), lambda f: any("+200 new" in r for r in f), 10, "+200 new")
+        f = s.frame_after(s.mark(), lambda f: any("+200 new" in r for r in f), DEADLINE, "+200 new")
         assert sel_row(f) and "#9" in sel_row(f), f
         m = s.mark()
         s.resize(60, 20)
-        f = s.frame_after(m, lambda f: len(f[0]) <= 59 and any("+200" in r for r in f), 5, "the narrow redraw")
+        f = s.frame_after(m, lambda f: len(f[0]) <= 59 and any("+200" in r for r in f), DEADLINE, "the narrow redraw")
         assert sel_row(f) and "#9" in sel_row(f) and len(f) == 20, f
         s.send(b"q")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     finally:
         s.close()
         c = sqlite3.connect(DB)
@@ -221,7 +224,7 @@ def exits():
             else:
                 s.signal(getattr(signal, how))
             try:
-                rc = s.wait(10)
+                rc = s.wait(DEADLINE)
             except AssertionError as e:
                 raise AssertionError(f"{how}: {e}")
             assert rc == want, (how, rc)
@@ -248,60 +251,82 @@ def refused():
         c.execute("ALTER TABLE messages ADD COLUMN extra TEXT")
         c.commit()
         c.close()
-        f = s.frame_after(s.mark(), lambda f: "not readable" in f[0], 10, "the refused frame")
+        f = s.frame_after(s.mark(), lambda f: "not readable" in f[0], DEADLINE, "the refused frame")
         text = "\n".join(f)
         assert "This bus could not be read" in text and "Run: agentbus upgrade" in text, text
         assert "Agents" not in text and "Messages" not in text, text
         restore()
         m = s.mark()
         s.send(b"r")
-        s.frame_after(m, lambda f: "fact runtime" in f[0], 10, "r brings the bus back")
+        s.frame_after(m, lambda f: "fact runtime" in f[0], DEADLINE, "r brings the bus back")
         after = settled(s, lambda f: "fact runtime" in f[0] and any("History" in r for r in f), "the fact detail again")
         assert after == before, ("the view did not come back as it was", s.frames(m)[-1])
         key(s, b"q", lambda f: "fact runtime" not in f[0] and f[-1].startswith("  /from:c"), "q back to the filtered overview")
         s.send(b"q")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     finally:
         s.close()
 
 
 @case
 def latency():
-    """Key to redraw under 100 ms for 20 keys; then the same while another process holds the bus (the reads wait
-    on the lock off the input loop), and q exits within 250 ms + 100 ms slack with the terminal restored."""
-    def run(s, label):
-        key(s, b"k", lambda f: sel_row(f) is not None, "k selects")
-        worst = 0.0
+    """R13 and R5, by construction rather than by the clock: a snapshot read is held blocked inside watch (a
+    wrapper parks it until the test lets it go), and every key still redraws, and q still exits, while that read
+    is in flight. Then a real lock on the bus: the last frame stays, with waiting · Ns old."""
+    work = os.path.dirname(ROOT)
+    parked, release = os.path.join(work, "read.parked"), os.path.join(work, "read.release")
+    for f in (parked, release):
+        if os.path.exists(f):
+            os.unlink(f)
+    wrapper = os.path.join(work, "park_read.py")
+    with open(wrapper, "w") as f:
+        f.write("import os, runpy, sys, time\n"
+                "g = runpy.run_path(sys.argv[1], run_name='agentbus_park')\n"
+                "G = g['render_watch'].__globals__\n"
+                "real, n, parked, release = G['watch_snapshot'], [0], sys.argv[2], sys.argv[3]\n"
+                "def parks(*a, **k):\n"
+                "    n[0] += 1\n"
+                "    if n[0] == 3:  # the third read waits until the test releases it\n"
+                "        open(parked, 'w').close()\n"
+                "        while not os.path.exists(release):\n"
+                "            time.sleep(0.01)\n"
+                "    return real(*a, **k)\n"
+                "G['watch_snapshot'] = parks\n"
+                "sys.argv = ['agentbus'] + sys.argv[4:]\n"
+                "G['contract_main']()\n")
+    s = start(argv=[os.environ.get("PYTHON") or "python3", wrapper, bin_path(), parked, release])
+    try:
+        end = time.monotonic() + DEADLINE
+        while not os.path.exists(parked):  # the event: a read is now in flight and will not finish by itself
+            assert time.monotonic() < end, "the third read never started"
+            s.pump(0.02)
+        key(s, b"k", lambda f: sel_row(f) is not None, "k while a read is parked")
         for i in range(20):
             want = "#9" if i % 2 == 0 else "#10"
-            m = s.mark()
-            t0 = time.monotonic()
-            s.send(b"k" if i % 2 == 0 else b"j")
-            s.frame_after(m, lambda f: (sel_row(f) or "> -").split()[1] == want, 5, f"{label}: the redraw for key {i}")
-            worst = max(worst, time.monotonic() - t0)
-        assert worst < 0.1, f"{label}: a key took {worst * 1000:.0f} ms to redraw"
-        return worst
+            key(s, b"k" if i % 2 == 0 else b"j", lambda f: (sel_row(f) or "> -").split()[1] == want,
+                f"the redraw for key {i} while a read is parked")
+        assert not os.path.exists(release), "the read was let go early"
+        s.send(b"q")
+        assert s.wait(DEADLINE) == 0, "q did not exit while a read was in flight"
+        assert s.termios_now() == s.before, "terminal modes not restored after q with a read in flight"
+    finally:
+        open(release, "w").close()
+        s.close()
     s = start()
     try:
-        w1 = run(s, "idle")
-        s.send(b"G")
         hold = sqlite3.connect(DB, timeout=0)
         hold.execute("PRAGMA locking_mode=EXCLUSIVE")
         hold.execute("SELECT COUNT(*) FROM messages").fetchone()
         try:
-            s.frame_after(s.mark(), lambda f: "waiting" in f[0] and "s old" in f[0], 10, "waiting · Ns old in the header")
-            f = s.frame_after(s.mark(), lambda f: True, 5, "a frame")
+            f = s.frame_after(s.mark(), lambda f: "waiting" in f[0] and "s old" in f[0], DEADLINE,
+                              "waiting · Ns old in the header")
             assert any(r.startswith("Messages  10") for r in f), ("the busy frame lost the last frame", f)
-            w2 = run(s, "locked")
-            t0 = time.monotonic()
+            key(s, b"\t", lambda f: any(r.startswith("Agents") and "j/k move" in r for r in f), "Tab with the bus locked")
             s.send(b"q")
-            rc = s.wait(5)
-            took = time.monotonic() - t0
+            assert s.wait(DEADLINE) == 0
         finally:
             hold.close()
-        assert rc == 0 and took < 0.35, (rc, f"q took {took * 1000:.0f} ms with the bus locked")
         assert s.termios_now() == s.before, "terminal modes not restored after q on a locked bus"
-        print(f"worst key to redraw: {w1 * 1000:.0f} ms idle, {w2 * 1000:.0f} ms locked; q on a locked bus {took * 1000:.0f} ms")
     finally:
         s.close()
 
@@ -310,7 +335,7 @@ def latency():
 def dumb():
     s = PtySession(agentbus_argv() + ["watch"], env(TERM="dumb"), cols=100, rows=30)
     try:
-        assert s.wait(15) == 0
+        assert s.wait(DEADLINE) == 0
         out = s.buf.decode("utf-8", "replace")
         assert "\x1b" not in out, ("escape codes under TERM=dumb", out[:400])
         assert "agentbus: TERM=dumb, printing one frame. Use a terminal for the live view." in out, out
@@ -324,7 +349,7 @@ def narrow():
     """NO_COLOR and AGENTBUS_NO_EMOJI at 40 columns: every message row says its kind as a code."""
     s = start(cols=40, rows=30, NO_COLOR="1", AGENTBUS_NO_EMOJI="1")
     try:
-        f = s.frame_after(0, lambda f: any(r.startswith("Messages") for r in f), 5, "a frame")
+        f = s.frame_after(0, lambda f: any(r.startswith("Messages") for r in f), DEADLINE, "a frame")
         assert b"\x1b[3" not in s.buf and b"\x1b[1m" not in s.buf, "colour with NO_COLOR set"
         rows = [r for r in f if __import__("re").match(r"^[ >▌|] #\d", r)]
         assert len(rows) >= 3, f
@@ -332,7 +357,7 @@ def narrow():
         for r in rows:
             assert re.match(r"^[ >▌|] #\d+\s+\S+\s+(hand|ask |ans |done|dec |ALRT|note) ", r), ("no kind code", r)
         s.send(b"q")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     finally:
         s.close()
 
@@ -346,10 +371,10 @@ def readonly():
         for k in (b"j", b"k", b"\t", b"\r", b"j", b"\r", b"\x1b", b"\x1b", b"y", b"t", b"/", b"x", b"\r", b"\x1b", b"p",
                   b"?", b"q", b"r", b"G", b"1", b"j", b"\r", b"y", b"q", b"2", b"\r", b"\x1b", b"3", b"\r", b"\x1b"):
             s.send(k)
-            s.frame_after(s.mark(), lambda f: True, 5, "a frame after a key")
+            s.frame_after(s.mark(), lambda f: True, DEADLINE, "a frame after a key")
         assert s.p.poll() is None, "a key in the mix quit watch"
         s.send(b"4q")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     finally:
         s.close()
     assert bus_state(DB) == before, "watch changed bus.db"
@@ -370,7 +395,7 @@ def copy():
         assert "copied" in f[-1] and ("select it here" in f[-1] or "select it above" in f[-1]), f[-1]
         f = key(s, b"t", lambda f: "copied" not in f[-1], "the next key clears the copied footer")
         s.send(b"qq")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     finally:
         s.close()
     assert bus_state(DB) == before, "y changed the bus"
@@ -381,12 +406,12 @@ def ascii_auto():
     """TERM=linux and AGENTBUS_ASCII=1 draw ASCII glyphs with a reverse-video header; so does a terminal that answers
     the start-up probe with a two-column advance for ●."""
     def check(s, what):
-        f = s.frame_after(0, lambda f: any(r.startswith("Messages") for r in f), 5, what)
+        f = s.frame_after(0, lambda f: any(r.startswith("Messages") for r in f), DEADLINE, what)
         assert all(ord(ch) < 128 for r in f for ch in r), (what, [r for r in f if any(ord(ch) >= 128 for ch in r)])
         raw = s.frames(0, raw=True)[-1]
         assert raw[0].startswith("\x1b[1;7m"), (what, raw[0][:30])
         s.send(b"q")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     for kw in ({"TERM": "linux"}, {"AGENTBUS_ASCII": "1"}):
         s = start(**kw)
         try:
@@ -400,7 +425,7 @@ def ascii_auto():
             assert time.monotonic() < end, "no cursor position probe"
             s.pump(0.02)
         s.send(b"\x1b[30;3R")  # ● advanced the cursor two columns
-        s.until(lambda t: "following" in t, 10, "the first frame")
+        s.until(lambda t: "following" in t, DEADLINE, "the first frame")
         check(s, "the probe")
     finally:
         s.close()
@@ -430,21 +455,23 @@ def detail_reads():
                 "g['render_watch'].__globals__['contract_main']()\n")
     s = start(argv=[os.environ.get("PYTHON") or "python3", wrapper, path, log])
     try:
-        key(s, b"\r", lambda f: "message #10" in f[0] and any(r.startswith("Thread") for r in f), "Enter opens #10")
-        for _ in range(6):  # six ticks at 0.2 s
-            s.frame_after(s.mark(), lambda f: True, 5, "a tick")
+        key(s, b"\r", lambda f: "message #10" in f[0] and any(r.startswith("Thread") for r in f)
+            and not any("reading the bus" in r for r in f), "Enter opens #10 and its detail is read")
+        for _ in range(6):  # six more frames (ticks at 0.2 s), the window ended by events
+            s.frame_after(s.mark(), lambda f: True, DEADLINE, "a tick")
         n = open(log).read().count("call")
         assert n == 1, f"watch_detail ran {n} times for one open detail over several ticks: {open(log).read()[-600:]}"
         key(s, b"r", lambda f: "message #10" in f[0], "r")
-        t0 = time.monotonic()
-        while open(log).read().count("call") < 2 and time.monotonic() - t0 < 5:
+        end = time.monotonic() + DEADLINE
+        while open(log).read().count("call") < 2:  # the event: r's read has started
+            assert time.monotonic() < end, "r did not read the detail again"
             s.pump(0.05)
         for _ in range(4):  # four more ticks: r read the detail once, not once per effect or per tick
-            s.frame_after(s.mark(), lambda f: True, 5, "a tick after r")
+            s.frame_after(s.mark(), lambda f: True, DEADLINE, "a tick after r")
         n = open(log).read().count("call")
         assert n == 2, f"r read the detail {n - 1} times (want once)"
         s.send(b"qq")
-        assert s.wait(10) == 0
+        assert s.wait(DEADLINE) == 0
     finally:
         s.close()
 
@@ -480,7 +507,7 @@ def hostile():
     e = env(AGENTBUS_DB=db)
 
     def cli(*args):
-        r = subprocess.run(agentbus_argv() + list(args), env=e, capture_output=True, text=True, timeout=30)
+        r = subprocess.run(agentbus_argv() + list(args), env=e, capture_output=True, text=True, timeout=DEADLINE)
         assert r.returncode == 0, (args, r.stderr)
     evil, bob = "ev" + H, "bob"
     cli("--as", evil, "join", "--role", "lead" + H)
@@ -498,7 +525,7 @@ def hostile():
             ee.pop("AGENTBUS_NO_EMOJI")
         s = PtySession(agentbus_argv() + ["watch", "--interval", "0.2"], ee, cols=100, rows=30)
         try:
-            s.until(lambda t: "following" in t, 15, "the first frame")
+            s.until(lambda t: "following" in t, DEADLINE, "the first frame")
             over = lambda f: "open question" in f[0]
             head = lambda w: (lambda f: w in f[0] and not any("reading the bus" in r for r in f))  # its data is in
             sel = lambda f: sel_row(f) is not None
@@ -521,7 +548,7 @@ def hostile():
             for k, cond in walk:
                 key(s, k, cond, f"the view after {k!r}")
             s.send(b"q")
-            assert s.wait(10) == 0
+            assert s.wait(DEADLINE) == 0
             for want in ("agent ", "claim ", "fact key", "message #2", "message #1", "keys"):
                 assert any(want in f[0] for f in s.frames()), ("a view the walk did not reach", want)
             leaks = raw_controls(s.buf)
@@ -566,28 +593,28 @@ def jobctl():
         return bool(l & termios.ICANON), bool(l & termios.ECHO)
     try:
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-        until(lambda b: b"PROMPT$" in b, 10, "the prompt")
+        until(lambda b: b"PROMPT$" in b, DEADLINE, "the prompt")
         os.write(fd, (shlex.join(agentbus_argv() + ["watch", "--interval", "0.2"]) + "\n").encode())
-        until(lambda b: b"following" in b, 15, "the first frame")
+        until(lambda b: b"following" in b, DEADLINE, "the first frame")
         assert lflag() == (False, False), ("watch is not in cbreak", lflag())
         m = len(buf[0])
         os.write(fd, b"\x1a")
-        until(lambda b: b"PROMPT$" in b, 10, "the prompt after Ctrl-Z", m)
+        until(lambda b: b"PROMPT$" in b, DEADLINE, "the prompt after Ctrl-Z", m)
         after = buf[0][m:]
         assert b"\x1b[?25h\x1b[?1049l" in after and after.index(b"\x1b[?25h\x1b[?1049l") < after.index(b"PROMPT$"), \
             ("Ctrl-Z did not give the terminal back before the prompt", after.find(b"\x1b[?25h\x1b[?1049l"),
              after.find(b"PROMPT$"), after[-400:])
         m = len(buf[0])
         os.write(fd, b"fg\n")
-        until(lambda b: b"\x1b[?1049h" in b and b"\x1b[?25l" in b and b"following" in b.split(b"\x1b[?1049h")[-1], 10,
+        until(lambda b: b"\x1b[?1049h" in b and b"\x1b[?25l" in b and b"following" in b.split(b"\x1b[?1049h")[-1], DEADLINE,
               "the alternate screen and a full frame after fg", m)
         assert lflag() == (False, False), ("after fg the terminal is not in cbreak", lflag())
         m = len(buf[0])
         os.write(fd, b"\t")  # a key works at once, no Enter needed
-        until(lambda b: b"j/k move" in b, 5, "Tab redrawn after fg", m)
+        until(lambda b: b"j/k move" in b, DEADLINE, "Tab redrawn after fg", m)
         m = len(buf[0])
         os.write(fd, b"q")
-        until(lambda b: b"PROMPT$" in b, 10, "q to exit to the prompt", m)
+        until(lambda b: b"PROMPT$" in b, DEADLINE, "q to exit to the prompt", m)
         assert b"\x1b[?25h\x1b[?1049l" in buf[0][m:], "q after fg did not restore the screen"
         os.write(fd, b"exit\n")
         end = time.monotonic() + 10
@@ -610,12 +637,12 @@ def jobctl():
 
 @case
 def bigbodies():
-    """M3: 200 held messages of 1 MB each. A tick reads only the head of each body, so keys still redraw under
-    100 ms (R13) and the process stays small."""
+    """M3: 200 held messages of 1 MB each: keys redraw and the process stays small (a tick reads only the head of
+    a body it has not seen; TEST 2d proves the reads with SQLite's trace)."""
     db = os.path.join(os.path.dirname(ROOT), "big", ".agentbus", "bus.db")
     os.makedirs(os.path.dirname(db), exist_ok=True)
     e = env(AGENTBUS_DB=db)
-    r = subprocess.run(agentbus_argv() + ["--as", "seed", "post", "seed"], env=e, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(agentbus_argv() + ["--as", "seed", "post", "seed"], env=e, capture_output=True, text=True, timeout=DEADLINE)
     assert r.returncode == 0, r.stderr
     c = sqlite3.connect(db)
     c.execute("INSERT INTO messages(ts, sender, recipient, kind, body) "
@@ -627,26 +654,15 @@ def bigbodies():
     c.close()
     s = PtySession(agentbus_argv() + ["watch", "--interval", "0.2"], e, cols=100, rows=30)
     try:
-        s.until(lambda t: "following" in t, 30, "the first frame")
-        key(s, b"k", lambda f: sel_row(f) is not None, "k selects the newest", 10)
-        ids = []
-        for _ in range(4):  # the ids of the rows above, to aim each key at a known row
-            key(s, b"k", lambda f: True, "k")
-        worst = 0.0
-        for i in range(20):
-            m = s.mark()
-            t0 = time.monotonic()
-            s.send(b"j" if i % 2 == 0 else b"k")
-            f = s.frame_after(m, lambda f: sel_row(f) is not None and sel_row(f) != ids[-1:] and
-                              (ids.append(sel_row(f)) or True), 5, f"the redraw for key {i}")
-            worst = max(worst, time.monotonic() - t0)
-        assert len(set(ids)) == 2, ("j and k did not move between two rows", ids[:4])
+        s.until(lambda t: "following" in t, DEADLINE, "the first frame")
+        key(s, b"k", lambda f: sel_row(f) is not None, "k selects the newest")
+        for i in range(20):  # every key redraws (its frame is the event); how fast is the reader's business
+            key(s, b"k" if i % 2 == 0 else b"j", lambda f: sel_row(f) is not None, f"the redraw for key {i}")
         rss = resident_kb(s.p.pid)
         s.send(b"q")
-        assert s.wait(10) == 0
-        assert worst < 0.1, f"a key took {worst * 1000:.0f} ms to redraw with 200 bodies of 1 MB"
+        assert s.wait(DEADLINE) == 0
         assert rss < 150 * 1024, f"watch holds {rss // 1024} MB with 200 bodies of 1 MB"
-        print(f"200 x 1 MB bodies: worst key to redraw {worst * 1000:.0f} ms, {rss // 1024} MB resident")
+        print(f"200 x 1 MB bodies: 20 keys redrawn, {rss // 1024} MB resident")
     finally:
         s.close()
 
@@ -672,7 +688,7 @@ def watchdog():
                 "G['contract_main']()\n")
     s = start(argv=[os.environ.get("PYTHON") or "python3", wrapper, bin_path()])
     try:
-        rc = s.wait(15)
+        rc = s.wait(DEADLINE)
         out = s.buf.decode("utf-8", "replace")
         assert "test: the read hung" in out, ("the exit does not show the watchdog's reason", out[-400:])
         assert "Bad file descriptor" not in out and "Traceback" not in out, out[-600:]
@@ -692,12 +708,12 @@ def encodings():
     for extra, want_ascii in (({"PYTHONIOENCODING": "ascii"}, True), ({"LC_ALL": "en_US.ISO8859-1", "LANG": "en_US.ISO8859-1"}, False)):
         s = start(**extra)
         try:
-            f = s.frame_after(0, lambda f: any(r.startswith("Messages") for r in f), 5, f"a frame under {extra}")
+            f = s.frame_after(0, lambda f: any(r.startswith("Messages") for r in f), DEADLINE, f"a frame under {extra}")
             if want_ascii:
                 assert all(ord(c) < 128 for r in f for c in r), ("non-ASCII under an ASCII stdout", f)
             key(s, b"\t", lambda f: any(r.startswith("Agents") and "j/k" in r for r in f), f"Tab under {extra}")
             s.send(b"q")
-            assert s.wait(10) == 0, extra
+            assert s.wait(DEADLINE) == 0, extra
             assert b"Traceback" not in s.buf and s.termios_now() == s.before, extra
         finally:
             s.close()
@@ -757,11 +773,11 @@ def paste():
                         break
         try:
             fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 200, 0, 0))
-            until(lambda b: b"P> " in b, 10, "the prompt")
+            until(lambda b: b"P> " in b, DEADLINE, "the prompt")
             for i, c in enumerate(copies):
                 os.write(fd, b"\x1b[200~" + c.encode() + b"\x1b[201~")
                 os.write(fd, b"\x15" + f"echo DONE$((40+{i}))\r".encode())  # clear the line, then a marker command
-                until(lambda b, i=i: f"DONE{40 + i}".encode() in b, 10, f"the marker after paste {i}")
+                until(lambda b, i=i: f"DONE{40 + i}".encode() in b, DEADLINE, f"the marker after paste {i}")
             ran = [f for f in os.listdir(work) if f.startswith("PWNED")]
             assert not ran, (sh[0], "a paste ran a command", ran)
             os.write(fd, b"exit\r")

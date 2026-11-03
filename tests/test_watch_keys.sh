@@ -32,6 +32,7 @@ table = [
     (b"\x1b\x1b[A", ["Esc", "Up"], "ESC ESC [ A: one Esc, then Up"),
     ("kind:é".encode(), list("kind:é"), "printable text, UTF-8 too"),
     (b"\x01\x02\x1f", [], "other control characters are dropped"),
+    (b"\x1b[30;3Rq", ["CPR 30;3", "q"], "a cursor position report (the probe's answer, however late) is one key"),
 ]
 for data, want, name in table:
     got = dk(data)
@@ -312,7 +313,24 @@ c.execute("UPDATE messages SET body='gamma', ts='2026-01-01T00:00:00Z' WHERE id=
 c.commit(); c.close()
 third = g["watch_snapshot"](live, False, 200, body_head=4096, bodies=cache)["messages"][0]["body"]
 assert third == "gamma", third
-print("dated history fits 40 to 100; latin-1 rows fit as written; the cache read beta and gamma, not alpha")
+# M3, counted: with the cache, a body is read once (SQLite's trace shows the statements), at most BODY_HEAD long.
+bigdb = bus("cache3", "x" * 10000)
+for _ in range(3):
+    subprocess.run(agentbus_argv() + ["--as", "a", "post", "y" * 9000], env=dict(env, AGENTBUS_DB=bigdb), check=True,
+                   capture_output=True, timeout=60)
+cache, seen = {}, []
+def traced(con):
+    con.set_trace_callback(seen.append)
+snap = g["watch_snapshot"](bigdb, False, 200, body_head=g["BODY_HEAD"], bodies=cache, opened=traced)
+assert [len(m["body"]) for m in snap["messages"]] == [4096] * 4 and all(m["body_cut"] for m in snap["messages"]), \
+    [len(m["body"]) for m in snap["messages"]]
+first = [q for q in seen if "substr(body" in q]
+assert len(first) == 1, first  # one read of the four new bodies
+seen.clear()
+g["watch_snapshot"](bigdb, False, 200, body_head=g["BODY_HEAD"], bodies=cache, opened=traced)
+assert not [q for q in seen if "body" in q.split("FROM")[0]], ("a later tick read bodies again", seen)
+print("dated history fits 40 to 100; latin-1 rows fit as written; the cache read beta and gamma, not alpha; "
+      "a body is read once, cut to 4096")
 PY
 ok "fact history from earlier days fits 40 to 100 columns; on a latin-1 stdout rows fit after the ? replacement; a replaced bus.db or a reused id is read again"
 
