@@ -29,7 +29,7 @@ Codex trusts the exact entry: if setup updates the hooks later, or another tool 
 
 Setup starts your login shell once, as Codex will (`$SHELL -lc`), and says how many bytes it printed at startup, never what. It sets `AGENTBUS_SHELL_PROBE=1` while it runs, so a profile can skip slow work or output when that is set. Anything a profile prints reaches Codex in front of the hook's JSON, which Codex may then fail to read; make it print nothing unless it runs in a terminal (for example `[ -t 1 ]`). A shell that does not finish within 10 seconds is stopped and reported as unknown, and so is anything it left running.
 
-The hook command is written for a POSIX shell (`sh`, `bash`, `zsh`). If `$SHELL` is `fish`, `nu`, `xonsh` or `elvish`, setup says so and does not start it; start Codex as `SHELL=/bin/sh codex`.
+The hook command is written for a POSIX shell. Setup starts only `sh`, `bash`, `zsh`, `dash` and `ksh` (versioned names such as `bash-5.2` too). For any other `$SHELL` (`fish`, `nu`, `xonsh`, `elvish`, `tcsh`, `csh`) it says so and does not start it; start Codex as `SHELL=/bin/sh codex`.
 
 ## Check it worked
 
@@ -40,7 +40,7 @@ agentbus watch       # shows codex-xxxxxxxx on the roster
 agentbus doctor      # checks the hooks file, the executable it runs and the AGENTS.md block
 ```
 
-`agentbus doctor` reads files only: it never starts Codex or your shell. It warns about a hook entry that runs another install of `agentbus` (after an upgrade moved it; run `agentbus setup codex` again). An entry tagged `# agentbus:managed` that is not the line setup writes (another command, extra commands chained on, a relative path, a script in the project or in a `.agentbus` folder) is a problem: it was not written by setup, so remove it with `agentbus setup codex --uninstall --scope user` and set up again. Doctor also says on its `codex` line that trust cannot be checked from outside Codex, so `/hooks` stays the place to confirm.
+`agentbus doctor` reads files only: it never starts Codex or your shell. It warns about a hook entry that runs another install of `agentbus` (after an upgrade moved it; run `agentbus setup codex` again). An entry tagged `# agentbus:managed` that is not the line setup writes (another command, extra commands chained on, a relative path, a path that goes through the project or a `.agentbus` folder even by a link, an interpreter that is not Python, a script that is not agentbus) is a problem: it was not written by setup, so remove it with `agentbus setup codex --uninstall --scope user` and set up again. Doctor also says on its `codex` line that trust cannot be checked from outside Codex, so `/hooks` stays the place to confirm.
 
 Hooks only ever add context: they never block a tool call, never edit a file and never run `leave`.
 
@@ -73,7 +73,7 @@ Messages, goals and names other agents wrote are never put in a hook message, on
 - Use one scope. User and project hooks both run on every event, so installing both doubles them.
 - Project hooks (`--scope project`) load only for a project you have told Codex to trust.
 - Codex starts each hook as `$SHELL -lc COMMAND`, a login shell: see "Your login shell" above.
-- A project's `.codex` that is a link is refused: setup will not write through it.
+- With `--scope project`, setup refuses a `.codex` or `.claude` that is a link, or a link anywhere below it (`.claude/skills`): it will not write or delete through it, and checks the folders again right before each write.
 
 ## Print the hooks yourself
 
@@ -92,4 +92,4 @@ Every command in them names the installed tool by absolute path and ends with `#
 agentbus setup codex --uninstall
 ```
 
-Only the entries and the block setup added are removed; anything you edited stays. A `hooks.json` or `AGENTS.md` that held nothing else is deleted with them. `--dry-run` shows the plan first.
+Only the entries and the block setup added are removed; anything you edited stays. A `hooks.json` or `AGENTS.md` that held nothing else is deleted with them, and so is the `.codex` folder setup made when nothing else is in it. `--dry-run` shows the plan first.
