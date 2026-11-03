@@ -129,6 +129,16 @@ assert not (c["fix"] and c["hint"]), "a fix and a hint on one entry: " + repr(c)
 PY
 }
 
+# hooks_row STATUS DETAIL-FRAGMENT FIX: some hooks entry of the --json output in $T/out (hooks has several rows) has them, in the user scope.
+hooks_row() {
+  "$PY" - "$T/out" "$1" "$2" "$3" <<'PY' || { echo "json was:" >&2; cat "$T/out" >&2; fail "hooks row: status $1, detail with '$2', fix '$3' not found"; }
+import json, sys
+path, status, frag, fix = sys.argv[1:]
+rows = [c for c in json.load(open(path))["checks"] if c["id"] == "hooks" and c["status"] == status and c.get("scope") == "user" and frag in c["detail"] and (c["fix"] or "") == fix and not c["hint"]]
+assert len(rows) == 1, rows
+PY
+}
+
 echo "TEST 1: doctor writes nothing: HOME and the project are equal, byte for byte, before and after, in every state, run from a bus folder and from a folder with none"
 states=(current fresh-bus v010-shape stale-copy edited-skill old-link unmanaged damaged-markers newer-bus no-claude-dir no-codex-dir bare-home)
 for state in "${states[@]}"; do
@@ -702,7 +712,7 @@ json.dump({"version": d.get("version", 2), "plugins": {"agentbus@agentbus": entr
 PY
 doc doctor --json
 [ "$RC" = 1 ] || fail "a plugin and setup both registering hooks must exit 1 (got $RC)"
-row hooks fail "the agentbus plugin and setup both register hooks" "agentbus setup claude --uninstall" user
+hooks_row fail "the agentbus plugin and setup both register hooks" "agentbus setup claude --uninstall"
 ok "plugin plus setup: a fail whose fix is setup claude --uninstall"
 world
 "$PY" - "$HOME/.claude/settings.json" <<'PY' || fail "settings edit"
@@ -716,7 +726,7 @@ json.dump(d, open(sys.argv[1], "w"), indent=2)
 PY
 doc doctor --json
 [ "$RC" = 1 ] || fail "a hook running a missing executable must exit 1 (got $RC)"
-row hooks fail "which is not an agentbus executable" "agentbus setup claude" user
+hooks_row fail "which is not an agentbus executable" "agentbus setup claude"
 ok "a hook command that names a missing executable: a fail whose fix is setup claude"
 
 all_passed "All doctor tests passed"

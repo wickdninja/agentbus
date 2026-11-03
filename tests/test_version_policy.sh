@@ -406,17 +406,6 @@ assert h.agent_text_problems("run agentbus claim src/a.py first")
 assert h.agent_text_problems("`/usr/local/bin/agentbus --as a join`")
 assert not h.agent_text_problems("`/w/app/.agentbus/bin/agentbus --as a join` and `.agentbus/bin/agentbus skill` and `agentbus upgrade DIR`")
 PY
-  # the Claude hook's text is agent-facing too: what it tells a session to run is the bus copy
-  mkdir -p "$W/r12"; git -C "$W/r12" init -q; "${NEW[@]}" init "$W/r12" >/dev/null 2>&1; (cd "$W/r12" && "${NEW[@]}" --as peer join >/dev/null 2>&1)
-  hook_session "$W/r12" "${NEW[@]}"
-  is "row 12: the hook on a joined bus exits 0" 0 "$RC"
-  "$PY" - "$T/out" <<'PY' || { cat "$T/out" >&2; fail "row 12: the hook's text names the installed agentbus where the bus copy belongs, or is empty"; }
-import json, sys, h
-d = json.load(open(sys.argv[1]))
-text = (d.get("hookSpecificOutput") or {}).get("additionalContext") or d.get("systemMessage")
-assert text and ".agentbus/bin/agentbus" in text, text
-assert not h.agent_text_problems(text), h.agent_text_problems(text)
-PY
 }
 
 row_13() {

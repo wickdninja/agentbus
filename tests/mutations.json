@@ -771,6 +771,6 @@
     "replace": "if code == \"problem\":",
     "count": 1,
     "run": "tests/test_doctor.sh",
-    "expect": "detail with 'the agentbus plugin and setup both register hooks'"
+    "expect": "hooks row: status fail, detail with 'the agentbus plugin and setup both register hooks'"
   }
 ]
