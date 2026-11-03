@@ -26,7 +26,7 @@ assert g["goal"] == "ship v0.1 today" and g["set_by"] == "lead" and g["set_at"].
 agentbus --as lead goal "ship v0.1 and a demo" >/dev/null
 [ "$(json_ok agentbus --json ctx history goal | python3 -c 'import json,sys; print("|".join(r["value"] for r in json.load(sys.stdin)["items"]))')" \
   = "ship v0.1 today|ship v0.1 and a demo" ] || fail "goal history"
-expect_fail "empty message" agentbus --as lead goal "  "
+expect_fail "the goal is empty. Use: agentbus --as NAME goal" agentbus --as lead goal "  "
 ok "set, shown with its author, kept in history, empty refused"
 
 echo "TEST 3: a joining agent is told the goal; status leads with it"

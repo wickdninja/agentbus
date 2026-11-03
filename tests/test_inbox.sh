@@ -24,17 +24,18 @@ outof agentbus --as b inbox >/dev/null
 ok "inbox >&- marks nothing read"
 
 echo "TEST 2: inbox | head -1 beyond the pipe buffer fails and marks nothing read"
-big c 10
-rc=0; agentbus --as c inbox 2>"$T/e2" | head -1 >/dev/null || rc=$?
-[ "$(unread c)" = 10 ] || fail "inbox | head -1 marked $((10 - $(unread c))) unshown messages read"
+# A listing cuts each body at 2 KB, so it takes 60 messages (120 KB) to pass the pipe buffer.
+big c 60
+rc=0; agentbus --as c inbox --limit -1 2>"$T/e2" | head -1 >/dev/null || rc=$?
+[ "$(unread c)" = 60 ] || fail "inbox | head -1 marked $((60 - $(unread c))) unshown messages read"
 grep -q "reader closed stdout" "$T/e2" || fail "no error for the cut-off reader: $(cat "$T/e2")"
 ! grep -q Traceback "$T/e2" || fail "traceback: $(cat "$T/e2")"
-ok "inbox | head -1: all 10 still unread"
+ok "inbox | head -1: all 60 still unread"
 
 echo "TEST 3: a reader killed mid-output: nothing marked read"
-big d 10
-rc=0; ( agentbus --as d inbox 2>"$T/e3" | python3 -c 'import os, sys; sys.stdin.buffer.read(1000); os.kill(os.getpid(), 9)' ) 2>/dev/null || rc=$?
-[ "$(unread d)" = 10 ] || fail "a reader killed mid-output: $((10 - $(unread d))) messages marked read"
+big d 60
+rc=0; ( agentbus --as d inbox --limit -1 2>"$T/e3" | python3 -c 'import os, sys; sys.stdin.buffer.read(1000); os.kill(os.getpid(), 9)' ) 2>/dev/null || rc=$?
+[ "$(unread d)" = 60 ] || fail "a reader killed mid-output: $((60 - $(unread d))) messages marked read"
 grep -q "reader closed stdout" "$T/e3" || fail "no error for the killed reader: $(cat "$T/e3")"
 outof agentbus --as d inbox --limit -1 >/dev/null
 [ "$(unread d)" = 0 ] || fail "the full inbox did not mark everything read"
@@ -59,7 +60,7 @@ ok "overlapping inboxes: cursor at the furthest shown (at least once, never back
 echo "TEST 5: inbox --limit 0 says how many wait, not 'inbox empty'"
 for i in 1 2 3; do agentbus --as a post "f$i" --to f >/dev/null; done
 o=$(outof agentbus --as f inbox --limit 0)
-[ "$o" = "  ... 3 more unread; run inbox again" ] || fail "inbox --limit 0 printed: $o"
+[ "$o" = $'  ... 3 more unread\n  next: agentbus --as f inbox --limit 20' ] || fail "inbox --limit 0 printed: $o"
 [ "$(unread f)" = 3 ] || fail "inbox --limit 0 marked messages read"
 outof agentbus --as f inbox >/dev/null
 [ "$(outof agentbus --as f inbox)" = "inbox empty" ] || fail "an empty inbox did not say so"

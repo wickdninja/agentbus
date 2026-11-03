@@ -75,7 +75,8 @@ both(db, ["--as", "a", "post"], 2, "bad_input")
 both(db, ["post"], 2, "bad_input")        # no identity
 both(db, ["--as", "a", "claim", "../x"], 2, "bad_input")
 both(db, ["--as", "a", "claim", "x", "--ttl-min", "0"], 2, "bad_input")
-both(db, [], 2, "bad_input")               # no command at all
+both(db, ["claim"], 2, "bad_input")        # a command missing its argument (no command at all prints the guide, exit 0: tests/test_help.sh)
+both(db, ["--as", "a", "release"], 2, "bad_input")
 both(db, ["schema", "nope"], 2, "bad_input")
 # argparse accepts any unambiguous prefix of a long option: --js would be --json to it, but the tool
 # decides how to print errors before parsing, so prefixes are not accepted at all
@@ -109,6 +110,7 @@ both(None, ["buses", "--up", "5"], 3, "no_bus")
 both(bad, ["buses"], 3, "bus_unavailable")
 empty = os.path.join(tmp, "emptydir"); os.makedirs(empty)
 both(None, ["upgrade", empty], 3, "no_bus")
+both(None, ["update", os.path.join(tmp, "no-such-folder")], 2, "bad_input")  # refused before GitHub is asked
 plain_file = os.path.join(tmp, "not-a-dir"); open(plain_file, "w").close()
 both(None, ["init", plain_file], 2, "bad_input")  # a file, not a missing folder: init creates those since 0.2
 print("PASS: exit 3 for no bus, a refused schema, an unsafe folder and a held database (busy is retryable)")

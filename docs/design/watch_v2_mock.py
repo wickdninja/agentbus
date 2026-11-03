@@ -1229,7 +1229,9 @@ class Frame:
         rows = [self.header("keys")]
         rows += self.wrap("watch only reads the bus. It never marks a message read and never changes a claim.",
                           W - 2, "  ")
-        pinned = len(rows)  # the header and the whole intro stay; the keys below scroll, so no sentence is cut
+        # The header and the whole intro stay while the keys scroll, so no sentence is cut, unless the page is so
+        # short that pinning them would leave fewer than 3 rows for the keys: then only the header stays.
+        pinned = len(rows) if self.rows - 1 - len(rows) - 2 >= 3 else 1
         rows.append(Row())
 
         def entry(k, d, width, kwid=kw):
@@ -1763,8 +1765,9 @@ def case_wrap_linear():
         finally:
             g["cell_width"] = real
         return seen[0]
-    one, two = work(16000), work(32000)
-    assert 16000 <= one <= 4 * 16000, f"wrapping measured {one} cells for 16000 characters"
+    one = work(4000)  # checked before the 2x run, so quadratic wrapping fails fast
+    assert 4000 <= one <= 4 * 4000, f"wrapping measured {one} cells for 4000 characters"
+    two = work(8000)
     assert two <= 2.1 * one, f"wrapping is not linear: 2x text measured {two / one:.2f}x the cells"
     assert wrap_lines("a b", 5) is wrap_lines("a b", 5), "wrapping is cached by text and width"
 

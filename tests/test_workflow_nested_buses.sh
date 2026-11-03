@@ -17,7 +17,9 @@ is_equal "init output after the version line" "added .agentbus/ to <REPO>/app/.g
 optional: add \`.agentbus/\` to .gitignore to share that rule
 outer bus: <REPO>
 next: cd <REPO>/app
-next: .agentbus/bin/agentbus --as YOUR_NAME join" "$(sed 1d <<<"$got")"
+next: .agentbus/bin/agentbus --as YOUR_NAME join
+next: agentbus setup claude (teaches Claude Code the protocol)
+next: agentbus setup codex (teaches Codex the protocol)" "$(sed 1d <<<"$got")"
 grep -Eq '^installed agentbus .+ into <REPO>/app/\.agentbus/$' <<<"$(sed -n 1p <<<"$got")" || fail "first init line: $(sed -n 1p <<<"$got")"
 APP_DB="$R/app/.agentbus/bus.db"
 mkdir -p "$R/app/src"; cd "$R/app/src"
@@ -28,8 +30,8 @@ ok "chain listed nearest first, before any bus file exists"
 echo "STEP 2: the same name joins both buses; claims and messages stay on the bus they were made on"
 say "joined as a on <REPO>/app/.agentbus/bus.db" agentbus --as a join
 say "joined as a on <REPO>/.agentbus/bus.db" agentbus --up 1 --as a join
-say "claimed x.txt until <TS>" agentbus --as a claim x.txt
-say "claimed y.txt until <TS>" agentbus --up 1 --as a claim y.txt
+say "claimed x.txt <left>" agentbus --as a claim x.txt
+say "claimed y.txt <left>" agentbus --up 1 --as a claim y.txt
 say "posted #1 to everyone [note]" agentbus --as a post "repo news"
 say "posted #1 to everyone [note]" agentbus --up 1 --as a post "workspace news"
 is_equal "repo bus rows" "x.txt|a" "$(sql -d "$APP_DB" "SELECT resource, agent FROM claims")"
@@ -45,7 +47,7 @@ assert [c["resource"] for c in json.load(sys.stdin)["items"]] == ["y.txt"]' || f
 say "#1 a -> everyone [note] · <time>
   workspace news" agentbus --up 1 read
 # A missing outer bus is "bus unavailable": exit 3 (see `agentbus schema --json`, exit_codes).
-refuse 3 "agentbus: no bus at --up 2; no such outer bus" agentbus --up 2 who
+refuse 3 "agentbus: no bus at --up 2; no such outer bus. See: agentbus buses" agentbus --up 2 who
 ok "claims and messages never cross buses"
 
 echo "STEP 3: a linked worktree of the repo, inside and outside the workspace, shares the repo's bus"
@@ -57,7 +59,7 @@ for W in "$R/wt-in" "$T/wt-out"; do
   say "  a  seen <ago>" agentbus --up 1 who
   say "  0  <REPO>/app  bus.db exists  copy <copy>
   1  <REPO>  bus.db exists  copy <copy>" agentbus buses
-  say "claimed from-$(basename "$W").txt until <TS>" agentbus --as a claim "from-$(basename "$W").txt"
+  say "claimed from-$(basename "$W").txt <left>" agentbus --as a claim "from-$(basename "$W").txt"
 done
 is_equal "worktree claims landed on the repo bus" "from-wt-in.txt
 from-wt-out.txt

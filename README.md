@@ -71,7 +71,13 @@ $bus --as claude inbox
 agentbus watch      # live view of agents, claims, facts and messages; q quits
 ```
 
-Want to see it without touching a repo? Run `examples/two-agent-handoff.sh` (from a clone without the install, set the AGENTBUS variable to python3 bin/agentbus first).
+Want to see it without touching a repo? From a clone, without the install:
+
+```bash
+AGENTBUS="python3 bin/agentbus" bash examples/two-agent-handoff.sh
+```
+
+With the install, run `examples/two-agent-handoff.sh` as it is. From v0.2.0, `demo` is the same tour with no clone.
 
 <br>
 
@@ -94,6 +100,7 @@ Full diagrams and their sources: [docs/workflow.md](docs/workflow.md)
 | --- | --- |
 | Shared goal | `goal`, `status` |
 | Who's here | `join`, `who`, `leave` |
+| Catch up in one call (v0.2.0) | `brief` |
 | Don't collide | `claim`, `claims`, `release` |
 | Hand off and ask | `post --kind handoff`, `post --kind question`, `inbox` |
 | Shared facts | `ctx set`, `ctx get` |
@@ -104,14 +111,12 @@ Full diagrams and their sources: [docs/workflow.md](docs/workflow.md)
 
 ## Teach your agents
 
-| Agent | Setup |
-| --- | --- |
-| **Claude Code** | From a clone: `mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus` |
-| **Codex**, or anything that reads `AGENTS.md` | Add: *Coordinate with other agents through `.agentbus/bin/agentbus`; follow `/path/to/agentbus/skill/SKILL.md`.* |
+| Agent | Setup in this release (v0.1.0) | From v0.2.0 |
+| --- | --- | --- |
+| **Claude Code** | From a clone: `mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus` | One command, no clone: [Set up your agents](docs/how-to/setup.md) |
+| **Codex**, or anything that reads `AGENTS.md` | Add: *Coordinate with other agents through `.agentbus/bin/agentbus`; follow `/path/to/agentbus/skill/SKILL.md`.* | One command, then approve the hooks with `/hooks` in Codex: [Use agentbus with Codex](docs/how-to/codex.md) |
 
 The skill tells an agent when to join, check its inbox, claim files and hand off.
-
-From v0.2.0 one command does this without a clone: see [Set up your agents](docs/how-to/setup.md).
 
 <br>
 
@@ -124,6 +129,8 @@ From v0.2.0 one command does this without a clone: see [Set up your agents](docs
 | `ctx set` `ctx get` | Shared facts, with history |
 | `goal` | The one shared goal; shown by `join`, `status` and `watch` |
 | `who` `status` `watch` `log` | Who's here, what's claimed, what happened |
+| `brief` | The goal, who holds what, open questions, unread handoffs and changed facts, in a few lines; reads only, never marks anything read (v0.2.0) |
+| `demo` | A 30-second tour on a temporary bus that leaves nothing behind (v0.2.0) |
 
 Use `--json` for structured output; `watch` is a live terminal view.
 
@@ -136,7 +143,7 @@ Use `--json` for structured output; `watch` is a live terminal view.
 - Buses nest. A repo can have its own bus inside a workspace that has one; `--up 1` reaches the outer bus. `buses` lists the chain.
 - Claims and messages stay on their bus; nothing merges across buses.
 - Write path claims relative to the directory the bus belongs to.
-- `AGENTBUS_DB` overrides discovery and `--up`. Sandboxed lanes get an explicit bus.
+- `AGENTBUS_DB` overrides discovery and `--up`. Sandboxed agents get an explicit bus.
 - `init` copies the tool into `.agentbus/bin/`, so agents need no package installed. At a git checkout root, it also adds the exclude rule.
 - Needs Python 3.9+ and git 2.31+. Runs on macOS and Linux.
 

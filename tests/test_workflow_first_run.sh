@@ -46,7 +46,7 @@ goal: auth on the new token API
 posted #1 to codex [handoff]
 #1 claude -> codex [handoff] · <time>
   auth refactor is yours
-claimed src/auth/ until <TS>
+claimed src/auth/ <left>
 released src/auth/
 posted #2 to claude [done]
 #2 codex -> claude [done] re #1 · <time>

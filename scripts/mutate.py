@@ -26,6 +26,9 @@ Mutations are independent, so they run in a bounded pool of threads, each drivin
 temp dir with its own HOME and TMPDIR (nothing shared between two running tests). Results print in file order,
 whatever order they finish in, and the summary line is the same at any -j.
 
+Every test, baseline or mutated, runs with its cwd in its own empty temp dir, never in the checkout (a checkout
+sits under a folder that may hold a real bus, and a command run before the test's own cd would find it).
+
 The test runs from a shadow tree in a temp dir (symlinks to the checkout, the mutated file real), so BIN
 in tests/lib.sh is the mutated copy; AGENTBUS_BIN names it too, which tests/lib.sh and
 tests/agentbus_cmd.py honour (AGENTBUS_CMD is dropped so the copy is what runs). An entry whose
@@ -129,7 +132,7 @@ def baseline(e, root):
         test = os.path.join(root, e["run"])
         work = os.path.realpath(tempfile.mkdtemp(prefix="agentbus-mutation-"))
         try:
-            rc, out = _run(test, root, _env(os.path.join(root, "bin", "agentbus"), work))
+            rc, out = _run(test, work, _env(os.path.join(root, "bin", "agentbus"), work))
         finally:
             shutil.rmtree(work, ignore_errors=True)
         if rc == 0:
@@ -158,7 +161,7 @@ def shadow_run(e, mutated, root):
         shadow_test = test if rel.startswith("..") else os.path.join(tmp, rel)  # a test outside the tree runs in place
         # AGENTBUS_BIN is the CLI under test: the mutated copy only when the CLI is what is mutated.
         cli = copy if e["file"] == "bin/agentbus" else os.path.join(tmp, "bin", "agentbus")
-        return _run(shadow_test, tmp, _env(cli, work))
+        return _run(shadow_test, work, _env(cli, work))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -242,6 +245,15 @@ def run_all(picked, jobs, root=ROOT):
     try:
         for f in [pool.submit(baseline, e, root) for e in first]:
             f.result()
+        # A baseline that failed while other test files ran beside it may only have been starved (the timing tests keep
+        # fixed budgets): run each such file once more with the machine to itself before it makes its entries BROKEN.
+        for e in first:
+            key = (root, e["run"])
+            if _baselines.get(key, "").startswith("bad:") and jobs > 1:
+                first_try = _baselines.pop(key)
+                again = baseline(e, root)
+                print(f"NOTE {e['run']}: failed beside other files ({first_try[4:100]}); run alone: "
+                      + ("ok" if again == "ok" else again[:100]), file=sys.stderr, flush=True)
         pending = []
         for e, st in zip(picked, steps):
             if st[0] == "baseline":
