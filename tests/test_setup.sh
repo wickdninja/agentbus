@@ -943,6 +943,7 @@ setup_in "$HOME" "$HOME/bin:$PATH"
 ! ran || fail "setup run from a git home folder started a claude its index lists"
 # a work tree elsewhere (Homebrew's prefix is one): Caskroom/ and node_modules/ are untracked there
 WT="$T/wt"; rm -rf "$WT"; mkdir -p "$WT/Caskroom/claude/1.0" "$WT/bin"; git -C "$WT" init -q
+printf 'readme\n' >"$WT/README"; gitq "$WT" add README      # the index lists something, just not the claude
 mkclaude "$WT/Caskroom/claude/1.0/claude"; ln -s ../Caskroom/claude/1.0/claude "$WT/bin/claude"
 reset
 setup_in "$W" "$WT/bin:$PATH"
@@ -951,10 +952,11 @@ grep -qF "provided by the agentbus plugin" <<<"$OUT" || fail "an untracked work-
 gitq "$WT" add -f Caskroom/claude/1.0/claude
 setup_in "$W" "$WT/bin:$PATH"
 ! ran || fail "setup started a claude tracked in the index of its work tree"
-gitq "$WT" rm -q --cached Caskroom/claude/1.0/claude; gitq "$WT" add -f bin/claude
-setup_in "$W" "$WT/bin:$PATH"
+gitq "$WT" update-index --force-remove Caskroom/claude/1.0/claude; gitq "$WT" add -f bin/claude
+mkdir -p "$T/outbin"; ln -sf "$WT/bin/claude" "$T/outbin/claude"     # the PATH entry is outside the work tree; the tracked link is a hop on the way in
+setup_in "$W" "$T/outbin:$PATH"
 ! ran || fail "setup started a claude reached through a tracked symlink hop"
-gitq "$WT" rm -q --cached bin/claude
+gitq "$WT" update-index --force-remove bin/claude
 setup_in "$W" "$WT/bin:$PATH"
 ran || fail "setup refused the work-tree claude after nothing was tracked any more"
 printf 'garbage, not an index' >"$WT/.git/index"

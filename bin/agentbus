@@ -6531,31 +6531,38 @@ def claude_tracked_in_index(exe):
     lists (a repository can commit a claude, or a link to one). Read with the hook's own index parser, no git run. Fails
     closed: a work tree whose layout or index cannot be read counts as tracking it. Ignored or untracked files in a work
     tree (Homebrew's Caskroom and node_modules, a dotfiles home) are not tracked."""
-    path, seen = exe, 0
-    while True:
+    chain, path = [], exe
+    for _ in range(21):
         here = os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+        chain.append(here)
+        if not os.path.islink(here):
+            break
+        target = os.readlink(here)
+        path = target if os.path.isabs(target) else os.path.join(os.path.dirname(here), target)
+    else:
+        return True  # too many hops
+    chain.append(os.path.realpath(exe))
+    indexes = {}
+    for here in chain:
         repo = hook_git_layout(os.path.dirname(here))
         if repo is False:
             return True
-        if repo is not None:
-            rel = os.fsencode(os.path.relpath(here, repo["top"]).replace(os.sep, "/")).lower()
+        if repo is None:
+            continue
+        key = repo["gitdir"]
+        if key not in indexes:
             try:
-                names, _ = hook_index_entries(repo)
+                indexes[key] = hook_index_entries(repo)[0]
             except FileNotFoundError:
-                names = []
+                indexes[key] = []
             except (OSError, ValueError, MemoryError):
                 return True
-            for name, mode in names:
-                n = name.lower()
-                if n == rel or (n.endswith(b"/") and rel.startswith(n)):
-                    return True
-        if not os.path.islink(here):
-            return False
-        seen += 1
-        if seen > 20:
-            return True
-        target = os.readlink(here)
-        path = target if os.path.isabs(target) else os.path.join(os.path.dirname(here), target)
+        rel = os.fsencode(os.path.relpath(here, repo["top"]).replace(os.sep, "/")).lower()
+        for name, mode in indexes[key]:
+            n = name.lower()
+            if n == rel or (n.endswith(b"/") and rel.startswith(n)):
+                return True
+    return False
 
 
 def claude_trusted_binary():

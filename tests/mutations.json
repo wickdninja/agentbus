@@ -488,8 +488,8 @@
   {
     "name": "setup trusts a claude reached through a tracked symlink",
     "file": "bin/agentbus",
-    "find": "        if not os\\.path\\.islink\\(here\\):",
-    "replace": "        if True:",
+    "find": "        if not os\\.path\\.islink\\(here\\):\\n            break",
+    "replace": "        if True:\n            break",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "setup started a claude reached through a tracked symlink hop"
@@ -506,8 +506,8 @@
   {
     "name": "setup refuses every claude in a work tree",
     "file": "bin/agentbus",
-    "find": "                if n == rel or \\(n\\.endswith\\(b\"/\"\\) and rel\\.startswith\\(n\\)\\):\\n                    return True",
-    "replace": "                if True:\n                    return True",
+    "find": "            if n == rel or \\(n\\.endswith\\(b\"/\"\\) and rel\\.startswith\\(n\\)\\):\\n                return True",
+    "replace": "            if True:\n                return True",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "setup refused a claude that is untracked in an unrelated work tree"
