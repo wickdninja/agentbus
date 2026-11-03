@@ -70,7 +70,7 @@ try:
     ids = {str(r[0]) for r in sqlite3.connect(db).execute("SELECT id FROM messages")}
 except sqlite3.Error:
     ids = set()
-section = re.compile(r"== (bus .*|goal: .*|no goal yet .*|agents|context|claims|last 10 messages)")
+section = re.compile(r"== (bus .*|goal: .*|no goal yet .*|agents|facts|claims|last 10 messages)")
 CONFIRM = ("joined as ", "left as ", "posted #", "inbox empty", "set ", "claimed ", "released ", "logged")
 # init and upgrade: their lines start with the repo path the caller named, or fixed text.
 if os.environ.get("ORACLE_REPO"):
@@ -240,7 +240,7 @@ out, cols, db, cmd = open(sys.argv[1], encoding="utf-8").read(), int(sys.argv[2]
 from presence import require_records
 require_records(out, db, cmd)
 ids = {str(r[0]) for r in sqlite3.connect(db).execute("SELECT id FROM messages")}
-section = re.compile(r"== (bus .*|goal: .*|no goal yet .*|agents|context|claims|last 10 messages)$")
+section = re.compile(r"== (bus .*|goal: .*|no goal yet .*|agents|facts|claims|last 10 messages)$")
 bad = []
 for n, line in enumerate(out.split("\n")):
     for k, row in enumerate(rows(line, cols)):
