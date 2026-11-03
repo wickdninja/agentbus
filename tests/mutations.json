@@ -933,7 +933,7 @@
     "replace": "    if False:\n        if not a.no_buses:",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "dry run failed"
+    "expect": "no exact would run line"
   },
   {
     "name": "update: an installer that changed nothing is accepted",
@@ -1041,7 +1041,7 @@
     "replace": "    if False:",
     "count": 1,
     "run": "tests/test_doctor.sh",
-    "expect": "doctor showed a cached answer more than a week old"
+    "expect": "row tool: status ok, detail with '0.2.0 at '"
   },
   {
     "name": "doctor does not warn about a newer cached release",
