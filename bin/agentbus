@@ -4419,13 +4419,15 @@ def _watch_messages(con, q, limit, head, bodies):
     if bodies is None:
         return q("SELECT id, ts, sender, recipient, kind, topic, substr(body, 1, ?) AS body, reply_to, "
                  "substr(body, ?, 1) <> '' AS body_cut FROM messages ORDER BY id DESC LIMIT ?", head, head + 1, limit)
-    rows = q("SELECT id, ts, sender, recipient, kind, topic, reply_to FROM messages ORDER BY id DESC LIMIT ?", limit)
-    # Entries belong to one bus file (device and inode) and one message (id, time, sender): a bus.db replaced
-    # under watch, or an id that came back with another message, is read again, never shown from the cache.
+    rows = q(f"SELECT id, ts, sender, recipient, kind, topic, reply_to, {BYTE_LENGTH}(body) AS body_len "
+             "FROM messages ORDER BY id DESC LIMIT ?", limit)
+    # Entries belong to one bus file (device and inode) and one message (id, time, sender, body length in bytes,
+    # which octet_length gives without reading the body): a bus.db replaced under watch, copied over in place, or
+    # an id that came back with another message is read again. A same-length edit in place is not seen.
     if bodies.get("bus") != con.ident:
         bodies.clear()
         bodies["bus"] = con.ident
-    stamp = lambda r: (r["ts"], r["sender"])
+    stamp = lambda r: (r["ts"], r["sender"], r["body_len"])
     need = [r["id"] for r in rows if r["id"] not in bodies or bodies[r["id"]][2] != stamp(r)]
     by_id = {r["id"]: r for r in rows}
     for i in range(0, len(need), 500):
@@ -4915,30 +4917,36 @@ def visible_keys(snap, section, text):
     return [x[k] for x in section_items(snap, section) if filter_matches(section, x, toks)]
 
 
-def shell_word(v):
-    """v as one shell word that holds no control byte: shlex.quote when v has no unsafe character, else
-    bash/zsh ANSI-C quoting ($'...') with every unsafe character, quote and backslash escaped. A pasted
-    control byte goes to the line editor before any parser (ESC [ 2 0 1 ~ ends a bracketed paste, Ctrl-U kills
-    the line, CR runs what follows), so no quoting may keep one raw."""
+# A word every shell reads the same, unquoted: dash and other POSIX sh, bash 3.2 and 5, zsh and fish. No quoting
+# rule is the same across them (dash has no $'...'; fish reads \' inside '...'), so a value is put in a copied
+# command only when it needs none, else a placeholder the person replaces.
+_PLAIN_WORD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@+=:,/-]*\Z")
+
+
+def plain_word(v, placeholder):
     v = str(v)
-    if not any(_unsafe(c) for c in v):
-        return shlex.quote(v)
-    return "$'" + "".join("\\" + c if c in "\\'" else _esc(c) if _unsafe(c) else c for c in v) + "'"
+    return v if _PLAIN_WORD.match(v) else placeholder
 
 
 def copy_text(v):
-    """Plain text as y copies it: as written, unless it holds an unsafe character, then in its clean()ed
-    form, so nothing copied carries a control byte into a paste."""
+    """Plain text as y copies it. As written, unless it holds an unsafe character (then its clean()ed form)
+    or non-ASCII next to $, ` or a backslash (then the non-ASCII is written as backslash-u escapes): a paste
+    into bash 3.2 under LANG=C reads bytes 0x80 and up as Meta keys, so no copy gives such a line both."""
     v = str(v)
-    return clean(v) if any(_unsafe(c) for c in v) else v
+    if any(_unsafe(c) for c in v):
+        return clean(v)
+    if not v.isascii() and any(c in v for c in "$`\\"):
+        return "".join(c if ord(c) < 0x80 else _esc(c) for c in v)
+    return v
 
 
 def reply_command(m, name="NAME"):
-    """The command that replies to m, shown in its detail and copied by y, as the text a shell takes: every
-    value is one shell word (shell_word), so a sender named `ops$(touch x)` is one argument and runs nothing,
-    and no control byte is ever in it. name: $AGENTBUS_AGENT or --as when set, else the word NAME."""
+    """The command that replies to m, shown in its detail and copied by y. Every word is a plain word
+    (plain_word): a name or sender that is not one is shown as NAME or SENDER for the person to fill in (the
+    detail shows the sender above), so the command means the same, and runs nothing else, in every shell, and
+    holds no control byte. name: $AGENTBUS_AGENT or --as when set, else the word NAME."""
     kind = " --kind answer" if m["kind"] == "question" else ""
-    return (f"agentbus --as {shell_word(name)} post --to {shell_word(m['sender'])} "
+    return (f"agentbus --as {plain_word(name, 'NAME')} post --to {plain_word(m['sender'], 'SENDER')} "
             f"--reply-to {int(m['id'])}{kind} \"...\"")
 
 
@@ -5755,7 +5763,9 @@ class _Frame:
         rows = [self.header("keys")]
         rows += self.wrap("watch only reads the bus. It never marks a message read and never changes a claim.",
                           W - 2, "  ")
-        pinned = len(rows)  # the header and the whole intro stay; the keys below scroll, so no sentence is cut
+        # The header and the whole intro stay while the keys scroll, so no sentence is cut, unless the page is so
+        # short that pinning them would leave fewer than 3 rows for the keys: then only the header stays.
+        pinned = len(rows) if self.rows - 1 - len(rows) - 2 >= 3 else 1
         rows.append(Row())
 
         def entry(k, d, width, kwid=kw):
@@ -6079,7 +6089,7 @@ def detail_related(view, snap, data):
 def _copy_text(view, snap, data):
     """What y copies (OSC 52 carries it base64; the footer shows it clean()ed): in the overview the selected
     row's key, in a detail the reply command (message), the name, the resource or the value. Never a control
-    byte: plain text is copied as written unless it holds one (copy_text), the command quotes it (shell_word)."""
+    byte: plain text goes through copy_text, the command holds only plain words (reply_command)."""
     shown = view.shown(snap)
     if view.mode == "detail" and view.detail:
         d = view.detail
@@ -6414,12 +6424,21 @@ def watch_settings(stdout_tty):
     return colour, emoji, ascii_mode
 
 
+PROBE = "\033[2;1H●\033[6n"  # ● at row 2, column 1, then: where is the cursor?
+
+
+def probe_answer(key):
+    """True (● drew two columns wide: use ASCII), False (one column), or None when the key is not the probe's
+    answer. The answer is row 2, column 2 or 3; a modified F3 (ESC [ 1 ; m R) is never row 2."""
+    return {"CPR 2;2": False, "CPR 2;3": True}.get(key)
+
+
 def ambiguous_is_wide(stdin, out, select_mod):
     """The start-up probe: draw ● and ask the terminal where the cursor went (ESC [ 6 n), waiting at most
     100 ms. A two-column advance means East Asian Ambiguous characters are drawn wide: use ASCII glyphs.
     Bytes that are not the answer are handed back as input."""
     try:
-        out.write("\r●\033[6n")
+        out.write(PROBE)
         out.flush()
     except (OSError, UnicodeError):
         return False, b"", True
@@ -6435,7 +6454,7 @@ def ambiguous_is_wide(stdin, out, select_mod):
         if not chunk:
             break
         got += chunk
-        m = re.search(rb"\x1b\[(\d+);(\d+)R", got)
+        m = re.search(rb"\x1b\[(2;[23])R", got)
         if m:
             rest = got[:m.start()] + got[m.end():]
             try:
@@ -6443,7 +6462,7 @@ def ambiguous_is_wide(stdin, out, select_mod):
                 out.flush()
             except OSError:
                 pass
-            return int(m.group(2)) - 1 >= 2, rest, True
+            return probe_answer("CPR " + m.group(1).decode()), rest, True
     try:
         out.write("\r\033[K")
         out.flush()
@@ -6657,9 +6676,10 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
         size = shutil.get_terminal_size()
         for key in keys:
             if key.startswith("CPR "):  # the probe's answer, however late (a loaded machine): apply it once
-                if probing[0]:
+                wide = probe_answer(key)
+                if probing[0] and wide is not None:
                     probing[0] = False
-                    if int(key.split(";")[1]) - 1 >= 2:
+                    if wide:
                         paint.ascii, paint.emoji = True, False
                 continue
             d = view.detail
