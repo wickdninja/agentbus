@@ -4361,6 +4361,8 @@ SCAN = 5000         # detail queries look at most at the newest 5000 messages
 THREAD_MAX = 20     # ancestors and direct replies a message detail loads, each; fact history rows
 LIST_MAX = 5        # messages an agent or claim detail lists
 LOCK_WAIT_MS = 250  # the longest a watch read waits for the bus lock; then it keeps the last frame
+BODY_HEAD = 4096    # characters of each held body the live view reads per tick (a row shows its first line);
+                    # a detail reads its own message whole. A word filter searches these characters.
 
 
 def empty_snapshot():
@@ -4369,11 +4371,15 @@ def empty_snapshot():
             "omitted": {"agents": 0, "context": 0, "claims": 0, "messages": 0}}
 
 
-def watch_snapshot(path, strict, limit, read_only=True, busy_wait=BUSY_WAIT_S, opened=None):
+def watch_snapshot(path, strict, limit, read_only=True, busy_wait=BUSY_WAIT_S, opened=None, body_head=None, bodies=None):
     """Everything the view shows, as plain values, read in one short open. Read-only: it never
     creates, stamps, migrates or tidies the bus. A bus folder whose bus.db nothing has written yet
     is shown as the empty bus it is (and still not created). opened(con), when given, is told the
-    connection (the live view interrupts it on quit)."""
+    connection (the live view interrupts it on quit). body_head: read at most that many characters of
+    each body (and body_cut, whether there was more), so a tick never copies whole large bodies into Python;
+    --json reads them whole. bodies: the live view's {id: (head, cut)} from earlier ticks; a message's body
+    is then read once, when it first appears (SQLite does not even page in the body of a row it already has),
+    and the dict is trimmed to the held ids."""
     try:
         con = open_bus(path, strict, read_only=read_only, busy_wait=busy_wait)
     except SystemExit as e:
@@ -4392,7 +4398,8 @@ def watch_snapshot(path, strict, limit, read_only=True, busy_wait=BUSY_WAIT_S, o
             "context": q("SELECT key, value, updated_by, updated_at FROM context WHERE key<>? ORDER BY updated_at DESC LIMIT ?",
                          GOAL_KEY, limit),
             "messages": list(reversed(q("SELECT id, ts, sender, recipient, kind, topic, body, reply_to FROM messages "
-                                        "ORDER BY id DESC LIMIT ?", limit))),
+                                        "ORDER BY id DESC LIMIT ?", limit) if body_head is None else
+                                      _watch_messages(con, q, limit, body_head, bodies))),
             "counts": {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("agents", "messages")},
         }
         snap["unread"] = watch_unread(con, [a["name"] for a in snap["agents"]])
@@ -4404,6 +4411,27 @@ def watch_snapshot(path, strict, limit, read_only=True, busy_wait=BUSY_WAIT_S, o
         return snap
     finally:
         con.close()
+
+
+def _watch_messages(con, q, limit, head, bodies):
+    """The newest `limit` messages, newest first, with each body cut to `head` characters (body_cut says
+    there was more). With `bodies` (the cache of earlier ticks) only messages not in it have their bodies read."""
+    if bodies is None:
+        return q("SELECT id, ts, sender, recipient, kind, topic, substr(body, 1, ?) AS body, reply_to, "
+                 "substr(body, ?, 1) <> '' AS body_cut FROM messages ORDER BY id DESC LIMIT ?", head, head + 1, limit)
+    rows = q("SELECT id, ts, sender, recipient, kind, topic, reply_to FROM messages ORDER BY id DESC LIMIT ?", limit)
+    need = [r["id"] for r in rows if r["id"] not in bodies]
+    for i in range(0, len(need), 500):
+        part = need[i:i + 500]
+        for r in con.execute("SELECT id, substr(body, 1, ?), substr(body, ?, 1) <> '' FROM messages WHERE id IN (%s)"
+                             % ",".join("?" * len(part)), (head, head + 1, *part)):
+            bodies[r[0]] = (r[1], bool(r[2]))
+    held = {r["id"] for r in rows}
+    for i in [i for i in bodies if i not in held]:
+        del bodies[i]
+    for r in rows:
+        r["body"], r["body_cut"] = bodies.get(r["id"], ("", False))
+    return rows
 
 
 def watch_unread(con, names):
@@ -4423,6 +4451,9 @@ def watch_unread(con, names):
 
 
 DETAIL_MESSAGE = "SELECT id, ts, sender, recipient, kind, topic, body, reply_to FROM messages"
+# The rows a detail lists show a first line: their bodies are read to BODY_HEAD characters.
+DETAIL_ROW = ("SELECT id, ts, sender, recipient, kind, topic, substr(body, 1, %d) AS body, reply_to, "
+              "substr(body, %d, 1) <> '' AS body_cut FROM messages" % (BODY_HEAD, BODY_HEAD + 1))
 
 
 def watch_detail_rows(con, section, key, top):
@@ -4440,7 +4471,7 @@ def watch_detail_rows(con, section, key, top):
         chain, further = [], None
         cur = m
         while cur and cur["reply_to"] is not None and len(chain) < THREAD_MAX:
-            up = one(DETAIL_MESSAGE + f" WHERE id=? AND {window}", cur["reply_to"], lo, top)
+            up = one(DETAIL_ROW + f" WHERE id=? AND {window}", cur["reply_to"], lo, top)
             if up is None:
                 break
             chain.append(up)
@@ -4448,7 +4479,7 @@ def watch_detail_rows(con, section, key, top):
         if cur and cur["reply_to"] is not None and len(chain) == THREAD_MAX:
             further = cur["reply_to"]
         out.update(record=m, chain=chain, further=further,
-                   replies=q(DETAIL_MESSAGE + f" WHERE {window} AND reply_to=? ORDER BY id LIMIT ?", lo, top, key, THREAD_MAX),
+                   replies=q(DETAIL_ROW + f" WHERE {window} AND reply_to=? ORDER BY id LIMIT ?", lo, top, key, THREAD_MAX),
                    n_replies=con.execute(f"SELECT COUNT(*) FROM messages WHERE {window} AND reply_to=?",
                                          (lo, top, key)).fetchone()[0])
         return out
@@ -4465,7 +4496,7 @@ def watch_detail_rows(con, section, key, top):
         out["n_history"] = con.execute("SELECT COUNT(*) FROM context_history WHERE key=?", (key,)).fetchone()[0]
         return out
     n, first = con.execute(f"SELECT COUNT(*), MIN(id) FROM messages WHERE {window} AND {match}", (lo, top) + params).fetchone()
-    out.update(n=n, first=first, list=list(reversed(q(DETAIL_MESSAGE + f" WHERE {window} AND {match} ORDER BY id DESC LIMIT ?",
+    out.update(n=n, first=first, list=list(reversed(q(DETAIL_ROW + f" WHERE {window} AND {match} ORDER BY id DESC LIMIT ?",
                                                         lo, top, *params, LIST_MAX))))
     return out
 
@@ -5146,6 +5177,8 @@ class _Frame:
         frm, dest = self.fit(m["sender"], part).rstrip(), self.fit(to, part).rstrip()
         lines = str(m["body"] or "").split("\n")
         extra = f" {g['lines']}{len(lines) - 1}" if len(lines) > 1 else ""
+        if m.get("body_cut") and extra:
+            extra += g["ell"]  # at least that many more lines: only the head of a long body was read
         reply = f"{g['reply']}{m['reply_to']} " if m["reply_to"] else ""
         fixed = 2 + mid_w + route_w + 1 + text_width(kind_cell) + 1 + text_width(extra) + 1 + 4
         if not self.wide and W - fixed - text_width(reply) < 8:
@@ -5163,7 +5196,11 @@ class _Frame:
         row.add(kind_cell, kc)
         row.add(" ")
         row.add(reply, "2")
-        text = self.fit(lines[0], body_w).rstrip()  # the ↵+N mark follows the text, then the padding
+        first = lines[0]
+        part = first[:max(0, body_w) * 4 + 16]  # cut before clean(): a row never cleans more than it can show
+        if len(part) < len(first) and text_width(part) > body_w:
+            first = part
+        text = self.fit(first, body_w).rstrip()  # the ↵+N mark follows the text, then the padding
         row.add(text, "1" if new else "")
         row.add(extra, "2")
         row.add(" " * (body_w - text_width(text)) + " ")
@@ -6211,6 +6248,7 @@ class WatchReader:
         self.cond = threading.Condition()
         self.queue, self.results = [], []
         self.snap_busy = False
+        self.bodies = {}  # message id -> (head of its body, cut): a body is read once, when it first shows
         self.con = None
         self.done = False
         self.res_r, self.res_w = os.pipe()
@@ -6246,7 +6284,8 @@ class WatchReader:
                 req = self.queue.pop(0)
             try:
                 if req[0] == "snap":
-                    value = watch_snapshot(self.path, self.strict, HELD, busy_wait=wait, opened=self._opened)
+                    value = watch_snapshot(self.path, self.strict, HELD, busy_wait=wait, opened=self._opened,
+                                           body_head=BODY_HEAD, bodies=self.bodies)
                     value = (value, bus_copy_version(self.path))
                 else:
                     value = watch_detail(self.path, self.strict, req[1], req[2], req[3], busy_wait=wait,
@@ -6355,7 +6394,7 @@ def cmd_watch(a, strict):
     colour, emoji, ascii_mode = watch_settings(tty_out and not dumb)
     paint = Paint(colour, emoji, ascii_mode)
     if a.once or not tty_out or dumb:
-        snap = watch_snapshot(a._db, strict, HELD)
+        snap = watch_snapshot(a._db, strict, HELD, body_head=BODY_HEAD)
         size = shutil.get_terminal_size((100, 40))
         frame = render(View(), snap, where, (size.columns, size.lines), datetime.now(timezone.utc), paint, live=False)
         write_out("\n".join(l.rstrip() for l in frame) + "\n")

@@ -612,4 +612,8 @@ echo "TEST 19: Ctrl-Z in a shell gives the terminal back and stops; fg takes it 
 live jobctl || fail "job control"
 ok "Ctrl-Z shows the cursor and leaves the alternate screen before the prompt; fg restores cbreak, the alternate screen and a full frame; Tab works without Enter; q exits"
 
+echo "TEST 20: 200 held messages of 1 MB each: keys redraw under 100 ms and the process stays small"
+live bigbodies || fail "large bodies"
+ok "with 200 bodies of 1 MB a tick reads only each body's head: keys redraw under 100 ms, under 150 MB resident"
+
 echo "All watch key tests passed"

@@ -598,6 +598,49 @@ def jobctl():
         os.close(fd)
 
 
+@case
+def bigbodies():
+    """M3: 200 held messages of 1 MB each. A tick reads only the head of each body, so keys still redraw under
+    100 ms (R13) and the process stays small."""
+    db = os.path.join(os.path.dirname(ROOT), "big", ".agentbus", "bus.db")
+    os.makedirs(os.path.dirname(db), exist_ok=True)
+    e = env(AGENTBUS_DB=db)
+    r = subprocess.run(agentbus_argv() + ["--as", "seed", "post", "seed"], env=e, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO messages(ts, sender, recipient, kind, body) "
+              "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200) "
+              "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-3 days'), 'codex', '*', 'note', "
+              "CASE i % 2 WHEN 0 THEN printf('%.*c', 1000000, 'x') "
+              "ELSE replace(printf('%.*c', 1000000, 'x'), 'xxxxxxxxx', 'xxxxxxxx' || char(10)) END FROM n")
+    c.commit()
+    c.close()
+    s = PtySession(agentbus_argv() + ["watch", "--interval", "0.2"], e, cols=100, rows=30)
+    try:
+        s.until(lambda t: "following" in t, 30, "the first frame")
+        key(s, b"k", lambda f: sel_row(f) is not None, "k selects the newest", 10)
+        ids = []
+        for _ in range(4):  # the ids of the rows above, to aim each key at a known row
+            key(s, b"k", lambda f: True, "k")
+        worst = 0.0
+        for i in range(20):
+            m = s.mark()
+            t0 = time.monotonic()
+            s.send(b"j" if i % 2 == 0 else b"k")
+            f = s.frame_after(m, lambda f: sel_row(f) is not None and sel_row(f) != ids[-1:] and
+                              (ids.append(sel_row(f)) or True), 5, f"the redraw for key {i}")
+            worst = max(worst, time.monotonic() - t0)
+        assert len(set(ids)) == 2, ("j and k did not move between two rows", ids[:4])
+        rss = int(subprocess.run(["ps", "-o", "rss=", "-p", str(s.p.pid)], capture_output=True, text=True).stdout.split()[0])
+        s.send(b"q")
+        assert s.wait(10) == 0
+        assert worst < 0.1, f"a key took {worst * 1000:.0f} ms to redraw with 200 bodies of 1 MB"
+        assert rss < 150 * 1024, f"watch holds {rss // 1024} MB with 200 bodies of 1 MB"
+        print(f"200 x 1 MB bodies: worst key to redraw {worst * 1000:.0f} ms, {rss // 1024} MB resident")
+    finally:
+        s.close()
+
+
 CASES["restore"] = restore
 
 if __name__ == "__main__":
