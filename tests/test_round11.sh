@@ -109,12 +109,11 @@ def hints():
     text = ok('--as','b','inbox','--limit','1', db=db)
     assert text.endswith('  ... 2 more unread\n  next: agentbus --as b inbox --limit 1\n'), text
     text = ok('read','--limit','1', db=db)
-    # at 80 columns the long cursor moves to a continuation row; joined, it is the command as written
-    assert re.match(r'  \.\.\. 2 earlier\n  next: agentbus read --before v1\.\S+ --limit 1\n#3 ', text.replace(' \n  ', ' ')), text
+    assert re.match(r'  \.\.\. 2 earlier\n  next: agentbus read --before v1\.\S+ --limit 1\n#3 ', text), text
     text = ok('read','--since','0','--limit','1', db=db)
     assert text.startswith('#1 ') and text.endswith('  ... 2 more\n  next: agentbus read --since 1 --limit 1\n'), text
     text = ok('log','show','--limit','1', db=db)
-    assert re.match(r'  \.\.\. 1 earlier\n  next: agentbus log show --before v1\.\S+ --limit 1\n', text.replace(' \n  ', ' ')), text
+    assert re.match(r'  \.\.\. 1 earlier\n  next: agentbus log show --before v1\.\S+ --limit 1\n', text), text
     text = ok('who','--limit','1', db=db)
     assert text.endswith('  ... 1 more\n  next: agentbus who --limit 2\n'), text
 check('4 more hints name unread or earlier rows and appear on the correct side', hints)

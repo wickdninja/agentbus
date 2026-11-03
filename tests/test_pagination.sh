@@ -6,7 +6,7 @@ set -euo pipefail
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export HOME="$T/home"; mkdir -p "$HOME"
 "$PY" - "$BIN" "$T" <<'PY'
-import base64, json, os, sqlite3, subprocess, sys
+import base64, json, os, re, sqlite3, subprocess, sys
 sys.path.insert(0, os.environ["TESTS_DIR"])
 from agentbus_cmd import agentbus_argv
 bin_, tmp = sys.argv[1:]
@@ -157,12 +157,14 @@ ok(db, "--as", "a", "join")
 for i in range(6):
     ok(db, "--as", "a", "post", "m%d" % i, "--topic", "t"); ok(db, "--as", "a", "ctx", "set", "k", "v%d" % i)
 good = ok(db, "read", "--limit", "2", "--topic", "t")["next"]
-body = json.loads(base64.urlsafe_b64decode(good[3:] + "=" * (-len(good[3:]) % 4)))
-assert set(body) == {"c", "f", "id"} and body["c"] == "read", body
+assert re.fullmatch(r"v1\.r\.[0-9a-f]{6}\.[0-9]+", good), good   # versioned, short enough for an 80-column `next:` line
 other = ok(db, "ctx", "history", "k", "--limit", "2")["next"]
 usage_error(db, "read", "--before", "garbage")
 usage_error(db, "read", "--before", "v1.!!!")
 usage_error(db, "read", "--before", "v1." + base64.urlsafe_b64encode(b"[1]").decode())
+usage_error(db, "read", "--before", "v1.r.zzzzzz.1")
+usage_error(db, "read", "--before", good.rsplit(".", 1)[0] + ".007")   # a spelling this tool does not make
+usage_error(db, "read", "--before", "v1.r.%s.9223372036854775808" % good.split(".")[2])
 usage_error(db, "read", "--before", other)                       # from another command
 usage_error(db, "read", "--before", good)                        # different filters (no --topic)
 usage_error(db, "read", "--before", good, "--topic", "other")

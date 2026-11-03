@@ -190,6 +190,19 @@ OBSERVED["upgrade"] = "idempotent" if tree() == t2 else "unsafe"
 cfg = {"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")}
 def cfg_tree():
     return sorted((r, f, open(os.path.join(r, f), "rb").read()) for d in cfg.values() for r, _, fs in os.walk(d) for f in fs)
+# update writes the tool, bus copies and a cache; its retry-safe forms are observed on the one that needs no network, --check
+# answering from a good cache entry (a second run leaves the cache as the first did).
+ucache = os.path.join(tmp, "Library", "Caches", "agentbus") if sys.platform == "darwin" else os.path.join(tmp, ".cache", "agentbus")
+os.makedirs(ucache, mode=0o700)
+with open(os.path.join(ucache, "release-check.json"), "w") as f:
+    json.dump({"v": 1, "checked_at": int(__import__("time").time()), "ok": True, "reason": None, "retry_after": None,
+               "stable": "0.9.0", "pre": None, "notified": None}, f)
+os.chmod(os.path.join(ucache, "release-check.json"), 0o600)
+def ucache_tree():
+    return sorted((r, f, open(os.path.join(r, f), "rb").read()) for r, _, fs in os.walk(ucache) for f in fs)
+uenv = {"XDG_CACHE_HOME": os.path.join(tmp, ".cache")}
+ok(fresh(), "update", "--check", env=uenv); t4 = ucache_tree(); ok(fresh(), "update", "--check", env=uenv)
+OBSERVED["update"] = "idempotent" if ucache_tree() == t4 else "unsafe"
 for target in ("claude", "codex"):
     ok(fresh(), "setup", target, env=cfg); t3 = cfg_tree(); ok(fresh(), "setup", target, env=cfg)
     assert t3, ("setup wrote nothing", target)

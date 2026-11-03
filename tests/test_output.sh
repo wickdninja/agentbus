@@ -163,6 +163,27 @@ if not j["bus"].startswith(home + "/") or not j["bus"].endswith("/app/.agentbus/
     fail("--json must keep the whole path: %r" % j["bus"])
 print("PASS: human paths show ~ for the home folder; --json keeps the whole path")
 
+# HOME is a link (macOS's /var is one): paths agentbus resolves still show ~, whichever spelling of the home folder they have
+real2 = os.path.realpath(os.path.join(T, "realhome"))
+os.makedirs(os.path.join(real2, "app"))
+subprocess.run(["git", "init", "-q", os.path.join(real2, "app")], check=True)
+link = os.path.join(T, "linkhome")
+os.symlink(real2, link)
+e2 = dict(BASE, HOME=link)
+e2.pop("AGENTBUS_DB", None)
+def via_link(*args):
+    return subprocess.run([*agentbus_argv(), *args], env=e2, cwd=os.path.join(link, "app"), text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+p = via_link("init")
+if "into ~/app/.agentbus/" not in p.stdout or real2 in p.stdout or link in p.stdout:
+    fail("init does not show ~ when HOME is a link: %r" % p.stdout)
+p = via_link("--as", "c", "join")
+if "joined as c on ~/app/.agentbus/bus.db" not in p.stdout:
+    fail("join does not show ~ when HOME is a link: %r" % p.stdout)
+if "== bus ~/app/.agentbus/bus.db" not in via_link("status").stdout:
+    fail("status does not show ~ when HOME is a link")
+print("PASS: ~ is shown when HOME is a symlink to the folder paths resolve to")
+
 # ---------------------------------------------------------------- 4. one human time format
 db = new_bus("time")
 ok(db, "--as", "a", "join")
@@ -303,7 +324,12 @@ text = ok(db, "status")
 hints = [l.strip() for l in text.splitlines() if l.strip().startswith("next: ")]
 if len(hints) != 4 or not any("agentbus read --before v1." in h for h in hints) or not any("agentbus who --limit 71" in h for h in hints):
     fail("status needs a next command under each cut section: %r" % hints)
-print("PASS: every cut listing prints the exact next command, and it works as written")
+# the longest ordinary ones fit an 80-column row, so a terminal never has to break the command
+for text in (first, peek, cons):
+    for l in text.splitlines():
+        if l.startswith("  next: ") and len(l) > 80:
+            fail("a next: line is %d columns, wider than 80: %r" % (len(l), l))
+print("PASS: every cut listing prints the exact next command, it works as written, and it fits 80 columns")
 
 # ---------------------------------------------------------------- 6. body cap, cut bodies, read --id
 db = new_bus("bodies")

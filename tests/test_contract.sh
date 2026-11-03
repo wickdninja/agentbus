@@ -19,10 +19,10 @@ BASE = {k: v for k, v in os.environ.items() if not k.startswith("AGENTBUS_")}
 BASE.update(COLUMNS="4096", PYTHONDONTWRITEBYTECODE="1")
 count = [0]
 
-def run(*args, db=None, env=None, cwd=None, closed=False, stdin=None):
+def run(*args, db=None, env=None, cwd=None, closed=False, home=None, stdin=None):
     count[0] += 1
     e = dict(BASE, **(env or {}))
-    home = os.path.join(tmp, "h%d" % count[0]); os.makedirs(home)
+    home = home or os.path.join(tmp, "h%d" % count[0]); os.makedirs(home, exist_ok=True)
     e["HOME"] = home
     if db:
         e["AGENTBUS_DB"] = str(db)
@@ -92,6 +92,13 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
     "output_failed": (1, True, []),
     "interrupted": (130, True, []),
     "items_failed": (1, False, ["failed"]),
+    "installer_failed": (1, False, ["argv", "exit_status", "reason", "recovery"]),
+    "download_failed": (1, False, ["reason", "asset"]),
+    "manual_step": (1, False, ["commands"]),
+    "release_offline": (1, True, ["reason"]),
+    "rate_limited": (1, True, ["retry_after"]),
+    "release_unknown": (1, False, ["reason"]),
+    "update_running": (1, True, ["lock"]),
     "internal": (4, False, []),
 }
 assert set(doc["errors"]) == set(EXPECTED_ERRORS), sorted(set(doc["errors"]) ^ set(EXPECTED_ERRORS))
@@ -102,7 +109,7 @@ EXPECTED_OPTIONAL = {"bus_unavailable": ["file", "outcome_unknown"],
                      "bad_input": ["field"],
                      # upgrade stopped once a migration committed: what was migrated, its backup, how to finish
                      # and the files the command had already changed (init, upgrade's copy, setup)
-                     "interrupted": ["directory", "backup", "migrations", "rerun", "changed"]}
+                     "interrupted": ["directory", "backup", "migrations", "rerun", "changed", "argv"]}
 for code, (status, retryable, fields) in EXPECTED_ERRORS.items():
     e = doc["errors"][code]
     assert (e["exit"], e["retryable"], e["fields"]) == (status, retryable, fields), (code, e)
@@ -355,6 +362,20 @@ for args, env in ((("upgrade", "--all", fdir), None),
     assert json.loads(p.stdout), ("the result is still on stdout", args, p.stdout)
     declared("items_failed", args)
     produced["items_failed"] = e
+# The six update codes: tests/update_codes.sh runs one failing `update` per code against fake installs and the fixture
+# release server, and leaves each JSON error in a file here.
+ucodes = os.path.join(tmp, "update_codes"); os.makedirs(ucodes)
+p = subprocess.run(["bash", os.path.join(os.environ["TESTS_DIR"], "update_codes.sh"), ucodes], capture_output=True, text=True, timeout=300,
+                   env=dict(BASE, **{k: v for k, v in os.environ.items() if k in ("PYTHON", "AGENTBUS_BIN", "TESTS_DIR")}))
+assert p.returncode == 0, ("update_codes.sh", p.returncode, p.stdout[-500:], p.stderr[-800:])
+for code in ("installer_failed", "manual_step", "release_offline", "rate_limited", "release_unknown", "download_failed", "update_running"):
+    err = json.loads(open(os.path.join(ucodes, code + ".json")).read())["error"]
+    assert err["code"] == code and err["retryable"] is EXPECTED_ERRORS[code][1], (code, err)
+    for f in EXPECTED_ERRORS[code][2]:
+        assert f in err, (code, "missing field", f, err)
+    assert isinstance(err["committed"], bool) and set(doc["error_fields"]) <= set(err), (code, err)
+    declared(code, ("--json", "update"))
+    produced[code] = err
 missing = set(EXPECTED_ERRORS) - set(produced) - NOT_YET
 assert not missing, ("codes with no scripted failure", sorted(missing))
 print("PASS: every error code in the registry is produced by at least one scripted failure, with its extra fields")
@@ -407,6 +428,16 @@ step("watch", "watch", "--once")
 step("schema", "schema")
 step("schema", "schema", "post")
 step("schema", "schema", "--index")
+# update --check from the checkout (a clone) answers from a good cache entry: no request is made. (The full update
+# result is validated in tests/test_update.sh.)
+uhome = os.path.join(tmp, "uhome")
+ucache = os.path.join(uhome, "Library", "Caches", "agentbus") if sys.platform == "darwin" else os.path.join(uhome, ".cache", "agentbus")
+os.makedirs(ucache, mode=0o700)
+json.dump({"v": 1, "checked_at": int(__import__("time").time()), "ok": True, "reason": None, "retry_after": None,
+           "stable": "0.9.0", "pre": None, "notified": None}, open(os.path.join(ucache, "release-check.json"), "w"))
+os.chmod(os.path.join(ucache, "release-check.json"), 0o600)
+chk = step("update", "update", "--check", home=uhome, env={"XDG_CACHE_HOME": os.path.join(uhome, ".cache")})
+assert chk["update_available"] is True and chk["latest"] == "0.9.0" and chk["install"]["method"] == "clone", chk
 step("leave", "--as", "a", "leave")
 repo = os.path.join(tmp, "install"); os.makedirs(repo)
 step("init", "init", repo)

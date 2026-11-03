@@ -37,6 +37,17 @@ for v in CODEX_HOME CLAUDE_CONFIG_DIR; do
 done
 ok "caller's Codex and Claude Code config writes caught"
 
+echo "TEST 2c: a test that writes the update cache or the list of known bus folders in the caller's home fails, at every path it can live"
+for rel in ".cache/agentbus" ".local/state/agentbus" "Library/Caches/agentbus" "Library/Application Support/agentbus"; do
+  leak upd "mkdir -p \"\$HOME/$rel\""
+  run "$T/tests/test_upd.sh"
+  [ "$rc" = 1 ] && grep -q "^FAIL $T/tests/test_upd.sh (isolation: it wrote the caller's update cache or bus list ($rel)" "$T/out" || fail "a write to $rel passed (rc $rc): $(cat "$T/out")"
+done
+leak upd 'mkdir -p "$XDG_CACHE_HOME/agentbus" "$XDG_STATE_HOME/agentbus"; echo "$XDG_CACHE_HOME" > "$HOME/xdg-cache"; true'
+run "$T/tests/test_upd.sh"
+[ "$rc" = 1 ] && grep -q "update cache or bus list" "$T/out" || fail "a write through the pinned XDG folders passed (rc $rc): $(cat "$T/out")"
+ok "update cache and bus list leaks caught, XDG folders pinned into the scratch home"
+
 echo "TEST 3: a test that changes the checkout fails, ignored files included"
 leak tree "touch '$ROOT/.isolation-probe'"
 run "$T/tests/test_tree.sh"

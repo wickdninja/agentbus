@@ -165,7 +165,10 @@ assert b"Traceback" not in buf[0]
 os.close(master); os.close(slave)
 print(f"post beside watch: {took:.2f}s")
 PY
-ok "live view updates and marks new messages; arrows ignored; resize redraws at once; q and Ctrl-C restore the terminal, even when started with SIGINT blocked"
+if [ -z "${AGENTBUS_CMD:-}" ]; then  # it wraps the script's own render; an installed command has no script to wrap
+  "$PY" "$TESTS_DIR/watch_live_cases.py" post_during_draw >/dev/null || fail "a post waited for a drawing watch"
+else skip_part "post during a draw: AGENTBUS_CMD names an installed command"; fi
+ok "live view updates and marks new messages; arrows ignored; resize redraws at once; q and Ctrl-C restore the terminal, even when started with SIGINT blocked; a post during a draw takes the bus at its first try"
 
 echo "TEST 5: watch writes nothing to the bus"
 before=$("$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute("select group_concat(name||last_seen) from agents").fetchone()[0], c.execute("select count(*) from log").fetchone()[0])' "$AGENTBUS_DB")
@@ -383,3 +386,4 @@ for want in "Keys: j/k move, Tab section, Enter open, / filter, p pause, y copy,
   grep -qF -- "$want" <<<"$o" || fail "watch --help lacks '$want': $o"
 done
 ok "watch --help states the keys, read-only, Esc and q, --once and --json"
+all_passed "All watch tests passed"
