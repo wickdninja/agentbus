@@ -648,11 +648,11 @@
     "expect": "recorded creation time differs"
   },
   {
-    "name": "a hard-linked bus.db is opened (the link count check is dropped)",
+    "name": "a hard-linked bus.db is opened (every link count check is dropped)",
     "file": "bin/agentbus",
-    "find": "    if kind == \"file\" and st\\.st_nlink != 1:\\n        die\\(f\"refusing \\{path\\}: it has \\{st\\.st_nlink\\} hard links\"[^\\n]*\\n",
-    "replace": "",
-    "count": 1,
+    "find": "st\\.st_nlink != 1",
+    "replace": "False",
+    "count": 7,
     "run": "tests/test_hooks_claude.sh",
     "expect": "hard link"
   },
