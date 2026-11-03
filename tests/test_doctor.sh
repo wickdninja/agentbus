@@ -530,7 +530,8 @@ r = json.load(open(sys.argv[1], "rb"), parse_constant=lambda c: (_ for _ in ()).
 s = json.load(open(sys.argv[2]))
 errors = validate(r, s["commands"]["doctor"]["result"], s["objects"])
 assert not errors, errors
-assert [c["id"] for c in r["checks"]] == ["tool", "bus", "copy", "skill", "agents-md", "hooks"], [c["id"] for c in r["checks"]]
+# hooks has a row for the entries and one for the tool they run (both ok here); every other check is one row
+assert [c["id"] for c in r["checks"]] == ["tool", "bus", "copy", "skill", "agents-md", "hooks", "hooks"], [c["id"] for c in r["checks"]]
 assert r["agentbus"] == "0.2.0" and r["contract"] == 1 and r["fail"] == 0 and r["warn"] == 0 and r["path"].endswith("tool/agentbus"), r
 assert all(c["status"] in ("ok", "warn", "fail", "n/a") and "fix" in c and "hint" in c for c in r["checks"]), r
 assert "checks of doctor" in s["errors"]["items_failed"]["meaning"], s["errors"]["items_failed"]

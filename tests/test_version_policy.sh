@@ -4,7 +4,7 @@ set -euo pipefail
 # bus schema (S), the skill (K) and the hooks (H). Each row builds one combination in a temp HOME with the v0.1.0
 # fixture copy (tests/fixtures/legacy/agentbus-0.1.0) and the current tool, runs the commands and asserts what the
 # code does. Where the epic's wording and the code differ, the row follows the code (listed at the end of the file).
-# The hook column waits for streams 03 and 04: no hook exists yet, and a tripwire (row 13) fails the day one does.
+# The hook column: the Claude hooks exist (stream 03), so rows 2, 4, 8 and 10 carry their cells; the Codex hooks (stream 04) add theirs when they land (row 13).
 . "$(dirname "$0")/lib.sh"
 SELF="$TESTS_DIR/$(basename "$0")"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -121,6 +121,21 @@ c = [c for c in json.load(open(path))["checks"] if c["id"] == id][0]
 assert c["status"] == status and frag in c["detail"] and (c["fix"] or "") == fix, c
 PY
 }
+# hook_session DIR LAUNCH...: the Claude SessionStart hook from DIR, with the captured startup payload; OUT, ERR, RC.
+hook_session() {
+  local d="$1"; shift
+  "$PY" -I -c 'import json, sys
+d = json.load(open(sys.argv[1] + "/session_start_startup_print.json")); d["session_id"] = "aaaaaaaa-0000-4000-8000-000000000001"
+print(json.dumps(json.loads(json.dumps(d).replace("/home/user/proj", sys.argv[2]))))' "$TESTS_DIR/fixtures/claude_hooks" "$d" > "$T/hook-payload"
+  RC=0; (cd "$d" && "$@" hook claude SessionStart <"$T/hook-payload" >"$T/out" 2>"$T/err") || RC=$?
+  OUT=$(cat "$T/out"); ERR=$(cat "$T/err")
+}
+# hook_notice WANT: the hook printed exactly one systemMessage, WANT.
+hook_notice() {
+  local want
+  want=$("$PY" -c 'import json,sys; print(json.dumps({"systemMessage": sys.argv[1]}, separators=(",", ":")))' "$2")
+  is "$1: exit 0" 0 "$RC"; is "$1: stderr empty" "" "$ERR"; is "$1: one notice, nothing else" "$want" "$OUT"
+}
 install_pieces() { mkdir -p "$HOME/.claude" "$HOME/.codex"; "${NEW[@]}" setup claude >/dev/null && "${NEW[@]}" setup codex >/dev/null; }
 
 # ---- the table ----
@@ -134,12 +149,12 @@ ROWS=(
 "5|new|0.1.0|any|current|any|the copy prints bare arrays and no contract; the shipped skill names the envelope and the fix"
 "6|new|new|current|old install-line link|none|doctor flags the link; setup claude replaces it; doctor ok"
 "7|new|any|current|unmanaged SKILL.md|none|setup claude refuses and writes nothing; doctor warns"
-"8|new|new|current|current|plugin and setup duplicates|doctor fails hooks on a duplicate (waits for streams 03 and 04)"
+"8|new|new|current|current|plugin and setup duplicates|doctor fails hooks on a duplicate and names setup claude --uninstall"
 "9|0.1.0|0.1.0|synthetic schema 2|n/a|n/a|the 0.1.0 copy answers schema_refused, bytes equal; upgrade from a project copy is refused"
 "10|new|new|needs migration|current|current|watch and doctor write nothing; a non-hook command migrates with one backup"
 "11|new|0.1.0|any|AGENTS.md block|n/a|the 0.1.0 copy has no skill command; the block names the upgrade --all fallback"
 "12|new|new|current|current|templates|every agent-facing command is .agentbus/bin/agentbus; the installed agentbus only in human commands"
-"13|new|new|current|current|any hook|tripwire: the hook cells are added the day a hook exists"
+"13|new|new|current|current|Codex hook|tripwire: the Codex hook cells are added the day a Codex hook piece exists"
 )
 
 row_1() {
@@ -173,7 +188,10 @@ row_2() {
   run "$W/r2" "${NEW[@]}" status; is "row 2: status without a name exits 0" 0 "$RC"
   run "$W/r2" "${NEW[@]}" doctor; is "row 2: doctor exits 0" 0 "$RC"
   has "row 2: doctor says no problems" "No problems." "$OUT"
+  has "row 2: doctor checks the hooks setup wrote" "hooks      ~/.claude/settings.json has the current hooks" "$OUT"
   is "row 2: reads and doctor leave every byte, mode and mtime as it was" "$before" "$(snap "$W" "$HOME")"
+  hook_session "$W/r2" "${NEW[@]}"
+  is "row 2: the hook on a bus still in the v0.1.0 shape exits 0" 0 "$RC"; is "row 2: the hook wrote nothing to stderr" "" "$ERR"
   run "$W/r2" "${NEW[@]}" --as n join; is "row 2: a write open exits 0" 0 "$RC"
   is "row 2: a write open adopts: stamp 1" 1 "$(uv "$W/r2")"
   [ ! -e "$W/r2/.agentbus/backups" ] || fail "row 2: adopting made a backup"
@@ -213,6 +231,9 @@ row_4() {
   run "$W/r4" "${NEW[@]}" doctor; is "row 4: doctor exits 1" 1 "$RC"
   doctor_row "$W/r4" bus fail "(schema 2) is newer than this agentbus (it knows 1)" "uv tool upgrade agentbus"
   is "row 4: doctor changed nothing either" "$before" "$(snap "$W/r4")"
+  hook_session "$W/r4" "${NEW[@]}"
+  hook_notice "row 4: the hook on a newer bus" "agentbus: this folder's bus is newer than this agentbus, so the hooks are off for it. Update agentbus (or the plugin), then start a new session."
+  is "row 4: the hook changed nothing" "$before" "$(snap "$W/r4")"
 }
 
 row_5() {
@@ -261,9 +282,10 @@ row_7() {
 }
 
 row_8() {
-  # Duplicate hook entries, through the real hook-piece interface: the plugin and setup both writing is stream 03's, so the
-  # cell that doctor FAILS on a plugin/setup duplicate waits for it (row 13 is the tripwire). What runs here is doctor over
-  # a settings file holding the same managed hook twice: it must flag `hooks` and name the setup command that dedupes it.
+  # Duplicate hook entries. First, through a generic hook piece: doctor over a settings file holding the same managed hook
+  # twice must flag `hooks` and name the setup command that dedupes it. Second, the real case: setup's hooks and the
+  # plugin both registered (the plugin's installed record is the captured fixture), which doctor FAILS with the command
+  # that removes setup's entries.
   reset; install_pieces; mkdir -p "$W/r8"; "${NEW[@]}" init "$W/r8" >/dev/null 2>&1
   before=$(snap "$W" "$HOME")
   cat > "$T/settings.json" <<'JSON'
@@ -276,6 +298,7 @@ import json, os, sys, h
 m = h.load()
 os.chdir(sys.argv[1])
 path = sys.argv[2]
+m.SETUP_TARGETS["claude"] = [p for p in m.SETUP_TARGETS["claude"] if not isinstance(p, m.JsonEntriesPiece)]   # the shipped Claude hooks piece is row 8's second half below
 m.SETUP_TARGETS["claude"].append(m.JsonEntriesPiece("claude_hooks", lambda scope: path,
     lambda scope: [("SessionStart", None, {"type": "command", "command": "/new/agentbus hook start 2>/dev/null || true " + m.MANAGED_TAG})]))
 import io, contextlib
@@ -291,7 +314,21 @@ assert len(hooks) == 1 and hooks[0]["status"] == "warn" and hooks[0]["fix"] == "
 assert "needs the agentbus hooks" in hooks[0]["detail"], hooks
 PY
   is "row 8: doctor wrote nothing" "$before" "$(snap "$W" "$HOME")"
-  echo "NOTE: row 8's plugin-vs-setup duplicate (a fail) waits for stream 03; the setup-only duplicate runs above; row 13 fails when a hook command exists"
+  "${NEW[@]}" setup claude >/dev/null
+  mkdir -p "$HOME/.claude/plugins"
+  "$PY" -I - "$HOME/.claude/plugins/installed_plugins.json" "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" <<'PY' || fail "row 8: the plugin fixture"
+import json, sys
+d = json.load(open(sys.argv[2])); entry = next(iter(d["plugins"].values()))
+json.dump({"version": d.get("version", 2), "plugins": {"agentbus@agentbus": entry}}, open(sys.argv[1], "w"))
+PY
+  before=$(snap "$W" "$HOME")
+  run "$W/r8" "${NEW[@]}" --json doctor; is "row 8: doctor exits 1 on a plugin and setup both registering" 1 "$RC"
+  "$PY" - "$T/out" <<'PY' || { cat "$T/out" >&2; fail "row 8: doctor did not fail hooks on a plugin and setup duplicate with the uninstall fix"; }
+import json, sys
+c = [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "hooks" and c["status"] == "fail"]
+assert len(c) == 1 and "the agentbus plugin and setup both register hooks" in c[0]["detail"] and c[0]["fix"] == "agentbus setup claude --uninstall", c
+PY
+  is "row 8: doctor left the duplicate as it found it" "$before" "$(snap "$W" "$HOME")"
 }
 
 row_9() {
@@ -330,6 +367,9 @@ row_10() {
   run "$W/r10" "${V2[@]}" doctor; is "row 10: doctor exits 0 (a warning)" 0 "$RC"
   has "row 10: doctor names the fix" "the next write migrates it after a backup. Run: agentbus upgrade $W/r10" "$OUT"
   is "row 10: watch and doctor left the bus bytes equal" "$before" "$(snap "$W/r10")"
+  hook_session "$W/r10" "${V2[@]}"
+  hook_notice "row 10: the hook on a bus that needs a migration" "agentbus: this folder's bus was made by an older agentbus, so the hooks are off for it. Run: agentbus upgrade DIR"
+  is "row 10: the hook left the bus bytes equal" "$before" "$(snap "$W/r10")"
   [ ! -e "$W/r10/.agentbus/backups" ] || fail "row 10: a backup appeared before any write"
   run "$W/r10" "${V2[@]}" --as a status; is "row 10: a command that writes exits 0" 0 "$RC"
   is "row 10: it migrated the bus" 2 "$(uv "$W/r10")"
@@ -366,14 +406,25 @@ assert h.agent_text_problems("run agentbus claim src/a.py first")
 assert h.agent_text_problems("`/usr/local/bin/agentbus --as a join`")
 assert not h.agent_text_problems("`/w/app/.agentbus/bin/agentbus --as a join` and `.agentbus/bin/agentbus skill` and `agentbus upgrade DIR`")
 PY
+  # the Claude hook's text is agent-facing too: what it tells a session to run is the bus copy
+  mkdir -p "$W/r12"; git -C "$W/r12" init -q; "${NEW[@]}" init "$W/r12" >/dev/null 2>&1; (cd "$W/r12" && "${NEW[@]}" --as peer join >/dev/null 2>&1)
+  hook_session "$W/r12" "${NEW[@]}"
+  is "row 12: the hook on a joined bus exits 0" 0 "$RC"
+  "$PY" - "$T/out" <<'PY' || { cat "$T/out" >&2; fail "row 12: the hook's text names the installed agentbus where the bus copy belongs, or is empty"; }
+import json, sys, h
+d = json.load(open(sys.argv[1]))
+text = (d.get("hookSpecificOutput") or {}).get("additionalContext") or d.get("systemMessage")
+assert text and ".agentbus/bin/agentbus" in text, text
+assert not h.agent_text_problems(text), h.agent_text_problems(text)
+PY
 }
 
 row_13() {
-  "$PY" - <<'PY' || fail "row 13: the hook command or a hook piece exists now (streams 03 and 04): add the hook cells of rows 2, 4, 8 and 10 to this file (hook output empty, bytes equal, duplicate flagged), the hook templates to row 12, and delete this tripwire"
+  "$PY" - <<'PY' || fail "row 13: a Codex hook piece or a DOCTOR_HOOK_CHECKS check exists now (stream 04): add its cells to rows 2, 4, 8 and 10 (hook output, bytes equal, duplicate flagged), its templates to row 12, and move this tripwire on"
 import h
 m = h.load()
-assert "hook" not in m.EARLY_COMMANDS
-assert not any(hasattr(p, "entries_for") for t in m.SETUP_TARGETS.values() for p in t)
+assert "hook" in m.EARLY_COMMANDS and any(isinstance(p, m.ClaudeHooksPiece) for p in m.SETUP_TARGETS["claude"]), "the Claude hooks are gone"
+assert not any(isinstance(p, m.JsonEntriesPiece) for p in m.SETUP_TARGETS["codex"])
 assert m.DOCTOR_HOOK_CHECKS == []
 PY
 }
@@ -398,7 +449,7 @@ done
 #    0.1.x allotment as unfilled); only the AGENTS.md block names upgrade --all.
 #  - rule 2: "a 0.1.0 copy opens a schema-1 bus ... refuses any newer shape with schema_refused" holds (row 9), but a 0.1.0 copy opens a
 #    bus stamped 2 whose tables still have the v1 shape (it never reads user_version).
-#  - rule 4: hooks do not exist yet; their cells wait for streams 03 and 04 (row 13).
+#  - rule 4: the Claude hooks have cells (rows 2, 4, 8, 10); the Codex hooks' cells wait for stream 04 (row 13).
 #  - the matrix row for "upgrade run from a project copy is refused" exits 1 from the 0.1.0 copy and 2 (bad_input) from the new one.
 
 all_passed "All version policy tests passed"
