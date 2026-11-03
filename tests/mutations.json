@@ -447,7 +447,7 @@
     "replace": "if False and (isinstance(saved, dict) and saved.get(\"stamp\") == stamp",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "re-read an unchanged 1M-entry index"
+    "expect": "a cached answer was not used"
   },
   {
     "name": "an index without a checksum is refused",

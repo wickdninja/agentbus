@@ -647,17 +647,25 @@ ab --as peer join --tool t >/dev/null; ab --as peer post "for g" --to "$(dname "
 printf 'claude-deadbeef\n' >"$T/evil.name"; ln -s "$T/evil.name" "$STATE/$SIDG.name"
 UPS "$SIDG"; grep -qF "1 unread message" <<<"$(text_of)" || fail "a linked name file was followed: out $OUT"
 SS "$SIDH"
-for i in $(seq 1 40); do payload pre_tool_use_write session_id="\"$SIDH\"" tool_input.file_path="\"$P/par$i.txt\"" >"$T/par$i.json"; done
-for i in $(seq 1 40); do ( cd "$P" && "${AB[@]}" hook claude PreToolUse <"$T/par$i.json" >"$T/par$i.out" 2>/dev/null ) & done; wait
-# A hook that hit the 0.3 s busy limit is silent by design and recorded nothing. Every hook that answered (the nudge for
-# a new path) must have its update kept; with the lock off, answered hooks overwrite each other and the count falls short.
-answered=$(for i in $(seq 1 40); do [ -s "$T/par$i.out" ] && echo "$i"; done | wc -l | tr -d ' ')
-kept=$(grep -c . "$STATE/$SIDH.seen")
-[ "$answered" -ge 20 ] || fail "only $answered of 40 parallel hooks answered; the lock test proves nothing"
-[ "$kept" = "$answered" ] || fail "parallel hooks lost memory updates: $kept paths kept for $answered hooks that answered"
+# Two hooks, one session, the interleaving forced (no luck): A holds the memory file between its read and its write; B comes
+# to the lock while A holds it. With the lock, B waits and then adds its path to A's; without it, B finishes alone and A's
+# write, made from its stale read, erases B's path.
+payload pre_tool_use_write session_id="\"$SIDH\"" tool_input.file_path="\"$P/seen-a.txt\"" >"$T/seen-a.json"
+payload pre_tool_use_write session_id="\"$SIDH\"" tool_input.file_path="\"$P/seen-b.txt\"" >"$T/seen-b.json"
+PA="$T/pause-a"; PB="$T/pause-b"; mkdir -p "$PA" "$PB"
+( cd "$P" && AGENTBUS_TEST_PAUSE="hook-seen-read=$PA" "${AB[@]}" hook claude PreToolUse <"$T/seen-a.json" >"$T/seen-a.out" 2>/dev/null ) & PIDA=$!
+wait_for "$PA/hook-seen-read.reached"
+( cd "$P" && AGENTBUS_TEST_PAUSE="hook-seen-lock=$PB" "${AB[@]}" hook claude PreToolUse <"$T/seen-b.json" >"$T/seen-b.out" 2>/dev/null ) & PIDB=$!
+wait_for "$PB/hook-seen-lock.reached"          # B is at the lock, A holds the file
+touch "$PB/hook-seen-lock.go"
+for i in $(seq 1 30); do kill -0 "$PIDB" 2>/dev/null || break; sleep 0.05; done     # without a lock B is done in milliseconds
+touch "$PA/hook-seen-read.go"
+wait "$PIDA" "$PIDB" || true
+[ -s "$T/seen-a.out" ] && [ -s "$T/seen-b.out" ] || fail "the forced-interleaving hooks did not both answer: a=$(cat "$T/seen-a.out") b=$(cat "$T/seen-b.out")"
+[ "$(grep -c 'seen-[ab].txt' "$STATE/$SIDH.seen")" = 2 ] || fail "parallel hooks lost memory updates: kept $(tr '\n' ' ' <"$STATE/$SIDH.seen")"
 END other "$SIDH"; [ ! -e "$STATE/$SIDH.seen" ] || fail "the memory file outlived the session"
 rm -f "$STATE"/bulk-*.seen "$STATE/proc-$$.name"
-ok "dead pids pruned, links ignored, 40 parallel updates kept, memory dropped at SessionEnd"
+ok "dead pids pruned, links ignored, two forced-interleaved updates both kept, memory dropped at SessionEnd"
 
 echo
 echo "TEST 32: an index written with index.skipHash (no checksum) is read: untracked works, tracked is refused"
@@ -690,6 +698,18 @@ newbus p33; mkgenindex "$P/.git/index" 2000
 SS; [ -n "$OUT" ] || fail "an untracked bus with a generated index was refused: rc $RC err $ERR"
 UPS; ab --as peer join --tool t >/dev/null; ab --as peer post "x" --to "$(dname "$SID1")" --kind note >/dev/null 2>&1; UPS
 [ -n "$OUT" ] || fail "an unchanged index: UserPromptSubmit said nothing"
+# Only a cache hit can answer now: the index file is overwritten in place with bytes that are not an index, and given
+# back its size and modification time (so its device, inode, size and mtime_ns are what they were).
+"$PY" -I - "$P/.git/index" <<'PY'
+import os, sys
+st = os.stat(sys.argv[1])
+with open(sys.argv[1], "r+b") as f:
+    f.write(b"X" * st.st_size)
+os.utime(sys.argv[1], ns=(st.st_atime_ns, st.st_mtime_ns))
+after = os.stat(sys.argv[1])
+assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+PY
+UPS; [ -n "$OUT" ] || fail "a cached answer was not used: an unchanged-identity index was read again"
 mkgenindex "$P/.git/index" 2000 .agentbus/bus.db      # same size class, new identity (a new file)
 UPS; quiet || fail "a changed index that now tracks the bus was served from the cache: rc $RC out $OUT"
 mkgenindex "$P/.git/index" 2000

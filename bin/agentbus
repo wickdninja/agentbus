@@ -952,6 +952,9 @@ def watched(seconds, why):
 
 
 # Test hooks, active only when their AGENTBUS_TEST_* variable is set; they never run otherwise.
+_HOOK_GUARD = None  # the running hook's whole-hook timer (hook_run), so a test pause can stop it
+
+
 def _test_pause(point):
     """Test hook: AGENTBUS_TEST_PAUSE=<point>=<dir> stops here until <dir>/<point>.go exists, after
     creating <dir>/<point>.reached (O_EXCL|O_NOFOLLOW: never through a planted link). Only pauses;
@@ -959,6 +962,8 @@ def _test_pause(point):
     spec = os.environ.get("AGENTBUS_TEST_PAUSE", "")
     if not spec.startswith(point + "="):
         return
+    if _HOOK_GUARD is not None:
+        _HOOK_GUARD.cancel()  # a hook held at a test pause is not a hung hook
     d = spec.split("=", 1)[1]
     mark = os.path.join(d, point + ".reached")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW
@@ -6310,6 +6315,7 @@ def hook_nudge_once(session_id, key):
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or not _owned(st):
             raise OSError(errno.EPERM, "the memory file is not ours")
+        _test_pause("hook-seen-lock")
         fcntl.flock(fd, fcntl.LOCK_EX)
         data = b""
         while len(data) < (1 << 17):
@@ -6317,6 +6323,7 @@ def hook_nudge_once(session_id, key):
             if not chunk:
                 break
             data += chunk
+        _test_pause("hook-seen-read")  # test hook: holds the window between this read and the write below open
         seen = data.decode("utf-8", "surrogateescape").split("\n")
         if key in seen:
             return False
@@ -6473,7 +6480,8 @@ def hook_run(argv):
     render, handler = HOOK_DIALECTS.get(dialect), HOOK_HANDLERS.get(event)
     if render is None or handler is None:
         return
-    guard = threading.Timer(HOOK_END_LIMIT_S if event == "SessionEnd" else HOOK_LIMIT_S, os._exit, (0,))
+    global _HOOK_GUARD
+    guard = _HOOK_GUARD = threading.Timer(HOOK_END_LIMIT_S if event == "SessionEnd" else HOOK_LIMIT_S, os._exit, (0,))
     guard.daemon = True
     guard.start()
     payload = hook_read_payload()
