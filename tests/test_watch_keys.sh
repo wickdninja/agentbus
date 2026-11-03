@@ -188,6 +188,47 @@ print("state machine cases passed")
 PY
 ok "Tab Tab j Enter opens the second claim; k pauses on the newest and holds it; G follows and clears +N new; refreshes keep the selected key; filters keep 6 and 9; kind:fyi says the kinds; filter input takes q, j, k and digits as text; Esc in the overview does nothing; details stack and go back one level; y copies"
 
+echo "TEST 2b: y copies raw text, and a copied reply command pasted into sh runs nothing but agentbus"
+"$PY" - "$T" <<'PY' || fail "copy and paste"
+import os, subprocess, sys
+sys.path.insert(0, os.environ["TESTS_DIR"])
+from watch_case import W
+g, T = W.g, sys.argv[1]
+S = W.snap("sample")
+step, View = g["step"], g["View"]
+T0 = W.when(W.T_NOW)
+# Raw: a backslash and a long run of spaces are copied as written, not as clean()'s escapes.
+snap = W.snap("sample")
+snap["context"] = [{"key": "path", "value": "C:\\Users\\nate          x", "updated_by": "codex", "updated_at": W.T_NOW}]
+v = View()
+for k in ("3", "Enter"):
+    v = step(v, k, snap, (100, 30), T0)
+v = step(v, "y", snap, (100, 30), T0, W.detail_for(v, snap))
+assert v.copied == "C:\\Users\\nate          x", repr(v.copied)
+# Quoted: senders a shell would run, pasted into sh with a stub agentbus that records its arguments.
+stub = os.path.join(T, "stubbin")
+os.makedirs(stub, exist_ok=True)
+with open(os.path.join(stub, "agentbus"), "w") as f:
+    f.write('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > "$ARGS_OUT"\n')
+os.chmod(os.path.join(stub, "agentbus"), 0o755)
+evil = ["ops$(touch PWNED1)", "a;touch PWNED2", "`touch PWNED3`", "x' ; touch PWNED4 ; '", "$HOME", "a b\n touch PWNED5",
+        "-n", "q\x1b]52;c;eA==\x07"]
+for i, sender in enumerate(evil):
+    m = {"id": 9, "sender": sender, "kind": "question"}
+    for me in ("NAME", sender):
+        cmd = g["reply_command"](m, me)
+        out = os.path.join(T, f"args{i}")
+        r = subprocess.run(["sh", "-c", cmd], cwd=T, env=dict(os.environ, PATH=stub + ":/usr/bin:/bin", ARGS_OUT=out),
+                           capture_output=True, text=True, timeout=10)
+        assert r.returncode == 0, (sender, r.stderr)
+        got = open(out).read().split("\n")[:-1]
+        want = ["--as", me, "post", "--to", sender, "--reply-to", "9", "--kind", "answer", "..."]
+        assert got == [w for w in "\n".join(want).split("\n")], (sender, got)
+assert not [f for f in os.listdir(T) if f.startswith("PWNED")], "a pasted reply command ran a command"
+print(len(evil), "hostile senders pasted into sh: agentbus got each as one argument, nothing else ran")
+PY
+ok "y copies the raw value (C:\\Users as written); a reply command with a hostile sender, pasted into sh, runs only agentbus with the sender as one argument"
+
 echo "TEST 3: the design's behaviour cases, on bin/agentbus's render (ported from the design mock)"
 "$PY" - <<'PY' || fail "behaviour cases"
 import os, re, sys, time
@@ -562,5 +603,9 @@ ok "TERM=linux, AGENTBUS_ASCII=1 and the probe each give pure-ASCII frames with 
 echo "TEST 17: a detail is read when it opens and on r, never per tick"
 live detail_reads || fail "detail reads"
 ok "watch_detail ran once over several ticks with a detail open, and once more on r"
+
+echo "TEST 18: hostile bytes in every field the CLI takes, walked through every view, never reach the terminal raw"
+live hostile || fail "hostile text"
+ok "ESC, OSC 52, CSI, C1, bidi and zero-width bytes in names, roles, recipients, keys, values, resources, purposes, topics, bodies and the goal: none reached the pty raw in the overview, every detail, a nested detail, help, the filter and the footers"
 
 echo "All watch key tests passed"

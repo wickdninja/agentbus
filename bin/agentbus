@@ -25,6 +25,7 @@ import posixpath  # noqa: E402
 import random  # noqa: E402
 import re  # noqa: E402
 import secrets  # noqa: E402
+import shlex  # noqa: E402
 import shutil  # noqa: E402
 import signal  # noqa: E402
 import sqlite3  # noqa: E402
@@ -4647,8 +4648,19 @@ def tilde(path):
     return path
 
 
+def screen_text(s):
+    """The one boundary between watch and the terminal: every segment of every row passes here, so no
+    control, C1, format (bidi) or default-ignorable character reaches the screen raw, whatever a caller
+    forgot to clean(). Text clean() made is returned unchanged (its escapes are printable ASCII), so a
+    cleaned string is never escaped twice."""
+    if s.isascii() and s.isprintable():
+        return s
+    return "".join(_esc(c) if _unsafe(c) else c for c in s)
+
+
 class Row:
-    """One physical row: segments of (text, SGR). sel: the whole row in reverse video, inner colours off."""
+    """One physical row: segments of (text, SGR). sel: the whole row in reverse video, inner colours off.
+    Every segment goes through screen_text() as it is added."""
 
     def __init__(self, *segs, sel=False):
         self.segs, self.sel = [], sel
@@ -4657,11 +4669,11 @@ class Row:
 
     def add(self, text, sgr=""):
         if text:
-            self.segs.append((text, sgr))
+            self.segs.append((screen_text(text), sgr))
         return self
 
     def extend(self, other):
-        self.segs.extend(other.segs)
+        self.segs.extend(other.segs)  # already through screen_text() when other was built
         return self
 
     @property
@@ -4851,10 +4863,12 @@ def visible_keys(snap, section, text):
 
 
 def reply_command(m, name="NAME"):
-    """The command that replies to m, shown in its detail and copied by y. name: $AGENTBUS_AGENT or --as when
-    set, else the word NAME."""
+    """The command that replies to m, shown in its detail and copied by y, as the raw text a shell takes:
+    every value is shlex-quoted, so a sender named `ops$(touch x)` is pasted as one argument and runs
+    nothing. name: $AGENTBUS_AGENT or --as when set, else the word NAME. The screen shows it clean()ed."""
     kind = " --kind answer" if m["kind"] == "question" else ""
-    return f"agentbus --as {clean(name)} post --to {clean(m['sender'])} --reply-to {m['id']}{kind} \"...\""
+    return (f"agentbus --as {shlex.quote(str(name))} post --to {shlex.quote(str(m['sender']))} "
+            f"--reply-to {int(m['id'])}{kind} \"...\"")
 
 
 class View:
@@ -4940,6 +4954,19 @@ class _Frame:
     def fit(self, text, n):
         return fit_ascii(text, n) if self.A else fit(text, n)
 
+    def cut(self, text, n):
+        """Text that is already clean, cut to n columns with the ellipsis (never cleaned again)."""
+        if text_width(text) <= n:
+            return text
+        ell = self.g["ell"]
+        out, w = [], 0
+        for c in text:
+            if w + cell_width(c) > max(0, n - len(ell)):
+                break
+            out.append(c)
+            w += cell_width(c)
+        return "".join(out) + ell[:max(0, n - w)]
+
     def ac(self, name):
         return str(self.colour(name))
 
@@ -4978,7 +5005,7 @@ class _Frame:
         else:  # no room for the folder: the name, then the right-hand text, as much as fits
             left = next((h for h in (head, head[:-1], " agentbus ") if text_width(h) + tail_w <= W), " agentbus ")
             if text_width(left) + tail_w > W:
-                segs = [(self.fit(segs[0][0] + segs[1][0], W - text_width(left)).rstrip(), WAIT_SGR if wait else H)]
+                segs = [(self.cut(segs[0][0] + segs[1][0], W - text_width(left)), WAIT_SGR if wait else H)]
             row = Row((left, H), *segs)
         row.add(" " * (W - row.width), H)
         return row
@@ -5460,8 +5487,8 @@ class _Frame:
         body = [Row()]
         related = False
         hint = ["j/k select · Enter open", "j/k · Enter", ""]
-        label = {"messages": f"message #{key}", "agents": f"agent {key}", "claims": f"claim {key}",
-                 "facts": f"fact {key}"}[sec]
+        label = {"messages": f"message #{key}", "agents": f"agent {clean(key)}", "claims": f"claim {clean(key)}",
+                 "facts": f"fact {clean(key)}"}[sec]
         if sec == "messages":
             rec = data and data["record"] or next((m for m in self.snap["messages"] if m["id"] == key), None)
         else:
@@ -5530,7 +5557,7 @@ class _Frame:
             last = data["list"]
             related = bool(cl or last)
             count = f"{len(last)} of {data['n']}" + (f" in newest {SCAN}" if data["scanned"] else "")
-            body.append(self.title("Messages", count, [f"from or to {a['name']}", ""]))
+            body.append(self.title("Messages", count, [f"from or to {clean(a['name'])}", ""]))
             body += [self.msg_row(m, sel=sel == ("messages", m["id"])) for m in last] or [Row(("  quiet so far", "2"))]
             if data["n"] > len(last):
                 body.append(self.more_row(self.older_route(data, a["name"])))
@@ -5575,7 +5602,7 @@ class _Frame:
         back = "back"
         if stack:
             p = stack[-1]
-            back = f"back to #{p['key']}" if p["section"] == "messages" else f"back to {p['key']}"
+            back = f"back to #{p['key']}" if p["section"] == "messages" else f"back to {self.cut(clean(p['key']), 24)}"
         items = ([("j/k", "select", 60), ("Enter", "open", 55)] if related else [("j/k", "scroll", 60)])
         items.append(("y", "copy", 30))
         if sec == "messages":
@@ -5950,8 +5977,9 @@ def detail_related(view, snap, data):
 
 
 def _copy_text(view, snap, data):
-    """What y copies: in the overview the selected row's key, in a detail the reply command (message), the
-    name, the resource or the value."""
+    """What y copies, raw (OSC 52 carries it base64, so it cannot drive the terminal; the footer shows it
+    clean()ed): in the overview the selected row's key, in a detail the reply command (message), the name,
+    the resource or the value."""
     shown = view.shown(snap)
     if view.mode == "detail" and view.detail:
         d = view.detail
@@ -5961,13 +5989,13 @@ def _copy_text(view, snap, data):
             return reply_command(m, view.me or "NAME") if m else None
         if d["section"] == "facts":
             rec = next((x for x in shown["context"] if x["key"] == d["key"]), None) or (data or {}).get("record")
-            return clean(rec["value"]) if rec else None
-        return clean(str(d["key"]))
+            return str(rec["value"]) if rec else None
+        return str(d["key"])
     key = view.sel.get(view.focus)
     if key is None and view.focus == "messages":
         keys = visible_keys(shown, "messages", view.filter)
         key = keys[-1] if keys else None
-    return None if key is None else clean(str(key))
+    return None if key is None else str(key)
 
 
 def _open(v, section, key, stack):

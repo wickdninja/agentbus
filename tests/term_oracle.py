@@ -160,7 +160,8 @@ class PtySession:
         end = time.monotonic() + seconds
         while self.p.poll() is None:
             if time.monotonic() > end:
-                raise AssertionError(f"process still running after {seconds}s: ...{self.buf[-600:]!r}")
+                fs = self.frames()
+                raise AssertionError(f"process still running after {seconds}s; last frame ends {fs[-1][-3:] if fs else None}: ...{self.buf[-300:]!r}")
             self.pump(0.02)
         while self.pump(0.02):
             pass

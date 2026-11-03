@@ -439,6 +439,90 @@ def detail_reads():
         s.close()
 
 
+
+# Every kind of hostile byte a lane can store: OSC 52 (writes the clipboard), CSI (leaves the alternate screen,
+# clears it, moves the cursor), the C1 CSI (U+009B), bidi overrides and isolates, a zero-width joiner, BEL.
+HOSTILE = "\x1b]52;c;ZWNobyBwd25lZAo=\x07\x1b[?1049l\x1b[2J\x1b[5;5H\u009b31m‮⁦‍\x07"
+ALLOWED = (rb"\x1b\[[0-9;?]*[mHKJhl]", rb"\x1b\[6n", rb"\x1b\]52;c;[A-Za-z0-9+/=]*\x07", rb"\r", rb"\n")
+
+
+def raw_controls(buf):
+    """What is left after removing every sequence watch itself writes: any control byte, C1, format (bidi,
+    zero-width) or other unsafe character is a leak."""
+    import re
+    import unicodedata
+    rest = re.sub(b"|".join(ALLOWED), b"", buf)
+    bad = [b for b in rest if b < 0x20 or b == 0x7f]
+    text = rest.decode("utf-8", "replace")
+    bad += [hex(ord(c)) for c in text if 0x80 <= ord(c) <= 0x9f or unicodedata.category(c) in ("Cf", "Cc")]
+    return bad
+
+
+@case
+def hostile():
+    """H1: hostile bytes in every field the CLI takes (agent names and roles, recipients, ctx keys and values,
+    claim resources and purposes, topics, bodies, the goal), walked through every view (the overview, every
+    detail kind, a nested detail, help to its last page, the filter input, a kept filter, the copied footer):
+    no raw control, C1 or format character reaches the terminal."""
+    db = os.path.join(os.path.dirname(ROOT), "hostile", ".agentbus", "bus.db")
+    os.makedirs(os.path.dirname(db), exist_ok=True)
+    H = HOSTILE
+    e = env(AGENTBUS_DB=db)
+
+    def cli(*args):
+        r = subprocess.run(agentbus_argv() + list(args), env=e, capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0, (args, r.stderr)
+    evil, bob = "ev" + H, "bob"
+    cli("--as", evil, "join", "--role", "lead" + H)
+    cli("--as", bob, "join", "--role", "tester")
+    cli("--as", evil, "goal", "goal" + H)
+    cli("--as", evil, "claim", "src/" + H, "--purpose", "why" + H)
+    cli("--as", bob, "claim", "docs/" + H)
+    cli("--as", evil, "ctx", "set", "key" + H, "value" + H)
+    cli("--as", evil, "post", "body" + H + "\nline two" + H, "--to", bob, "--kind", "question", "--topic", "t" + H)
+    cli("--as", bob, "post", "names src/" + H + " and " + evil, "--to", evil, "--kind", "answer", "--reply-to", "1")
+    cli("--as", bob, "post", "to a ghost", "--to", "ghost" + H)
+    for emoji in (False, True):
+        ee = dict(e)
+        if emoji:
+            ee.pop("AGENTBUS_NO_EMOJI")
+        s = PtySession(agentbus_argv() + ["watch", "--interval", "0.2"], ee, cols=100, rows=30)
+        try:
+            s.until(lambda t: "following" in t, 15, "the first frame")
+            over = lambda f: "open question" in f[0]
+            head = lambda w: (lambda f: w in f[0] and not any("reading the bus" in r for r in f))  # its data is in
+            sel = lambda f: sel_row(f) is not None
+            copied = lambda f: "copied" in f[-1]
+            walk = [(b"1", lambda f: any(r.startswith("Agents") and "j/k" in r for r in f) or "Agents" in f[3]),
+                    (b"\r", head("agent ")), (b"j", sel), (b"\r", head("claim ")), (b"y", copied),  # nested, copy
+                    (b"q", head("agent ")), (b"q", over),
+                    (b"2", lambda f: True), (b"\r", head("claim ")), (b"j", sel), (b"\r", head("agent ")),
+                    (b"q", head("claim ")), (b"j", lambda f: sel_row(f) and "#" in sel_row(f)),
+                    (b"\r", head("message #")), (b"y", copied), (b"q", head("claim ")), (b"q", over),
+                    (b"3", lambda f: True), (b"\r", head("fact ")), (b"j", sel), (b"\r", head("agent ")),
+                    (b"q", head("fact ")), (b"y", copied), (b"q", over),
+                    (b"4", lambda f: True), (b"k", sel), (b"k", lambda f: sel_row(f) and "#2" in sel_row(f)),
+                    (b"\r", head("message #2")), (b"j", sel),
+                    (b"\r", lambda f: "back to #" in f[-1]), (b"y", copied), (b"q", head("message #")), (b"q", over),
+                    (b"?", head("keys")), (b"G", lambda f: any("lines above" in r for r in f)), (b"q", over),
+                    (b"/", lambda f: f[-1].startswith("/")), (b"e", lambda f: f[-1].startswith("/e_")),
+                    (b"v", lambda f: f[-1].startswith("/ev_")), (b"\r", lambda f: f[-1].startswith("  /ev")),
+                    (b"y", copied), (b"\x1b", lambda f: not f[-1].startswith("  /ev") and "copied" not in f[-1])]
+            for k, cond in walk:
+                key(s, k, cond, f"the view after {k!r}")
+            s.send(b"q")
+            assert s.wait(10) == 0
+            for want in ("agent ", "claim ", "fact key", "message #2", "message #1", "keys"):
+                assert any(want in f[0] for f in s.frames()), ("a view the walk did not reach", want)
+            leaks = raw_controls(s.buf)
+            assert not leaks, ("raw control characters reached the terminal", leaks[:20])
+            import re
+            for payload in re.findall(rb"\x1b\]52;c;([A-Za-z0-9+/=]*)\x07", s.buf):  # only watch's own y copies
+                assert payload != b"ZWNobyBwd25lZAo=", "the planted OSC 52 reached the terminal raw"
+        finally:
+            s.close()
+
+
 CASES["restore"] = restore
 
 if __name__ == "__main__":
