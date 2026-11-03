@@ -53,7 +53,7 @@ is_equal "the release is in the log" "docs/x.md auto-released from w2 (not on ro
 ok "auto-release listed in the claim result and the log"
 
 echo "STEP 4: w1 comes back: a live-looking name needs --takeover, and its mail is still there"
-refuse 1 "agentbus: w1 was active <ago> ago and may be another live session. Pick your own name, or pass --takeover only if that session is you." \
+refuse 1 "agentbus: w1 was active <ago> ago and may be another live session. Pick your own name (try w1-2), or pass --takeover only if that session is you." \
   agentbus --as w1 join --tool codex
 is_equal "w1 is still on the roster after the refusal" "w1" "$(sql "SELECT name FROM agents WHERE name='w1'")"
 say "joined as w1 on $BUSLINE" agentbus --as w1 join --tool codex --takeover

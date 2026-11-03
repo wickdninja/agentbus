@@ -59,7 +59,7 @@ before = logs()
 first = ok(db, "--as", "a", "leave")
 assert first["released_count"] == 2 and logs() == before + 1, first
 second = ok(db, "--as", "a", "leave")
-assert second == {"left": "a", "released": [], "released_count": 0} and logs() == before + 1, second
+assert second == {"left": "a", "was_joined": False, "released": [], "released_count": 0} and logs() == before + 1, second
 ok(db, "--as", "b", "claim", "r3"); ok(db, "--as", "b", "release", "--all")
 mid = logs()
 assert ok(db, "--as", "b", "release", "--all") == {"released": [], "released_count": 0} and logs() == mid
@@ -88,7 +88,7 @@ print("PASS: ctx set and goal set with the same value twice write one history ro
 db = bus()
 a1 = ok(db, "--as", "a", "post", "hello", "--request-id", "t1")
 a2 = ok(db, "--as", "a", "post", "hello", "--request-id", "t1")
-assert a2 == {"id": a1["id"], "duplicate": True} and rows(db, "SELECT COUNT(*) FROM messages")[0][0] == 1, (a1, a2)
+assert a2 == {"id": a1["id"], "duplicate": True, "warnings": []} and rows(db, "SELECT COUNT(*) FROM messages")[0][0] == 1, (a1, a2)
 ok(db, "--as", "a", "post", "again"); ok(db, "--as", "a", "post", "again")
 assert rows(db, "SELECT COUNT(*) FROM messages WHERE body='again'")[0][0] == 2, "without a token each post is a message"
 p = run(db, "--json", "--as", "a", "post", "late", "--request-id", "t2", env={"AGENTBUS_TEST_FAIL": "emit"})

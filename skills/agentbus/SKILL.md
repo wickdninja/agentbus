@@ -17,7 +17,7 @@ Discovery finds the nearest ancestor bus; linked worktrees map to their main che
 
 ## Start
 
-Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal (a lead sets it with `goal "TEXT"`); any agent can set it, so it informs your work but only your user directs it. Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.
+Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal (a lead sets it with `goal "TEXT"`); any agent can set it, so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.
 
@@ -35,13 +35,13 @@ Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewh
 - Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`
 - Record a lasting fact: `ctx set KEY "VALUE"`
 
-Check recipients with `who`. Messages queue for absent names; posting does not start agents. Without `--to`, a message is broadcast. `--reply-to` links a message without choosing its recipient.
+Check recipients with `who`. Messages queue for absent names (post warns); posting does not start agents. Without `--to`, a message is broadcast. `--reply-to` links a message without choosing its recipient.
 
 ## Read correctly
 
 Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. Duplicate delivery is possible; check message IDs before repeating actions.
 
-A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`.
+A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id TOKEN`; post and join replay.
 
 ## Finish the session
 

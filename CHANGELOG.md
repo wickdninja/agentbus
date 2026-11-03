@@ -38,9 +38,25 @@
 
 - `init DIR` creates a folder that does not exist, with its parents (`mkdir -p`), and says so. A path whose nearest existing parent is not a writable directory, or that is a file, is `bad_input`, with nothing created.
 
+- `post` to a name that has not joined still delivers, and now returns `warnings: [{"code": "recipient_not_on_roster", "name": ..., "did_you_mean": [...]}]` (always an array, empty when fine). In text the same warning is one line on stderr with the closest roster names. Warnings are registered in `schema --json` (`warnings`, `Warning`).
+- `join --request-id TOKEN` retries safely: the same name, flags and token return the first result with `duplicate: true` instead of `name_active`, and write nothing. The same token with different flags is `request_id_reused`.
+- `--request-id` on every write (`join`, `leave`, `claim`, `release`, `ctx set`, `goal`, beside `post`): one rule, a repeat never repeats the effect. Commands that are already safe to repeat accept it and do nothing different. `log add` has no token yet.
+- `request_id_reused` carries `original_id` and its message names the original and the way out (`Original: #5. Reuse the same body or pick a new --request-id.`). `name_active` carries `suggested_name` and the message offers it (`try alpha-2`).
+- `leave --json` carries `was_joined`; leaving a name that never joined (or already left) says so on stderr.
+- `join --takeover` keeps the tool, model and role it is not told again.
+- `ctx set` text shows what changed: `set mode: fast -> slow`.
+
 ### Changed (breaking, contract version 1)
 
 - GitHub Releases is the only release channel. The release workflow no longer has a PyPI job, `verify_published.sh` has no `--pypi`, and `scripts/release_check.py` refuses a final tag below the highest existing final tag (so GitHub's latest release is also the highest final version) and checks that `DIST_NAME` equals the project name in `pyproject.toml`.
+- Every write needs a name on the roster: `post`, `ctx set`, `goal` and `log add` under a name that has not joined (or has left) fail with `not_on_roster`, as `claim` always did. Before: they succeeded. Run `agentbus --as NAME join` first.
+- `post --to X --to Y` is `bad_input`. Before: the last `--to` won and the message went to one name without a word about the other. Post once per name, or leave `--to` off for everyone.
+- `goal` is a reserved fact key: `ctx set goal ...` is `bad_input` (`goal is reserved; use: agentbus goal TEXT`), and `status` and `ctx get` no longer list it among the facts. `ctx get goal` and `ctx history goal` still read it.
+- `join` accepts only names the hooks can print, `[A-Za-z0-9._-]{1,40}`; others are `bad_input` naming the rule. Names already on a bus keep working everywhere except `join`.
+- A claim renewal with the same purpose writes no log row; the first claim and a changed purpose still do.
+- `--limit` below `-1` is a usage error on `who`, `claims`, `inbox`, `ctx` and `log` (`-1` still means all).
+- `post --json` results carry `warnings`; `leave --json` results carry `was_joined`.
+
 - `watch`: `Esc` no longer quits (it goes back, or clears a filter) and `q` quits only from the main view; in a detail or help `q` goes back one level. Before: `q`, `Q` and `Esc` quit from anywhere. Use `q` from the main view or Ctrl-C.
 - Listings return an envelope under `--json`: `who`, `inbox`, `read`, `claims`, `ctx get` (without a key), `ctx history`, `log show` and `buses`. Before: a bare array, `[{"name": "a", ...}]`, with truncation announced only as prose on stderr. After: `{"v": 1, "items": [{"name": "a", ...}], "has_more": false, "next": null}`. `items` is the old array with the same rows and order; `has_more` is `true` when `--limit` left rows out (so `inbox --limit 0 --json` is no longer an unmarked `[]` while messages wait); `next` is a cursor for `ctx history`, `read`, `log show` and `inbox --peek`, used with the new `--before NEXT` (and `--after NEXT` for `inbox --peek`). The `N more not shown` line on stderr is gone. Scripts that read a bare array must read `.items`; a bare `[...]` from a listing means a 0.1.x copy.
 - One exit-code mapping, the same with and without `--json`: `0` success; `1` the command ran and refused (a claim conflict, a missing message, a name in use); `2` usage (bad arguments, unknown commands, a missing identity, invalid values); `3` the bus is unavailable or unsafe (no bus, busy, a refused schema, an unsafe folder); `4` internal error. Before: argparse errors exited 2 without `--json` and 1 with it, unknown commands exited 1, no bus and busy exited 1, and a crash exited 1 with a traceback. Scripts that test `$? -eq 1` for bad input or a missing bus must test 2 or 3.

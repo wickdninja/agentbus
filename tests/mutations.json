@@ -1492,5 +1492,248 @@
     "count": 1,
     "run": "tests/test_update.sh",
     "expect": "check json shows an installer argv"
+  },
+  {
+    "name": "identity: post allowed without joining",
+    "file": "bin/agentbus",
+    "find": "        require_joined\\(con, name\\)\\n        if a\\.request_id is not None:",
+    "replace": "        if a.request_id is not None:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "unjoined write was not refused: post hello"
+  },
+  {
+    "name": "identity: ctx set allowed without joining",
+    "file": "bin/agentbus",
+    "find": "            require_joined\\(con, name\\)\\n            cur = con\\.execute\\(\\\"SELECT value, updated_by",
+    "replace": "            cur = con.execute(\"SELECT value, updated_by",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "unjoined write was not refused: ctx set k v"
+  },
+  {
+    "name": "identity: goal allowed without joining",
+    "file": "bin/agentbus",
+    "find": "            require_joined\\(con, name\\)\\n            cur = current_goal\\(con\\)",
+    "replace": "            cur = current_goal(con)",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "unjoined write was not refused: goal ship"
+  },
+  {
+    "name": "identity: log add allowed without joining",
+    "file": "bin/agentbus",
+    "find": "            require_joined\\(con, name\\)\\n            row_id = log",
+    "replace": "            row_id = log",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "unjoined write was not refused: log add note detail"
+  },
+  {
+    "name": "identity: unknown recipient gets no warning",
+    "file": "bin/agentbus",
+    "find": "    names = \\(\\[r\\[0\\]",
+    "replace": "    return []\n    names = ([r[0]",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "recipient_not_on_roster"
+  },
+  {
+    "name": "identity: did-you-mean never matches",
+    "file": "bin/agentbus",
+    "find": "n=3, cutoff=0\\.6\\)\\}\\]",
+    "replace": "n=3, cutoff=1.0)}]",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "recipient_not_on_roster"
+  },
+  {
+    "name": "identity: repeated --to silently keeps the last",
+    "file": "bin/agentbus",
+    "find": "metavar=\\\"NAME\\\", action=OneName,",
+    "replace": "metavar=\"NAME\",",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected bad_input but succeeded"
+  },
+  {
+    "name": "identity: join retry is refused as name_active",
+    "file": "bin/agentbus",
+    "find": "if isinstance\\(old, dict\\) and old\\.get\\(\\\"request_id\\\"\\) == a\\.request_id:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "command failed"
+  },
+  {
+    "name": "identity: join token reused with other flags replays",
+    "file": "bin/agentbus",
+    "find": "                if old != detail:",
+    "replace": "                if False:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected request_id_reused but succeeded"
+  },
+  {
+    "name": "identity: name_active suggests no name",
+    "file": "bin/agentbus",
+    "find": "                free = free_name\\(con, name\\)",
+    "replace": "                free = None",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "suggested_name"
+  },
+  {
+    "name": "identity: request id mismatch does not name the original",
+    "file": "bin/agentbus",
+    "find": " Original: \\{original\\}\\. \\\"",
+    "replace": " \"",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "Original"
+  },
+  {
+    "name": "identity: takeover wipes role, tool and model",
+    "file": "bin/agentbus",
+    "find": "if a\\.takeover else \\(lambda c: f\\\"excluded\\.\\{c\\}\\\"\\)",
+    "replace": "if False else (lambda c: f\"excluded.{c}\")",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "reviewer"
+  },
+  {
+    "name": "identity: ctx set goal allowed",
+    "file": "bin/agentbus",
+    "find": "a\\.key == GOAL_KEY:\\n        die\\(f\\\"\\{GOAL_KEY\\} is reserved",
+    "replace": "a.key == GOAL_KEY + \"x\":\n        die(f\"{GOAL_KEY} is reserved",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected bad_input but succeeded"
+  },
+  {
+    "name": "identity: status lists the goal as a fact",
+    "file": "bin/agentbus",
+    "find": "WHERE key<>\\? ORDER BY key\\\", \\(GOAL_KEY,\\), limit\\)",
+    "replace": "ORDER BY key\", (), limit)",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "!= \"goal\""
+  },
+  {
+    "name": "identity: leave always says was_joined",
+    "file": "bin/agentbus",
+    "find": "\\\"was_joined\\\": bool\\(gone\\)",
+    "replace": "\"was_joined\": True",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "was_joined"
+  },
+  {
+    "name": "identity: leave of an unknown name is silent",
+    "file": "bin/agentbus",
+    "find": "    if not gone:\\n        note\\(",
+    "replace": "    if False:\n        note(",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "stderr note"
+  },
+  {
+    "name": "identity: join accepts any name",
+    "file": "bin/agentbus",
+    "find": "not HOOK_NAME_RE\\.fullmatch\\(me\\(a\\)\\)",
+    "replace": "False",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected bad_input but succeeded"
+  },
+  {
+    "name": "identity: claim renewal logs every time",
+    "file": "bin/agentbus",
+    "find": "if not own or own\\[\\\"purpose\\\"\\] != purpose:",
+    "replace": "if True:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "repeats wrote log rows"
+  },
+  {
+    "name": "identity: claim with a new purpose is not logged",
+    "file": "bin/agentbus",
+    "find": "if not own or own\\[\\\"purpose\\\"\\] != purpose:",
+    "replace": "if not own:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "a changed purpose did not log"
+  },
+  {
+    "name": "identity: ctx set text hides the old value",
+    "file": "bin/agentbus",
+    "find": "        elif cur:\\n            emit\\(a, result, \\\"set \\{\\}: \\{\\} -> \\{\\}\\\"",
+    "replace": "        elif False:\n            emit(a, result, \"set {}: {} -> {}\"",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "changed:"
+  },
+  {
+    "name": "identity: ctx set text shows a whole long value",
+    "file": "bin/agentbus",
+    "find": "return one if len\\(one\\) <= n else one\\[:n - 3\\] \\+ \\\"\\.\\.\\.\\\"",
+    "replace": "return one",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "long value not cut"
+  },
+  {
+    "name": "identity: --limit -2 accepted",
+    "file": "bin/agentbus",
+    "find": "parser\\.add_argument\\(\\\"--limit\\\", type=limit_count,",
+    "replace": "parser.add_argument(\"--limit\", type=integer,",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "expected failure but succeeded"
+  },
+  {
+    "name": "identity: claim takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ request_id_arg\\(cl\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "identity: release takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ request_id_arg\\(rl\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "identity: goal takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ request_id_arg\\(gl\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "identity: leave takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "request_id_arg\\(sub\\(\"leave\",\\ help=\"Leave\\ the\\ roster\\ and\\ release\\ all\\ your\\ claims\"\\)\\)",
+    "replace": "sub(\"leave\", help=\"Leave the roster and release all your claims\")",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
+  },
+  {
+    "name": "identity: ctx set takes no --request-id",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ request_id_arg\\(act\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "refused: "
   }
 ]

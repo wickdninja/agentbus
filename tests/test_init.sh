@@ -22,6 +22,7 @@ ok "layout, modes, VERSION, gitignore, idempotent, no bus opened, HOME untouched
 echo "TEST 2: a worktree's call finds the main checkout's bus"
 W="$T/wt"; git -C "$R" worktree add -q "$W" -b wt
 (cd "$R" && "$PY" .agentbus/bin/agentbus --as a1 join --tool t --model t --role r >/dev/null)
+(cd "$W" && "$PY" "$R/.agentbus/bin/agentbus" --as a2 join >/dev/null)
 # SQLite may delete -wal when the last connection closes, so check the modes while a post holds
 # the bus open (paused just after it opened bus.db and -wal).
 P2="$T/pause2"; mkdir -p "$P2"

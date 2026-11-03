@@ -506,7 +506,15 @@ CONTRACT = {
         "DoctorCheck": _o({"id": _STR, "status": {"type": "string", "enum": ["ok", "warn", "fail", "n/a"]}, "detail": _STR,
                            "fix": _NSTR, "hint": _NSTR, "scope": {"type": "string", "enum": ["user", "project"]}},
                            optional=("scope",)),
+        "Warning": _o({"code": _STR, "name": _STR, "did_you_mean": _list(_STR)}),
         "Envelope": _env({}),
+    },
+    # A warning is not an error: the command succeeded, and its result carries "warnings": [Warning].
+    "warnings": {
+        "recipient_not_on_roster": {"fields": ["name", "did_you_mean"], "commands": ["post"],
+                                    "meaning": "The message was delivered to --to NAME, but no agent with that name has joined. "
+                                               "did_you_mean lists the closest roster names (at most 3, possibly none).",
+                                    "action": "If the name is a typo, post again to a name in did_you_mean. The first message waits for the typo."},
     },
     "errors": {
         "claim_conflict": {"exit": 1, "retryable": False, "fields": ["resource", "holder", "expires_at", "purpose"],
@@ -519,12 +527,12 @@ CONTRACT = {
                            "meaning": "There is no fact with that key.", "action": "List keys with ctx get."},
         "not_on_roster": {"exit": 1, "retryable": False, "fields": ["agent"],
                           "meaning": "That name has not joined.", "action": "Join first."},
-        "name_active": {"exit": 1, "retryable": False, "fields": ["agent", "last_seen_min"],
-                        "meaning": "The name was active recently and may be another live session.",
-                        "action": "Pick another name, or join --takeover if it is you."},
-        "request_id_reused": {"exit": 1, "retryable": False, "fields": ["request_id", "agent"],
-                              "meaning": "That request id was used with a different message.",
-                              "action": "Use a new token for a different message."},
+        "name_active": {"exit": 1, "retryable": False, "fields": ["agent", "last_seen_min", "suggested_name"],
+                        "meaning": "The name was active recently and may be another live session. suggested_name is a free name, or null.",
+                        "action": "Join under suggested_name, or join --takeover if it is you. To retry your own join, pass the same --request-id."},
+        "request_id_reused": {"exit": 1, "retryable": False, "fields": ["request_id", "agent", "original_id"],
+                              "meaning": "That request id was used with a different message or join. original_id is the message id, or the log id of the join, that first used it.",
+                              "action": "Repeat the original request exactly, or use a new token for a different one."},
         "bad_input": {"exit": 2, "retryable": False, "fields": [],
                       "optional_fields": ["field"],
                       "meaning": "The arguments are not valid (a usage error).", "action": "Fix the arguments."},
@@ -632,16 +640,20 @@ CONTRACT = {
     },
     "commands": {
         "join": _cmd("Register on the roster",
-                     _o({"joined": _STR, "bus": _STR, "goal": _NGOAL, "agentbus": _STR, "contract": _INT}),
-                     ["name_active"], {"class": "idempotent_with_flag", "how": "join --takeover for your own name",
-                                       "short": "only with --takeover"}),
+                     _o({"joined": _STR, "bus": _STR, "goal": _NGOAL, "agentbus": _STR, "contract": _INT, "duplicate": _BOOL},
+                        optional=("duplicate",)),
+                     ["name_active", "request_id_reused"],
+                     {"class": "idempotent_with_flag", "short": "with --request-id or --takeover",
+                      "how": "join --request-id TOKEN: the same token and flags return the first result with duplicate true "
+                             "instead of name_active; or join --takeover for your own name"}),
         "leave": _cmd("Leave the roster and release your claims",
-                      _o({"left": _STR, "released": _list(_STR), "released_count": _INT}),
-                      retry={"class": "idempotent", "how": "a second run reports released_count 0 and writes no log row",
+                      _o({"left": _STR, "was_joined": _BOOL, "released": _list(_STR), "released_count": _INT}),
+                      retry={"class": "idempotent", "how": "a second run reports was_joined false and released_count 0 and writes no log row",
                              "short": "safe to repeat"}),
         "who": _cmd("List agents, most recently seen first", _env(_ref("Agent"))),
-        "post": _cmd("Send a message", _o({"id": _INT, "duplicate": _BOOL}, optional=("duplicate",)),
-                     ["no_message", "request_id_reused"],
+        "post": _cmd("Send a message",
+                     _o({"id": _INT, "duplicate": _BOOL, "warnings": _list(_ref("Warning"))}, optional=("duplicate",)),
+                     ["no_message", "not_on_roster", "request_id_reused"],
                      {"class": "needs_request_id", "short": "only with --request-id",
                       "how": "pass --request-id TOKEN; the same token and payload returns the original id with duplicate true"}),
         "inbox": _cmd("Unread messages for you, oldest first, then mark them read", _env(_ref("Message")), ["ack_failed"],
@@ -649,7 +661,7 @@ CONTRACT = {
                        "how": "repeat; a crash or ack_failed redelivers, so check message ids before acting",
                        "with": {"--peek": {"class": "safe", "how": "repeat freely"}}}),
         "read": _cmd("Recent messages, anyone's", _env(_ref("Message"))),
-        "ctx set": _cmd("Set a shared fact and record its history", _ref("Fact"),
+        "ctx set": _cmd("Set a shared fact and record its history", _ref("Fact"), ["not_on_roster"],
                         retry={"class": "idempotent", "short": "safe to repeat",
                                "how": "an unchanged value writes no history row and returns unchanged true"}),
         "ctx get": _cmd("Get one fact, or list all facts", {"anyOf": [_ref("Fact"), _env(_ref("Fact"))]}, ["no_context_key"],
@@ -665,14 +677,14 @@ CONTRACT = {
                          "how": "release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent"}),
         "claims": _cmd("List claims", _env(_ref("Claim"))),
         "log add": _cmd("Append an activity log entry",
-                        _o({"id": _INT, "logged": _BOOL, "agent": _STR, "action": _STR, "detail": _STR}),
+                        _o({"id": _INT, "logged": _BOOL, "agent": _STR, "action": _STR, "detail": _STR}), ["not_on_roster"],
                         retry={"class": "unsafe", "short": "appends each time",
                                "how": "each call appends a row; check log show --limit 1 before retrying"}),
         "log show": _cmd("Show recent activity log entries", _env(_ref("LogEntry"))),
         "status": _cmd("Agents, facts, claims and recent messages",
                        _o({"bus": _STR, "goal": _NGOAL, "agents": _list(_ref("Agent")), "context": _list(_ref("Fact")),
                            "claims": _list(_ref("Claim")), "messages": _list(_ref("Message")), "omitted": _OMITTED})),
-        "goal": _cmd("Show or set the shared goal", _NGOAL, text="null or a Goal",
+        "goal": _cmd("Show or set the shared goal", _NGOAL, ["not_on_roster"], text="null or a Goal",
                      retry={"class": "idempotent", "short": "safe to repeat",
                             "how": "showing is free; an unchanged goal writes no history row and returns unchanged true"}),
         "watch": _cmd("A live view of the bus; with --json one snapshot",
@@ -729,7 +741,7 @@ CONTRACT = {
                             '"url": string or null}, "argv": null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null, "notes": string or null}'),
         "schema": _cmd("Result shapes, errors, exit codes and retry rules",
                        _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"}, "objects": {"type": "object"},
-                           "error_fields": {"type": "object"}, "errors": {"type": "object"}, "exit_codes": {"type": "object"}, "env": {"type": "object"}}), base=_PLAIN_ERRORS),
+                           "error_fields": {"type": "object"}, "errors": {"type": "object"}, "warnings": {"type": "object"}, "exit_codes": {"type": "object"}, "env": {"type": "object"}}), base=_PLAIN_ERRORS),
         "skill": _cmd("Print the bundled skill, or with --agents-md the AGENTS.md block", _o({"text": _STR}), base=_PLAIN_ERRORS),
         "setup": _cmd("Install the skill for Claude Code or the AGENTS.md block for Codex",
                       _o({"target": _STR, "scope": _STR, "dry_run": _BOOL,
@@ -802,7 +814,7 @@ def _arg_entry(action, notes):
     if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
         e["type"] = "boolean"
     else:
-        e["type"] = {integer: "integer", bus_level: "integer", interval: "number"}.get(action.type, "string")
+        e["type"] = {integer: "integer", bus_level: "integer", limit_count: "integer", interval: "number"}.get(action.type, "string")
     if action.required or (positional and action.nargs is None):
         e["required"] = True
     if action.nargs in ("*", "+"):
@@ -3485,6 +3497,42 @@ def me(args):
     return name
 
 
+def require_joined(con, name):
+    """Every write is made by a name on the roster: inside the caller's transaction, refuse one that
+    has not joined (or left), with the error claim has always given."""
+    if not con.execute("SELECT 1 FROM agents WHERE name=?", (name,)).fetchone():
+        die(f"{name} is not on the roster. Run: agentbus --as {name} join", "not_on_roster", agent=name)
+
+
+def roster_warnings(con, to):
+    """The warnings for a message addressed to `to`: [] for a broadcast or a name on the roster, else one
+    recipient_not_on_roster with the closest roster names. The message is still delivered (it waits
+    for that name); this only says the name may be a typo."""
+    if to == "*" or con.execute("SELECT 1 FROM agents WHERE name=?", (to,)).fetchone():
+        return []
+    # Bounded, because a lane can plant any number of agents with any name under the bus lock: only short
+    # text names are compared (a name join accepts is at most 40 characters), at most 1000 of them.
+    names = ([r[0] for r in con.execute("SELECT name FROM agents WHERE typeof(name)='text' AND length(name)<=64 "
+                                         "ORDER BY name LIMIT 1000")] if len(to) <= 64 else [])
+    return [{"code": "recipient_not_on_roster", "name": to,
+             "did_you_mean": difflib.get_close_matches(to, names, n=3, cutoff=0.6)}]
+
+
+def warn_text(w):
+    """A warning as one stderr line."""
+    text = f"{w['name']} is not on the roster; the message waits for that name."
+    if w["did_you_mean"]:
+        text += " Did you mean: " + ", ".join(w["did_you_mean"]) + "?"
+    return text
+
+
+def request_reused(token, name, original_id, original, what, same):
+    """The one refusal for a request id reused with a different request: it names the original and the way out."""
+    die(f"request id '{token}' was already used with a different {what}. Original: {original}. "
+        f"Reuse the same {same} or pick a new --request-id.", "request_id_reused",
+        request_id=token, agent=name, original_id=original_id)
+
+
 def touch(con, name):
     with immediate(con, record=False):
         con.execute("UPDATE agents SET last_seen=? WHERE name=?", (now(), name))
@@ -3659,10 +3707,47 @@ def read_body(parts, command):
 LIVE_WINDOW_MIN = 30
 
 
+def free_name(con, name):
+    """A name close to `name` that is not on the roster: alpha -> alpha-2, alpha-2 -> alpha-3."""
+    base = re.sub(r"-[0-9]+$", "", name) or name
+    for n in range(2, 10000):
+        suffix = f"-{n}"
+        cand = base[:40 - len(suffix)] + suffix
+        if not con.execute("SELECT 1 FROM agents WHERE name=?", (cand,)).fetchone():
+            return cand
+    return None
+
+
+def join_result(con, a, name, **extra):
+    return {"joined": name, "bus": a._db, "goal": current_goal(con), "agentbus": __version__,
+            "contract": CONTRACT["contract"], **extra}
+
+
 def cmd_join(con, a):
     name = me(a)
     t = now()
+    detail = {"tool": a.tool, "model": a.model, "branch": a.branch, "role": a.role}
+    if a.request_id is not None:
+        detail["request_id"] = a.request_id
     with immediate(con):
+        if a.request_id is not None and con.execute("SELECT 1 FROM agents WHERE name=?", (name,)).fetchone():
+            # A retry: this name's latest join carried this token. The first result stands, and the name
+            # (still active from that join) is not refused as another session's.
+            prev = con.execute("SELECT id, detail FROM log WHERE agent=? AND action='join' ORDER BY id DESC LIMIT 1",
+                               (name,)).fetchone()
+            try:
+                old = json.loads(prev["detail"]) if prev else None
+            except (TypeError, ValueError):
+                old = None
+            if isinstance(old, dict) and old.get("request_id") == a.request_id:
+                if old != detail:
+                    request_reused(a.request_id, name, prev["id"], f"join (log #{prev['id']})", "join", "flags")
+                result = join_result(con, a, name, duplicate=True)
+                g = result["goal"]
+                emit(a, result, "joined as {} on {} (already joined)", name, a._db)
+                if g and not a.json:
+                    show("goal: {}", g["goal"])
+                return
         # A name seen in the last LIVE_WINDOW_MIN minutes may belong to another live session; joining
         # under it would overwrite that session's roster entry and let this one act as it.
         row = con.execute("SELECT last_seen FROM agents WHERE name=?", (name,)).fetchone()
@@ -3676,20 +3761,24 @@ def cmd_join(con, a):
             # stale, or the name would stay locked until then.
             if 0 <= mins < LIVE_WINDOW_MIN:
                 age = "less than a minute" if mins < 1 else f"{int(mins)} min"
+                free = free_name(con, name)
+                try_name = f"Pick your own name (try {free}), or pass" if free else "Pick your own name, or pass"
                 die(f"{name} was active {age} ago and may be another live session. "
-                    f"Pick your own name, or pass --takeover only if that session is you.", "name_active",
-                    agent=name, last_seen_min=int(mins))
+                    f"{try_name} --takeover only if that session is you.", "name_active",
+                    agent=name, last_seen_min=int(mins), suggested_name=free)
+        # --takeover is the same session coming back: what it does not say again (tool, model, role) stays.
+        keep = (lambda c: f"COALESCE(excluded.{c}, agents.{c})") if a.takeover else (lambda c: f"excluded.{c}")
         con.execute(
-            """INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen)
+            f"""INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen)
                VALUES(?,?,?,?,?,?,?,?)
-               ON CONFLICT(name) DO UPDATE SET tool=excluded.tool, model=excluded.model, cwd=excluded.cwd,
-                 branch=excluded.branch, role=excluded.role, last_seen=excluded.last_seen""",
+               ON CONFLICT(name) DO UPDATE SET tool={keep('tool')}, model={keep('model')}, cwd=excluded.cwd,
+                 branch=excluded.branch, role={keep('role')}, last_seen=excluded.last_seen""",
             (name, a.tool, a.model, a.cwd or cwd_text(), a.branch, a.role, t, t))
         ensure_cursor(con, name)
-        log(con, name, "join", json.dumps({"tool": a.tool, "model": a.model, "branch": a.branch, "role": a.role}))
-    g = current_goal(con)
-    emit(a, {"joined": name, "bus": a._db, "goal": g, "agentbus": __version__, "contract": CONTRACT["contract"]},
-         "joined as {} on {}", name, a._db)
+        log(con, name, "join", json.dumps(detail))
+    result = join_result(con, a, name)
+    g = result["goal"]
+    emit(a, result, "joined as {} on {}", name, a._db)
     if g and not a.json:
         show("goal: {}", g["goal"])
 
@@ -3743,7 +3832,9 @@ def cmd_leave(con, a):
         gone = con.execute("DELETE FROM agents WHERE name=?", (name,)).rowcount
         if total or gone:  # a second leave changes nothing and writes nothing
             log(con, name, "leave", f"released {total} claims: {claims_text(paths, total)}")
-    emit(a, {"left": name, "released": paths, "released_count": total},
+    if not gone:
+        note(f"{name} was not on the roster, so there was nothing to leave.")
+    emit(a, {"left": name, "was_joined": bool(gone), "released": paths, "released_count": total},
          "left as {}, released {} claims", name, total)
     show_released(a, paths, total)
 
@@ -3818,6 +3909,11 @@ def read_inputs(a):
         a._after_id = read_cursor(a, a.after, "--after")
     if a.cmd == "ctx" and a.key == "":
         die("KEY must not be empty. Omit KEY to list facts.", "bad_input")
+    if a.cmd == "ctx" and a.action == "set" and a.key == GOAL_KEY:
+        die(f"{GOAL_KEY} is reserved; use: agentbus goal TEXT", "bad_input", field="key")
+    if a.cmd == "join" and not HOOK_NAME_RE.fullmatch(me(a)):
+        die(f"'{me(a)}' is not a valid name. Use 1 to 40 letters, digits, dots, underscores or hyphens ([A-Za-z0-9._-]).",
+            "bad_input", field="name")
     if a.cmd == "post":
         me(a)
         if a.kind not in KINDS:
@@ -3838,24 +3934,28 @@ def cmd_post(con, a):
     name = me(a)
     body = a._body
     with immediate(con):
+        require_joined(con, name)
         if a.request_id is not None:
             old = con.execute("SELECT id, body, recipient, kind, topic, reply_to FROM messages "
                               "WHERE sender=? AND request_id=?", (name, a.request_id)).fetchone()
             if old:
                 if tuple(old)[1:] != (body, a.to, a.kind, a.topic, a.reply_to):
-                    die(f"request id '{a.request_id}' was already used with a different payload",
-                        "request_id_reused", request_id=a.request_id, agent=name)
-                emit(a, {"id": old['id'], "duplicate": True}, "posted #{} to {} [{}] (already posted)",
-                     old['id'], "everyone" if a.to == "*" else a.to, a.kind)
+                    request_reused(a.request_id, name, old['id'], f"#{old['id']}", "message", "body")
+                warnings = roster_warnings(con, a.to)
+                for w in warnings:
+                    note(warn_text(w))
+                emit(a, {"id": old['id'], "duplicate": True, "warnings": warnings},
+                     "posted #{} to {} [{}] (already posted)", old['id'], "everyone" if a.to == "*" else a.to, a.kind)
                 return
         if a.reply_to is not None and not con.execute("SELECT 1 FROM messages WHERE id=?", (a.reply_to,)).fetchone():
             die(f"no message #{a.reply_to} to reply to. See recent ids with: agentbus read", "no_message", id=a.reply_to)
         cur = con.execute(
             "INSERT INTO messages(ts,sender,recipient,kind,topic,body,reply_to,request_id) VALUES(?,?,?,?,?,?,?,?)",
             (now(), name, a.to, a.kind, a.topic, body, a.reply_to, a.request_id))
-    if a.to != "*" and not con.execute("SELECT 1 FROM agents WHERE name=?", (a.to,)).fetchone():
-        note(f"{a.to} is not on the roster; the message waits for that name.")
-    emit(a, {"id": cur.lastrowid}, "posted #{} to {} [{}]", cur.lastrowid,
+        warnings = roster_warnings(con, a.to)
+    for w in warnings:
+        note(warn_text(w))
+    emit(a, {"id": cur.lastrowid, "warnings": warnings}, "posted #{} to {} [{}]", cur.lastrowid,
          "everyone" if a.to == "*" else a.to, a.kind)
 
 
@@ -3944,8 +4044,15 @@ def cmd_read(con, a):
     out(a, rows, fmt_msg, more, empty="no messages", earlier=a.since is None, cursor=nxt)
 
 
+def glimpse(text, n=60):
+    """A value on one line for a short message: whitespace collapsed, cut to n characters."""
+    one = " ".join(str(text).split())
+    return one if len(one) <= n else one[:n - 3] + "..."
+
+
 def q_ctx(con, limit=DEFAULT_LIMIT):
-    return capped(con, "SELECT * FROM context ORDER BY key", (), limit)
+    # The goal is a fact under a reserved key; goal and status show it on their own.
+    return capped(con, "SELECT * FROM context WHERE key<>? ORDER BY key", (GOAL_KEY,), limit)
 
 
 def fmt_ctx(r):
@@ -3958,6 +4065,7 @@ def cmd_ctx(con, a):
         value = a._body
         t = now()
         with immediate(con):
+            require_joined(con, name)
             cur = con.execute("SELECT value, updated_by, updated_at FROM context WHERE key=?", (a.key,)).fetchone()
             unchanged = bool(cur) and cur["value"] == value  # the same value again writes nothing
             if unchanged:
@@ -3971,6 +4079,8 @@ def cmd_ctx(con, a):
         result = {"key": a.key, "value": value, "updated_by": name, "updated_at": t, "unchanged": unchanged}
         if unchanged:
             emit(a, result, "set {} (unchanged)", a.key)
+        elif cur:
+            emit(a, result, "set {}: {} -> {}", a.key, glimpse(cur["value"]), glimpse(value))
         else:
             emit(a, result, "set {}", a.key)
     elif a.action == "get":
@@ -4008,6 +4118,7 @@ def cmd_goal(con, a):
     if a._body is not None:
         name, t = me(a), now()
         with immediate(con):
+            require_joined(con, name)
             cur = current_goal(con)
             unchanged = bool(cur) and cur["goal"] == a._body  # the same goal again writes nothing
             if unchanged:
@@ -4097,7 +4208,8 @@ def cmd_claim(con, a):
             "ON CONFLICT(resource) DO UPDATE SET agent=excluded.agent, purpose=excluded.purpose, "
             "claimed_at=excluded.claimed_at, expires_at=excluded.expires_at",
             (res, name, purpose, claimed_at, exp))
-        log(con, name, "claim", f"{res} until {exp}: {purpose or ''}")
+        if not own or own["purpose"] != purpose:  # a renewal that changes nothing is not news
+            log(con, name, "claim", f"{res} until {exp}: {purpose or ''}")
     emit(a, {"resource": res, "agent": name, "purpose": purpose, "claimed_at": claimed_at,
              "expires_at": exp, "auto_released": released,
              "auto_released_count": n_released}, "claimed {} until {}", res, exp)
@@ -4156,6 +4268,7 @@ def cmd_log(con, a):
         name = me(a)
         detail = a._body
         with immediate(con):
+            require_joined(con, name)
             row_id = log(con, name, a.what, detail)
         emit(a, {"id": row_id, "logged": True, "agent": name, "action": a.what, "detail": detail}, "logged")
     else:
@@ -4207,6 +4320,7 @@ def cmd_schema(a):
         print_json({"contract": CONTRACT["contract"], "agentbus": __version__, "commands": commands,
                     "global_args": [_arg_entry(x, {}) for x in parser._actions if x.dest in GLOBAL_DESTS],
                     "objects": CONTRACT["objects"], "error_fields": CONTRACT["error_fields"], "errors": CONTRACT["errors"],
+                    "warnings": CONTRACT["warnings"],
                     "exit_codes": CONTRACT["exit_codes"],
                     "env": CONTRACT["env"]})
         return
@@ -4291,8 +4405,35 @@ class Parser(argparse.ArgumentParser):
 _HELP_TEXT = []
 
 
+def limit_count(text):
+    """An argparse type for --limit: a count, or -1 for all. Below -1 is a mistake, not a second way to say all."""
+    v = integer(text)
+    if v < -1:
+        raise argparse.ArgumentTypeError("must be 0 or more, or -1 for all")
+    return v
+
+
+def request_id_arg(parser, replays=False):
+    """--request-id on a write. One rule: repeating a command with the same token never repeats its effect."""
+    parser.add_argument("--request-id", metavar="TOKEN", help=(
+        "Retry safely: the same token and flags replay the first result, flagged duplicate." if replays else
+        "Retry safely. Accepted so every write retries the same way; this command already does nothing the second time."))
+
+
+class OneName(argparse.Action):
+    """--to takes one name: a second --to would silently replace the first, so it is refused.
+    Whether one was given is a flag on the namespace (a bool: refuse_bad_inputs checks every field's text)."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, "to_given", False):
+            parser.error(f"{option_string} takes one name (got {getattr(namespace, self.dest)} and {values}). "
+                         "Post once per name, or leave --to off to tell everyone.")
+        namespace.to_given = True
+        setattr(namespace, self.dest, values)
+
+
 def limit_arg(parser, default=DEFAULT_LIMIT, what="rows"):
-    parser.add_argument("--limit", type=integer, default=default, help=f"At most this many {what} (default {default}). Use -1 for all.")
+    parser.add_argument("--limit", type=limit_count, default=default, help=f"At most this many {what} (default {default}). Use -1 for all.")
 
 
 def register_join(sub):
@@ -4302,11 +4443,13 @@ def register_join(sub):
     j.add_argument("--cwd", help="Working directory for this session.")
     j.add_argument("--branch", help="Branch for this session.")
     j.add_argument("--role", help="What you do here (shown in who/watch).")
-    j.add_argument("--takeover", action="store_true", help="Rejoin a name active in the last 30 min (only your own)")
+    j.add_argument("--takeover", action="store_true",
+                   help="Rejoin a name active in the last 30 min (only your own); tool, model and role you leave out are kept.")
+    request_id_arg(j, replays=True)
 
 
 def register_leave(sub):
-    sub("leave", help="Leave the roster and release all your claims")
+    request_id_arg(sub("leave", help="Leave the roster and release all your claims"))
 
 
 def register_who(sub):
@@ -4316,8 +4459,8 @@ def register_who(sub):
 def register_post(sub):
     po = sub("post", help="Send a message (body '-' reads stdin)")
     po.add_argument("body", nargs="*")
-    po.add_argument("--to", default="*", metavar="NAME",
-                    help="Deliver to this agent name; omitted means broadcast. Messages wait for that name even if it has not joined.")
+    po.add_argument("--to", default="*", metavar="NAME", action=OneName,
+                    help="Deliver to this one agent name; omitted means broadcast. A name not on the roster still gets the message, with a warning.")
     po.add_argument("--kind", default="note",
                     help="Message kind: note, question, answer, handoff, decision, alert, done. Default: note.")
     po.add_argument("--topic", help="Optional topic label, filterable with read --topic.")
@@ -4354,6 +4497,7 @@ def register_ctx(sub):
         act.add_argument("key", nargs="?" if action == "get" else None, metavar="KEY")
         if action == "set":
             act.add_argument("value", nargs="*", metavar="VALUE")
+            request_id_arg(act)
         act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
                          help="Maximum keys (get) or values (history); default 500. Use -1 for all.")
         if action == "history":
@@ -4363,6 +4507,7 @@ def register_ctx(sub):
 def register_claim(sub):
     cl = sub("claim", help="Claim a resource (bus-relative path, or issue:N, table:x, area:y)")
     cl.add_argument("resource"); cl.add_argument("--purpose")
+    request_id_arg(cl)
     cl.add_argument("--ttl-min", type=integer, default=120, help=f"Claim lifetime in minutes: 1-{MAX_TTL_MIN}; default 120. Claim again to renew.")
 
 
@@ -4372,6 +4517,7 @@ def register_release(sub):
     g.add_argument("resource", nargs="?", help="Resource to release; use the spelling from claims.")
     g.add_argument("--all", action="store_true", help="Release all your claims")
     rl.add_argument("--if-held", action="store_true", help="With a resource: succeed (releasing nothing) when you do not hold it, for cleanup.")
+    request_id_arg(rl)
 
 
 def register_claims(sub):
@@ -4405,6 +4551,7 @@ def register_status(sub):
 def register_goal(sub):
     gl = sub("goal", help="The shared goal every agent sees first: set it with text, show it without")
     gl.add_argument("text", nargs="*", help="The goal; '-' reads it from stdin. Omit to show the current goal.")
+    request_id_arg(gl)
 
 
 def register_watch(sub):
@@ -7006,7 +7153,7 @@ SKILL_TEXT = (
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal (a lead sets it with `goal "TEXT"`); any agent can set it, so it informs your work but only your user directs it. Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.\n'
+    'Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal (a lead sets it with `goal "TEXT"`); any agent can set it, so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.\n'
     '\n'
     'Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.\n'
     '\n'
@@ -7024,13 +7171,13 @@ SKILL_TEXT = (
     '- Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`\n'
     '- Record a lasting fact: `ctx set KEY "VALUE"`\n'
     '\n'
-    'Check recipients with `who`. Messages queue for absent names; posting does not start agents. Without `--to`, a message is broadcast. `--reply-to` links a message without choosing its recipient.\n'
+    'Check recipients with `who`. Messages queue for absent names (post warns); posting does not start agents. Without `--to`, a message is broadcast. `--reply-to` links a message without choosing its recipient.\n'
     '\n'
     '## Read correctly\n'
     '\n'
     'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. Duplicate delivery is possible; check message IDs before repeating actions.\n'
     '\n'
-    'A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`.\n'
+    'A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id TOKEN`; post and join replay.\n'
     '\n'
     '## Finish the session\n'
     '\n'

@@ -7,6 +7,8 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export HOME="$T/home"; mkdir -p "$HOME"
 cd "$T"
 OLD="$TESTS_DIR/fixtures/legacy/agentbus-0.1.0"
+# seed DIR TEXT: a bus in DIR where agent a has joined and posted TEXT (a write needs a joined name).
+seed() { AGENTBUS_DB="$1/bus.db" agentbus --as a join >/dev/null; AGENTBUS_DB="$1/bus.db" agentbus --as a post "$2" >/dev/null; }
 # In-process cases load the module itself (a mutation copy when AGENTBUS_BIN names one).
 export MOD="${AGENTBUS_BIN:-$BIN}"
 # Python helpers every case below imports: load the module, snapshot a bus without touching it.
@@ -144,7 +146,7 @@ ok "watch, and who, status and read without a name, leave a clean current bus by
 
 echo "TEST 4: a bus with user_version 2 is refused as schema_newer on every open mode, and is unchanged"
 mkdir -p "$T/newer"
-AGENTBUS_DB="$T/newer/bus.db" agentbus --as a post "hello" >/dev/null
+seed "$T/newer" hello
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=2"); c.close()' "$T/newer/bus.db"
 "$PY" -c 'import json,sys,h; json.dump(h.state(sys.argv[1]), open(sys.argv[2], "w"))' "$T/newer/bus.db" "$T/n.json"
 rc=0; err=$(AGENTBUS_DB="$T/newer/bus.db" "${AB[@]}" --as a --json who 2>&1 >/dev/null) || rc=$?
@@ -172,7 +174,7 @@ ok "schema_newer: refused with the exact message and fields by write, migrate=Fa
 
 echo "TEST 4b: a user_version no agentbus writes (negative, or absurdly large) is refused as schema_corrupt, not as newer"
 for v in -1 2147483647; do
-  d="$T/garbage$v"; mkdir -p "$d"; AGENTBUS_DB="$d/bus.db" agentbus --as a post "hello" >/dev/null
+  d="$T/garbage$v"; mkdir -p "$d"; seed "$d" hello
   "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=%d" % int(sys.argv[2])); c.close()' "$d/bus.db" "$v"
   "$PY" -c 'import json,sys,h; json.dump(h.state(sys.argv[1]), open(sys.argv[2], "w"))' "$d/bus.db" "$T/g.json"
   "$PY" - "$d/bus.db" "$v" <<'PY' || fail "user_version $v"
@@ -189,10 +191,10 @@ ok "a negative or absurd user_version is schema_corrupt on every open mode, and 
 
 echo "TEST 5: a read-only open of a clean bus keeps bus.db's bytes and makes no -shm, on a current bus, a v0.1.0 bus and a claim that needs normalizing; a bus that needs migration is refused"
 make_v010 "$T/ro_v010"
-mkdir -p "$T/ro_cur"; AGENTBUS_DB="$T/ro_cur/bus.db" agentbus --as a post "current" >/dev/null
+mkdir -p "$T/ro_cur"; seed "$T/ro_cur" current
 make_v010 "$T/ro_norm"
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("./lib//x.py","codex","p","2026-01-01T00:00:00Z","2999-01-01T00:00:00Z")); c.commit(); c.close()' "$T/ro_norm/bus.db"
-mkdir -p "$T/ro_mig"; AGENTBUS_DB="$T/ro_mig/bus.db" agentbus --as a post "needs migration" >/dev/null
+mkdir -p "$T/ro_mig"; seed "$T/ro_mig" "needs migration"
 "$PY" - "$T" <<'PY' || fail "read-only open wrote"
 import json, sys, h
 T = sys.argv[1]
@@ -349,7 +351,7 @@ grep -qF "no one yet" <<<"$o" || fail "watch on an unwritten bus: $o"
 ok "a missing bus is no_bus to a read-only open and is never created, by watch either"
 
 echo "TEST 7: busy_wait 0.3 gives busy within 1 s while a connection holds the bus, for writes and reads alike"
-mkdir -p "$T/busy"; AGENTBUS_DB="$T/busy/bus.db" agentbus --as a post "x" >/dev/null
+mkdir -p "$T/busy"; seed "$T/busy" x
 "$PY" - "$T/busy/bus.db" "$T" <<'PY' || fail "busy_wait"
 import os, sqlite3, subprocess, sys, time, h
 db, T = sys.argv[1:]
@@ -591,6 +593,7 @@ ok "MIGRATIONS[1]: one backup of the version-1 bus, the column added, version 2,
 echo "TEST 13: two simultaneous first opens make one backup and one migrate log row"
 v1_bus "$T/race"
 P="$T/pause-race"; mkdir -p "$P"
+AGENTBUS_DB="$T/race/bus.db" agentbus --as b join >/dev/null
 AGENTBUS_DB="$T/race/bus.db" AGENTBUS_TEST_PAUSE="after-checkpoint=$P" "${V2[@]}" --as a post one >/dev/null 2>"$T/e1" & A=$!
 wait_for "$P/after-checkpoint.reached"
 AGENTBUS_DB="$T/race/bus.db" "${V2[@]}" --as b post two >/dev/null 2>"$T/e2" & B=$!
@@ -653,7 +656,7 @@ T = sys.argv[1]
 V2 = tuple(sys.argv[2:4])
 d = os.path.join(T, "prune-intr"); os.makedirs(d)
 run = lambda args, cwd: subprocess.run([*agentbus_argv(), *args], cwd=cwd, capture_output=True, text=True, timeout=60)
-assert run(["init", d], T).returncode == 0 and run(["--as", "a", "post", "before"], d).returncode == 0
+assert run(["init", d], T).returncode == 0 and run(["--as", "a", "join"], d).returncode == 0 and run(["--as", "a", "post", "before"], d).returncode == 0
 b = os.path.join(d, ".agentbus", "backups"); os.mkdir(b, 0o700)
 planted = ["bus-v1-2026010%dT000000Z.db" % i for i in range(1, 6)]
 for i, n in enumerate(planted):
@@ -776,7 +779,7 @@ ok "past its budget the migration stops before writing, with no partial left"
 echo "TEST 18b: a migration never holds the bus longer than other agents wait for it"
 "$PY" -c 'import h; m=h.load(); t=m.MIGRATE_BUDGET_S + m.HOLD_GRACE_S + m.UNDO_LOCK_WAIT_S + m.EXIT_GRACE_S; assert t + 1 < m.BUSY_WAIT_S, (t, m.BUSY_WAIT_S)' \
   || fail "a stopped migration (budget, hold grace, undo lock wait, exit grace) does not end at least 1 s inside BUSY_WAIT_S"
-v1_bus "$T/slowmig"
+v1_bus "$T/slowmig"; AGENTBUS_DB="$T/slowmig/bus.db" agentbus --as b join >/dev/null
 P="$T/pause-slow"; mkdir -p "$P"
 AGENTBUS_DB="$T/slowmig/bus.db" AGENTBUS_TEST_SLOW=60 AGENTBUS_TEST_PAUSE="after-checkpoint=$P" "${V2[@]}" who >/dev/null 2>"$T/e1" & A=$!
 wait_for "$P/after-checkpoint.reached"
@@ -846,7 +849,7 @@ for point in ("commit", "before-install"):
     for js in (True, False):
         d = os.path.join(T, "intr-%s-%d" % (point, js)); os.makedirs(d)
         assert run(["init", d], T).returncode == 0
-        assert run(["--as", "a", "post", "before"], d).returncode == 0
+        assert run(["--as", "a", "join"], d).returncode == 0 and run(["--as", "a", "post", "before"], d).returncode == 0
         pause = os.path.join(T, "pause-%s-%d" % (point, js)); os.makedirs(pause)
         env = dict(os.environ, AGENTBUS_TEST_PAUSE="%s=%s" % (point, pause))
         p = subprocess.Popen([*V2, *(["--json"] if js else []), "upgrade", d], cwd=T, env=env, stdout=subprocess.PIPE,

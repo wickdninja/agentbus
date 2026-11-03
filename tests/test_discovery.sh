@@ -15,7 +15,7 @@ for d in "$R/src/deep" "$R2/src"; do
   got=$(cd "$d" && busof)
   [ "$got" = "$(real "$WS")/.agentbus/bus.db" ] || fail "workspace discovery from $d: $got"
 done
-(cd "$R" && agentbus --as a post "shared workspace" >/dev/null)
+(cd "$R" && agentbus --as a join >/dev/null && agentbus --as a post "shared workspace" >/dev/null)
 got=$(cd "$R2" && agentbus --json read | python3 -c 'import json,sys; print("|".join(r["body"] for r in json.load(sys.stdin)["items"]))')
 [ "$got" = "shared workspace" ] || fail "repos did not share messages"
 [ ! -e "$R/.agentbus" ] && [ ! -e "$R2/.agentbus" ] || fail "discovery created a repo bus"
