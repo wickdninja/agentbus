@@ -153,7 +153,7 @@ ROWS=(
 "9|0.1.0|0.1.0|synthetic schema 2|n/a|n/a|the 0.1.0 copy answers schema_refused, bytes equal; upgrade from a project copy is refused"
 "10|new|new|needs migration|current|current|watch and doctor write nothing; a non-hook command migrates with one backup"
 "11|new|0.1.0|any|AGENTS.md block|n/a|the 0.1.0 copy has no skill command; the block names the upgrade --all fallback"
-"12|new|new|current|current|templates|every agent-facing command is .agentbus/bin/agentbus; the installed agentbus only in human commands"
+"12|new|new|current|current|templates|every agent-facing command is .agentbus/bin/agentbus (the Claude hook text excepted: it names the installed agentbus); the installed agentbus only in human commands"
 "13|new|new|current|current|Codex hook|tripwire: the Codex hook cells are added the day a Codex hook piece exists"
 )
 
@@ -388,6 +388,8 @@ row_11() {
   doctor_row "$W/r11" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade $W/r11"
 }
 
+# The one exception to this row: the Claude hook's SessionStart text names the installed `agentbus` (tests/test_hooks_claude.sh pins it),
+# because the plugin deliberately does not endorse a project's bus copy. This row reads the skill and the AGENTS.md block, not hook text.
 row_12() {
   reset
   "${NEW[@]}" skill > "$T/skill.txt"; "${NEW[@]}" skill --agents-md > "$T/block.txt"
