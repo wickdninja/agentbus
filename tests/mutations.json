@@ -711,10 +711,10 @@
     "expect": "check with a login shell that prints"
   },
   {
-    "name": "check starts the executable a hooks file names",
+    "name": "codex check starts the executable a hooks file names",
     "file": "bin/agentbus",
-    "find": "        text = setup_read\\(script, follow=True\\)\\n",
-    "replace": "        try:\n            subprocess.run([*tool, \"--version\"], capture_output=True, cwd=os.sep)\n        except OSError:\n            pass\n        text = setup_read(script, follow=True)\n",
+    "find": "        rows = \\[\\]\n        other = self\\.path_for\\(\"user\" if scope == \"project\" else \"project\"\\)\n",
+    "replace": "        subprocess.run(commands[0], shell=True, capture_output=True, cwd=os.sep)\n        rows = []\n        other = self.path_for(\"user\" if scope == \"project\" else \"project\")\n",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "check started the executable a hooks file names"
