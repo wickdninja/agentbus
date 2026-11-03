@@ -12,7 +12,8 @@ agentbus --as codex join --role implementer >/dev/null
 agentbus --as claude post "add a live watch view" --to codex --kind handoff >/dev/null
 agentbus --as codex claim bin/agentbus --purpose "watch command" >/dev/null
 agentbus --as codex ctx set style "stdlib only" >/dev/null
-agentbus --as $'evil\x1b]52;c;aGk=\x07#99' join >/dev/null
+# A name with control characters is refused at join since 0.2; a bus from an older release can hold one, so plant it.
+"$PY" -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute("INSERT INTO agents(name,joined_at,last_seen) VALUES(?,?,?)",("evil\x1b]52;c;aGk=\x07#99","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z"));c.commit()' "$T/bus/bus.db"
 
 # Compare every cursor, including broadcast boundaries, across all watch modes below.
 cursor_snapshot() { "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute("SELECT * FROM cursors ORDER BY agent").fetchall())' "$T/bus/bus.db"; }
