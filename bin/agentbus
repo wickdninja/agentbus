@@ -6415,7 +6415,7 @@ def update_scope(a):
     return {"narrowed": narrowed, "why": why if narrowed else None}
 
 
-def say(line):
+def tell(line):
     """A human line, written now (update's own lines come between the installer's, so they are not queued)."""
     write_out(clean(line) + "\n")
 
@@ -6642,17 +6642,17 @@ def report_update_rows(rows, dry=False):
     c = counts_of(rows)
     head = "bus folders: " + (f"would upgrade {sum(1 for r in rows if r.get('status') == 'would_upgrade')}" if dry
                               else f"upgraded {c['upgraded']}")
-    say(f"{head}, current {c['current']}, skipped {c['skipped']}, failed {c['failed']}")
+    tell(f"{head}, current {c['current']}, skipped {c['skipped']}, failed {c['failed']}")
     for r in rows:
         if r.get("status") == "current":
             continue
         if r.get("status") == "skipped" and isinstance(r.get("error"), dict):
-            say(f"  {tilde(r['directory'])}   skipped: {r['error']['message']}")
+            tell(f"  {tilde(r['directory'])}   skipped: {r['error']['message']}")
             continue
         try:
-            say("  " + "   ".join(_upgrade_parts(r)))
+            tell("  " + "   ".join(_upgrade_parts(r)))
         except (KeyError, TypeError):
-            say(f"  {tilde(str(r.get('directory')))}   {r.get('status')}")
+            tell(f"  {tilde(str(r.get('directory')))}   {r.get('status')}")
 
 
 def counts_of(rows):
@@ -6667,13 +6667,13 @@ def update_check(a, inst, install, latest, newer, no_release, plan):
         return
     head = f"agentbus {__version__} ({method_label(inst)})."
     if no_release:
-        say(head + " No release is published yet.")
+        tell(head + " No release is published yet.")
     elif newer:
-        say(head + f" Latest release: {newer}.")
-        say("Notes: " + notes)
-        say("Run: agentbus update")
+        tell(head + f" Latest release: {newer}.")
+        tell("Notes: " + notes)
+        tell("Run: agentbus update")
     else:
-        say(head + f" Latest release: {latest}. You have it.")
+        tell(head + f" Latest release: {latest}. You have it.")
 
 
 def cmd_update(a):
@@ -6697,29 +6697,29 @@ def cmd_update(a):
     human = not a.json
     if human:
         if inst["method"] in ("uv", "pipx", "pip"):
-            say(f"agentbus {__version__}, installed with {method_label(inst)} from {inst['url'].split('://', 1)[-1]}")
+            tell(f"agentbus {__version__}, installed with {method_label(inst)} from {inst['url'].split('://', 1)[-1]}")
         elif inst["method"] == "clone":
-            say(f"agentbus {__version__}, running from a clone" + (f" at {inst['dir']}" if inst["dir"] else ""))
+            tell(f"agentbus {__version__}, running from a clone" + (f" at {inst['dir']}" if inst["dir"] else ""))
         else:
-            say(f"agentbus {__version__}, installed some other way")
-        say("no release is published yet." if no_release else f"latest release: {newer}" if newer
+            tell(f"agentbus {__version__}, installed some other way")
+        tell("no release is published yet." if no_release else f"latest release: {newer}" if newer
             else f"agentbus {__version__} is the latest release.")
         if scope["narrowed"]:
             why = scope["why"] if scope["why"] == "no terminal" else scope["why"] + " is set"
-            say(f"agent session ({why}): upgrading this bus only and skipping setup. Run with --all-buses for the rest.")
+            tell(f"agent session ({why}): upgrading this bus only and skipping setup. Run with --all-buses for the rest.")
     tool = {"status": "current", "argv": None, "exit_status": None, "commands": None}
     if newer:
         if plan["argv"]:
             tool.update({"status": "dry_run" if a.dry_run else "current", "argv": plan["argv"]})
             if human:
-                say(("would run: " if a.dry_run else "running: ") + shlex_join(plan["argv"]))
+                tell(("would run: " if a.dry_run else "running: ") + shlex_join(plan["argv"]))
         else:
             tool.update({"status": "manual", "commands": plan["commands"]})
             if human:
-                say("This copy is not one agentbus update may replace itself. Run:" if inst["method"] not in ("uv", "pipx", "pip")
+                tell("This copy is not one agentbus update may replace itself. Run:" if inst["method"] not in ("uv", "pipx", "pip")
                     or inst["fork"] else "No safe installer was found. Run:")
                 for c in plan["commands"]:
-                    say("  " + c)
+                    tell("  " + c)
             if not a.dry_run:
                 die("agentbus cannot update this copy itself. Run: " + "; ".join(plan["commands"]), "manual_step",
                     commands=plan["commands"])
@@ -6736,10 +6736,10 @@ def cmd_update(a):
             if not a.no_buses:
                 report_update_rows(result["buses"], dry=True)
             if not a.no_setup and not scope["narrowed"]:
-                say("setup: the skill and AGENTS.md block that are there and unedited would be refreshed")
+                tell("setup: the skill and AGENTS.md block that are there and unedited would be refreshed")
             if fix:
-                say("plugin: " + fix)
-            say("dry run: nothing was changed.")
+                tell("plugin: " + fix)
+            tell("dry run: nothing was changed.")
         else:
             print_json(result)
         return
@@ -6777,7 +6777,7 @@ def update_real(a, inst, scope, result, newer, plan, targets, new_buses, new_roo
         tool.update({"status": "updated", "argv": argv, "exit_status": 0})
         result["to"], result["restart"] = got, True
         if human:
-            say(f"agentbus {got} is installed.")
+            tell(f"agentbus {got} is installed.")
     rows = []
     if not a.no_buses:
         gone = [d for _, d in targets if not os.path.isdir(d)]
@@ -6792,23 +6792,23 @@ def update_real(a, inst, scope, result, newer, plan, targets, new_buses, new_roo
             if targets:
                 report_update_rows(rows)
             if not a.dirs and len(targets) < 2 and not scope["narrowed"]:
-                say("agentbus knows no other bus folders yet. Run: agentbus update ~/src (the folder that holds your repos)")
+                tell("agentbus knows no other bus folders yet. Run: agentbus update ~/src (the folder that holds your repos)")
     if not a.no_setup and not scope["narrowed"]:
         result["setup"] = setup_rows(inst, [r["directory"] for r in rows if r.get("status") in ("upgraded", "current")])
         if human:
             for s in result["setup"]:
                 if s["error"]:
-                    say(f"  ! setup {s['target']} ({s['scope']}): {s['error']['message']}")
+                    tell(f"  ! setup {s['target']} ({s['scope']}): {s['error']['message']}")
                 for c in s["changes"]:
                     if c["action"] != "unchanged":
                         mark = "~" if c["action"] in ("installed", "updated", "replaced_link", "removed") else "!" if c["action"] == "refused" else "="
-                        say(f"  {mark} {tilde(c['path'])}   {c['detail']}")
+                        tell(f"  {mark} {tilde(c['path'])}   {c['detail']}")
     fix = plugin_fix()
     result["plugin"] = {"fix": fix} if fix else None
     if human and fix:
-        say("plugin: " + fix)
+        tell("plugin: " + fix)
     if human:
-        say(f"done: {before} -> {result['to']}. Restart Claude Code and Codex sessions, and any agentbus watch, to load it."
+        tell(f"done: {before} -> {result['to']}. Restart Claude Code and Codex sessions, and any agentbus watch, to load it."
             if result["restart"] else f"done: agentbus {before} is current.")
     bad = [r for r in rows if r.get("status") == "failed"] + [s for s in result["setup"] if s["error"]]
     if a.json:
