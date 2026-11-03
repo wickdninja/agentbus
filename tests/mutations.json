@@ -1393,5 +1393,23 @@
     "count": 1,
     "run": "tests/test_release_check.sh",
     "expect": "a wheel URL naming another tag"
+  },
+  {
+    "name": "watch: the body cache ignores the bus file (N4b)",
+    "file": "bin/agentbus",
+    "find": "^    if bodies\\.get\\(\"bus\"\\) != con\\.ident:$",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: history, encoding, cache"
+  },
+  {
+    "name": "watch: a late cursor report is never applied",
+    "file": "bin/agentbus",
+    "find": "^                if probing\\[0\\] and wide is not None:$",
+    "replace": "                if False:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: ascii"
   }
 ]
