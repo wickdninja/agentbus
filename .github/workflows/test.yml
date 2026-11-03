@@ -134,10 +134,14 @@ jobs:
       - name: Install (pipx)
         if: startsWith(matrix.installer, 'pipx')
         run: |
-          python3 -m pip install --user pipx
+          # One explicit interpreter for every pipx call in this job: the setup-python one, pipx installed into ITS site-packages
+          # (not --user: a later step that changes HOME, as scripts/verify_update_layout.sh does, cannot see a user site).
+          PIPX_PYTHON=$(python3 -c 'import sys; print(sys.executable)')
+          "$PIPX_PYTHON" -m pip install pipx
+          echo "PIPX_PYTHON=$PIPX_PYTHON" >> "$GITHUB_ENV"
           artifact=$(ls dist/*.${{ endsWith(matrix.installer, 'wheel') && 'whl' || 'tar.gz' }})
           export PIPX_HOME="$RUNNER_TEMP/pipx" PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
-          python3 -m pipx install "$artifact"
+          "$PIPX_PYTHON" -m pipx install "$artifact"
           echo "INSTALLED=$PIPX_BIN_DIR/agentbus" >> "$GITHUB_ENV"
           echo "INSTALLED_PY=$PIPX_HOME/venvs/agentbus/bin/python" >> "$GITHUB_ENV"
       - name: uvx runs the wheel
