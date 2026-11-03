@@ -200,8 +200,8 @@
   {
     "name": "run_all's cap kills only the file, not its process group",
     "file": "tests/run_capped.py",
-    "find": "        os\\.killpg\\(proc\\.pid, signal\\.SIGKILL\\)",
-    "replace": "        proc.kill()",
+    "find": "    killpg\\(proc\\.pid, signal\\.SIGKILL\\)\\n    proc\\.wait\\(\\)",
+    "replace": "    proc.kill()\\n    proc.wait()",
     "count": 1,
     "run": "tests/test_docs.sh",
     "expect": "outlived the cap"
@@ -214,5 +214,14 @@
     "count": 1,
     "run": "tests/test_planted.sh",
     "expect": "the freed pages were zeroed"
+  },
+  {
+    "name": "normalising on open reads every planted claim name",
+    "file": "bin/agentbus",
+    "find": "\\{BYTE_LENGTH\\}\\(resource\\) <= \\{4 \\* RESOURCE_MAX\\} AND ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "database disk image is malformed"
   }
 ]

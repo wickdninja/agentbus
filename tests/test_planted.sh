@@ -4,13 +4,18 @@ set -euo pipefail
 # the 15 s other agents wait, so another agent's post still lands. Bug it catches: 8 GLOBs read
 # every planted 100 MB claim on every open, claim fetched every claim into Python and compared them
 # one by one, release --all logged 500 MB, and the query budget (30 s) was above the 15 s wait.
-# Throwaway buses and HOME only; the planted buses take a few GB in the temp dir while they exist.
+# Throwaway buses and HOME only. Each test removes its bus when it ends; the largest (TEST 3, 500 x 1 MB names
+# in the table and again in its index) takes about 1.1 GB, so the file needs NEED_MB free in the temp dir.
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
+NEED_MB=2048
+free=$(python3 -c 'import shutil,sys; print(shutil.disk_usage(sys.argv[1]).free >> 20)' "$T")
+[ "$free" -ge "$NEED_MB" ] || fail "this file needs ${NEED_MB} MB free in $T for its planted buses; there are ${free} MB (a full disk fails planting with 'disk I/O error')"
 secs() { python3 -c 'import time; print(time.time())'; }
 since() { python3 -c 'import sys,time; print("%.2f" % (time.time() - float(sys.argv[1])))' "$1"; }
 under() { python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < float(sys.argv[2]) else 1)' "$1" "$2"; }
-# plant DB PYTHON-CODE: rows written straight into the bus, as a lane would (c is the connection).
+# plant DB PYTHON-CODE: rows written straight into the bus, as a lane would (c is the connection; step()
+# commits what is planted so far and empties bus.db-wal, so planting big rows never needs their size twice on disk).
 # The rows are on disk before plant returns: written with synchronous=OFF and never synced, the GBs a test
 # plants sit in the page cache, and the next fsync on that disk (an honest post's commit) waits for the
 # kernel to write all of them. On a slow CI disk that took over 8 s for TEST 1 (the post was in fdatasync
@@ -21,11 +26,15 @@ plant() {
 import os, sqlite3, sys
 c = sqlite3.connect(sys.argv[1], isolation_level=None)
 c.execute("PRAGMA synchronous=OFF")
+def step():
+    c.execute("COMMIT")
+    busy = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]  # every row into bus.db, bus.db-wal emptied
+    assert busy == 0, "the planted rows could not be checkpointed into bus.db"
+    c.execute("BEGIN")
 c.execute("BEGIN")
 exec(sys.argv[2])
+step()
 c.execute("COMMIT")
-busy = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]  # every row into bus.db, bus.db-wal emptied
-assert busy == 0, "the planted rows could not be checkpointed into bus.db"
 c.close()
 fd = os.open(sys.argv[1], os.O_RDONLY)
 try:
@@ -66,16 +75,55 @@ measured() {
 # finished: the checks that need ARGS to have finished run only when it did.
 finished() { [ "$STOPPED" = 0 ]; }
 
-echo "TEST 1: 20 planted claims of 100 MB each: who and post stay fast"
+# chains DB break|mend: break (or put back) the overflow chain of every planted claim name, in the table and in its
+# index, so any read of a whole planted name fails ("database disk image is malformed") while a read of its header
+# (typeof, octet_length) works. Budgets alone cannot prove "never reads a planted name": SQLite reads a cached name at
+# 2 to 4 GB/s (400 MB in 0.1 to 0.2 s, measured), so a name read once per open would need 30 to 60 GB planted to
+# outlast the 6 s query budget, 8 s hold or 15 s wait, more than a CI runner's disk. With the chains broken, one read
+# of one byte past the first page fails the command, whatever the size.
+chains() {
+  python3 - "$1" "$1.chains" "$2" <<'PY'
+import json, os, sqlite3, struct, sys
+db, saved, what = sys.argv[1:]
+c = sqlite3.connect(db)
+size = c.execute("PRAGMA page_size").fetchone()[0]
+if what == "break":
+    pages = [r[0] for r in c.execute("SELECT pageno FROM dbstat WHERE name IN ('claims', 'sqlite_autoindex_claims_1') "
+                                     "AND pagetype='overflow'")]
+c.close()  # bus.db-wal is empty (plant checkpointed it); every byte below is in bus.db itself
+with open(db, "r+b") as f:
+    if what == "break":
+        old = {}
+        for p in pages:
+            f.seek((p - 1) * size); old[p] = f.read(4).hex()
+            f.seek((p - 1) * size); f.write(struct.pack(">I", 0x7FFFFFFF))  # the next page: past the end of the file
+        json.dump(old, open(saved, "w"))
+    else:
+        for p, b in json.load(open(saved)).items():
+            f.seek((int(p) - 1) * size); f.write(bytes.fromhex(b))
+    f.flush()
+    os.fsync(f.fileno())  # each page written is dirty: on disk before any command runs, as plant() does
+PY
+}
+
+echo "TEST 1: 20 planted claims of 20 MB each: who and post never read them"
+# 800 MB on disk (each name in the table and its index): unsynced, that is 20 s of writeback at 40 MB/s, so the
+# plant-then-post stall plant() rules out stays reproducible on a throttled disk.
 D1="$T/b1.db"; AGENTBUS_DB="$D1" agentbus --as honest join --tool t >/dev/null
-plant "$D1" 'big = "a" * (100 << 20)
+plant "$D1" 'big = "a" * (20 << 20)
 for i in range(20):
-    c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("src//%02d" % i + big, "lane", "p", "2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z"))'
+    c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("src//%02d" % i + big, "lane", "p", "2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z"))
+    step()'
+chains "$D1" break
+python3 -c 'import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute("SELECT max(length(resource)) FROM claims").fetchone()' "$D1" 2>/dev/null \
+  && fail "a planted name can still be read whole with its chain broken: the check below would prove nothing"
 measured "$D1" 5 who; t1=$TOOK
 measured "$D1" 5 --as honest post "an honest post"; t2=$TOOK
+chains "$D1" mend
 [ "$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("SELECT COUNT(*) FROM claims WHERE length(resource) > 1024").fetchone()[0])' "$D1")" = 20 ] \
   || fail "the planted claims were changed"
-ok "who ${t1}s, post ${t2}s with 2 GB of planted claims; another agent posted meanwhile"
+rm -f "$D1" "$D1"-* "$D1.chains"
+ok "who ${t1}s, post ${t2}s beside 400 MB of planted claims, not one name read; another agent posted meanwhile"
 
 echo "TEST 2: 2M planted stale claims: claim reads only what overlaps"
 D2="$T/b2.db"; AGENTBUS_DB="$D2" agentbus --as honest join --tool t >/dev/null
@@ -109,11 +157,14 @@ PY
 fi
 ok "claim beside 2M stale claims ${t1}s; claim over all of them ${t2}s, 21 log rows; another agent posted meanwhile"
 
+rm -f "$D2" "$D2"-*
 echo "TEST 3: release --all of 500 planted 1 MB names writes no 500 MB log row"
 D3="$T/b3.db"; AGENTBUS_DB="$D3" agentbus --as honest join --tool t >/dev/null
 plant "$D3" 'big = "n" * (1 << 20)
 for i in range(500):
-    c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("r%03d" % i + big, "honest", "p", "2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z"))'
+    c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("r%03d" % i + big, "honest", "p", "2026-01-01T00:00:00Z", "2099-01-01T00:00:00Z"))
+    if i % 50 == 49:
+        step()'
 measured "$D3" 10 --as honest release --all; t1=$TOOK
 [ "$(wc -c < "$T/mo")" -lt 1000000 ] || fail "release --all printed $(wc -c < "$T/mo") bytes"
 if finished; then
@@ -134,6 +185,7 @@ PY
   ok "release --all stopped cleanly $STOPPED after ${t1}s, nothing half-done; another agent posted meanwhile"
 fi
 
+rm -f "$D3" "$D3"-*
 echo "TEST 3b: a release of planted 1 MB names does not write the freed pages (SQLite built with SECURE_DELETE)"
 # Debian and Ubuntu (so GitHub's Linux runners) build SQLite with SECURE_DELETE on, which zeroes every page a delete
 # frees: releasing 500 planted 1 MB names wrote 600 MB to bus.db-wal with the bus held, and on a slow disk
@@ -154,6 +206,7 @@ grep -qx "released 100 claims" "$T/o3b" || fail "release --all output: $(head -c
 [ "$wal" -lt $((20 << 20)) ] || fail "release --all of 100 planted 1 MB names wrote $wal bytes to bus.db-wal before its commit (the freed pages were zeroed)"
 ok "release --all of 100 MB of planted names: $wal bytes in bus.db-wal at the commit"
 
+rm -f "$D3b" "$D3b"-*
 echo "TEST 4: claim refuses a resource over 1024 characters; a refusal naming a planted name is cut"
 D4="$T/b4.db"; AGENTBUS_DB="$D4" agentbus --as honest join --tool t >/dev/null
 AGENTBUS_DB="$D4" agentbus --as lane join --tool t >/dev/null

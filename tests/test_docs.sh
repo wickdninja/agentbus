@@ -107,7 +107,8 @@ for path in "$NOTMO" "$PATH"; do
 done
 rm -f "$T/tests/test_d_slow.sh" "$T/tests/test_d_orphan.sh"
 # A Ctrl-C (SIGINT) to the helper ends the file's whole group, and the helper dies of the signal itself (not just
-# exit 130), so the shell running it, run_all.sh, stops too.
+# exit 130), so the shell running it, run_all.sh, stops too. Ready marker: the file writes int.pid once it runs,
+# and the helper's handlers are in place before it starts the file, so the SIGINT can never arrive too early.
 printf '#!/bin/bash\nsleep 30 & echo $! > %s/int.pid\nsleep 30\n' "$T" > "$T/int.sh"
 "$PY" - "$(dirname "$RUNNER")/run_capped.py" "$T/int.sh" "$T/int.pid" <<'PY' || fail "SIGINT to run_capped.py"
 import os, signal, subprocess, sys, time
