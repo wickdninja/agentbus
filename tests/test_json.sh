@@ -108,7 +108,7 @@ array(setup['changes'], path=str, action=str, detail=str)
 doctor = shape(j('doctor'), agentbus=str, path=str, contract=int, checks=list, fail=int, warn=int)
 assert doctor['checks'], doctor
 for check in doctor['checks']:   # scope is there for the checks of a user or project file
-    shape(check, id=str, status=str, detail=str, fix=(str, null), **({'scope': str} if 'scope' in check else {}))
+    shape(check, id=str, status=str, detail=str, fix=(str, null), hint=(str, null), **({'scope': str} if 'scope' in check else {}))
 j('--as', 'b', 'claim', 'watch-fixture')
 for after in (False, True):
     for once in ((), ('--once',)):
