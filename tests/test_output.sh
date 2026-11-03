@@ -432,7 +432,7 @@ for name, entry in index["commands"].items():
 if index["commands"]["post"]["errors"] != ["no_message", "not_on_roster", "request_id_reused"]:
     fail("schema --index must keep a command's own error codes: %r" % index["commands"]["post"])
 text = ok(db, "schema", "--index")
-if "  post  body --to --kind --topic --reply-to --request-id  errors: no_message request_id_reused" not in text:
+if "  post  body --to --kind --topic --reply-to --request-id  errors: no_message not_on_roster request_id_reused" not in text:
     fail("schema --index in text: %r" % text[:300])
 error, p = refused(db, "schema", "--index", "post")
 if error["code"] != "bad_input":
