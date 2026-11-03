@@ -188,7 +188,7 @@ print("state machine cases passed")
 PY
 ok "Tab Tab j Enter opens the second claim; k pauses on the newest and holds it; G follows and clears +N new; refreshes keep the selected key; filters keep 6 and 9; kind:fyi says the kinds; filter input takes q, j, k and digits as text; Esc in the overview does nothing; details stack and go back one level; y copies"
 
-echo "TEST 2b: y copies raw text, and a copied reply command pasted into sh runs nothing but agentbus"
+echo "TEST 2b: y copies plain text as written, and a copied reply command run by bash runs nothing but agentbus"
 "$PY" - "$T" <<'PY' || fail "copy and paste"
 import os, subprocess, sys
 sys.path.insert(0, os.environ["TESTS_DIR"])
@@ -218,7 +218,8 @@ for i, sender in enumerate(evil):
     for me in ("NAME", sender):
         cmd = g["reply_command"](m, me)
         out = os.path.join(T, f"args{i}")
-        r = subprocess.run(["sh", "-c", cmd], cwd=T, env=dict(os.environ, PATH=stub + ":/usr/bin:/bin", ARGS_OUT=out),
+        assert not any(ord(c) < 0x20 or 0x7f <= ord(c) < 0xa0 for c in cmd), ("a control byte in the copy", cmd)
+        r = subprocess.run(["bash", "-c", cmd], cwd=T, env=dict(os.environ, PATH=stub + ":/usr/bin:/bin", ARGS_OUT=out),
                            capture_output=True, text=True, timeout=10)
         assert r.returncode == 0, (sender, r.stderr)
         got = open(out).read().split("\n")[:-1]
@@ -254,6 +255,66 @@ assert calls[0] <= cap, f"a 4 KB paste settled the selection {calls[0]} times"
 print(f"4096 keys: filter {len(v.filter)} characters, {calls[0]} settles")
 PY
 ok "the filter stops at 200 characters and a 4 KB paste costs at most 200 selection updates"
+
+echo "TEST 2d: dated history rows fit, a non-UTF-8 stdout measures what it writes, the body cache follows the bus file"
+"$PY" - "$T" <<'PY' || fail "history, encoding, cache"
+import os, shutil, sqlite3, subprocess, sys
+sys.path.insert(0, os.environ["TESTS_DIR"])
+from watch_case import W
+from term_oracle import width
+from agentbus_cmd import agentbus_argv
+g, T = W.g, sys.argv[1]
+S, T0 = W.snap("sample"), W.when(W.T_NOW)
+tw = g["text_width"]
+# N2: history from earlier days (`Nov 2 00:00`) fits every width from 40 to 100.
+hist = [{"value": "v" * 90, "updated_by": "claude", "updated_at": f"2026-10-{d:02d}T00:00:00Z"} for d in (30, 29, 3)]
+data = {"section": "facts", "key": "baseline_sha", "top": 9, "scanned": False, "record": S["context"][0],
+        "history": hist, "n_history": 3}
+v = W.view(mode="detail", focus="facts", detail={"section": "facts", "key": "baseline_sha"})
+for cols in range(40, 101):
+    rows = [r.rstrip() for r in g["render"](v, S, W.WHERE, (cols, 40), T0, g["Paint"](False), detail=data)]
+    assert all(tw(r) <= cols - 1 for r in rows), (cols, [r for r in rows if tw(r) > cols - 1])
+    assert any("Oct 30 00:00" in r for r in rows), rows
+# N3: under a latin-1 stdout, what cannot be encoded is written as ?; the row is measured as it will be written.
+snap = W.snap("sample")
+snap["messages"] = [dict(snap["messages"][0], body="é" * 60 + "漢" * 40)]
+g["_WATCH_ENCODING"] = "latin-1"
+g["wrap_lines"].cache_clear()
+try:
+    for cols in (40, 60, 100):
+        for ascii_ in (True, False):
+            for f in (W.view(), W.view(mode="detail", detail={"section": "messages", "key": 1})):
+                rows = g["render"](f, snap, W.WHERE, (cols, 30), T0, g["Paint"](False, False, ascii_),
+                                   detail=W.detail_for(f, snap))
+                for r in rows:
+                    out = r.encode("latin-1", "replace").decode("latin-1")
+                    assert sum(width(c) for c in out) <= cols - 1, (cols, ascii_, out)
+finally:
+    g["_WATCH_ENCODING"] = None
+    g["wrap_lines"].cache_clear()
+# N4: the body cache follows the bus file: a replaced bus.db, or an id that comes back with another message.
+env = dict(os.environ, HOME=T)
+def bus(name, body):
+    d = os.path.join(T, name, ".agentbus")
+    os.makedirs(d, exist_ok=True)
+    r = subprocess.run(agentbus_argv() + ["--as", "a", "post", body], env=dict(env, AGENTBUS_DB=os.path.join(d, "bus.db")),
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    return os.path.join(d, "bus.db")
+live, other = bus("cache1", "alpha"), bus("cache2", "beta")
+cache = {}
+first = g["watch_snapshot"](live, False, 200, body_head=4096, bodies=cache)["messages"][0]["body"]
+os.replace(other, live)  # a new file (another inode) in its place, with the same id 1
+second = g["watch_snapshot"](live, False, 200, body_head=4096, bodies=cache)["messages"][0]["body"]
+assert (first, second) == ("alpha", "beta"), (first, second)
+c = sqlite3.connect(live)  # the same file, id 1 now another message
+c.execute("UPDATE messages SET body='gamma', ts='2026-01-01T00:00:00Z' WHERE id=1")
+c.commit(); c.close()
+third = g["watch_snapshot"](live, False, 200, body_head=4096, bodies=cache)["messages"][0]["body"]
+assert third == "gamma", third
+print("dated history fits 40 to 100; latin-1 rows fit as written; the cache read beta and gamma, not alpha")
+PY
+ok "fact history from earlier days fits 40 to 100 columns; on a latin-1 stdout rows fit after the ? replacement; a replaced bus.db or a reused id is read again"
 
 echo "TEST 3: the design's behaviour cases, on bin/agentbus's render (ported from the design mock)"
 "$PY" - <<'PY' || fail "behaviour cases"
@@ -445,6 +506,8 @@ def help_pages():
                     assert len(t) == rows, (cols, rows, scroll, len(t))
                     for l in t:
                         assert tw(l) <= cols - 1, (cols, rows, ascii_, emoji, scroll, l)
+                    intro = " ".join(l.strip() for l in t[1:5])  # the intro stays whole on every page
+                    assert "watch only reads the bus" in intro and "never changes a claim." in intro, (cols, rows, t)
                     if t == last:
                         break
                     last = t
@@ -677,5 +740,9 @@ ok "a hung read ended by the watchdog exits 3 with its own reason, the screen an
 echo "TEST 22: a stdout that is not UTF-8 draws ASCII and keeps running"
 live encodings || fail "encodings"
 ok "PYTHONIOENCODING=ascii draws pure ASCII; a latin-1 locale runs; both quit cleanly"
+
+echo "TEST 23: what y copies, pasted into an interactive zsh or bash inside bracketed paste, runs nothing"
+live paste || fail "paste"
+ok "senders, keys and values carrying ESC [ 201 ~, Ctrl-U and CR are copied without a control byte; pasted into each shell, nothing ran"
 
 echo "All watch key tests passed"

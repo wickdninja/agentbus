@@ -1,7 +1,7 @@
  agentbus  ~/src/acme-api                             keys
   watch only reads the bus. It never marks a message read
+  and never changes a claim.
   … 43 lines above · PgUp
-  of newest 200      watch holds the newest 200; older ones
                      are not searched (agentbus read)
   n/a                the filter does not apply to this
                      section

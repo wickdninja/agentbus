@@ -1148,10 +1148,12 @@ class Frame:
             body.append(Row())
             body.append(self.title("History", str(min(len(hist), THREAD_MAX)) if len(hist) <= THREAD_MAX else
                                    f"{THREAD_MAX} of {len(hist)}", ["newest first", ""]))
-            vw = W - 2 - 7 - 13
-            for h in hist[:THREAD_MAX]:
+            stamps = [self.hhmm(h["updated_at"]) for h in hist[:THREAD_MAX]]
+            sw = max([5] + [len(t) for t in stamps])  # HH:MM today, `Nov 2 00:00` on an earlier day
+            vw = W - 2 - sw - 2 - 13
+            for h, stamp in zip(hist[:THREAD_MAX], stamps):
                 lines = wrap_lines(clean(h["value"]), max(1, vw))
-                body.append(Row(("  " + self.hhmm(h["updated_at"]).rjust(5) + "  ", "2"),
+                body.append(Row(("  " + stamp.rjust(sw) + "  ", "2"),
                                 (self.fit(h["updated_by"], 12), self.ac(h["updated_by"])), (" ", ""), (lines[0], "")))
                 body += [Row((" " * (W - vw) + l, "")) for l in lines[1:]]
             if len(hist) > THREAD_MAX:
@@ -1176,11 +1178,11 @@ class Frame:
             return f"… {len(older)} older · /{word} lists them"
         return f"… {len(older)} older · agentbus read"
 
-    def page(self, rows, footer):
+    def page(self, rows, footer, keep=2):
         """Rows above the footer, scrolled by view.scroll and moved so the selected row shows; rows hidden
         above or below are counted on a dim row."""
         room = self.rows - 1
-        head, rest = rows[:2], rows[2:]
+        head, rest = rows[:keep], rows[keep:]
         avail = room - len(head)
         n = len(rest)
         if n <= avail:
@@ -1227,6 +1229,7 @@ class Frame:
         rows = [self.header("keys")]
         rows += self.wrap("watch only reads the bus. It never marks a message read and never changes a claim.",
                           W - 2, "  ")
+        pinned = len(rows)  # the header and the whole intro stay; the keys below scroll, so no sentence is cut
         rows.append(Row())
 
         def entry(k, d, width, kwid=kw):
@@ -1298,7 +1301,7 @@ class Frame:
             roles = [("🧠", "brain, lead, planner"), ("✋", "hand, implementer"), ("🧪", "tests"), ("🔍", "review"),
                      ("📚", "docs"), ("🚀", "ops, release"), ("🎨", "design"), ("🙋", "human"), ("🤖", "anyone else")]
             rows += self.flow([f"{e} {d}" for e, d in roles], [""] * len(roles))
-        return self.page(rows, self.footer([("j/k", "scroll", 60), ("Esc/q", "back", 95)]))
+        return self.page(rows, self.footer([("j/k", "scroll", 60), ("Esc/q", "back", 95)]), keep=pinned)
 
     def titled(self, title, note):
         """A help title with a dim note beside it, or wrapped under it when the row is short."""
@@ -1822,6 +1825,8 @@ def case_help_pages():
                     assert len(t) == rows, (cols, rows, scroll, len(t))
                     for l in t:
                         assert tw(l) <= cols - 1, (cols, rows, ascii_, emoji, scroll, l)
+                    intro = " ".join(l.strip() for l in t[1:5])  # the intro stays whole on every page
+                    assert "watch only reads the bus" in intro and "never changes a claim." in intro, (cols, rows, t)
                     if t == last:
                         break
                     last = t
@@ -1886,7 +1891,8 @@ MOCK_CASES = [
      "The open message is marked *, nothing is selected on open, the reply command shows, Esc/q back replaces "
      "q quit, an ancestor outside the 200 can be selected, and a nested detail says where back goes."),
     ("help-pages", "w2-06 review M4", case_help_pages,
-     "Every page of help, 40 to 80 columns, three heights, Unicode, emoji and ASCII: every row within the width."),
+     "Every page of help, 40 to 80 columns, three heights, Unicode, emoji and ASCII: every row within the width, "
+     "and the intro whole."),
     ("no-zero-more", "w2-06 review L1", case_no_zero_more,
      "No 0 more, 0 earlier or 0 later at 40 to 100 columns and 6 to 30 rows, with five filters and every focus, "
      "also when a section has one row."),

@@ -703,6 +703,89 @@ def encodings():
             s.close()
 
 
+@case
+def paste():
+    """N1: what y copies, pasted into a real interactive shell inside bracketed paste (as a terminal sends a
+    paste, control bytes and all), runs nothing: a sender, a value or a key carrying ESC [ 2 0 1 ~ (ends the
+    paste), Ctrl-U (kills the line) and CR (runs what follows) is copied without a control byte."""
+    import fcntl
+    import pty
+    import select
+    import shutil
+    import struct
+    import termios
+    g = W.g
+    evils = ["a\x1b[201~\x15touch PWNED1\r", "\x1b[201~\rtouch PWNED2\r", "x\x03touch PWNED3\n", "y\x1b\x1b[201~;touch PWNED4\r"]
+    copies = []
+    for e in evils:
+        copies.append(g["reply_command"]({"sender": e, "id": 1, "kind": "question"}, e))
+        copies.append(g["copy_text"](e))
+    snap = W.snap("sample")
+    snap["context"] = [{"key": "k" + evils[0], "value": evils[1], "updated_by": evils[2], "updated_at": W.T_NOW}]
+    v = g["View"]()
+    for k in ("3", "y"):
+        v = g["step"](v, k, snap, (100, 30), W.when(W.T_NOW))
+    copies.append(v.copied)  # the overview copies the key
+    v = g["step"](g["step"](v, "Enter", snap, (100, 30), W.when(W.T_NOW)), "y", snap, (100, 30), W.when(W.T_NOW),
+                  W.detail_for(g["step"](v, "Enter", snap, (100, 30), W.when(W.T_NOW)), snap))
+    copies.append(v.copied)  # the fact detail copies the value
+    for c in copies:
+        assert c and not any(ord(ch) < 0x20 or 0x7f <= ord(ch) < 0xa0 for ch in c), ("a control byte in a copy", c)
+    shells = [sh for sh in (["/bin/zsh", "-f", "-i"], [shutil.which("bash") or "", "--norc", "--noprofile", "-i"])
+              if sh[0] and os.path.exists(sh[0])]
+    assert shells, "no interactive shell to paste into"
+    work = os.path.join(os.path.dirname(ROOT), "paste")
+    os.makedirs(work, exist_ok=True)
+    for sh in shells:
+        e = {"HOME": work, "PATH": "/usr/bin:/bin", "TERM": "xterm-256color", "PS1": "P> ", "PROMPT": "P> "}
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(work)
+            os.execve(sh[0], sh, e)
+        buf = [b""]
+
+        def until(cond, seconds, what):
+            end = time.monotonic() + seconds
+            while not cond(buf[0]):
+                if time.monotonic() > end:
+                    raise AssertionError(f"{sh[0]}: timed out waiting for {what}: ...{buf[0][-300:]!r}")
+                r, _, _ = select.select([fd], [], [], 0.05)
+                if r:
+                    try:
+                        buf[0] += os.read(fd, 65536)
+                    except OSError:
+                        break
+        try:
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 200, 0, 0))
+            until(lambda b: b"P> " in b, 10, "the prompt")
+            for i, c in enumerate(copies):
+                os.write(fd, b"\x1b[200~" + c.encode() + b"\x1b[201~")
+                os.write(fd, b"\x15" + f"echo DONE$((40+{i}))\r".encode())  # clear the line, then a marker command
+                until(lambda b, i=i: f"DONE{40 + i}".encode() in b, 10, f"the marker after paste {i}")
+            ran = [f for f in os.listdir(work) if f.startswith("PWNED")]
+            assert not ran, (sh[0], "a paste ran a command", ran)
+            os.write(fd, b"exit\r")
+            end = time.monotonic() + 10
+            while pid and time.monotonic() < end:
+                if os.waitpid(pid, os.WNOHANG)[0]:
+                    pid = 0
+                    break
+                if select.select([fd], [], [], 0.05)[0]:
+                    try:
+                        os.read(fd, 65536)
+                    except OSError:
+                        pass
+        finally:
+            if pid:
+                try:
+                    os.kill(pid, signal.SIGKILL)  # the shell this case started
+                    os.waitpid(pid, 0)
+                except (ProcessLookupError, ChildProcessError):
+                    pass
+            os.close(fd)
+    print(f"{len(copies)} copies pasted into {', '.join(s[0] for s in shells)}: nothing ran")
+
+
 CASES["restore"] = restore
 
 if __name__ == "__main__":

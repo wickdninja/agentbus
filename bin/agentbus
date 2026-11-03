@@ -4420,17 +4420,24 @@ def _watch_messages(con, q, limit, head, bodies):
         return q("SELECT id, ts, sender, recipient, kind, topic, substr(body, 1, ?) AS body, reply_to, "
                  "substr(body, ?, 1) <> '' AS body_cut FROM messages ORDER BY id DESC LIMIT ?", head, head + 1, limit)
     rows = q("SELECT id, ts, sender, recipient, kind, topic, reply_to FROM messages ORDER BY id DESC LIMIT ?", limit)
-    need = [r["id"] for r in rows if r["id"] not in bodies]
+    # Entries belong to one bus file (device and inode) and one message (id, time, sender): a bus.db replaced
+    # under watch, or an id that came back with another message, is read again, never shown from the cache.
+    if bodies.get("bus") != con.ident:
+        bodies.clear()
+        bodies["bus"] = con.ident
+    stamp = lambda r: (r["ts"], r["sender"])
+    need = [r["id"] for r in rows if r["id"] not in bodies or bodies[r["id"]][2] != stamp(r)]
+    by_id = {r["id"]: r for r in rows}
     for i in range(0, len(need), 500):
         part = need[i:i + 500]
         for r in con.execute("SELECT id, substr(body, 1, ?), substr(body, ?, 1) <> '' FROM messages WHERE id IN (%s)"
                              % ",".join("?" * len(part)), (head, head + 1, *part)):
-            bodies[r[0]] = (r[1], bool(r[2]))
-    held = {r["id"] for r in rows}
+            bodies[r[0]] = (r[1], bool(r[2]), stamp(by_id[r[0]]))
+    held = {r["id"] for r in rows} | {"bus"}
     for i in [i for i in bodies if i not in held]:
         del bodies[i]
     for r in rows:
-        r["body"], r["body_cut"] = bodies.get(r["id"], ("", False))
+        r["body"], r["body_cut"] = bodies.get(r["id"], ("", False, None))[:2]
     return rows
 
 
@@ -4542,10 +4549,25 @@ def time_left(ts, t_now):
     return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
 
 
+_WATCH_ENCODING = None  # set by watch on a stdout that is not UTF-8: what it cannot encode is written as ?
+
+
+@lru_cache(maxsize=4096)
+def _unencodable(c, encoding):
+    try:
+        c.encode(encoding)
+        return False
+    except (UnicodeError, LookupError):
+        return True
+
+
 def cell_width(c):
     """Columns a character takes in the live view: 2 for wide (East Asian W/F), 0 for combining
     marks, else 1. clean() has already escaped every control and format character. Ambiguous-width
-    characters (é, the em dash) count 1, as in every non-CJK terminal; each row keeps one spare column."""
+    characters (é, the em dash) count 1, as in every non-CJK terminal; each row keeps one spare column.
+    On a stdout that is not UTF-8 (_WATCH_ENCODING) a character it cannot encode is written as ?: 1."""
+    if _WATCH_ENCODING and _unencodable(c, _WATCH_ENCODING):
+        return 1
     if unicodedata.combining(c):
         return 0
     return 2 if unicodedata.east_asian_width(c) in "WF" else 1
@@ -4893,12 +4915,30 @@ def visible_keys(snap, section, text):
     return [x[k] for x in section_items(snap, section) if filter_matches(section, x, toks)]
 
 
+def shell_word(v):
+    """v as one shell word that holds no control byte: shlex.quote when v has no unsafe character, else
+    bash/zsh ANSI-C quoting ($'...') with every unsafe character, quote and backslash escaped. A pasted
+    control byte goes to the line editor before any parser (ESC [ 2 0 1 ~ ends a bracketed paste, Ctrl-U kills
+    the line, CR runs what follows), so no quoting may keep one raw."""
+    v = str(v)
+    if not any(_unsafe(c) for c in v):
+        return shlex.quote(v)
+    return "$'" + "".join("\\" + c if c in "\\'" else _esc(c) if _unsafe(c) else c for c in v) + "'"
+
+
+def copy_text(v):
+    """Plain text as y copies it: as written, unless it holds an unsafe character, then in its clean()ed
+    form, so nothing copied carries a control byte into a paste."""
+    v = str(v)
+    return clean(v) if any(_unsafe(c) for c in v) else v
+
+
 def reply_command(m, name="NAME"):
-    """The command that replies to m, shown in its detail and copied by y, as the raw text a shell takes:
-    every value is shlex-quoted, so a sender named `ops$(touch x)` is pasted as one argument and runs
-    nothing. name: $AGENTBUS_AGENT or --as when set, else the word NAME. The screen shows it clean()ed."""
+    """The command that replies to m, shown in its detail and copied by y, as the text a shell takes: every
+    value is one shell word (shell_word), so a sender named `ops$(touch x)` is one argument and runs nothing,
+    and no control byte is ever in it. name: $AGENTBUS_AGENT or --as when set, else the word NAME."""
     kind = " --kind answer" if m["kind"] == "question" else ""
-    return (f"agentbus --as {shlex.quote(str(name))} post --to {shlex.quote(str(m['sender']))} "
+    return (f"agentbus --as {shell_word(name)} post --to {shell_word(m['sender'])} "
             f"--reply-to {int(m['id'])}{kind} \"...\"")
 
 
@@ -5460,10 +5500,11 @@ class _Frame:
     def wrap(self, text, width, indent):
         return [Row((indent + l, "")) for l in wrap_lines(clean(text, newlines=True), max(1, width))]
 
-    def label_rows(self, label, text, sgr="", sel=False):
-        """A label and a value wrapped under itself; nothing in a detail is cut."""
+    def label_rows(self, label, text, sgr="", sel=False, shell=False):
+        """A label and a value wrapped under itself; nothing in a detail is cut. shell: text that is already a
+        shell command holding no unsafe character (reply_command), shown exactly as y copies it."""
         lab = label.ljust(10)
-        lines = wrap_lines(clean(text), max(1, self.W - 2 - text_width(lab)))
+        lines = wrap_lines(text if shell else clean(text), max(1, self.W - 2 - text_width(lab)))
         return [Row(("> " if sel and i == 0 else "  ", ""), (lab if i == 0 else " " * text_width(lab), "2"), (l, sgr),
                     sel=sel and i == 0) for i, l in enumerate(lines)]
 
@@ -5558,7 +5599,7 @@ class _Frame:
             body.append(Row())
             body += self.wrap(m["body"], W - 4, "    ")
             body.append(Row())
-            body += self.label_rows("reply", reply_command(m, self.me), "1")
+            body += self.label_rows("reply", reply_command(m, self.me), "1", shell=True)
             if d.get("thread", True):
                 body.append(Row())
                 if data is None:
@@ -5629,10 +5670,12 @@ class _Frame:
             body.append(Row())
             body.append(self.title("History", str(nh) if nh <= THREAD_MAX else f"{THREAD_MAX} of {nh}",
                                    ["newest first", ""]))
-            vw = W - 2 - 7 - 13
-            for h in hist[:THREAD_MAX]:
+            stamps = [self.hhmm(h["updated_at"]) for h in hist[:THREAD_MAX]]
+            sw = max([5] + [len(t) for t in stamps])  # HH:MM today, `Nov 2 00:00` on an earlier day
+            vw = W - 2 - sw - 2 - 13
+            for h, stamp in zip(hist[:THREAD_MAX], stamps):
                 lines = wrap_lines(clean(h["value"]), max(1, vw))
-                body.append(Row(("  " + self.hhmm(h["updated_at"]).rjust(5) + "  ", "2"),
+                body.append(Row(("  " + stamp.rjust(sw) + "  ", "2"),
                                 (self.fit(h["updated_by"], 12), self.ac(h["updated_by"])), (" ", ""), (lines[0], "")))
                 body += [Row((" " * (W - vw) + l, "")) for l in lines[1:]]
             if nh > THREAD_MAX:
@@ -5658,11 +5701,12 @@ class _Frame:
             return f"… {older} older · /{word} lists them"
         return f"… {older} older · agentbus read"
 
-    def page(self, rows, footer):
+    def page(self, rows, footer, keep=2):
         """Rows above the footer, scrolled by view.scroll and moved so the selected row shows; rows hidden
-        above or below are counted on a dim row."""
+        above or below are counted on a dim row. keep: the rows that never scroll (the header and the goal; help
+        keeps its header and its whole intro, so a scrolled page never shows half a sentence)."""
         room = self.rows - 1
-        head, rest = rows[:2], rows[2:]
+        head, rest = rows[:keep], rows[keep:]
         avail = room - len(head)
         n = len(rest)
         if n <= avail:
@@ -5711,6 +5755,7 @@ class _Frame:
         rows = [self.header("keys")]
         rows += self.wrap("watch only reads the bus. It never marks a message read and never changes a claim.",
                           W - 2, "  ")
+        pinned = len(rows)  # the header and the whole intro stay; the keys below scroll, so no sentence is cut
         rows.append(Row())
 
         def entry(k, d, width, kwid=kw):
@@ -5782,7 +5827,7 @@ class _Frame:
             roles = [("🧠", "brain, lead, planner"), ("✋", "hand, implementer"), ("🧪", "tests"), ("🔍", "review"),
                      ("📚", "docs"), ("🚀", "ops, release"), ("🎨", "design"), ("🙋", "human"), ("🤖", "anyone else")]
             rows += self.flow([f"{e} {d}" for e, d in roles], [""] * len(roles))
-        return self.page(rows, self.footer([("j/k", "scroll", 60), ("Esc/q", "back", 95)]))
+        return self.page(rows, self.footer([("j/k", "scroll", 60), ("Esc/q", "back", 95)]), keep=pinned)
 
     def titled(self, title, note):
         """A help title with a dim note beside it, or wrapped under it when the row is short."""
@@ -6030,9 +6075,9 @@ def detail_related(view, snap, data):
 
 
 def _copy_text(view, snap, data):
-    """What y copies, raw (OSC 52 carries it base64, so it cannot drive the terminal; the footer shows it
-    clean()ed): in the overview the selected row's key, in a detail the reply command (message), the name,
-    the resource or the value."""
+    """What y copies (OSC 52 carries it base64; the footer shows it clean()ed): in the overview the selected
+    row's key, in a detail the reply command (message), the name, the resource or the value. Never a control
+    byte: plain text is copied as written unless it holds one (copy_text), the command quotes it (shell_word)."""
     shown = view.shown(snap)
     if view.mode == "detail" and view.detail:
         d = view.detail
@@ -6042,13 +6087,13 @@ def _copy_text(view, snap, data):
             return reply_command(m, view.me or "NAME") if m else None
         if d["section"] == "facts":
             rec = next((x for x in shown["context"] if x["key"] == d["key"]), None) or (data or {}).get("record")
-            return str(rec["value"]) if rec else None
-        return str(d["key"])
+            return copy_text(rec["value"]) if rec else None
+        return copy_text(d["key"])
     key = view.sel.get(view.focus)
     if key is None and view.focus == "messages":
         keys = visible_keys(shown, "messages", view.filter)
         key = keys[-1] if keys else None
-    return None if key is None else str(key)
+    return None if key is None else copy_text(key)
 
 
 def _open(v, section, key, stack):
@@ -6356,6 +6401,8 @@ def watch_settings(stdout_tty):
     utf8 = (sys.stdout.encoding or "").lower().replace("-", "").replace("_", "") == "utf8"
     ascii_mode = os.environ.get("AGENTBUS_ASCII", "") not in ("", "0") or term == "linux" or not utf8
     if not utf8:
+        global _WATCH_ENCODING
+        _WATCH_ENCODING = sys.stdout.encoding or "ascii"
         try:
             sys.stdout.reconfigure(errors="replace")
         except (AttributeError, ValueError):

@@ -83,7 +83,7 @@
    "name": "help-pages",
    "from": "w2-06 review M4",
    "runs": "mock",
-   "checks": "Every page of help, 40 to 80 columns, three heights, Unicode, emoji and ASCII: every row within the width."
+   "checks": "Every page of help, 40 to 80 columns, three heights, Unicode, emoji and ASCII: every row within the width, and the intro whole."
   },
   {
    "name": "no-zero-more",

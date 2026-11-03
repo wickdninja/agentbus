@@ -1,7 +1,7 @@
  agentbus  ~/src/acme-api                                         keys
   watch only reads the bus. It never marks a message read and never
+  changes a claim.
   ... 35 lines above - PgUp
-Words
   following          the newest messages, as they arrive
   paused at 16:44    the whole view is frozen as it was then; +N new
                      counts what came since
