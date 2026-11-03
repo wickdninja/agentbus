@@ -175,6 +175,7 @@ OBSERVED = {
     "buses": observe((), ("buses",), EVERYTHING),
     "schema": observe((), ("schema",), EVERYTHING),
     "skill": observe((), ("skill",), EVERYTHING),
+    "doctor": observe((), ("doctor",), EVERYTHING),
 }
 # init and upgrade write files, not rows: a second run leaves the folder as the first did
 repo = os.path.join(tmp, "repo"); os.makedirs(repo)

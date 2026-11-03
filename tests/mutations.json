@@ -223,5 +223,113 @@
     "count": 1,
     "run": "tests/test_planted.sh",
     "expect": "database disk image is malformed"
+  },
+  {
+    "name": "doctor opens the bus for writing",
+    "file": "bin/agentbus",
+    "find": "open_bus\\(ctx\\.db, ctx\\.strict, read_only=True, busy_wait=DOCTOR_BUSY_WAIT_S\\)",
+    "replace": "open_bus(ctx.db, ctx.strict, read_only=False, busy_wait=DOCTOR_BUSY_WAIT_S)",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
+  },
+  {
+    "name": "doctor exits 0 when a check failed",
+    "file": "bin/agentbus",
+    "find": "    if fail:\\n        bad = \\[",
+    "replace": "    if False:\\n        bad = [",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "a newer bus must exit 1"
+  },
+  {
+    "name": "doctor treats an older copy as newer",
+    "file": "bin/agentbus",
+    "find": "    if copy is not None and release_key\\(copy\\) < mine:",
+    "replace": "    if copy is not None and release_key(copy) > mine:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "output lacks: 0.1.0 here, 0.2.0 installed"
+  },
+  {
+    "name": "doctor waits five seconds for a busy bus",
+    "file": "bin/agentbus",
+    "find": "^DOCTOR_BUSY_WAIT_S = 0\\.3 ",
+    "replace": "DOCTOR_BUSY_WAIT_S = 5.0 ",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "FAIL: busy"
+  },
+  {
+    "name": "doctor starts a process of its own in discovery",
+    "file": "bin/agentbus",
+    "find": "    try:\\n        ctx\\.db, ctx\\.strict = find_bus_path\\(up\\)",
+    "replace": "    os.waitpid(os.posix_spawnp(\"true\", [\"true\"], {}), 0)\\n    try:\\n        ctx.db, ctx.strict = find_bus_path(up)",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor started a subprocess or an executable"
+  },
+  {
+    "name": "doctor names upgrade --all PARENT for an older copy",
+    "file": "bin/agentbus",
+    "find": "return \\[doctor_result\\(\"copy\", \"warn\", f\"\\{copy\\} here, \\{ctx\\.version\\} installed\", upgrade\\)\\]",
+    "replace": "return [doctor_result(\"copy\", \"warn\", f\"{copy} here, {ctx.version} installed\", f\"agentbus upgrade --all {os.path.dirname(ctx.directory)}\")]",
+    "count": 1,
+    "run": "tests/test_version_policy.sh",
+    "expect": "doctor entry copy (warn, '0.1.0 here, 0.2.0 installed') is not as documented"
+  },
+  {
+    "name": "doctor creates the missing agent config folder",
+    "file": "bin/agentbus",
+    "find": "    if scope == \"user\" and not os\\.path\\.isdir\\(cfg\\):\\n        return doctor_result",
+    "replace": "    if scope == \"user\" and not os.path.isdir(cfg):\\n        os.makedirs(cfg, exist_ok=True)\\n        return doctor_result",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
+  },
+  {
+    "name": "doctor compares the copy's version but not its bytes",
+    "file": "bin/agentbus",
+    "find": "    if theirs is None or ours is None or theirs != ours:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "the copy is from source (0123456)"
+  },
+  {
+    "name": "doctor reports a refused discovery as no bus",
+    "file": "bin/agentbus",
+    "find": "        if r\\[\"code\"\\] == \"no_bus\" and r\\[\"message\"\\]\\.startswith\\(DOCTOR_NO_BUS\\):",
+    "replace": "        if r[\"code\"] == \"no_bus\":",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor must exit 1 where join exits 3"
+  },
+  {
+    "name": "doctor offers setup for a file setup refuses",
+    "file": "bin/agentbus",
+    "find": "return doctor_result\\(\"skill\", \"warn\", f\"\\{skill\\} was not written by agentbus\", scope=scope, hint=refused \\+ \"\\.\"\\)",
+    "replace": "return doctor_result(\"skill\", \"warn\", f\"{skill} was not written by agentbus\", fix, scope=scope, hint=refused + \".\")",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "was not written by agentbus', fix ''"
+  },
+  {
+    "name": "doctor drops null keys from the failed list",
+    "file": "bin/agentbus",
+    "find": "        bad = \\[doctor_json_check\\(r\\) for r in results if r\\[\"status\"\\] == \"fail\"\\]",
+    "replace": "        bad = [{k: v for k, v in doctor_json_check(r).items() if v is not None} for r in results if r[\"status\"] == \"fail\"]",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "stdout is not the full result"
+  },
+  {
+    "name": "doctor writes the git exclude rule",
+    "file": "bin/agentbus",
+    "find": "        ctx\\.db, ctx\\.strict = find_bus_path\\(up\\)\\n",
+    "replace": "        ctx.db, ctx.strict = find_bus_path(up)\\n        _i = repo_info(os.path.dirname(os.path.dirname(ctx.db)))\\n        _i and keep_excluded(*_i)\\n",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
   }
 ]
