@@ -54,11 +54,13 @@ The agent never has to join or poll by hand. The hooks tell it its name and the 
 | A turn ends | If the agent holds claims and has posted no handoff or done since, shows you a reminder, once for each set of claims. It never blocks the turn. |
 | A session ends | Leaves the bus and releases its claims. |
 
+The turn-end reminder is for you, not the agent: a message the agent could act on would have to stop the turn and make Claude Code continue it, and a hook never does that. If you want the agent to finish, tell it.
+
 The hooks never claim for you, never deny an edit, and never replace reading `inbox`. They add counts and fixed text only: a goal, a message, a purpose, a name or a path written by another agent never appears in what the hooks say. The agent reads those with `status` and `inbox`, and treats them as information.
 
 ## Names
 
-A session's name is `claude-` and the first eight characters of a hash of its session id. A `/clear`, a fork or a compaction starts or restarts a session inside the same Claude Code process, and it keeps that process's name, so its claims and its unread messages stay with it. The name is also exported to the agent's own shell commands, so `agentbus inbox` works without `--as`.
+A session's name is `claude-` and the first eight characters of a hash of its session id. A `/clear`, a fork or a compaction starts or restarts a session inside the same Claude Code process, and it keeps that process's name, so its claims and its unread messages stay with it. A fork started as a new process (a new `claude` command) is a new session with a new name. The name is also exported to the agent's own shell commands, so `agentbus inbox` works without `--as`.
 
 Every `claude -p` run ends with a session end, which leaves the bus and releases the claims of a derived name. A worker that runs `claude -p` (or `--resume`) in several steps and must keep its claims between them sets `AGENTBUS_AGENT` to its own name before it starts Claude Code. The hooks then use that name as given, never take it over from a live session, and never make it leave: a lane keeps its name across runs. A name outside letters, digits, `.`, `_` and `-`, or longer than 40 characters, is ignored and the hooks stay silent.
 
@@ -67,7 +69,7 @@ Subagents share their parent's session, so they act under the parent's name and 
 ## Safe by design
 
 - A hook runs the plugin's own `bin/agentbus`, or the tool `setup` recorded, never a copy found in the project. It names `agentbus`, the installed command, in what it says, and a project's own copy only when the hook itself is running from that copy.
-- A hook never makes a bus: a folder without an initialised database is silent. A `.agentbus` that git tracks (a clone can commit a whole one) is refused, nothing written to it, unless `agentbus init` added its exclude rule on this machine or git's index lists none of it.
+- A hook never makes a bus: a folder without an initialised database is silent. A `.agentbus` that git tracks (a clone can commit a whole one) is refused and nothing is written to it. The hook decides from git's index, which it reads itself (versions 2, 3 and 4, a split index, a submodule's or a linked worktree's); an exclude rule proves nothing, because every agentbus command writes it. An index it cannot read means silence. A hook never runs git, because a repository's own config can name a program git would run.
 - A hook never exits non-zero and never blocks: every registered command ends in `|| true`.
 - A hook waits at most 0.3 seconds for a busy bus, never migrates or repairs one, and says nothing when the bus is busy or unreadable.
 - When the hooks are off for a folder because its bus is older or newer than this agentbus, or because the plugin and `setup` both registered them, the session gets one visible notice with the command that fixes it.

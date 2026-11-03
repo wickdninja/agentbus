@@ -39,9 +39,20 @@ jobs:
           node-version: "22"
       - name: Claude Code CLI (tests/test_plugin_manifest.sh runs `claude plugin validate .`, which needs no login)
         run: |
-          # Exact version, and the registry's integrity hash for it pinned too.
-          test "$(npm view @anthropic-ai/claude-code@2.1.316 dist.integrity)" = "sha512-i3BpzyDkcCPnsa0CSkWgxGPs7WMsyqDkxkqT0SDxyEC5XMIxEmcUmluWRHG9VSeBY8Vyv+l9X34JvJ/Bj54nBQ=="
-          npm install --global @anthropic-ai/claude-code@2.1.316
+          # Exact version. No install scripts run: the package's own install.cjs is run by hand, after the registry's
+          # integrity hash of the wrapper and of the platform build were checked against the values pinned here.
+          set -e
+          pin() { test "$(npm view "$1@2.1.316" dist.integrity)" = "$2"; }
+          pin @anthropic-ai/claude-code sha512-i3BpzyDkcCPnsa0CSkWgxGPs7WMsyqDkxkqT0SDxyEC5XMIxEmcUmluWRHG9VSeBY8Vyv+l9X34JvJ/Bj54nBQ==
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) plat=linux-x64; sum=sha512-RQDM6N285IjNKcmlPRriayNzpTkEJreAw5/vBU+V0R3qljkQ5z6/pSbzcVUAXvasoOlvub0RIma3NWvSuZA8Cg== ;;
+            Linux-aarch64) plat=linux-arm64; sum=sha512-xqlAkhgSLCMdcaepQNIs1+ym5X9++apiEeOc0LHRVOHpfLlpYKAaAXBRccM6QVITN0T9sXLCIby7CO1Lczusgw== ;;
+            Darwin-arm64) plat=darwin-arm64; sum=sha512-wJiLVMzg2atF7C/a+0wt+yQShWIePsMNL86gIoIJanURY2fxrwHIxrYuxoTW8sWqfj7ai+otV/ik2r7m5aPy1g== ;;
+            *) echo "no pinned Claude Code build for $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          pin "@anthropic-ai/claude-code-$plat" "$sum"
+          npm install --global --ignore-scripts "@anthropic-ai/claude-code@2.1.316" "@anthropic-ai/claude-code-$plat@2.1.316"
+          node "$(npm root --global)/@anthropic-ai/claude-code/install.cjs"
           claude --version
       - name: Compile
         run: |

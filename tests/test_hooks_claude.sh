@@ -187,7 +187,7 @@ PY
 # SessionStart may print (once per session; later events stay silent), or empty when everything must be silent.
 run_all_events() {
   BAD=""
-  for ev in "SessionStart session_start_startup_print" "UserPromptSubmit user_prompt_submit" "PreToolUse pre_tool_use_write" "Stop stop" "SessionEnd session_end_other" "SessionStart session_start_startup_print"; do
+  for ev in "SessionStart session_start_startup_print" "SessionStart session_start_startup_print" "UserPromptSubmit user_prompt_submit" "PreToolUse pre_tool_use_write" "Stop stop" "SessionEnd session_end_other"; do
     set -- $ev; local name=$1 fx=$2; shift 2
     payload "$fx" session_id="\"$SID1\"" >"$T/pl"
     RC=0; (cd "$P" && "${LAUNCH[@]}" hook claude "$name" <"$T/pl" >"$T/out" 2>"$T/err") || RC=$?
@@ -458,23 +458,87 @@ SS; quiet || fail "an init-ed folder before any bus command: rc $RC out $OUT err
 ok "no bus.db: silent, and none is made"
 
 echo
-echo "TEST 24: a .agentbus that git tracks is refused; the local exclude rule or an index without it accepts"
-newbus p24; N=$(dname "$SID1")
-ab --as peer join --tool t >/dev/null; ab --as peer goal "CANARY-GOAL" >/dev/null
-git -C "$P" add -f .agentbus; git -C "$P" -c user.email=t@t -c user.name=t commit -q -m "a committed bus"
-SS; [ -n "$OUT" ] || fail "setup: an excluded bus must work even if its files were force-added"
-EXC="$P/.git/info/exclude"; grep -qx '.agentbus/' "$EXC" || fail "init wrote no exclude rule"
-: >"$EXC"       # a fresh clone: the committed bus is there, init's local rule is not
-before=$(sha "$P/.agentbus/bus.db")
-SS; quiet || fail "a committed bus without init's exclude rule: rc $RC out $OUT err $ERR"
-UPS; quiet || fail "a committed bus, UserPromptSubmit: out $OUT"
-PRE x.txt; quiet || fail "a committed bus, PreToolUse: out $OUT"
-[ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a committed bus"
-newbus p24b                                   # not tracked, rule only in a .gitignore the project could have committed
-: >"$P/.git/info/exclude"
-printf '.agentbus/\n' >"$P/.gitignore"
-SS; [ -n "$OUT" ] || fail "an untracked bus whose index lists no .agentbus path was refused: rc $RC err $ERR"
-ok "tracked without the local rule: silent and unwritten; the rule, or an index that lacks it: works"
+echo "TEST 24: a .agentbus that git tracks is refused whatever the index (v2, v3, v4, split, a submodule, a linked worktree); an untracked one works; nothing runs git"
+gitq() { git -C "$1" -c user.email=t@t -c user.name=t -c protocol.file.allow=always "${@:2}"; }
+index_version() { "$PY" -c 'import struct,sys; print(struct.unpack(">I", open(sys.argv[1],"rb").read(8)[4:8])[0])' "$P/.git/index"; }
+# mkindexed KIND NAME: project P (a git repository with a bus, an untracked .agentbus) whose index is of KIND.
+mkindexed() {
+  newbus "$2"; printf x >"$P/f.txt"; printf y >"$P/g.txt"
+  case "$1" in v4) git -C "$P" config index.version 4 ;; split) git -C "$P" config core.splitIndex true ;; esac
+  gitq "$P" add f.txt g.txt; gitq "$P" commit -qm base
+  case "$1" in
+    v3) printf z >"$P/h.txt"; gitq "$P" add -N h.txt ;;
+    v4) gitq "$P" update-index --index-version 4 ;;
+    split) gitq "$P" update-index --split-index ;;
+  esac
+}
+# track: put .agentbus in the index of P (force-added, as a clone's committed bus would be)
+track() {
+  gitq "$P" add -f .agentbus
+  if [ "$1" = split ]; then
+    gitq "$P" update-index --no-split-index; gitq "$P" update-index --split-index; printf q >"$P/k.txt"; gitq "$P" add k.txt
+    ls "$P"/.git/sharedindex.* >/dev/null 2>&1 || fail "the split index test made no shared index"
+  fi
+}
+for kind in v2 v3 v4 split; do
+  want=2; [ "$kind" = v3 ] && want=3; [ "$kind" = v4 ] && want=4
+  mkindexed "$kind" "p24-$kind-free"
+  [ "$(index_version)" = "$want" ] || fail "the $kind index test wrote index version $(index_version)"
+  SS; [ -n "$OUT" ] || fail "an untracked bus with a $kind index was refused: rc $RC err $ERR"
+  mkindexed "$kind" "p24-$kind-tracked"; track "$kind"
+  [ "$(index_version)" = "$want" ] || fail "the tracked $kind index test wrote index version $(index_version)"
+  grep -qx '.agentbus/' "$P/.git/info/exclude" || fail "init wrote no exclude rule in the $kind test"   # and the bus is refused anyway
+  before=$(sha "$P/.agentbus/bus.db")
+  SS; quiet || fail "a tracked bus with a $kind index was used: rc $RC out $OUT err $ERR"
+  UPS; quiet || fail "a tracked bus ($kind), UserPromptSubmit: out $OUT"
+  PRE x.txt; quiet || fail "a tracked bus ($kind), PreToolUse: out $OUT"
+  [ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a tracked bus ($kind index)"
+done
+# a clone of a repository with a committed bus, after one ordinary command (which writes the exclude rule)
+mkindexed v2 p24-src; gitq "$P" add -f .agentbus; gitq "$P" commit -qm bus; SRC=$P
+git clone -q "$SRC" "$T/p24-clone"; P="$T/p24-clone"
+(cd "$P" && "${AB[@]}" status >/dev/null 2>&1)
+grep -q agentbus "$P/.git/info/exclude" || fail "the ordinary command wrote no exclude rule in the clone"
+before=$(sha "$P/.agentbus/bus.db"); SS; quiet || fail "a clone's committed bus was used after an ordinary command: rc $RC out $OUT"
+[ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a clone's committed bus"
+# an index git did not write, or cannot be read: silent
+for damage in truncated garbage checksum symlink fifo; do
+  mkindexed v2 "p24-bad-$damage"; IDX="$P/.git/index"
+  case "$damage" in
+    truncated) head -c 100 "$IDX" >"$IDX.t"; mv "$IDX.t" "$IDX" ;;
+    garbage) printf 'not an index at all' >"$IDX" ;;
+    checksum) "$PY" -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[40]^=1; open(sys.argv[1],"wb").write(bytes(b))' "$IDX" ;;
+    symlink) mv "$IDX" "$IDX.real"; ln -s "$IDX.real" "$IDX" ;;
+    fifo) rm "$IDX"; mkfifo "$IDX" ;;
+  esac
+  before=$(sha "$P/.agentbus/bus.db"); SS; quiet || fail "an unreadable index ($damage): the hook spoke: rc $RC out $OUT err $ERR"
+  [ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "an unreadable index ($damage): bus.db changed"
+done
+# a submodule: its .git is a file pointing at the real git dir
+mkindexed v2 p24-subsrc; SUBSRC=$P
+newbus p24-outer; gitq "$P" commit -q --allow-empty -m first; gitq "$P" submodule add -q "$SUBSRC" sub; gitq "$P" commit -qm sub
+[ -f "$P/sub/.git" ] || fail "the submodule test made no .git file"
+P="$P/sub"; (cd "$P" && "${AB[@]}" init . >/dev/null && "${AB[@]}" who >/dev/null)
+SS; [ -n "$OUT" ] || fail "an untracked bus in a submodule was refused: rc $RC err $ERR"
+gitq "$P" add -f .agentbus; before=$(sha "$P/.agentbus/bus.db")
+SS; quiet || fail "a tracked bus in a submodule was used: rc $RC out $OUT"
+[ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a submodule's tracked bus"
+# a linked worktree finds the main checkout's bus, and honours that checkout's index
+mkindexed v2 p24-main; MAIN=$P; gitq "$MAIN" worktree add -q "$T/p24-wt"
+HCWD="$T/p24-wt" SS; [ -n "$OUT" ] || fail "a linked worktree did not reach the main checkout's bus: rc $RC err $ERR"
+gitq "$MAIN" add -f .agentbus
+HCWD="$T/p24-wt" SS; quiet || fail "a linked worktree used the main checkout's tracked bus: rc $RC out $OUT"
+# nothing here runs git: a git first on PATH and a repository config that names a program (core.fsmonitor) stay idle
+mkindexed v2 p24-nogit
+mkdir -p "$T/fakebin"; printf '#!/bin/sh\ntouch "%s"\nexec /usr/bin/git "$@"\n' "$T/canary-git" >"$T/fakebin/git"; chmod +x "$T/fakebin/git"
+printf '[core]\n\tfsmonitor = touch %s/canary-fsmonitor\n' "$T" >>"$P/.git/config"
+PATH="$T/fakebin:$PATH" git -C "$P" status >/dev/null 2>&1 || true
+[ -e "$T/canary-git" ] || fail "the control failed: the stub git was not found first on PATH"
+rm -f "$T/canary-git" "$T/canary-fsmonitor"
+PATH="$T/fakebin:$PATH" SS; [ -n "$OUT" ] || fail "a repository with a fsmonitor setting: the hook said nothing: rc $RC err $ERR"
+PATH="$T/fakebin:$PATH" UPS; PATH="$T/fakebin:$PATH" PRE x.txt; PATH="$T/fakebin:$PATH" STOP; PATH="$T/fakebin:$PATH" END
+[ ! -e "$T/canary-git" ] && [ ! -e "$T/canary-fsmonitor" ] || fail "a hook ran git (or what a repository's config named)"
+ok "tracked or unreadable index: silent and unwritten, for every format; untracked: works; no git run"
 
 echo
 echo "TEST 25: hook text names the installed command, never a bus copy it is not running from; from a copy it quotes the path"
@@ -568,6 +632,27 @@ touch -t 202001010000 "$STATE/stale.seen" "$STATE/stale.name"; touch "$STATE/fre
 SS; grep -qF "1 agent is on it" <<<"$(text_of)" || fail "stale agents were counted: $OUT"
 [ ! -e "$STATE/stale.seen" ] && [ ! -e "$STATE/stale.name" ] && [ -e "$STATE/fresh.seen" ] || fail "per-session memory was not pruned by age: $(ls "$STATE")"
 ok "live agents only; memory older than a week is removed"
+
+echo
+echo "TEST 31: dead processes' names are pruned, a linked name file is not trusted, the memory file is locked and dropped, pruning reads every entry"
+newbus p31; SIDF=aaaaaaaa-0000-4000-8000-000000000021; SIDG=aaaaaaaa-0000-4000-8000-000000000022; SIDH=aaaaaaaa-0000-4000-8000-000000000023
+STATE="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; mkdir -p "$STATE"; chmod 700 "$STATE"
+sh -c 'exit 0' & DEAD=$!; wait "$DEAD" || true
+printf 'claude-aaaaaaaa' >"$STATE/proc-$DEAD.name"; printf 'claude-bbbbbbbb' >"$STATE/proc-$$.name"
+for i in $(seq 1 600); do : >"$STATE/bulk-$i.seen"; done; : >"$STATE/zz-old.seen"; touch -t 202001010000 "$STATE/zz-old.seen"
+SS "$SIDF"
+[ ! -e "$STATE/proc-$DEAD.name" ] && [ -e "$STATE/proc-$$.name" ] || fail "a dead process's name was kept, or a live one's removed"
+[ ! -e "$STATE/zz-old.seen" ] && [ -e "$STATE/bulk-600.seen" ] || fail "pruning did not reach the 600th entry, or removed fresh ones"
+ab --as peer join --tool t >/dev/null; ab --as peer post "for g" --to "$(dname "$SIDG")" --kind note >/dev/null 2>&1
+printf 'claude-deadbeef\n' >"$T/evil.name"; ln -s "$T/evil.name" "$STATE/$SIDG.name"
+UPS "$SIDG"; grep -qF "1 unread message" <<<"$(text_of)" || fail "a linked name file was followed: out $OUT"
+SS "$SIDH"
+for i in $(seq 1 40); do payload pre_tool_use_write session_id="\"$SIDH\"" tool_input.file_path="\"$P/par$i.txt\"" >"$T/par$i.json"; done
+for i in $(seq 1 40); do ( cd "$P" && "${AB[@]}" hook claude PreToolUse <"$T/par$i.json" >/dev/null 2>&1 ) & done; wait
+[ "$(grep -c . "$STATE/$SIDH.seen")" = 40 ] || fail "parallel hooks lost memory updates: $(grep -c . "$STATE/$SIDH.seen") of 40 paths kept"
+END other "$SIDH"; [ ! -e "$STATE/$SIDH.seen" ] || fail "the memory file outlived the session"
+rm -f "$STATE"/bulk-*.seen "$STATE/proc-$$.name"
+ok "dead pids pruned, links ignored, 40 parallel updates kept, memory dropped at SessionEnd"
 
 echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"

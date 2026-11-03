@@ -871,4 +871,52 @@ PY
 ok "absolute paths only"
 
 echo
+echo "TEST: hooks: setup starts claude only from a trusted place and from the home folder; check starts nothing"
+reset; git -C "$W" init -q; export AGENTBUS_CLAUDE_BIN=
+mkdir -p "$W/node_modules/.bin" "$T/ok" "$T/gw"
+mkclaude() { printf '#!/bin/sh\necho "$PWD $*" >>"%s"\necho '"'"'[{"id":"agentbus@agentbus","enabled":true}]'"'"'\n' "$T/claude.log" >"$1"; chmod 755 "$1"; }
+mkclaude "$W/node_modules/.bin/claude"; mkclaude "$T/ok/claude"; mkclaude "$T/gw/claude"
+ran() { [ -s "$T/claude.log" ]; }
+tried() {  # tried PATH LABEL: setup with that PATH; the log says whether a claude was started
+  rm -f "$T/claude.log"; PATH="$1" run_setup claude
+  [ "$RC" = 0 ] || fail "$2: setup exit $RC: $OUT"
+}
+tried "$W/node_modules/.bin:$PATH" "a claude inside the repo"
+! ran || fail "setup started a claude that lives inside the working directory's repo"
+grep -qF "added 5 hooks" <<<"$OUT" || fail "without a trusted claude the plugin files were not used"
+reset; git -C "$W" init -q; mkdir -p "$W/node_modules/.bin"; mkclaude "$W/node_modules/.bin/claude"
+(cd "$W" && rm -f "$T/claude.log" && PATH="node_modules/.bin:$PATH" "${AB[@]}" setup claude >/dev/null 2>&1) || fail "setup with a relative PATH entry failed"
+! ran || fail "setup started a claude found through a relative PATH entry"
+rm -rf "$W/.git"; reset; mkdir -p "$W/node_modules/.bin"; mkclaude "$W/node_modules/.bin/claude"
+tried "$W/node_modules/.bin:$PATH" "a claude under the working directory, no repository"
+! ran || fail "setup started a claude that lives under the working directory"
+chmod 775 "$T/gw/claude"; reset
+tried "$T/gw:$PATH" "a group-writable claude"
+! ran || fail "setup started a group-writable claude"
+mkdir -p "$T/gwdir"; mkclaude "$T/gwdir/claude"; chmod 775 "$T/gwdir"; reset
+tried "$T/gwdir:$PATH" "a claude in a group-writable folder"
+! ran || fail "setup started a claude in a group-writable folder"
+reset
+tried "$T/ok:$PATH" "a trusted claude"
+ran || fail "setup did not start a trusted claude"
+"$PY" -I - "$T/claude.log" "$HOME" <<'PY' || fail "claude was not started from the home folder with plugin list --json"
+import os, sys
+line = open(sys.argv[1]).read().strip()
+cwd, args = line.split(" ", 1)
+assert os.path.realpath(cwd) == os.path.realpath(sys.argv[2]) and args == "plugin list --json", line
+PY
+grep -qF "provided by the agentbus plugin" <<<"$OUT" || fail "a trusted claude's answer was not used"
+# check reads files only
+rm -f "$T/claude.log"; reset; run_setup claude >/dev/null
+(cd "$W" && PATH="$T/ok:$PATH" "$PY" -I - "${AGENTBUS_BIN:-$BIN}" <<'PY'
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_check")
+m["ClaudeHooksPiece"]().check("user"); m["ClaudeHooksPiece"]().check("project")
+PY
+)
+! ran || fail "check started claude"
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
+ok "claude: absolute PATH entries only, outside the project and its buses, not writable by others, run from HOME; check never starts it"
+
+echo
 echo "All setup tests passed"

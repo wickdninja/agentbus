@@ -29,6 +29,7 @@ import shutil  # noqa: E402
 import signal  # noqa: E402
 import sqlite3  # noqa: E402
 import stat  # noqa: E402
+import struct  # noqa: E402
 import subprocess  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
@@ -5730,8 +5731,7 @@ HOOK_PATH_KEYS = ("file_path", "notebook_path")  # NotebookEdit names its file n
 HOOK_KIND_PLURAL = {"note": "notes", "question": "questions", "answer": "answers", "handoff": "handoffs",
                     "decision": "decisions", "alert": "alerts", "done": "done", "other": "other"}
 HOOK_STATE_KEEP_S = 7 * 86400  # per-session memory older than this is removed
-HOOK_STATE_SCAN = 500  # files looked at per pruning pass
-HOOK_INDEX_MAX = 64 << 20  # the largest git index read
+HOOK_INDEX_MAX = 128 << 20  # the largest git index read (a bigger one is not read: the hook stays silent)
 HOOK_DERIVED_RE = re.compile(r"claude-[0-9a-f]{8}")
 HOOK_NOTICES = {
     "schema_older": "agentbus: this folder's bus was made by an older agentbus, so the hooks are off for it. Run: agentbus upgrade DIR",
@@ -5796,16 +5796,28 @@ def hook_state_drop(key):
         pass
 
 
+def hook_pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, OverflowError, ValueError):
+        return False
+    except OSError:
+        return True  # not ours to signal: it exists
+    return True
+
+
 def hook_state_prune():
-    """Remove memory files nobody has touched for HOOK_STATE_KEEP_S (looks at HOOK_STATE_SCAN files at most)."""
+    """Remove memory files nobody touched for HOOK_STATE_KEEP_S, and process names (proc-<pid>.name) whose process is
+    gone: a new process with that pid must not inherit them. Every entry is looked at, the age check is what bounds
+    the work."""
     base = hook_state_dir()
     old = time.time() - HOOK_STATE_KEEP_S
     with os.scandir(base) as entries:
-        for n, entry in enumerate(entries):
-            if n >= HOOK_STATE_SCAN:
-                break
+        for entry in entries:
             try:
-                if entry.is_file(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < old:
+                m = re.fullmatch(r"proc-(\d+)\.name", entry.name)
+                if (m and not hook_pid_alive(int(m.group(1)))) or (
+                        entry.is_file(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < old):
                     os.unlink(entry.path)
             except OSError:
                 pass
@@ -5847,45 +5859,214 @@ def hook_start_name(payload, name):
     return name
 
 
-def hook_untracked(directory):
-    """True when the .agentbus under `directory` is not something git tracks. A clone can commit a bus, so a
-    tracked one is not the user's. Evidence, without running git past rev-parse: the rule init writes to the
-    local info/exclude (a clone cannot bring that file); failing that, the git index lists no .agentbus/ path
-    (index versions 2 and 3, whose paths are stored whole). Anything else is refused."""
-    info = repo_info(directory)
-    if info is None:
-        return True  # not in a git work tree: nothing can be tracked
-    top, exclude = info
+def hook_read_file(path, limit):
+    """At most `limit` bytes of a regular file opened without following a link or blocking, else None (missing, a
+    link, a fifo, bigger than the limit)."""
     try:
-        text = read_small(exclude, TEXT_LIMIT) if check_node(exclude, "file") else ""
-    except (OSError, SystemExit):
-        text = ""
-    if any(line.strip() in _RULES for line in text.splitlines()):
-        return True
-    try:
-        fd = os.open(os.path.join(top, ".git", "index"), os.O_RDONLY | NOFOLLOW | NONBLOCK)
-    except FileNotFoundError:
-        return os.path.isdir(os.path.join(top, ".git"))  # a repository with no index yet tracks nothing
+        fd = os.open(path, os.O_RDONLY | NOFOLLOW | NONBLOCK)
     except OSError:
-        return False
+        return None
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_size > HOOK_INDEX_MAX:
-            return False
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
         data = b""
-        while True:
+        while len(data) <= limit:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                return data
+            data += chunk
+        return None
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def hook_git_layout(path):
+    """Where the repository holding `path` keeps its files, read from the file system only. A hook never runs git: a
+    repository's config can name a program git would run (core.fsmonitor), and a clone brings that config.
+    None outside a repository; False when the layout cannot be read; else {top, gitdir, common}. A `.git` file
+    (`gitdir: PATH`, as in linked worktrees and submodules) is followed to a real folder, never to a link."""
+    cur = os.path.realpath(path)
+    while True:
+        dot = os.path.join(cur, ".git")
+        try:
+            st = os.lstat(dot)
+        except FileNotFoundError:
+            st = None
+        except OSError:
+            return False
+        if st is not None:
+            if stat.S_ISDIR(st.st_mode):
+                gitdir = dot
+            elif stat.S_ISREG(st.st_mode):
+                text = hook_read_file(dot, 4096)
+                m = re.match(rb"gitdir: ([^\r\n]+)", text or b"")
+                if not m:
+                    return False
+                gitdir = os.path.normpath(os.path.join(cur, os.fsdecode(m.group(1))))
+                try:
+                    if not stat.S_ISDIR(os.lstat(gitdir).st_mode):
+                        return False
+                except OSError:
+                    return False
+            else:
+                return False
+            common, text = gitdir, hook_read_file(os.path.join(gitdir, "commondir"), 4096)
+            if text:
+                common = os.path.normpath(os.path.join(gitdir, os.fsdecode(text.strip())))
+            return {"top": cur, "gitdir": gitdir, "common": common}
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def hook_discovery_start(cwd):
+    """discovery_start without git: inside a linked worktree the same folder of the main checkout."""
+    here = os.path.realpath(cwd)
+    repo = hook_git_layout(here)
+    if repo is False:
+        raise ValueError("unreadable repository layout")
+    if repo and repo["gitdir"] != repo["common"]:
+        if os.path.basename(repo["common"]) != ".git":
+            raise ValueError("no main checkout")
+        return os.path.normpath(os.path.join(os.path.dirname(repo["common"]), os.path.relpath(here, repo["top"])))
+    return here
+
+
+def hook_index_hash_size(data):
+    """20 (SHA-1) or 32 (SHA-256): the size of the hash whose digest of everything before it ends the file."""
+    for size, algo in ((20, hashlib.sha1), (32, hashlib.sha256)):
+        if len(data) > 12 + size and algo(data[:-size]).digest() == data[-size:]:
+            return size
+    raise ValueError("index checksum")
+
+
+def hook_index_names(data):
+    """([(path bytes, mode)], hex of the shared index a split index links to or None) for an index file's bytes:
+    versions 2, 3 and 4 (path prefix compression), the link extension of a split index. ValueError when it is
+    not an index git wrote."""
+    size = hook_index_hash_size(data)
+    end = len(data) - size
+    try:
+        if data[:4] != b"DIRC":
+            raise ValueError("signature")
+        version, count = struct.unpack(">II", data[4:12])
+        if version not in (2, 3, 4):
+            raise ValueError("version")
+        pos, names, prev = 12, [], b""
+        for _ in range(count):
+            mode = struct.unpack(">I", data[pos + 24:pos + 28])[0]
+            flags = struct.unpack(">H", data[pos + 40 + size:pos + 42 + size])[0]
+            start = pos + 42 + size + (2 if version > 2 and flags & 0x4000 else 0)
+            if version == 4:
+                c = data[start]
+                start += 1
+                strip = c & 127
+                while c & 128:
+                    c = data[start]
+                    start += 1
+                    strip = ((strip + 1) << 7) + (c & 127)
+                nul = data.index(b"\0", start)
+                name = prev[:len(prev) - strip] + data[start:nul]
+                pos = nul + 1
+            else:
+                nul = data.index(b"\0", start)
+                name = data[start:nul]
+                pos += (start - pos + len(name) + 8) & ~7
+            if pos > end:
+                raise ValueError("entry past the end")
+            names.append((name, mode))
+            prev = name
+        link = None
+        while pos < end:
+            sig, length = struct.unpack(">4sI", data[pos:pos + 8])
+            body = data[pos + 8:pos + 8 + length]
+            if len(body) != length:
+                raise ValueError("extension past the end")
+            if sig == b"link":
+                link = body[:size].hex()
+            pos += 8 + length
+        if pos != end:
+            raise ValueError("trailing bytes")
+    except (IndexError, struct.error) as e:
+        raise ValueError("index") from e
+    return names, link
+
+
+def hook_index_tracks(repo, prefix):
+    """True when the repository's index lists anything under `prefix` (bytes, ending in /), a file or link named like
+    the folder, or a collapsed folder (sparse index) holding it. A split index is read with its shared index.
+    The index file being absent means nothing is tracked yet; any other trouble raises."""
+    try:
+        data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
+    except FileNotFoundError:
+        return False
+    names, link = hook_index_names(data)
+    if link is not None:
+        for folder in (repo["gitdir"], repo["common"]):
+            try:
+                shared = hook_read_file_exact(os.path.join(folder, "sharedindex." + link))
+                break
+            except FileNotFoundError:
+                continue
+        else:
+            raise ValueError("shared index missing")
+        more, again = hook_index_names(shared)
+        if again is not None or shared[-len(link) // 2:].hex() != link:
+            raise ValueError("shared index")
+        names += more
+    want = prefix.lower()
+    for name, mode in names:
+        n = name.lower()
+        if n.startswith(want) or n == want[:-1] or (mode == 0o040000 and n.endswith(b"/") and want.startswith(n)):
+            return True
+    return False
+
+
+def hook_read_file_exact(path):
+    """The bytes of a regular file of at most HOOK_INDEX_MAX, opened without following a link or blocking.
+    FileNotFoundError when absent; ValueError for anything else wrong."""
+    fd = os.open(path, os.O_RDONLY | NOFOLLOW | NONBLOCK)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > HOOK_INDEX_MAX:
+            raise ValueError("not a plain file of a size we read")
+        data = b""
+        while len(data) < st.st_size:
             chunk = os.read(fd, 1 << 20)
             if not chunk:
                 break
             data += chunk
     finally:
         os.close(fd)
-    return data[:4] == b"DIRC" and data[4:8] in (b"\0\0\0\2", b"\0\0\0\3") and b".agentbus/" not in data
+    if len(data) != st.st_size:
+        raise ValueError("short read")
+    return data
+
+
+def hook_untracked(directory):
+    """True when the .agentbus under `directory` is not something git tracks. A clone can commit a whole bus, so a
+    tracked one is not the user's. The index decides (an exclude rule proves nothing: every command writes it);
+    when the index cannot be read the answer is no. Nothing here runs git."""
+    repo = hook_git_layout(directory)
+    if repo is None:
+        return True  # not in a repository: nothing can be tracked
+    if repo is False:
+        return False
+    rel = os.path.relpath(os.path.realpath(directory), repo["top"])
+    prefix = os.fsencode(("" if rel == "." else rel.replace(os.sep, "/") + "/") + ".agentbus/")
+    try:
+        return not hook_index_tracks(repo, prefix)
+    except (OSError, ValueError, MemoryError):
+        return False
 
 
 def hook_find_bus(payload):
     """(database path, strict folder check) from AGENTBUS_DB or discovery from the payload's cwd, or None.
-    Unlike the commands, this never writes outside the bus (no exclude rule), never runs a copy, and skips a
-    .agentbus that git tracks (an AGENTBUS_DB is a dispatcher's own choice and is not second-guessed)."""
+    Unlike the commands, this never runs git, never writes outside the bus (no exclude rule), never runs a copy,
+    and skips a .agentbus that git tracks (an AGENTBUS_DB is a dispatcher's own choice and is not second-guessed)."""
     cwd = payload.get("cwd")
     if isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd):
         os.chdir(cwd)
@@ -5893,7 +6074,7 @@ def hook_find_bus(payload):
     if path:
         strict = False
     else:
-        directory = next(walk_buses(discovery_start()), None)
+        directory = next(walk_buses(hook_discovery_start(os.getcwd())), None)
         if directory is None or not hook_untracked(directory):
             return None
         path, strict = os.path.join(directory, ".agentbus", "bus.db"), True
@@ -6066,14 +6247,32 @@ def hook_user_prompt(payload):
 
 
 def hook_nudge_once(session_id, key):
-    """True the first time `key` (a path, or a notice or reminder name) is mentioned in this session; remembered,
-    at most HOOK_SEEN_MAX keys."""
-    name = hook_state_key(session_id, ".seen")
-    seen = (hook_state_get(name) or "").split("\n")
-    if key in seen:
-        return False
-    hook_state_put(name, "\n".join((seen + [key])[-HOOK_SEEN_MAX:]) + "\n")
-    return True
+    """True the first time `key` (a path, or a notice or reminder name) is mentioned in this session; remembered, at
+    most HOOK_SEEN_MAX keys. Updated under an exclusive lock on the memory file, so hooks running at once (a
+    subagent's, parallel tool calls) lose none. A link or another user's file there is an error (the hook is silent)."""
+    path = os.path.join(hook_state_dir(), hook_state_key(session_id, ".seen"))
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | NOFOLLOW | NONBLOCK, 0o600)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or not _owned(st):
+            raise OSError(errno.EPERM, "the memory file is not ours")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        data = b""
+        while len(data) < (1 << 17):
+            chunk = os.read(fd, 1 << 17)
+            if not chunk:
+                break
+            data += chunk
+        seen = data.decode("utf-8", "surrogateescape").split("\n")
+        if key in seen:
+            return False
+        out = ("\n".join((seen + [key])[-HOOK_SEEN_MAX:]) + "\n").encode("utf-8", "surrogateescape")
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, out)
+        return True
+    finally:
+        os.close(fd)
 
 
 def hook_edit_target(payload, db):
@@ -6156,6 +6355,8 @@ def hook_stop(payload):
 
 
 def hook_session_end(payload):
+    if isinstance(payload.get("session_id"), str) and payload["session_id"]:
+        hook_state_drop(hook_state_key(payload["session_id"], ".seen"))  # the session is over, whoever it was
     ident = hook_identity(payload)
     if not ident or not ident[1] or payload.get("reason") not in HOOK_END_REASONS:
         return None  # only a name this session derived, and only when the session really ends
@@ -6271,16 +6472,57 @@ CLAUDE_HOOK_TIMEOUT = {"SessionEnd": 2}  # Claude Code gives SessionEnd hooks 1.
 CLAUDE_PLUGIN_NOTE = "hooks   provided by the agentbus plugin; not added"
 
 
+def claude_trusted_binary():
+    """The claude executable setup may start, or None. Found on an absolute PATH entry (or named by
+    AGENTBUS_CLAUDE_BIN), and used only when nothing the project controls could be it: not inside the working
+    directory's repository (or the working directory itself outside one; a home folder is never a project), not
+    inside any bus folder, and neither the file nor the folders holding it (the PATH entry's and the real one's)
+    writable by group or others, all owned by this user or root. Anything else: None, and setup reads the plugin
+    files instead."""
+    exe = os.environ.get("AGENTBUS_CLAUDE_BIN")
+    if not exe:
+        for folder in os.environ.get("PATH", "").split(os.pathsep):
+            if folder and os.path.isabs(folder) and os.access(os.path.join(folder, "claude"), os.X_OK):
+                exe = os.path.join(folder, "claude")
+                break
+    try:
+        if not exe or not os.path.isabs(exe) or not os.path.isfile(exe) or not os.access(exe, os.X_OK):
+            return None
+        real, home = os.path.realpath(exe), os.path.realpath(os.path.expanduser("~"))
+        cwd = os.path.realpath(os.getcwd())
+        layout = hook_git_layout(cwd)
+        if layout is False:
+            return None
+        roots = [layout["top"] if layout else cwd]
+        roots += list(walk_buses(cwd))
+        for root in roots:
+            if root not in (home, os.sep) and (real == root or real.startswith(root.rstrip(os.sep) + os.sep)):
+                return None
+        if ".agentbus" in real.split(os.sep):
+            return None
+        uid = os.getuid()
+        for path in {exe, real, os.path.dirname(exe), os.path.dirname(real)}:
+            st = os.stat(path)
+            if st.st_mode & 0o022 or st.st_uid not in (0, uid):
+                return None
+    except (OSError, SystemExit):
+        return None
+    return exe
+
+
 def claude_plugin_from_cli():
-    """True/False from `claude plugin list --json`, or None when no usable claude is there. Primary: it is Claude
-    Code's documented interface and answers for every scope (user, project, local) and for enabled or not,
-    resolved by Claude Code itself. AGENTBUS_CLAUDE_BIN names the executable (default: claude on PATH); tests point
-    it at a stub, and at nothing, so the real claude is never started from a test."""
-    exe = os.environ.get("AGENTBUS_CLAUDE_BIN") or shutil.which("claude")
+    """True/False from `claude plugin list --json`, or None when no trusted claude is there (claude_trusted_binary) or
+    it gives no answer. Primary: it is Claude Code's documented interface and answers for the user's scopes and for
+    enabled or not, resolved by Claude Code itself. Run from the home folder, never from a project (a project's
+    files can configure what a program started there does). AGENTBUS_CLAUDE_BIN names the executable; tests point it
+    at a stub, and at nothing, so the real claude is never started from a test."""
+    exe = claude_trusted_binary()
     if not exe:
         return None
+    home = os.path.expanduser("~")
     try:
-        run = subprocess.run([exe, "plugin", "list", "--json"], capture_output=True, text=True, timeout=10, cwd=os.getcwd())
+        run = subprocess.run([exe, "plugin", "list", "--json"], capture_output=True, text=True, timeout=10,
+                             cwd=home if os.path.isdir(home) else os.sep)
         listing = json.loads(run.stdout) if run.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError, RecursionError):
         return None
@@ -6290,11 +6532,12 @@ def claude_plugin_from_cli():
                and p.get("enabled", True) is not False for p in listing)
 
 
-def claude_plugin_from_files():
+def claude_plugin_from_files(user=True):
     """The fallback when there is no claude to ask: Claude Code's record of installed plugins
     (<config>/plugins/installed_plugins.json, undocumented, so only a fallback) and the enabledPlugins switches
-    in the user's and the project's settings files. A user-scope install counts unless switched off; a
-    project-scope one counts when the project's settings switch it on. Unreadable files mean "not installed"."""
+    in the user's and the project's settings files. A user-scope install counts unless switched off (with user=False
+    it does not count at all: claude already answered for the user's scopes); a project-scope one counts when the
+    project's settings switch it on. Unreadable files mean "not installed"."""
     config = setup_config_dir("claude", "user")
 
     def load(*parts):
@@ -6319,15 +6562,18 @@ def claude_plugin_from_files():
             continue
         if switches.get(plugin_id) is False:
             continue
-        if switches.get(plugin_id) is True or any(isinstance(i, dict) and i.get("scope", "user") == "user" for i in installs):
+        if switches.get(plugin_id) is True or (user and any(isinstance(i, dict) and i.get("scope", "user") == "user" for i in installs)):
             return True
     return False
 
 
-def claude_plugin_provides_hooks():
-    """True when the agentbus plugin is installed and enabled for the user or this project."""
-    asked = claude_plugin_from_cli()
-    return claude_plugin_from_files() if asked is None else asked
+def claude_plugin_provides_hooks(ask=True):
+    """True when the agentbus plugin is installed and enabled for the user or this project. ask=False (check) never
+    starts claude: the files alone answer."""
+    asked = claude_plugin_from_cli() if ask else None
+    if asked:
+        return True
+    return claude_plugin_from_files(user=asked is None)
 
 
 def claude_hook_tool():
@@ -6351,6 +6597,7 @@ class ClaudeHooksPiece(JsonEntriesPiece):
     def __init__(self):
         super().__init__("claude_hooks", lambda scope: os.path.join(setup_config_dir("claude", scope), "settings.json"),
                          self.entries)
+        self.ask = True  # False while check() runs: nothing is started
 
     @staticmethod
     def entries(scope):
@@ -6360,7 +6607,7 @@ class ClaudeHooksPiece(JsonEntriesPiece):
                 for event, matcher in CLAUDE_HOOK_EVENTS]
 
     def plan(self, scope, uninstall=False):
-        if not uninstall and claude_plugin_provides_hooks():
+        if not uninstall and claude_plugin_provides_hooks(ask=self.ask):
             return [Change(self.path_for(scope), "unchanged", "provided by the agentbus plugin; not added",
                            line=CLAUDE_PLUGIN_NOTE)]
         changes = super().plan(scope, uninstall)
@@ -6385,9 +6632,13 @@ class ClaudeHooksPiece(JsonEntriesPiece):
         """Reads text only. The settings file may be a project's (a clone can commit one), so nothing it names is
         ever run: the executable is looked at, not started."""
         commands = self.recorded_commands(scope)
-        if not commands and claude_plugin_provides_hooks():
+        if not commands and claude_plugin_provides_hooks(ask=False):
             return [(self.id, "ok", "the agentbus plugin provides the hooks", "")]
-        rows = super().check(scope)
+        self.ask = False
+        try:
+            rows = super().check(scope)
+        finally:
+            self.ask = True
         fix = "agentbus setup claude" + (" --scope project" if scope == "project" else "")
         if not commands:
             return rows
@@ -6404,7 +6655,7 @@ class ClaudeHooksPiece(JsonEntriesPiece):
             rows.append(("claude_hooks_tool", "problem", f"the hooks run {script}, which is not an agentbus executable", fix))
         else:
             rows.append(("claude_hooks_tool", "ok", f"the hooks run {script}" + (f" ({version.group(1).decode()})" if version else ""), fix))
-        if claude_plugin_provides_hooks():
+        if claude_plugin_provides_hooks(ask=False):
             rows.append(("claude_hooks_duplicate", "problem", "the agentbus plugin and setup both register hooks",
                          "agentbus setup claude --uninstall"))
         return rows

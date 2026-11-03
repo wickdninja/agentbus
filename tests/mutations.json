@@ -272,7 +272,7 @@
   {
     "name": "setup claude adds hooks although the plugin provides them",
     "file": "bin/agentbus",
-    "find": "if not uninstall and claude_plugin_provides_hooks\\(\\):",
+    "find": "if not uninstall and claude_plugin_provides_hooks\\(ask=self\\.ask\\):",
     "replace": "if False:",
     "count": 1,
     "run": "tests/test_setup.sh",
@@ -294,7 +294,7 @@
     "replace": "if directory is None:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "a committed bus without init's exclude rule"
+    "expect": "a tracked bus with a v2 index was used"
   },
   {
     "name": "hook text endorses the bus copy in the project",
@@ -362,10 +362,91 @@
   {
     "name": "setup trusts the plugin files over claude plugin list",
     "file": "bin/agentbus",
-    "find": "return claude_plugin_from_files\\(\\) if asked is None else asked",
+    "find": "return claude_plugin_from_files\\(user=asked is None\\)",
     "replace": "return claude_plugin_from_files()",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "missing line:   = hooks   provided by the agentbus plugin; not added"
+  },
+  {
+    "name": "a hook treats every .agentbus as untracked",
+    "file": "bin/agentbus",
+    "find": "return not hook_index_tracks\\(repo, prefix\\)",
+    "replace": "return True",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "a hook ignores the shared index of a split index",
+    "file": "bin/agentbus",
+    "find": "        names \\+= more\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a split index was used"
+  },
+  {
+    "name": "a hook finds the repository by running git",
+    "file": "bin/agentbus",
+    "find": "hook_discovery_start\\(os\\.getcwd\\(\\)\\)",
+    "replace": "discovery_start()",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a hook ran git"
+  },
+  {
+    "name": "setup starts a claude that lives inside the project",
+    "file": "bin/agentbus",
+    "find": "if root not in \\(home, os\\.sep\\) and",
+    "replace": "if False and",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude that lives inside the working directory's repo"
+  },
+  {
+    "name": "setup starts claude from the project folder",
+    "file": "bin/agentbus",
+    "find": "cwd=home if os\\.path\\.isdir\\(home\\) else os\\.sep\\)",
+    "replace": "cwd=os.getcwd())",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "claude was not started from the home folder with plugin list --json"
+  },
+  {
+    "name": "check may start claude",
+    "file": "bin/agentbus",
+    "find": "        self\\.ask = False\\n        try:",
+    "replace": "        self.ask = True\n        try:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check started claude"
+  },
+  {
+    "name": "the hook memory file is updated without a lock",
+    "file": "bin/agentbus",
+    "find": "        fcntl\\.flock\\(fd, fcntl\\.LOCK_EX\\)\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "parallel hooks lost memory updates"
+  },
+  {
+    "name": "a dead process's name is never pruned",
+    "file": "bin/agentbus",
+    "find": "\\(m and not hook_pid_alive\\(int\\(m\\.group\\(1\\)\\)\\)\\)",
+    "replace": "False",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a dead process's name was kept"
+  },
+  {
+    "name": "the memory file outlives the session",
+    "file": "bin/agentbus",
+    "find": "        hook_state_drop\\(hook_state_key\\(payload\\[\"session_id\"\\], \"\\.seen\"\\)\\)[^\\n]*\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the memory file outlived the session"
   }
 ]
