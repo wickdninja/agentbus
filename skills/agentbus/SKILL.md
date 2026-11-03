@@ -17,13 +17,13 @@ Discovery finds the nearest ancestor bus; linked worktrees map to their main che
 
 ## Start
 
-Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal; work toward it (a lead sets it with `goal "TEXT"`). Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.
+Start with `join`, then `status` and `inbox` (20 rows each; a cut listing ends with the command that shows more). Join prints the shared goal; work toward it (a lead sets it with `goal "TEXT"`). Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.
 
 ## Before shared work
 
-Read `inbox --limit 20` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
+Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
 
 Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. Claims are advisory and expire after 120 minutes by default. Claim again to renew; omitted purpose preserves the current purpose and acquisition time stays unchanged. `--ttl-min` sets a lifetime of 1 to 10080 minutes.
 
@@ -39,13 +39,13 @@ Check recipients with `who`. Messages queue for absent names; posting does not s
 
 ## Read correctly
 
-Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. Duplicate delivery is possible; check message IDs before repeating actions.
+Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. A listing cuts a body at 2 KB (body_truncated true); `read --id N` shows it whole. Duplicate delivery is possible; check message IDs before repeating actions.
 
 A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`.
 
 ## Finish the session
 
-Run `release RESOURCE` when finished. Before ending the session, check `inbox --limit 20`, post the result or handoff, then `leave`, which releases all claims.
+Run `release RESOURCE` when finished. Before ending the session, check `inbox`, post the result or handoff, then `leave`, which releases all claims.
 
 ## Boundaries
 

@@ -46,7 +46,12 @@ ok "identity and bus level before and after commands, including ctx/log actions"
 
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as claude claim src/api/ --purpose review >/dev/null
-exp=$(agentbus --json claims | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["expires_at"])')
+# the message names the expiry in local time (HH:MM today, Mon D HH:MM another day), worked out here from the stored ISO time
+exp=$(agentbus --json claims | "$PY" -c '
+import json, sys, time
+from datetime import datetime, timezone
+t = datetime.strptime(json.load(sys.stdin)["items"][0]["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
+print(t.strftime("%H:%M") if t.date() == datetime.now().date() else t.strftime("%b ") + str(t.day) + t.strftime(" %H:%M"))')
 expect_fail "src/api/ is claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
 expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"
@@ -74,8 +79,8 @@ checks = {
     ('log','add'): ['Append an activity log entry.'],
     ('log','show'): ['Show recent activity log entries.'],
     ('claim',): ['Claim lifetime in minutes: 1-10080; default 120. Claim again to renew.'],
-    ('read',): ['Maximum messages; default 30. Use -1 for all.'],
-    ('status',): ['Limit agents, facts, and claims per section; default 500.', 'Recent messages always shows the latest 10.'],
+    ('read',): ['Maximum messages; default 50. Use -1 for all.', 'Show this one message, whole (a listing cuts a body at 2 KB).'],
+    ('status',): ['At most this many rows in each section (agents, facts, claims, the latest messages); default 20. Use -1 for all.'],
     ('init',): ['Directory to initialize, created (with its parents) if missing; default current directory. Run from the installed tool or source clone.'],
 }
 for args, expected in checks.items():

@@ -176,29 +176,28 @@ def _fd_width(fd):
         return None
 
 
-def _tty_width():
-    """The controlling terminal's width, from /dev/tty: where `agentbus read | less` or `| cat`
-    is finally shown, though stdout is a pipe."""
-    try:
-        fd = os.open("/dev/tty", os.O_RDONLY | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_CLOEXEC", 0))
-    except OSError:
-        return None
-    try:
-        return _fd_width(fd)
-    finally:
-        os.close(fd)
-
-
-def term_width():
-    """The width output is wrapped to, at least MIN_WIDTH: COLUMNS when set to a number (an explicit
-    choice); else stdout's terminal; else, when stdout is not a terminal, the controlling terminal
-    (/dev/tty), else stderr's terminal; else 80."""
+def wrap_width(stream="out"):
+    """The width human output is hard-wrapped to, or None for no wrapping. COLUMNS set to a number is
+    an explicit choice and wraps anywhere; otherwise only a terminal is wrapped (its own width, 80
+    when it will not say): a pipe or a file gets each line whole, the way a program's output is meant
+    to be piped (clig.dev), and `less` or the reader wraps it. At least MIN_WIDTH."""
     env = os.environ.get("COLUMNS", "").strip()
-    w = int(env) if env.isdigit() and len(env) < 7 and int(env) > 0 else None
-    if w is None:
-        out = sys.__stdout__.fileno() if sys.__stdout__ is not None else 1
-        w = _fd_width(out) or _tty_width() or _fd_width(2) or 80
-    return max(w, MIN_WIDTH)
+    if env.isdigit() and len(env) < 7 and int(env) > 0:
+        return max(int(env), MIN_WIDTH)
+    s = sys.__stderr__ if stream == "err" else sys.__stdout__
+    try:
+        if s is not None and s.isatty():
+            return max(_fd_width(s.fileno()) or 80, MIN_WIDTH)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def stdout_is_tty():
+    try:
+        return sys.__stdout__ is not None and sys.__stdout__.isatty()
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def char_width(c):
@@ -216,7 +215,9 @@ def wrap_line(line, width):
     INDENT. A row breaks after its last space, so a path or a word that fits on a row is never cut;
     only a token longer than a whole row is broken mid-token. The space stays at the end of the row
     it ends (nothing is dropped). A wide character that would cross the edge moves to the next row
-    whole."""
+    whole. width None (no wrapping, see wrap_width): the line as it is."""
+    if width is None:
+        return line
     rows, row, col = [], [], 0
     for c in line:
         w = char_width(c)
@@ -241,8 +242,9 @@ def wrap_line(line, width):
 def wrap_output(text, width=None):
     """Human output, every line wrapped by wrap_line to the terminal's width. A line marked HEAD
     (agentbus wrote its start) keeps its first row at column 0; every other non-empty line is
-    indented, so it starts with INDENT whatever text it holds."""
-    width = width or term_width()
+    indented, so it starts with INDENT whatever text it holds. With no width (stdout is not a
+    terminal and COLUMNS is unset) lines are not wrapped, but the same start-of-row rule holds."""
+    width = width or wrap_width("out")
     lines = []
     for line in text.split("\n"):
         if line.startswith(HEAD):
@@ -355,7 +357,7 @@ def diag(msg):
     """A diagnostic as stderr shows it: `agentbus: ` then the cleaned message, hard-wrapped to the
     same width as stdout with every continuation row indented, so bus text in an error (a trigger
     or claim name) never starts a row."""
-    return wrap_line("agentbus: " + clean(msg), term_width())
+    return wrap_line("agentbus: " + clean(msg), wrap_width("err"))
 
 
 # ==== contract registry ====
@@ -488,7 +490,7 @@ CONTRACT = {
         "Agent": _o({"name": _STR, "tool": _NSTR, "model": _NSTR, "cwd": _NSTR, "branch": _NSTR, "role": _NSTR,
                      "joined_at": _STR, "last_seen": _STR}),
         "Message": _o({"id": _INT, "ts": _STR, "sender": _STR, "recipient": _STR, "kind": _STR, "topic": _NSTR,
-                       "body": _STR, "reply_to": _NINT}),
+                       "body": _STR, "reply_to": _NINT, "body_truncated": _BOOL}, optional=("body_truncated",)),
         "Claim": _o({"resource": _STR, "agent": _STR, "purpose": _NSTR, "claimed_at": _STR, "expires_at": _STR,
                      "state": {"type": "string", "enum": ["held", "expired"]}}),
         "Fact": _o({"key": _STR, "value": _STR, "updated_by": _STR, "updated_at": _STR, "unchanged": _BOOL}, optional=("unchanged",)),
@@ -524,7 +526,9 @@ CONTRACT = {
                               "action": "Use a new token for a different message."},
         "bad_input": {"exit": 2, "retryable": False, "fields": [],
                       "optional_fields": ["field"],
-                      "meaning": "The arguments are not valid (a usage error).", "action": "Fix the arguments."},
+                      "meaning": "The arguments are not valid (a usage error). field names the argument when a value is refused: "
+                                 "a body, value, detail or text over 64 KB (field body for post).",
+                      "action": "Fix the arguments."},
         "no_bus": {"exit": 3, "retryable": False, "fields": [],
                    "meaning": "There is no bus here or above.", "action": "Run agentbus init DIR, or set AGENTBUS_DB."},
         "busy": {"exit": 3, "retryable": True, "fields": ["bus"],
@@ -589,7 +593,9 @@ CONTRACT = {
         "AGENTBUS_NO_EMOJI": {"meaning": "Turns emoji off in watch.", "default": "unset"},
         "AGENTBUS_ASCII": {"meaning": "Draws watch's own marks in ASCII, with emoji off (also under TERM=linux).",
                            "default": "unset"},
-        "COLUMNS": {"meaning": "Width human output is wrapped to.", "default": "the terminal width, else 80"},
+        "COLUMNS": {"meaning": "Width human output is wrapped to. Without it, human output wraps to the terminal when stdout is one "
+                               "and is never wrapped when stdout is a pipe or a file.",
+                    "default": "the terminal width; no wrapping when piped"},
     },
     # Commands the parser may have that `schema` leaves out.
     "hidden": ["hook", "__complete"],
@@ -617,7 +623,9 @@ CONTRACT = {
                       {"class": "at_least_once", "short": "repeat; dedupe by id",
                        "how": "repeat; a crash or ack_failed redelivers, so check message ids before acting",
                        "with": {"--peek": {"class": "safe", "how": "repeat freely"}}}),
-        "read": _cmd("Recent messages, anyone's", _env(_ref("Message"))),
+        "read": _cmd("Recent messages, anyone's; with --id N one message, whole",
+                     {"anyOf": [_env(_ref("Message")), _ref("Message")]}, ["no_message"],
+                     text='{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message'),
         "ctx set": _cmd("Set a shared fact and record its history", _ref("Fact"),
                         retry={"class": "idempotent", "short": "safe to repeat",
                                "how": "an unchanged value writes no history row and returns unchanged true"}),
@@ -671,8 +679,18 @@ CONTRACT = {
                              '{"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, '
                              '"failed": integer, "would_upgrade": integer (--dry-run)}'),
         "schema": _cmd("Result shapes, errors, exit codes and retry rules",
-                       _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"}, "objects": {"type": "object"},
-                           "error_fields": {"type": "object"}, "errors": {"type": "object"}, "exit_codes": {"type": "object"}, "env": {"type": "object"}}), base=_PLAIN_ERRORS),
+                       {"anyOf": [_o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"},
+                                      "global_args": _list({"type": "object"}), "objects": {"type": "object"},
+                                      "error_fields": {"type": "object"}, "errors": {"type": "object"},
+                                      "exit_codes": {"type": "object"}, "env": {"type": "object"}}),
+                                  # --index: every command's argument names and its own error codes, small enough to read whole
+                                  _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"},
+                                      "global_args": _list(_STR), "common_errors": _list(_STR)})]},
+                       text='the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, '
+                            '"errors": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command\'s '
+                            'commands, objects and errors; with --index {"contract": integer, "agentbus": string, '
+                            '"commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}',
+                       base=_PLAIN_ERRORS),
         "skill": _cmd("Print the bundled skill, or with --agents-md the AGENTS.md block", _o({"text": _STR}), base=_PLAIN_ERRORS),
         "setup": _cmd("Install the skill for Claude Code or the AGENTS.md block for Codex",
                       _o({"target": _STR, "scope": _STR, "dry_run": _BOOL,
@@ -1558,19 +1576,19 @@ def cmd_init(a):
     if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})? .*", version):
         version = version[:7] + (" +dirty" if version.endswith(" +dirty") else "")
     if made:
-        say("created {}", root)
-    say("installed agentbus {} into {}/.agentbus/", version, root)
+        say("created {}", tilde(root))
+    say("installed agentbus {} into {}/.agentbus/", version, tilde(root))
     added = ensure_exclude(exclude) if exclude else False
     if added:
         file_changed(exclude)
     shared = gitignore_has_rule(root) if exclude else False
     if added:
-        say("added .agentbus/ to {} (local only; the repo stays clean)", exclude)
+        say("added .agentbus/ to {} (local only; the repo stays clean)", tilde(exclude))
     if exclude and not shared:
         say("optional: add `.agentbus/` to .gitignore to share that rule")
     if outer:
-        say("outer bus: {}", outer)
-    say("next: cd {}", root)
+        say("outer bus: {}", tilde(outer))
+    say("next: cd {}", tilde(root))
     say("next: .agentbus/bin/agentbus --as YOUR_NAME join")
     if a.json:
         print_json({"directory": root, "copy": os.path.join(folder, "bin", "agentbus"), "old": old, "new": new,
@@ -1666,12 +1684,12 @@ def _cmd_upgrade(a):
         print_json({"directory": root, "old": old, "new": new, "schema_old": schema_old, "schema_new": schema_new,
                     "backup": backup})
     elif schema_old == schema_new:
-        show("{}: {} -> {}", root, shown_version(old), new, path_first=True)
+        show("{}: {} -> {}", tilde(root), shown_version(old), new, path_first=True)
     elif backup:
-        show("{}: {} -> {}   schema {} -> {}   backup {}", root, shown_version(old), new, schema_old, schema_new, backup,
-             path_first=True)
+        show("{}: {} -> {}   schema {} -> {}   backup {}", tilde(root), shown_version(old), new, schema_old, schema_new,
+             tilde(backup), path_first=True)
     else:
-        show("{}: {} -> {}   schema {} -> {}", root, shown_version(old), new, schema_old, schema_new, path_first=True)
+        show("{}: {} -> {}   schema {} -> {}", tilde(root), shown_version(old), new, schema_old, schema_new, path_first=True)
 
 
 # Folders upgrade --all never walks into: version control, dependencies, caches, and a bus folder
@@ -2038,7 +2056,7 @@ def cmd_buses(a):
         print_json(envelope(rows))
     else:
         for row in rows:
-            show("{}  {}  bus.db {}  copy {}", row["level"], row["directory"], "exists" if row["exists"] else "not created",
+            show("{}  {}  bus.db {}  copy {}", row["level"], tilde(row["directory"]), "exists" if row["exists"] else "not created",
                  row["copy_version"] or copy_label(row["directory"]), row=True)
 
 
@@ -3461,9 +3479,15 @@ def jsonable(v):
     return v
 
 
+def json_style():
+    """json.dumps keywords for stdout: indented on a terminal, compact (no indent, no spaces) when stdout is
+    a pipe or a file, where an agent pays for every byte. The same values either way."""
+    return {"indent": 2} if stdout_is_tty() else {"separators": (",", ":")}
+
+
 def print_json(obj):
     """One JSON value, encoded after the bus is closed (obj holds plain values by then)."""
-    later(lambda: print(json.dumps(jsonable(obj), indent=2, default=repr, allow_nan=False)))
+    later(lambda: print(json.dumps(jsonable(obj), **json_style(), default=repr, allow_nan=False)))
 
 
 def emit(a, obj, template, *fields):
@@ -3475,8 +3499,17 @@ def emit(a, obj, template, *fields):
 
 
 # Listings stop at this many rows unless --limit says otherwise: a lane can add rows without
-# bound, and every row is formatted (and every --json row encoded) for the reader.
-DEFAULT_LIMIT = 500
+# bound, and every row is formatted (and every --json row encoded) for the reader, and an agent
+# reads every byte. 20 for what an agent reads at the start of a turn (inbox, each section of
+# status), 50 for every other listing; a cut listing names the command that continues it.
+INBOX_LIMIT = 20
+LIST_LIMIT = 50
+# What leave and release --all list and log of the claims they drop: a lane can plant any number.
+RELEASED_SHOWN = 500
+# A listing cuts a message body at this many bytes (body_truncated true); read --id N has all of it.
+# A body over MAX_BODY bytes is refused when it is posted.
+LIST_BODY_MAX = 2048
+MAX_BODY = 64 * 1024
 
 
 def capped(con, sql, params, limit):
@@ -3555,16 +3588,36 @@ def read_cursor(a, text, flag):
     return body["id"]
 
 
-def out(args, rows, fmt, more=0, empty=None, earlier=False, unread=False, cursor=None):
+def next_command(a, *words):
+    """The command line that continues a cut listing, to paste as it is: `agentbus [--as NAME] [--up N]` and
+    words (a word that needs it is shell-quoted)."""
+    parts = ["agentbus"]
+    if getattr(a, "as_", None):
+        parts += ["--as", a.as_]
+    if getattr(a, "up", 0):
+        parts += ["--up", str(a.up)]
+    return " ".join(shlex.quote(str(p)) for p in parts + list(words))
+
+
+def page_size(a, default=LIST_LIMIT):
+    """The --limit a continuing command repeats: the one in use, or the default when it was 0 or all."""
+    return a.limit if a.limit > 0 else default
+
+
+def out(args, rows, fmt, more=0, empty=None, earlier=False, unread=False, cursor=None, next_cmd=None):
     """A listing with an empty state and a directional truncation hint. JSON is an envelope
-    (envelope()). Rows are copied now and formatted only after the bus is closed."""
+    (envelope()). Rows are copied now and formatted only after the bus is closed. In text, a cut
+    listing says how many rows it left out and, on the next line, the exact command that continues
+    it (next_cmd)."""
     rows = [dict(r) for r in rows]
     if args.json:
         print_json(envelope(rows, more, cursor))
         return
 
     if more and earlier:
-        show("... {} earlier (use --limit)", more, row=True)
+        show("... {} earlier", more, row=True)
+        if next_cmd:
+            show("next: {}", next_cmd, row=True)
 
     def render():
         formatter = table_formatter(rows, fmt) if fmt in (fmt_who, fmt_claim) else fmt
@@ -3575,9 +3628,24 @@ def out(args, rows, fmt, more=0, empty=None, earlier=False, unread=False, cursor
         show("{}", empty, row=True)
     if more and not earlier:
         if unread:
-            show("... {} more unread; run inbox again", more, row=True)
+            show("... {} more unread", more, row=True)
         else:
-            show("... {} more (use --limit)", more, row=True)
+            show("... {} more", more, row=True)
+        if next_cmd:
+            show("next: {}", next_cmd, row=True)
+
+
+def cut_body(row):
+    """A message row for a listing (a copy): the body cut at LIST_BODY_MAX bytes, on a character boundary,
+    and body_truncated true when it was. Nothing is added to a row that fits. read --id N has the whole body."""
+    d = dict(row)
+    body = d.get("body")
+    if isinstance(body, str) and len(body) * 4 > LIST_BODY_MAX:
+        raw = body.encode("utf-8", "replace")
+        if len(raw) > LIST_BODY_MAX:
+            d["body"] = raw[:LIST_BODY_MAX].decode("utf-8", "ignore")
+            d["body_truncated"] = True
+    return d
 
 
 def read_body(parts, command):
@@ -3592,6 +3660,11 @@ def read_body(parts, command):
         body = sys.stdin.buffer.read().decode("utf-8", "replace").strip()
     if not body:
         die(f'empty message. Use {command} "text", or pipe text to {command} -.', "bad_input")
+    size = len(body.encode("utf-8", "replace"))
+    if size > MAX_BODY:
+        field = {"ctx": "value", "log": "detail", "goal": "text"}.get(command.split()[0], "body")
+        die(f"the {field} is {size:,} bytes; the limit is {MAX_BODY // 1024} KB. "
+            "Put the long text in a file in the repo and send its path.", "bad_input", field=field)
     return body
 
 
@@ -3628,7 +3701,7 @@ def cmd_join(con, a):
         log(con, name, "join", json.dumps({"tool": a.tool, "model": a.model, "branch": a.branch, "role": a.role}))
     g = current_goal(con)
     emit(a, {"joined": name, "bus": a._db, "goal": g, "agentbus": __version__, "contract": CONTRACT["contract"]},
-         "joined as {} on {}", name, a._db)
+         "joined as {} on {}", name, tilde(a._db))
     if g and not a.json:
         show("goal: {}", g["goal"])
 
@@ -3646,7 +3719,7 @@ def ensure_cursor(con, name):
 
 def release_all(con, name):
     """Delete every claim `name` holds, inside the caller's transaction. Returns (the first
-    DEFAULT_LIMIT resources, in order, each cut to RESOURCE_MAX characters, and how many there
+    RELEASED_SHOWN resources, in order, each cut to RESOURCE_MAX characters, and how many there
     were): a lane can plant any number of claims of any length under a name, and they are listed,
     logged and printed only up to the cap.
     Ordered by the first RESOURCE_MAX + 1 characters (then rowid), the same order for every name
@@ -3654,14 +3727,14 @@ def release_all(con, name):
     name whole from the index and again from the table (1 GB for 500 names of 1 MB); this scans
     the table once and sorts only the short keys."""
     paths, more = capped(con, f"SELECT {cut('resource')} FROM claims WHERE agent=? "
-                         f"ORDER BY substr(resource, 1, {RESOURCE_MAX + 1}), rowid", (name,), DEFAULT_LIMIT)
+                         f"ORDER BY substr(resource, 1, {RESOURCE_MAX + 1}), rowid", (name,), RELEASED_SHOWN)
     paths = [r[0] for r in paths]
     con.execute("DELETE FROM claims WHERE agent=?", (name,))
     return paths, len(paths) + more
 
 
 def claims_text(paths, total):
-    """The log detail for released claims: the count, then the first DEFAULT_LIMIT of them."""
+    """The log detail for released claims: the count, then the first RELEASED_SHOWN of them."""
     if not total:
         return "(none)"
     return ", ".join(map(str, paths)) + (f", and {total - len(paths)} more" if total > len(paths) else "")
@@ -3687,7 +3760,7 @@ def cmd_leave(con, a):
     show_released(a, paths, total)
 
 
-def q_who(con, limit=DEFAULT_LIMIT):
+def q_who(con, limit=LIST_LIMIT):
     return capped(con, "SELECT * FROM agents ORDER BY last_seen DESC", (), limit)
 
 
@@ -3704,13 +3777,13 @@ def table_formatter(rows, fmt):
     if not rows:
         return lambda r: INDENT
     cells = [[str(v) for v in fmt(clean_row(r))] for r in rows]
-    caps = [28, 24, 10, 20, 20, 18] if fmt is fmt_who else [40, 28, 20, 32]
+    caps = [28, 24, 10, 20, 20, 18] if fmt is fmt_who else [40, 28, 32, 32]
     columns = [i for i in range(len(caps)) if any(r[i] for r in cells)]
     width = lambda s: sum(char_width(c) for c in s)
     sizes = {i: min(caps[i], max(width(r[i]) for r in cells)) for i in columns}
     # Retain the first column and the time; shrink descriptive columns first.
     time_col = 5 if fmt is fmt_who else 2
-    budget = term_width() - len(INDENT) - 2 * (len(columns) - 1)
+    budget = (wrap_width("out") or 10 ** 6) - len(INDENT) - 2 * (len(columns) - 1)
     flexible = [i for i in columns if i not in (0, time_col)]
     while sum(sizes.values()) > budget and any(sizes[i] > 4 for i in flexible):
         i = max(flexible, key=lambda i: sizes[i])
@@ -3737,7 +3810,8 @@ def table_formatter(rows, fmt):
 
 def cmd_who(con, a):
     rows, more = q_who(con, a.limit)
-    out(a, rows, fmt_who, more, empty="no agents. Join with: agentbus --as NAME join")
+    out(a, rows, fmt_who, more, empty="no agents. Join with: agentbus --as NAME join",
+        next_cmd=next_command(a, "who", "--limit", len(rows) + more))
 
 
 def read_inputs(a):
@@ -3808,17 +3882,11 @@ def fmt_msg(r):
         head += f" ({r['topic']})"
     if r.get("reply_to"):
         head += f" re #{r['reply_to']}"
-    ts = _when(r['ts'])
-    if ts is None:
-        stamp = str(r['ts'])  # hostile or malformed stored time: already cleaned
-    else:
-        local = ts.astimezone()
-        stamp = local.strftime("%H:%M")
-        if local.date() != datetime.now().date():
-            month = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")[local.month - 1]
-            stamp = f"{month} {local.day} {stamp}"
-    head += f" · {stamp}"
-    return f"{head}\n{INDENT}" + str(r["body"]).replace("\n", "\n" + INDENT)
+    head += f" · {human_time(r['ts'])}"  # a hostile or malformed stored time shows as it is (already cleaned)
+    text = f"{head}\n{INDENT}" + str(r["body"]).replace("\n", "\n" + INDENT)
+    if r.get("body_truncated") is True:
+        text += f"\n{INDENT}... cut at 2 KB. Full text: agentbus read --id {r['id']}"
+    return text
 
 
 def cmd_inbox(con, a):
@@ -3837,7 +3905,11 @@ def cmd_inbox(con, a):
         con, f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?)) ORDER BY id",
         (last, name, name, bcast), a.limit)
     nxt = make_cursor(a, rows[-1]["id"] if rows else last) if more and a.peek else None
-    out(a, rows, fmt_msg, more, unread=True, cursor=nxt)
+    rows = [cut_body(r) for r in rows]
+    page = ("--limit", page_size(a, INBOX_LIMIT))
+    # Consuming, the rows shown are marked read, so the same command continues; peeking leaves them unread, so the cursor does.
+    out(a, rows, fmt_msg, more, unread=True, cursor=nxt,
+        next_cmd=next_command(a, "inbox", "--peek", "--after", nxt, *page) if nxt else next_command(a, "inbox", *page))
     if not a.peek and (rows or not row):
         upto = rows[-1]["id"] if rows else None
         a._after = lambda c: mark_read(c, name, bcast, upto)
@@ -3856,11 +3928,6 @@ def mark_read(con, name, bcast, upto):
             con.execute("UPDATE cursors SET last_read_id=MAX(last_read_id, ?) WHERE agent=?", (upto, name))
 
 
-def q_read(con, since=None, topic=None, limit=30):
-    """With since (0 included), the next `limit` messages after that id, oldest first; else the newest."""
-    return q_read_page(con, since, topic, limit)[0]
-
-
 def q_read_page(con, since, topic, limit, before=None):
     q, p = f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>?", [since or 0]
     if before is not None:
@@ -3876,19 +3943,37 @@ def q_read_page(con, since, topic, limit, before=None):
 
 
 def cmd_read(con, a):
+    if a.id is not None:
+        if a.since is not None or a.before is not None or a.topic:
+            die("--id shows one message; it cannot be combined with --since, --before or --topic", "bad_input")
+        r = con.execute(f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id=?", (a.id,)).fetchone()
+        if not r:
+            die(f"no message #{a.id}. See recent ids with: agentbus read", "no_message", id=a.id)
+        if a.json:
+            print_json(dict(r))
+        else:
+            out(a, [r], fmt_msg)
+        return
     rows, more = q_read_page(con, a.since, a.topic, a.limit, a._before_id)
     # Walking back (no --since): the cursor is the oldest id shown. With --since, has_more means more
     # after it and the caller continues with --since LAST_ID, so there is no cursor.
     nxt = make_cursor(a, rows[0]["id"] if rows else MAX_ID if a._before_id is None else a._before_id) if more and a.since is None else None
-    out(a, rows, fmt_msg, more, empty="no messages", earlier=a.since is None, cursor=nxt)
+    rows = [cut_body(r) for r in rows]
+    topic = ["--topic", a.topic] if a.topic else []
+    page = ("--limit", page_size(a))
+    if a.since is None:
+        cont = next_command(a, "read", *topic, "--before", nxt, *page) if nxt else None
+    else:
+        cont = next_command(a, "read", "--since", rows[-1]["id"], *topic, *page) if rows else None
+    out(a, rows, fmt_msg, more, empty="no messages", earlier=a.since is None, cursor=nxt, next_cmd=cont)
 
 
-def q_ctx(con, limit=DEFAULT_LIMIT):
+def q_ctx(con, limit=LIST_LIMIT):
     return capped(con, "SELECT * FROM context ORDER BY key", (), limit)
 
 
 def fmt_ctx(r):
-    return INDENT + col0(f"{r['key']} = {r['value']}   ({r['updated_by']}, {r['updated_at']})")
+    return INDENT + col0(f"{r['key']} = {r['value']}   ({r['updated_by']}, {human_time(r['updated_at'])})")
 
 
 def cmd_ctx(con, a):
@@ -3923,14 +4008,15 @@ def cmd_ctx(con, a):
                 show("{}", r["value"], row=True)
         else:
             rows, more = q_ctx(con, a.limit)
-            out(a, rows, fmt_ctx, more, empty="no facts")
+            out(a, rows, fmt_ctx, more, empty="no facts", next_cmd=next_command(a, "ctx", "get", "--limit", len(rows) + more))
     elif a.action == "history":
         # The newest `limit` values, oldest first; --before continues back from a previous page.
         before = MAX_ID if a._before_id is None else a._before_id
         rows, more = capped(con, "SELECT * FROM context_history WHERE key=? AND id<? ORDER BY id DESC", (a.key, before), a.limit)
         rows = list(reversed(rows))
         nxt = make_cursor(a, rows[0]["id"] if rows else before) if more else None
-        out(a, rows, lambda r: INDENT + col0(f"{r['updated_at']} {r['updated_by']}: {r['value']}"), more, cursor=nxt)
+        out(a, rows, lambda r: INDENT + col0(f"{human_time(r['updated_at'])} {r['updated_by']}: {r['value']}"), more, cursor=nxt,
+            next_cmd=next_command(a, "ctx", "history", a.key, "--before", nxt, "--limit", page_size(a)) if nxt else None)
 
 
 # The shared goal: one fact every agent sees first, kept under the context key "goal" so it has the
@@ -3965,7 +4051,7 @@ def cmd_goal(con, a):
         print_json(g)
     elif g:
         show("goal: {}", g["goal"])
-        show("set by {} at {}", g["set_by"], g["set_at"], row=True)
+        show("set by {} at {}", g["set_by"], human_time(g["set_at"]), row=True)
     else:
         show("no goal yet. Set one with: agentbus --as NAME goal \"what we are shipping\"")
 
@@ -3993,15 +4079,15 @@ def cmd_claim(con, a):
                 next_step = (f" Do not edit it yet. Ask {r['agent']} with post --to {r['agent']} "
                              "--kind question, or choose another resource.")
                 if not r["same"]:
-                    die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {r['expires_at']} ({why})." + next_step,
+                    die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {human_time(r['expires_at'])} ({why})." + next_step,
                         "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
-                die(f"{res} is claimed by {r['agent']} until {r['expires_at']} ({why})." + next_step,
+                die(f"{res} is claimed by {r['agent']} until {human_time(r['expires_at'])} ({why})." + next_step,
                     "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
         odd = undecoded_overlaps(con, res, name, t)
         for raw, r in odd:
             if con.execute("SELECT 1 FROM agents WHERE name=(SELECT agent FROM claims WHERE resource=CAST(? AS TEXT))",
                            (raw,)).fetchone():
-                die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {r['expires_at']} "
+                die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {human_time(r['expires_at'])} "
                     f"({r['purpose'] or 'no purpose given'}). Do not edit it yet. "
                     f"Ask {r['agent']} with post --to {r['agent']} --kind question, or choose another resource.",
                     "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
@@ -4039,7 +4125,7 @@ def cmd_claim(con, a):
         log(con, name, "claim", f"{res} until {exp}: {purpose or ''}")
     emit(a, {"resource": res, "agent": name, "purpose": purpose, "claimed_at": claimed_at,
              "expires_at": exp, "auto_released": released,
-             "auto_released_count": n_released}, "claimed {} until {}", res, exp)
+             "auto_released_count": n_released}, "claimed {} {}", res, until_phrase(a.ttl_min * 60, exp))
 
 
 def cmd_release(con, a):
@@ -4067,7 +4153,7 @@ def cmd_release(con, a):
     emit(a, {"released": paths, "released_count": len(paths)}, "released {}", ", ".join(map(str, paths)))
 
 
-def q_claims(con, stale=False, limit=DEFAULT_LIMIT):
+def q_claims(con, stale=False, limit=LIST_LIMIT):
     if stale:
         # Unexpired claims held by agents not on the roster
         q = """SELECT c.*, CASE WHEN c.expires_at < ? THEN 'expired' ELSE 'held' END AS state
@@ -4081,13 +4167,21 @@ def q_claims(con, stale=False, limit=DEFAULT_LIMIT):
 
 
 def fmt_claim(r):
-    remaining = "expired" if r['state'] == 'expired' else time_left(r['expires_at'], datetime.now(timezone.utc)) + " left"
+    t_now = datetime.now(timezone.utc)
+    t = _when(r['expires_at'])
+    if r['state'] == 'expired':
+        remaining = "expired"
+    elif t is None:
+        remaining = str(r['expires_at'])  # not a time this tool wrote: shown as it is (already cleaned)
+    else:  # rounded up to the minute, so a claim made a second ago still says 2h
+        remaining = until_phrase(max(0, int(-((t_now - t).total_seconds() // 60))) * 60, r['expires_at'], t_now)
     return [r['resource'], r['agent'], remaining, r['purpose']]
 
 
 def cmd_claims(con, a):
     rows, more = q_claims(con, getattr(a, "stale", False), a.limit)
-    out(a, rows, fmt_claim, more, empty="no claims")
+    stale = ["--stale"] if getattr(a, "stale", False) else []
+    out(a, rows, fmt_claim, more, empty="no claims", next_cmd=next_command(a, "claims", *stale, "--limit", len(rows) + more))
 
 
 def cmd_log(con, a):
@@ -4102,52 +4196,119 @@ def cmd_log(con, a):
         rows, more = capped(con, "SELECT * FROM log WHERE id<? ORDER BY id DESC", (before,), a.limit)
         rows = list(reversed(rows))
         nxt = make_cursor(a, rows[0]["id"] if rows else before) if more else None
-        out(a, rows, lambda r: INDENT + col0(f"{r['ts']} {r['agent']:<22} {r['action']:<10} {r['detail'] or ''}"),
-            more, empty="log is empty", earlier=True, cursor=nxt)
+        out(a, rows, lambda r: INDENT + col0(f"{human_time(r['ts']):<12} {r['agent']:<22} {r['action']:<10} {r['detail'] or ''}"),
+            more, empty="log is empty", earlier=True, cursor=nxt,
+            next_cmd=next_command(a, "log", "show", "--before", nxt, "--limit", page_size(a)) if nxt else None)
+
+
+FACT_LINE = 80  # status shows a fact's first line, cut at this many characters; ctx get KEY has the whole value
+
+
+def one_line(value, width=FACT_LINE):
+    """A fact value for a text summary: its first line, cut at `width` characters, with ... when anything was left out."""
+    if not isinstance(value, str):
+        return value
+    first = value.split("\n", 1)[0]
+    return first[:width].rstrip() + "..." if first != value or len(first) > width else value
 
 
 def cmd_status(con, a):
     (agents, m1), (ctx, m2), (claims, m3) = q_who(con, a.limit), q_ctx(con, a.limit), q_claims(con, limit=a.limit)
-    msgs = q_read(con, None, None, 10)
+    msgs, m4 = q_read_page(con, None, None, a.limit)
+    msgs = [cut_body(r) for r in msgs]
     g = current_goal(con)
     if a.json:
-        total = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         print_json({"bus": a._db, "goal": g, "agents": [dict(r) for r in agents], "context": [dict(r) for r in ctx],
-                    "claims": [dict(r) for r in claims], "messages": [dict(r) for r in msgs],
-                    "omitted": {"agents": m1, "context": m2, "claims": m3, "messages": max(total - len(msgs), 0)}})
+                    "claims": [dict(r) for r in claims], "messages": msgs,
+                    "omitted": {"agents": m1, "context": m2, "claims": m3, "messages": m4}})
         return
-    show("== bus {}", a._db)
+    show("== bus {}", tilde(a._db))
     if g:
         show("== goal: {}", g["goal"])
     else:
         show("== no goal yet (agentbus --as NAME goal \"...\")")
     later(print)
     show("== agents")
-    out(a, agents, fmt_who, m1, empty="no agents. Join with: agentbus --as NAME join")
-    for title, rows, fmt, more in (("context", ctx, fmt_ctx, m2), ("claims", claims, fmt_claim, m3),
-                                   ("last 10 messages", msgs, fmt_msg, 0)):
+    out(a, agents, fmt_who, m1, empty="no agents. Join with: agentbus --as NAME join",
+        next_cmd=next_command(a, "who", "--limit", len(agents) + m1))
+    ctx = [dict(r, value=one_line(r["value"])) for r in ctx]
+    older = next_command(a, "read", "--before", make_cursor_text({"c": "read", "f": _filter_hash({"topic": None}), "id": msgs[0]["id"]}),
+                         "--limit", page_size(a, INBOX_LIMIT)) if m4 and msgs else None
+    for title, rows, fmt, more, empty, nxt in (
+            ("context", ctx, fmt_ctx, m2, "no facts", next_command(a, "ctx", "get", "--limit", len(ctx) + m2)),
+            ("claims", claims, fmt_claim, m3, "no claims", next_command(a, "claims", "--limit", len(claims) + m3)),
+            ("recent messages", msgs, fmt_msg, m4, "no messages", older)):
         later(print)  # a blank line between sections
         show("== {}", title)
-        out(a, rows, fmt, more, empty={"context": "no facts", "claims": "no claims", "last 10 messages": "no messages"}[title])
+        out(a, rows, fmt, more, empty=empty, earlier=(title == "recent messages"), next_cmd=nxt)
+
+
+def _refs(schema, found):
+    """Every object name a result schema points to with $ref."""
+    if isinstance(schema, dict):
+        if "$ref" in schema:
+            found.add(schema["$ref"].rsplit("/", 1)[-1])
+        for v in schema.values():
+            _refs(v, found)
+    elif isinstance(schema, list):
+        for v in schema:
+            _refs(v, found)
+    return found
+
+
+def schema_index(commands, parser):
+    """schema --index: for each command its argument names and the error codes of its own (the bus errors
+    every command that opens a bus can raise are listed once, as common_errors)."""
+    return {"contract": CONTRACT["contract"], "agentbus": __version__,
+            "commands": {k: {"args": [x["name"] for x in v["args"]], "errors": [e for e in v["errors"] if e not in _BUS_ERRORS]}
+                         for k, v in commands.items()},
+            "global_args": [x["name"] for x in global_args(parser)], "common_errors": list(_BUS_ERRORS)}
+
+
+def global_args(parser):
+    return [_arg_entry(x, {}) for x in parser._actions if x.dest in GLOBAL_DESTS]
 
 
 def cmd_schema(a):
     """The machine contract: every command's arguments, result shape, errors and retry rule, plus the
     shared objects, error codes, exit codes and environment (CONTRACT, with arguments read from the
-    parser). Needs no bus."""
+    parser). With COMMAND only that command's entry and the objects and errors it uses; with --index a
+    short list of every command's arguments and own errors. Needs no bus."""
     parser = build_parser()
     commands = contract_commands(parser)
     want = " ".join(a.command)
+    if a.index and want:
+        die("--index lists every command; it cannot be combined with COMMAND", "bad_input")
     if want:
         commands = {k: v for k, v in commands.items() if k == want or k.startswith(want + " ")}
         if not commands:
-            die(f"unknown command '{want}'. List them with: agentbus schema", "bad_input")
+            die(f"unknown command '{want}'. List them with: agentbus schema --index", "bad_input")
+    if a.index:
+        index = schema_index(commands, parser)
+        if a.json:
+            print_json(index)
+            return
+        show("contract {}: command, arguments, errors of its own", CONTRACT["contract"])
+        for name, entry in index["commands"].items():
+            show("{}", "  ".join(filter(None, [name, " ".join(entry["args"]),
+                                                     "errors: " + " ".join(entry["errors"]) if entry["errors"] else ""])), row=True)
+        show("every command that opens a bus can also fail with: {}", " ".join(index["common_errors"]))
+        show("details: agentbus schema COMMAND --json")
+        return
     if a.json:
-        print_json({"contract": CONTRACT["contract"], "agentbus": __version__, "commands": commands,
-                    "global_args": [_arg_entry(x, {}) for x in parser._actions if x.dest in GLOBAL_DESTS],
-                    "objects": CONTRACT["objects"], "error_fields": CONTRACT["error_fields"], "errors": CONTRACT["errors"],
-                    "exit_codes": CONTRACT["exit_codes"],
-                    "env": CONTRACT["env"]})
+        doc = {"contract": CONTRACT["contract"], "agentbus": __version__, "commands": commands,
+               "global_args": global_args(parser)}
+        objects, errors = CONTRACT["objects"], CONTRACT["errors"]
+        if want:  # only the objects and error codes this command uses
+            names = set()
+            for v in commands.values():
+                _refs(v["result"], names)
+            codes = set(e for v in commands.values() for e in v["errors"])
+            objects = {k: v for k, v in objects.items() if k in names}
+            errors = {k: v for k, v in errors.items() if k in codes}
+        doc.update(objects=objects, error_fields=CONTRACT["error_fields"], errors=errors,
+                   exit_codes=CONTRACT["exit_codes"], env=CONTRACT["env"])
+        print_json(doc)
         return
     rows = [(k, result_text(CONTRACT["commands"][k]["result"], brief=True), CONTRACT["commands"][k]["retry"]["short"]) for k in commands]
     show("contract {}: command, JSON result, retry rule", CONTRACT["contract"])
@@ -4230,7 +4391,7 @@ class Parser(argparse.ArgumentParser):
 _HELP_TEXT = []
 
 
-def limit_arg(parser, default=DEFAULT_LIMIT, what="rows"):
+def limit_arg(parser, default=LIST_LIMIT, what="rows"):
     parser.add_argument("--limit", type=integer, default=default, help=f"At most this many {what} (default {default}). Use -1 for all.")
 
 
@@ -4270,7 +4431,7 @@ def register_inbox(sub):
     ib = sub("inbox", help="Unread messages for you, then mark read")
     ib.add_argument("--peek", action="store_true", help="Do not mark read")
     ib.add_argument("--after", metavar="NEXT", help="With --peek: continue after the previous page (its next value).")
-    limit_arg(ib, what="messages (the oldest unread; the rest stay unread)")
+    limit_arg(ib, INBOX_LIMIT, "messages (the oldest unread; the rest stay unread)")
 
 
 def register_read(sub):
@@ -4278,7 +4439,8 @@ def register_read(sub):
     rd.add_argument("--since", type=integer, default=None, help="The messages after this id, oldest first")
     rd.add_argument("--topic")
     rd.add_argument("--before", metavar="NEXT", help="Older messages than the previous page (its next value).")
-    rd.add_argument("--limit", type=integer, default=30, help="Maximum messages; default 30. Use -1 for all.")
+    rd.add_argument("--id", type=integer, metavar="ID", help="Show this one message, whole (a listing cuts a body at 2 KB).")
+    rd.add_argument("--limit", type=integer, default=LIST_LIMIT, help=f"Maximum messages; default {LIST_LIMIT}. Use -1 for all.")
 
 
 def register_ctx(sub):
@@ -4294,7 +4456,7 @@ def register_ctx(sub):
         if action == "set":
             act.add_argument("value", nargs="*", metavar="VALUE")
         act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
-                         help="Maximum keys (get) or values (history); default 500. Use -1 for all.")
+                         help=f"Maximum keys (get) or values (history); default {LIST_LIMIT}. Use -1 for all.")
         if action == "history":
             act.add_argument("--before", metavar="NEXT", help="Older values than the previous page (its next value).")
 
@@ -4321,7 +4483,7 @@ def register_claims(sub):
 
 def register_log(sub):
     lg = sub("log", help="Append to or show the activity log")
-    limit_arg(lg, 40, "entries (show)")
+    limit_arg(lg, LIST_LIMIT, "entries (show)")
     actions = lg.add_subparsers(dest="action", required=True)
     add = actions.add_parser("add", parents=[sub.common], usage="agentbus log add ACTION DETAIL [options]",
                              help="Append an activity log entry.", description="Append an activity log entry.")
@@ -4331,14 +4493,14 @@ def register_log(sub):
                                   help="Show recent activity log entries.", description="Show recent activity log entries.")
     for act in (add, show_log):
         act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
-                         help="Maximum entries (show); default 40. Use -1 for all.")
+                         help=f"Maximum entries (show); default {LIST_LIMIT}. Use -1 for all.")
     show_log.add_argument("--before", metavar="NEXT", help="Older entries than the previous page (its next value).")
 
 
 def register_status(sub):
     st = sub("status", help="Agents, context, claims, recent messages")
-    st.add_argument("--limit", type=integer, default=DEFAULT_LIMIT,
-                    help="Limit agents, facts, and claims per section; default 500. Use -1 for all. Recent messages always shows the latest 10.")
+    st.add_argument("--limit", type=integer, default=INBOX_LIMIT,
+                    help=f"At most this many rows in each section (agents, facts, claims, the latest messages); default {INBOX_LIMIT}. Use -1 for all.")
 
 
 def register_goal(sub):
@@ -4376,6 +4538,7 @@ def register_upgrade(sub):
 def register_schema(sub):
     sc = sub("schema", help="Result shapes, errors, exit codes and retry rules of every command")
     sc.add_argument("command", nargs="*", metavar="COMMAND", help="One command (for example post, or ctx get); omit for all.")
+    sc.add_argument("--index", action="store_true", help="Only each command's argument names and its own error codes (under 3 KB).")
 
 
 REGISTER_COMMANDS = [
@@ -4692,6 +4855,38 @@ def time_left(ts, t_now):
         return "?"
     m = max(0, int((t - t_now).total_seconds()) // 60)
     return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def human_time(ts, t_now=None):
+    """The one time format of human output: local HH:MM for today, `Mon D HH:MM` for any other day.
+    --json keeps the stored ISO time (UTC). A value that is not a time this tool wrote is returned
+    as it is (callers pass it cleaned)."""
+    t = _when(ts)
+    if t is None:
+        return str(ts)
+    local = t.astimezone()
+    today = (t_now or datetime.now(timezone.utc)).astimezone().date()
+    stamp = local.strftime("%H:%M")
+    return stamp if local.date() == today else f"{_MONTHS[local.month - 1]} {local.day} {stamp}"
+
+
+def human_span(seconds):
+    """A duration in the largest units that say it: 45s, 12m, 2h, 1h 59m, 6d 23h."""
+    m = int(seconds) // 60
+    if m >= 1440:
+        d, h = m // 1440, m % 1440 // 60
+        return f"{d}d" + (f" {h}h" if h else "")
+    if m >= 60:
+        return f"{m // 60}h" + (f" {m % 60}m" if m % 60 else "")
+    return f"{m}m" if m else f"{max(int(seconds), 0)}s"
+
+
+def until_phrase(seconds, until, t_now=None):
+    """`for 2h (until 13:47)`: how long, and when it ends in the same time format."""
+    return f"for {human_span(seconds)} (until {human_time(until, t_now)})"
 
 
 _WATCH_ENCODING = None  # set by watch on a stdout that is not UTF-8: what it cannot encode is written as ?
@@ -6925,13 +7120,13 @@ SKILL_TEXT = (
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal; work toward it (a lead sets it with `goal "TEXT"`). Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.\n'
+    'Start with `join`, then `status` and `inbox` (20 rows each; a cut listing ends with the command that shows more). Join prints the shared goal; work toward it (a lead sets it with `goal "TEXT"`). Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.\n'
     '\n'
     'Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.\n'
     '\n'
     '## Before shared work\n'
     '\n'
-    'Read `inbox --limit 20` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
+    'Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
     '\n'
     'Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. Claims are advisory and expire after 120 minutes by default. Claim again to renew; omitted purpose preserves the current purpose and acquisition time stays unchanged. `--ttl-min` sets a lifetime of 1 to 10080 minutes.\n'
     '\n'
@@ -6947,13 +7142,13 @@ SKILL_TEXT = (
     '\n'
     '## Read correctly\n'
     '\n'
-    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. Duplicate delivery is possible; check message IDs before repeating actions.\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. A listing cuts a body at 2 KB (body_truncated true); `read --id N` shows it whole. Duplicate delivery is possible; check message IDs before repeating actions.\n'
     '\n'
     'A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`.\n'
     '\n'
     '## Finish the session\n'
     '\n'
-    'Run `release RESOURCE` when finished. Before ending the session, check `inbox --limit 20`, post the result or handoff, then `leave`, which releases all claims.\n'
+    'Run `release RESOURCE` when finished. Before ending the session, check `inbox`, post the result or handoff, then `leave`, which releases all claims.\n'
     '\n'
     '## Boundaries\n'
     '\n'
@@ -6967,7 +7162,7 @@ AGENTS_SNIPPET = (
     '## agentbus\n'
     "This workspace has a shared agentbus. Run `.agentbus/bin/agentbus skill` for the full protocol; if it says `unknown command 'skill'`, the copy is 0.1.x: stop and tell the user to run `agentbus upgrade --all PARENT_DIR`.\n"
     'Join: `.agentbus/bin/agentbus --as NAME join`. Before editing: `.agentbus/bin/agentbus --as NAME claim PATH --purpose WHY`.\n'
-    'Between steps: `.agentbus/bin/agentbus --as NAME inbox --limit 20`. Finish: `.agentbus/bin/agentbus --as NAME post RESULT --kind done`, then `leave`.\n'
+    'Between steps: `.agentbus/bin/agentbus --as NAME inbox`. Finish: `.agentbus/bin/agentbus --as NAME post RESULT --kind done`, then `leave`.\n'
 )
 SKILL_SHA256_HISTORY = (
     "2af5e4efedd84d7da42da6c4c5ddd02f230cc002e05b733741557dfd38b06156",
@@ -7702,7 +7897,7 @@ def setup_line(glyph, text):
 def setup_report(a, target, scope, changes, dry_run, uninstall, failure=None):
     if a.json:
         write_out(json.dumps({"target": target, "scope": scope, "dry_run": dry_run,
-                              "changes": [c.as_json() for c in changes]}, indent=2, ensure_ascii=False) + "\n")
+                              "changes": [c.as_json() for c in changes]}, **json_style(), ensure_ascii=False) + "\n")
         return
     show("agentbus setup {}{} ({})", target, " --uninstall" if uninstall else "", scope)
     for c in changes:

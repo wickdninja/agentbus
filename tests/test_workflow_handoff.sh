@@ -66,7 +66,7 @@ ok "fact value and both history entries visible to a reader with no identity"
 
 echo "STEP 6: release, reclaim by the reviewer, done, leave"
 jcall release --as worker release app/api | jis "release reply" 'r["released"] == ["app/api"]'
-say "claimed app/api/health.py until <TS>" agentbus --as reviewer claim app/api/health.py --purpose "review"
+say "claimed app/api/health.py <left>" agentbus --as reviewer claim app/api/health.py --purpose "review"
 is_equal "the reviewer holds the file" "app/api/health.py|reviewer|review" "$(sql "SELECT resource, agent, purpose FROM claims")"
 jcall post --as worker post "done: /health" --kind done --reply-to 1 | jis "done post reply" 'r["id"] == 4'
 say "#4 worker -> everyone [done] re #1 · <time>

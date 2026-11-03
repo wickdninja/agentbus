@@ -34,6 +34,11 @@
 
 - `init DIR` creates a folder that does not exist, with its parents (`mkdir -p`), and says so. A path whose nearest existing parent is not a writable directory, or that is a file, is `bad_input`, with nothing created.
 
+- `read --id N` shows one message whole (a `Message` under `--json`, not a listing); `no_message` when there is none, `bad_input` with `--since`, `--before` or `--topic`. Listings (`inbox`, `read`, `status`) cut a message body at 2 KB (2,048 bytes, on a character boundary) and mark the row `"body_truncated": true`; a body that fits has no such key. In text the cut row ends with `... cut at 2 KB. Full text: agentbus read --id N`.
+- A body over 64 KB is refused when it is sent: `bad_input` with `field` `body` (`post`), `value` (`ctx set`), `detail` (`log add`) or `text` (`goal`), and nothing is stored.
+- `schema COMMAND --json` carries only that command's entry and the objects and error codes it uses (`post` is about 7 KB, the full schema 60 KB); `schema --index` lists every command's argument names and its own error codes in under 3 KB (`--json` too). `schema --json` now lists `global_args` in its own result schema.
+- In text, every cut listing says how many rows it left out and, on the next line, the exact command that shows more: `next: agentbus read --before v1.eyJ... --limit 20` (`--topic`, `--as` and `--up` kept; `inbox --peek` continues with `--after`).
+
 ### Changed (breaking, contract version 1)
 
 - `watch`: `Esc` no longer quits (it goes back, or clears a filter) and `q` quits only from the main view; in a detail or help `q` goes back one level. Before: `q`, `Q` and `Esc` quit from anywhere. Use `q` from the main view or Ctrl-C.
@@ -47,6 +52,11 @@
 - `leave` and `release --all` write no log row when there was nothing to leave or release, so repeating them is clean.
 - The skill moved from `skill/SKILL.md` to `skills/agentbus/SKILL.md` and now ends with `<!-- agentbus:managed -->`. `skill/SKILL.md` stays as a link to it, so the old README line (`ln -s "$PWD/skill" ~/.claude/skills/agentbus`) keeps working from a clone; `agentbus setup claude` replaces such a link with a real folder.
 - README install lines pin a release tag.
+- Output off a terminal: human text is no longer hard-wrapped when stdout is a pipe or a file (an explicit `COLUMNS` still wraps; on a terminal text wraps at its width and a word that fits a row is never cut), and `--json` is compact (no indent, no spaces) when stdout is a pipe or a file and indented on a terminal. The values and field names are the same.
+- Human text shows `~` for the home folder (`join`, `status`, `buses`, `init`, `upgrade`; `--json` keeps the whole path) and one time format: local `HH:MM` for today, `Mon D HH:MM` for another day, and `for 2h (until 13:47)` for a claim (`claimed src/a.py for 2h (until 13:47)`, and in `claims`, `claim_conflict` messages and `ctx`, `log`, `goal` rows). Before: stored ISO times and `1h 59m left`. `--json` keeps ISO UTC.
+- Listing defaults: 20 rows for `inbox` and each section of `status`, 50 for `who`, `claims`, `ctx get`, `ctx history`, `log show` and `read` (before: 500, and 30 for `read`, 40 for `log show`). `status --limit` applies to the recent messages too (before: always 10), `status --json` `omitted.messages` counts the rest, and the text section is `== recent messages`. `leave` and `release --all` still list up to 500 claims.
+- `status` text shows a fact's first line, cut at 80 characters; `ctx get KEY` and `--json` keep the whole value.
+- The `... N more (use --limit)` and `run inbox again` lines are replaced by `... N more` and the `next:` command above (`inbox --peek` no longer says to run inbox again, which marks messages read).
 
 ### Fixed
 

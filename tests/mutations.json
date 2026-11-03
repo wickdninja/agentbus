@@ -997,5 +997,185 @@
     "count": 1,
     "run": "tests/test_launch.sh",
     "expect": "the launcher is not faster than the script"
+  },
+  {
+    "name": "output: a pipe is hard-wrapped at 80 columns",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ except\\ \\(OSError,\\ ValueError,\\ AttributeError\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ pass\\\n\\ \\ \\ \\ return\\ None\\\n\\\n\\\ndef\\ stdout_is_tty",
+    "replace": "    except (OSError, ValueError, AttributeError):\n        pass\n    return 80\n\n\ndef stdout_is_tty",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "piped output was wrapped at the terminal width"
+  },
+  {
+    "name": "output: wrapping cuts a word that fits a row",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ k\\ =\\ next\\(\\(i\\ for\\ i\\ in\\ range\\(len\\(row\\)\\ \\-\\ 1,\\ start,\\ \\-1\\)\\ if\\ row\\[i\\]\\ ==\\ \"\\ \"\\),\\ None\\)",
+    "replace": "            k = None",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "wrapping cut inside a token that fits a row"
+  },
+  {
+    "name": "output: JSON is indented off a terminal",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ \\{\"indent\":\\ 2\\}\\ if\\ stdout_is_tty\\(\\)\\ else\\ \\{\"separators\":\\ \\(\",\",\\ \":\"\\)\\}",
+    "replace": "    return {\"indent\": 2}",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "is not compact when piped"
+  },
+  {
+    "name": "output: JSON is compact on a terminal",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ \\{\"indent\":\\ 2\\}\\ if\\ stdout_is_tty\\(\\)\\ else\\ \\{\"separators\":\\ \\(\",\",\\ \":\"\\)\\}",
+    "replace": "    return {\"separators\": (\",\", \":\")}",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "--json on a terminal is not indented"
+  },
+  {
+    "name": "output: join shows the home folder in full",
+    "file": "bin/agentbus",
+    "find": "\"joined\\ as\\ \\{\\}\\ on\\ \\{\\}\",\\ name,\\ tilde\\(a\\._db\\)\\)",
+    "replace": "\"joined as {} on {}\", name, a._db)",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "join shows the home folder in full"
+  },
+  {
+    "name": "output: another day shows only HH:MM",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ stamp\\ if\\ local\\.date\\(\\)\\ ==\\ today\\ else\\ f\"\\{_MONTHS\\[local\\.month\\ \\-\\ 1\\]\\}\\ \\{local\\.day\\}\\ \\{stamp\\}\"",
+    "replace": "    return stamp",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "does not use `Mon D HH:MM` for another day"
+  },
+  {
+    "name": "output: claims round the time left down",
+    "file": "bin/agentbus",
+    "find": "int\\(\\-\\(\\(t_now\\ \\-\\ t\\)\\.total_seconds\\(\\)\\ //\\ 60\\)\\)",
+    "replace": "int((t - t_now).total_seconds() // 60)",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "claims does not say `for 2h (until HH:MM)`"
+  },
+  {
+    "name": "output: the claim confirmation says until ISO",
+    "file": "bin/agentbus",
+    "find": "\"claimed\\ \\{\\}\\ \\{\\}\",\\ res,\\ until_phrase\\(a\\.ttl_min\\ \\*\\ 60,\\ exp\\)\\)",
+    "replace": "\"claimed {} until {}\", res, exp)",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "claim does not say `for 2h (until HH:MM)`"
+  },
+  {
+    "name": "output: the inbox shows 500 by default",
+    "file": "bin/agentbus",
+    "find": "INBOX_LIMIT\\ =\\ 20\\\n",
+    "replace": "INBOX_LIMIT = 500\n",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "inbox --peek returned"
+  },
+  {
+    "name": "output: listings show 500 by default",
+    "file": "bin/agentbus",
+    "find": "LIST_LIMIT\\ =\\ 50\\\n",
+    "replace": "LIST_LIMIT = 500\n",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "returned 71 rows (wanted 50"
+  },
+  {
+    "name": "output: a body over 64 KB is stored",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ size\\ >\\ MAX_BODY:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "expected a refusal: ('--as', 'a', 'post', '-')"
+  },
+  {
+    "name": "output: a cut body is not marked",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ d\\[\"body_truncated\"\\]\\ =\\ True\\\n",
+    "replace": "            pass\n",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "did not cut a 5 KB body to 2048 bytes with body_truncated true"
+  },
+  {
+    "name": "output: a cut falls inside a character",
+    "file": "bin/agentbus",
+    "find": "d\\[\"body\"\\]\\ =\\ raw\\[:LIST_BODY_MAX\\]\\.decode\\(\"utf\\-8\",\\ \"ignore\"\\)",
+    "replace": "d[\"body\"] = raw[:LIST_BODY_MAX].decode(\"utf-8\", \"replace\")",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "a cut inside a multi-byte character must end on a character boundary"
+  },
+  {
+    "name": "output: read --id cuts the body",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ print_json\\(dict\\(r\\)\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ else:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ out\\(a,\\ \\[r\\],\\ fmt_msg\\)",
+    "replace": "            print_json(cut_body(r))\n        else:\n            out(a, [r], fmt_msg)",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "a body of exactly 64 KB must be accepted whole"
+  },
+  {
+    "name": "output: status shows 10 messages whatever --limit says",
+    "file": "bin/agentbus",
+    "find": "msgs,\\ m4\\ =\\ q_read_page\\(con,\\ None,\\ None,\\ a\\.limit\\)",
+    "replace": "msgs, m4 = q_read_page(con, None, None, 10)",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "status sections are not 20 rows each"
+  },
+  {
+    "name": "output: a cut listing names no next command",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ show\\(\"next:\\ \\{\\}\",\\ next_cmd,\\ row=True\\)",
+    "replace": "            pass",
+    "count": 2,
+    "run": "tests/test_output.sh",
+    "expect": "a cut listing must print exactly one next: line"
+  },
+  {
+    "name": "output: inbox --peek continues with the consuming command",
+    "file": "bin/agentbus",
+    "find": "next_command\\(a,\\ \"inbox\",\\ \"\\-\\-peek\",\\ \"\\-\\-after\",\\ nxt,\\ \\*page\\)\\ if\\ nxt\\ else",
+    "replace": "next_command(a, \"inbox\", *page) if nxt else",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "inbox --peek's hint is wrong"
+  },
+  {
+    "name": "output: status keeps a long multi-line fact",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ first\\[:width\\]\\.rstrip\\(\\)\\ \\+\\ \"\\.\\.\\.\"\\ if\\ first\\ !=\\ value\\ or\\ len\\(first\\)\\ >\\ width\\ else\\ value",
+    "replace": "    return value",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "status must cut a multi-line fact to its first line"
+  },
+  {
+    "name": "output: schema COMMAND prints every object",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ objects\\ =\\ \\{k:\\ v\\ for\\ k,\\ v\\ in\\ objects\\.items\\(\\)\\ if\\ k\\ in\\ names\\}",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "schema post is not trimmed to post"
+  },
+  {
+    "name": "output: schema --index lists every error",
+    "file": "bin/agentbus",
+    "find": "\"errors\":\\ \\[e\\ for\\ e\\ in\\ v\\[\"errors\"\\]\\ if\\ e\\ not\\ in\\ _BUS_ERRORS\\]\\}",
+    "replace": "\"errors\": list(v[\"errors\"])}",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "schema --index is"
   }
 ]

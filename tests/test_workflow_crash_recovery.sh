@@ -22,9 +22,9 @@ echo "STEP 1: a boss and two workers; the workers take paths, the boss hands wor
 say "joined as boss on $BUSLINE" agentbus --as boss join --tool claude --role lead
 say "joined as w1 on $BUSLINE" agentbus --as w1 join --tool codex --role worker
 say "joined as w2 on $BUSLINE" agentbus --as w2 join --tool codex --role worker
-say "claimed src/a.py until <TS>" agentbus --as w1 claim src/a.py --purpose "edit a"
-say "claimed lib/ until <TS>" agentbus --as w1 claim lib/ --purpose "edit lib"
-say "claimed docs/x.md until <TS>" agentbus --as w2 claim docs/x.md --purpose "docs"
+say "claimed src/a.py <left>" agentbus --as w1 claim src/a.py --purpose "edit a"
+say "claimed lib/ <left>" agentbus --as w1 claim lib/ --purpose "edit lib"
+say "claimed docs/x.md <left>" agentbus --as w2 claim docs/x.md --purpose "docs"
 say "posted #1 to w1 [handoff]" agentbus --as boss post "please finish b" --to w1 --kind handoff
 refuse 1 "agentbus: src/a.py is claimed by w1 until <TS> (edit a). Do not edit it yet. Ask w1 with post --to w1 --kind question, or choose another resource." \
   agentbus --as boss claim src/a.py
@@ -35,7 +35,7 @@ sql_write "UPDATE claims SET expires_at='2020-01-01T00:00:00Z' WHERE resource='s
 is_equal "the listing says expired" "docs/x.md w2 held
 lib/ w1 held
 src/a.py w1 expired" "$(claims_state)"
-say "claimed src/a.py until <TS>" agentbus --as boss claim src/a.py --purpose "take over a"
+say "claimed src/a.py <left>" agentbus --as boss claim src/a.py --purpose "take over a"
 is_equal "the boss holds src/a.py now" "src/a.py|boss|take over a" "$(sql "SELECT resource, agent, purpose FROM claims WHERE resource='src/a.py'")"
 ok "an expired claim is reported as expired and does not block"
 

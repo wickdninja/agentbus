@@ -34,7 +34,7 @@ AGENTS_SNIPPET = (
     "`unknown command 'skill'`, the copy is 0.1.x: stop and tell the user to run `agentbus upgrade --all PARENT_DIR`.\n"
     "Join: `.agentbus/bin/agentbus --as NAME join`. "
     "Before editing: `.agentbus/bin/agentbus --as NAME claim PATH --purpose WHY`.\n"
-    "Between steps: `.agentbus/bin/agentbus --as NAME inbox --limit 20`. "
+    "Between steps: `.agentbus/bin/agentbus --as NAME inbox`. "
     "Finish: `.agentbus/bin/agentbus --as NAME post RESULT --kind done`, then `leave`.\n"
 )
 

@@ -193,10 +193,10 @@ for n in "abcde":
 for i in range(15):
     ok(db, "--as", "a", "post", "m%d" % i)
 st = ok(db, "status", "--limit", "2")
-assert [len(st[k]) for k in ("agents", "context", "claims", "messages")] == [2, 2, 2, 10], st
-assert st["omitted"] == {"agents": 3, "context": 3, "claims": 3, "messages": 5}, st["omitted"]
+assert [len(st[k]) for k in ("agents", "context", "claims", "messages")] == [2, 2, 2, 2], st
+assert st["omitted"] == {"agents": 3, "context": 3, "claims": 3, "messages": 13}, st["omitted"]
 full = ok(db, "status", "--limit", "-1")
-assert full["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 5}, full["omitted"]
+assert full["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 0}, full["omitted"]
 print("PASS: status omitted counts equal rows left out per section")
 
 # watch shows at most 200 per section: plant 205 rows in each directly, as another tool could
@@ -215,7 +215,7 @@ print("PASS: watch --json omitted counts equal rows left out per section")
 
 # ---- human output keeps its truncation hints ----
 p = run(db, "who", "--limit", "1")
-assert p.returncode == 0 and p.stdout.rstrip().endswith("... 209 more (use --limit)"), p.stdout[-80:]
-print("PASS: human listings keep their '... N more (use --limit)' hint")
+assert p.returncode == 0 and p.stdout.rstrip().endswith("... 209 more\n  next: agentbus who --limit 210"), p.stdout[-80:]
+print("PASS: human listings keep their '... N more' hint and name the command that shows the rest")
 PY
 echo "All pagination tests passed"
