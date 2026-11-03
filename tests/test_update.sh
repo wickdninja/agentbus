@@ -292,7 +292,7 @@ ok "stdout holds the result, the error says committed"
 echo "TEST 19: --json validates against 'schema update --json'"
 new_case schema uv; new_bus "$C/b"; use_fake_module
 "$ENTRY" schema update --json >"$C/schema.json" || fail "schema update"
-validate() { "$PY" -I - "$C/schema.json" "$1" <<'PY'
+validate() { "$PY" -I -B - "$C/schema.json" "$1" <<'PY'
 import json, sys
 sys.path.insert(0, __import__("os").environ["TESTS_DIR"])
 from schema_check import validate
