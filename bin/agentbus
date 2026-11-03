@@ -5940,7 +5940,7 @@ def hook_index_candidates(data):
     trailer equals it, or the trailer is all zero (index.skipHash writes no checksum)."""
     found = []
     for size, algo in ((20, hashlib.sha1), (32, hashlib.sha256)):
-        if len(data) > 12 + size and (data[-size:] == bytes(size) or algo(data[:-size]).digest() == data[-size:]):
+        if len(data) >= 12 + size and (data[-size:] == bytes(size) or algo(data[:-size]).digest() == data[-size:]):
             found.append(size)
     if not found:
         raise ValueError("index checksum")
@@ -6017,6 +6017,30 @@ def hook_index_stamp(path):
     return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
 
 
+def hook_index_entries(repo):
+    """([(path bytes, mode)], stamp of the shared index or None) for the repository's index, a split index joined with
+    its shared index. FileNotFoundError when there is no index; ValueError or OSError for anything unreadable."""
+    data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
+    names, link = hook_index_names(data)
+    shared_stamp = None
+    if link is not None:
+        for folder in (repo["gitdir"], repo["common"]):
+            path = os.path.join(folder, "sharedindex." + link)
+            try:
+                shared = hook_read_file_exact(path)
+                shared_stamp = [path] + hook_index_stamp(path)
+                break
+            except FileNotFoundError:
+                continue
+        else:
+            raise ValueError("shared index missing")
+        more, again = hook_index_names(shared)
+        if again is not None or (shared[-len(link) // 2:] != bytes(len(link) // 2) and shared[-len(link) // 2:].hex() != link):
+            raise ValueError("shared index")
+        names += more
+    return names, shared_stamp
+
+
 def hook_index_tracks(repo, prefix):
     """True when the repository's index lists anything under `prefix` (bytes, ending in /), a file or link named like
     the folder, or a collapsed folder (sparse index) holding it. A split index is read with its shared index.
@@ -6037,24 +6061,7 @@ def hook_index_tracks(repo, prefix):
             return saved["tracked"]
     except (ValueError, OSError, TypeError):
         pass
-    data = hook_read_file_exact(index)
-    names, link = hook_index_names(data)
-    shared_stamp = None
-    if link is not None:
-        for folder in (repo["gitdir"], repo["common"]):
-            path = os.path.join(folder, "sharedindex." + link)
-            try:
-                shared = hook_read_file_exact(path)
-                shared_stamp = [path] + hook_index_stamp(path)
-                break
-            except FileNotFoundError:
-                continue
-        else:
-            raise ValueError("shared index missing")
-        more, again = hook_index_names(shared)
-        if again is not None or (shared[-len(link) // 2:] != bytes(len(link) // 2) and shared[-len(link) // 2:].hex() != link):
-            raise ValueError("shared index")
-        names += more
+    names, shared_stamp = hook_index_entries(repo)
     want = prefix.lower()
     tracked = False
     for name, mode in names:
@@ -6519,12 +6526,45 @@ CLAUDE_HOOK_TIMEOUT = {"SessionEnd": 2}  # Claude Code gives SessionEnd hooks 1.
 CLAUDE_PLUGIN_NOTE = "hooks   provided by the agentbus plugin; not added"
 
 
+def claude_tracked_in_index(exe):
+    """True when `exe`, its real path, or any symlink hop between them is a file the index of the work tree holding it
+    lists (a repository can commit a claude, or a link to one). Read with the hook's own index parser, no git run. Fails
+    closed: a work tree whose layout or index cannot be read counts as tracking it. Ignored or untracked files in a work
+    tree (Homebrew's Caskroom and node_modules, a dotfiles home) are not tracked."""
+    path, seen = exe, 0
+    while True:
+        here = os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+        repo = hook_git_layout(os.path.dirname(here))
+        if repo is False:
+            return True
+        if repo is not None:
+            rel = os.fsencode(os.path.relpath(here, repo["top"]).replace(os.sep, "/")).lower()
+            try:
+                names, _ = hook_index_entries(repo)
+            except FileNotFoundError:
+                names = []
+            except (OSError, ValueError, MemoryError):
+                return True
+            for name, mode in names:
+                n = name.lower()
+                if n == rel or (n.endswith(b"/") and rel.startswith(n)):
+                    return True
+        if not os.path.islink(here):
+            return False
+        seen += 1
+        if seen > 20:
+            return True
+        target = os.readlink(here)
+        path = target if os.path.isabs(target) else os.path.join(os.path.dirname(here), target)
+
+
 def claude_trusted_binary():
     """The claude executable setup may start, or None. Found on an absolute PATH entry (or named by
     AGENTBUS_CLAUDE_BIN), and used only when nothing the project controls could be it. Refused: a real path under
     the working directory or under any ancestor of it below the home folder (a project root that is not a git
-    repository, such as an unpacked archive), inside any git work
-    tree (the home folder included when it is one) or bus folder, or whose file or folders (the PATH entry's, the real
+    repository, such as an unpacked archive), inside a bus folder, tracked in the index of the work tree that
+    holds it (the file or a symlink hop to it; an index that cannot be read counts as tracking it; ignored or untracked
+    files, such as Homebrew's Caskroom or node_modules, are fine), or whose file or folders (the PATH entry's, the real
     one's) are writable by group or others or owned by someone but the user and root. Anything else: None, and
     setup reads the plugin files instead."""
     exe = os.environ.get("AGENTBUS_CLAUDE_BIN")
@@ -6549,8 +6589,8 @@ def claude_trusted_binary():
         roots += list(walk_buses(cwd))
         if any(under(real, root) for root in roots if root != os.sep) or ".agentbus" in real.split(os.sep):
             return None
-        if hook_git_layout(os.path.dirname(real)) is not None:
-            return None  # inside a git work tree (or one whose layout cannot be read)
+        if claude_tracked_in_index(exe):
+            return None
         uid = os.getuid()
         for path in {exe, real, os.path.dirname(exe), os.path.dirname(real)}:
             st = os.stat(path)

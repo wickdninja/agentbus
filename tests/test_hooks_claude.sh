@@ -694,7 +694,8 @@ mkgenindex "$P/.git/index" 2000 .agentbus/bus.db      # same size class, new ide
 UPS; quiet || fail "a changed index that now tracks the bus was served from the cache: rc $RC out $OUT"
 mkgenindex "$P/.git/index" 2000
 UPS; [ -n "$OUT" ] || fail "an index that no longer tracks the bus was served from the cache"
-mkgenindex "$P/.git/index" 2000
+mkgenindex "$P/.git/index" 0
+UPS; [ -n "$OUT" ] || fail "an index with no entries was taken for a damaged one"
 STATE="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; ls "$STATE"/idx-*.json >/dev/null 2>&1 || fail "no index answer was remembered"
 ok "tracked flips are seen; the answer is remembered while the index file is unchanged"
 

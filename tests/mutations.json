@@ -477,12 +477,48 @@
     "expect": "setup started a claude under an ancestor project root"
   },
   {
-    "name": "setup trusts a claude inside a git work tree",
+    "name": "setup trusts a claude tracked in its work tree's index",
     "file": "bin/agentbus",
-    "find": "if hook_git_layout\\(os\\.path\\.dirname\\(real\\)\\) is not None:",
+    "find": "if claude_tracked_in_index\\(exe\\):",
     "replace": "if False:",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "setup started a claude inside a home folder that is a git repository"
+    "expect": "setup started a claude tracked in the index of a home folder"
+  },
+  {
+    "name": "setup trusts a claude reached through a tracked symlink",
+    "file": "bin/agentbus",
+    "find": "        if not os\\.path\\.islink\\(here\\):",
+    "replace": "        if True:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude reached through a tracked symlink hop"
+  },
+  {
+    "name": "setup trusts a claude in a work tree whose index cannot be read",
+    "file": "bin/agentbus",
+    "find": "            except \\(OSError, ValueError, MemoryError\\):\\n                return True",
+    "replace": "            except (OSError, ValueError, MemoryError):\n                names = []",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a corrupt index"
+  },
+  {
+    "name": "setup refuses every claude in a work tree",
+    "file": "bin/agentbus",
+    "find": "                if n == rel or \\(n\\.endswith\\(b\"/\"\\) and rel\\.startswith\\(n\\)\\):\\n                    return True",
+    "replace": "                if True:\n                    return True",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup refused a claude that is untracked in an unrelated work tree"
+  },
+  {
+    "name": "an index with no entries is taken for a damaged one",
+    "file": "bin/agentbus",
+    "find": "len\\(data\\) >= 12 \\+ size and",
+    "replace": "len(data) > 12 + size and",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "an index with no entries was taken for a damaged one"
   }
 ]

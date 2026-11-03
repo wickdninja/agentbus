@@ -919,7 +919,7 @@ export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
 ok "claude: absolute PATH entries only, outside the project and its buses, not writable by others, run from HOME; check never starts it"
 
 echo
-echo "TEST: hooks: a claude under any project root below HOME (git or not), or in a git home, is not started"
+echo "TEST: hooks: a claude under any project root below HOME, or tracked in its work tree's index, is not started"
 export AGENTBUS_CLAUDE_BIN=
 setup_in() {  # setup_in CWD PATH: setup claude from CWD with that PATH; the log says whether a claude was started
   rm -f "$T/claude.log"; RC=0; OUT=$(cd "$1" && PATH="$2" "${AB[@]}" setup claude 2>&1) || RC=$?
@@ -931,13 +931,37 @@ setup_in "$HOME/tarball/sub" "$HOME/tarball/node_modules/.bin:$PATH"
 reset; mkdir -p "$HOME/proj" "$HOME/.local/bin"; mkclaude "$HOME/.local/bin/claude"
 setup_in "$HOME/proj" "$HOME/.local/bin:$PATH"
 ran || fail "setup refused a claude in the home folder's own bin, outside the project and not in a repository"
+gitq() { git -C "$1" -c user.email=t@t -c user.name=t "${@:2}"; }
+# a dotfiles home: an untracked claude is fine, one the home's index lists is not (from the project or from HOME itself)
 reset; git -C "$HOME" init -q; mkdir -p "$HOME/bin" "$HOME/proj"; mkclaude "$HOME/bin/claude"
 setup_in "$HOME/proj" "$HOME/bin:$PATH"
-! ran || fail "setup started a claude inside a home folder that is a git repository"
+ran || fail "setup refused an untracked claude in a dotfiles home"
+gitq "$HOME" add -f bin/claude
+setup_in "$HOME/proj" "$HOME/bin:$PATH"
+! ran || fail "setup started a claude tracked in the index of a home folder that is a git repository"
 setup_in "$HOME" "$HOME/bin:$PATH"
-! ran || fail "setup run from a home folder that is a git repository started a claude there"
+! ran || fail "setup run from a git home folder started a claude its index lists"
+# a work tree elsewhere (Homebrew's prefix is one): Caskroom/ and node_modules/ are untracked there
+WT="$T/wt"; rm -rf "$WT"; mkdir -p "$WT/Caskroom/claude/1.0" "$WT/bin"; git -C "$WT" init -q
+mkclaude "$WT/Caskroom/claude/1.0/claude"; ln -s ../Caskroom/claude/1.0/claude "$WT/bin/claude"
+reset
+setup_in "$W" "$WT/bin:$PATH"
+ran || fail "setup refused a claude that is untracked in an unrelated work tree (symlinked from its bin)"
+grep -qF "provided by the agentbus plugin" <<<"$OUT" || fail "an untracked work-tree claude's answer was not used"
+gitq "$WT" add -f Caskroom/claude/1.0/claude
+setup_in "$W" "$WT/bin:$PATH"
+! ran || fail "setup started a claude tracked in the index of its work tree"
+gitq "$WT" rm -q --cached Caskroom/claude/1.0/claude; gitq "$WT" add -f bin/claude
+setup_in "$W" "$WT/bin:$PATH"
+! ran || fail "setup started a claude reached through a tracked symlink hop"
+gitq "$WT" rm -q --cached bin/claude
+setup_in "$W" "$WT/bin:$PATH"
+ran || fail "setup refused the work-tree claude after nothing was tracked any more"
+printf 'garbage, not an index' >"$WT/.git/index"
+setup_in "$W" "$WT/bin:$PATH"
+! ran || fail "setup started a claude in a work tree whose index is a corrupt index (it must count as tracked)"
 export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
-ok "no claude under the working directory's ancestors below HOME, nor in a git work tree (HOME included); one in HOME's own bin outside a repository is trusted"
+ok "no claude under the working directory's ancestors below HOME or tracked in its work tree's index (itself, a symlink hop, or an unreadable index); untracked ones (Caskroom, node_modules, a dotfiles home) are trusted"
 
 echo
 echo "All setup tests passed"
