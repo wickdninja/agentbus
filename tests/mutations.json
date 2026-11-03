@@ -240,7 +240,7 @@
     "replace": "    if False:\\n        bad = [",
     "count": 1,
     "run": "tests/test_doctor.sh",
-    "expect": "a newer bus must exit 1"
+    "expect": "doctor must exit 1 where join exits 3"
   },
   {
     "name": "doctor treats an older copy as newer",
