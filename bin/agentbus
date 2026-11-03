@@ -6393,10 +6393,62 @@ def watch_live(a, strict, where, paint):
     # a blocked signal survives exec, and a CI runner or a parent shell can start us with SIGINT or SIGWINCH
     # blocked, so they are unblocked here; the C-level handler writes to the wakeup fd from whichever thread
     # took the signal, so select() wakes even when the kernel did not deliver it to this thread.
+    entered = []  # set once the loop has taken the terminal (cbreak, the alternate screen)
+
+    def leave_terminal():
+        """The terminal as it was: its modes first, then the cursor shown and the alternate screen left."""
+        if saved is not None:
+            try:
+                termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
+            except Exception:
+                pass
+        try:
+            out.write(SHOW_CURSOR_LEAVE_ALT)
+            out.flush()
+        except Exception:
+            pass
+
+    def enter_terminal():
+        try:
+            if stdin is not None:
+                ttymod.setcbreak(stdin)
+            out.write("\033[?1049h\033[?25l")
+            out.flush()
+            os.write(wake_w, b"c")  # redraw the whole frame at once
+        except Exception:
+            pass
+
+    jobs = []  # "stop" (Ctrl-Z) or "cont" (continued), done by the loop at a safe point, never inside a handler
+
+    def on_job(what):
+        def handler(*_):
+            jobs.append(what)
+            try:
+                os.write(wake_w, b"j")
+            except OSError:
+                pass
+        return handler
+
+    def do_jobs():
+        """Ctrl-Z, the standard way: give the terminal back, stop with SIGTSTP's default action, and take the
+        terminal again when continued (fg); after any other stop (SIGSTOP) take it again too, since a shell may
+        have reset its modes. Run from the loop between frames, so no write is ever cut in two."""
+        while jobs:
+            what = jobs.pop(0)
+            if what == "stop":
+                leave_terminal()
+                signal.signal(signal.SIGTSTP, signal.SIG_DFL)
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTSTP})
+                os.kill(os.getpid(), signal.SIGTSTP)  # stops here until continued
+                signal.signal(signal.SIGTSTP, on_job("stop"))
+                jobs[:] = [j for j in jobs if j != "cont"]
+            enter_terminal()
     for sig, handler in ((signal.SIGWINCH, lambda *_: os.write(wake_w, b"r")), (signal.SIGINT, on_signal(0)),
-                         (signal.SIGTERM, on_signal(0)), (signal.SIGHUP, on_signal(129))):
+                         (signal.SIGTERM, on_signal(0)), (signal.SIGHUP, on_signal(129)),
+                         (signal.SIGTSTP, on_job("stop")), (signal.SIGCONT, on_job("cont"))):
         old[sig] = signal.signal(sig, handler)
-    old_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGWINCH, signal.SIGTERM, signal.SIGHUP})
+    old_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGWINCH, signal.SIGTERM, signal.SIGHUP,
+                                                           signal.SIGTSTP, signal.SIGCONT})
     old_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)
     reader = WatchReader(a._db, strict, a.interval)
     cleaned = []
@@ -6432,7 +6484,7 @@ def watch_live(a, strict, where, paint):
                 pass
     _KILL_CLEANUP.append(cleanup)  # the watchdog ending the process restores the terminal first
     try:
-        _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod)
+        _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod, entered, do_jobs)
     except KeyboardInterrupt:
         pass
     finally:
@@ -6442,7 +6494,7 @@ def watch_live(a, strict, where, paint):
     return stop[0] if stop else 0
 
 
-def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod):
+def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod, entered=None, do_jobs=None):
     me_name = getattr(a, "as_", None) or os.environ.get("AGENTBUS_AGENT") or None
     view = View()
     view.me = me_name
@@ -6455,6 +6507,9 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
     out.flush()
     if stdin is not None:
         ttymod.setcbreak(stdin)
+    if entered is not None:
+        entered.append(1)
+    if stdin is not None:
         if not paint.ascii and (out.encoding or "").lower().replace("-", "") == "utf8":
             wide, rest = ambiguous_is_wide(stdin, out, select)
             if wide:
@@ -6557,6 +6612,8 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
             continue
         if wake_r in ready:
             os.read(wake_r, 64)
+        if do_jobs:
+            do_jobs()  # Ctrl-Z and fg
         if reader.res_r in ready:
             os.read(reader.res_r, 64)
         keys = []

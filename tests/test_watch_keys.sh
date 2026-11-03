@@ -608,4 +608,8 @@ echo "TEST 18: hostile bytes in every field the CLI takes, walked through every 
 live hostile || fail "hostile text"
 ok "ESC, OSC 52, CSI, C1, bidi and zero-width bytes in names, roles, recipients, keys, values, resources, purposes, topics, bodies and the goal: none reached the pty raw in the overview, every detail, a nested detail, help, the filter and the footers"
 
+echo "TEST 19: Ctrl-Z in a shell gives the terminal back and stops; fg takes it again and keys work at once"
+live jobctl || fail "job control"
+ok "Ctrl-Z shows the cursor and leaves the alternate screen before the prompt; fg restores cbreak, the alternate screen and a full frame; Tab works without Enter; q exits"
+
 echo "All watch key tests passed"

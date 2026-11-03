@@ -523,6 +523,81 @@ def hostile():
             s.close()
 
 
+@case
+def jobctl():
+    """M2: Ctrl-Z in an interactive bash gives the terminal back (cursor shown, alternate screen left) and the job
+    stops; fg takes it again (cbreak, the alternate screen, a full frame) and keys work at once; q exits."""
+    import fcntl
+    import pty
+    import select
+    import shlex
+    import struct
+    import termios
+    e = env(PS1="PROMPT$ ", AGENTBUS_DB=DB)
+    pid, fd = pty.fork()
+    if pid == 0:  # the child: an interactive shell with job control on this pty
+        os.execve("/bin/bash", ["bash", "--norc", "--noprofile", "-i"], e)
+    buf = [b""]
+
+    def until(cond, seconds, what, since=0):
+        end = time.monotonic() + seconds
+        while not cond(buf[0][since:]):
+            if time.monotonic() > end:
+                raise AssertionError(f"timed out waiting for {what}: ...{buf[0][-500:]!r}")
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if r:
+                try:
+                    buf[0] += os.read(fd, 65536)
+                except OSError:
+                    break
+
+    def lflag():
+        l = termios.tcgetattr(fd)[3]
+        return bool(l & termios.ICANON), bool(l & termios.ECHO)
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        until(lambda b: b"PROMPT$" in b, 10, "the prompt")
+        os.write(fd, (shlex.join(agentbus_argv() + ["watch", "--interval", "0.2"]) + "\n").encode())
+        until(lambda b: b"following" in b, 15, "the first frame")
+        assert lflag() == (False, False), ("watch is not in cbreak", lflag())
+        m = len(buf[0])
+        os.write(fd, b"\x1a")
+        until(lambda b: b"PROMPT$" in b, 10, "the prompt after Ctrl-Z", m)
+        after = buf[0][m:]
+        assert b"\x1b[?25h\x1b[?1049l" in after and after.index(b"\x1b[?25h\x1b[?1049l") < after.index(b"PROMPT$"), \
+            ("Ctrl-Z did not give the terminal back before the prompt", after.find(b"\x1b[?25h\x1b[?1049l"),
+             after.find(b"PROMPT$"), after[-400:])
+        m = len(buf[0])
+        os.write(fd, b"fg\n")
+        until(lambda b: b"\x1b[?1049h" in b and b"\x1b[?25l" in b and b"following" in b.split(b"\x1b[?1049h")[-1], 10,
+              "the alternate screen and a full frame after fg", m)
+        assert lflag() == (False, False), ("after fg the terminal is not in cbreak", lflag())
+        m = len(buf[0])
+        os.write(fd, b"\t")  # a key works at once, no Enter needed
+        until(lambda b: b"j/k move" in b, 5, "Tab redrawn after fg", m)
+        m = len(buf[0])
+        os.write(fd, b"q")
+        until(lambda b: b"PROMPT$" in b, 10, "q to exit to the prompt", m)
+        assert b"\x1b[?25h\x1b[?1049l" in buf[0][m:], "q after fg did not restore the screen"
+        os.write(fd, b"exit\n")
+        end = time.monotonic() + 10
+        while time.monotonic() < end:
+            done, _ = os.waitpid(pid, os.WNOHANG)
+            if done:
+                pid = 0
+                break
+            select.select([fd], [], [], 0.05) and None
+            try:
+                buf[0] += os.read(fd, 65536) if select.select([fd], [], [], 0)[0] else b""
+            except OSError:
+                pass
+    finally:
+        if pid:
+            os.kill(pid, signal.SIGKILL)  # the shell this case started
+            os.waitpid(pid, 0)
+        os.close(fd)
+
+
 CASES["restore"] = restore
 
 if __name__ == "__main__":
