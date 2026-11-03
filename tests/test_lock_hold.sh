@@ -48,10 +48,11 @@ done
 ok "stdin is read before the bus is opened"
 
 echo "TEST 2: a reader whose stdout is not being drained does not hold the bus"
-# 60 bodies of 3 KB: a listing cuts each at 2 KB, so read is still more than a pipe buffer. The proof below is the pause
-# point just before the stdout write, which every command reaches whatever its size.
-for i in $(seq 1 60); do python3 -c 'print("x" * 3000)' | agentbus --as a post - >/dev/null; done
-for cmd in read "--json read" status; do
+# 600 bodies of 3 KB, planted: a listing cuts each at 2 KB, so read (50 rows) is more than a pipe buffer, and status
+# --limit -1 (every message) is about 1.2 MB. The command must still be blocked on the full pipe when the other agent
+# posts ("finished early" means the output fitted the pipe and the test proved nothing); status's default is small.
+plant_big_messages "$AGENTBUS_DB" "*" 600
+for cmd in read "--json read" "status --limit -1"; do
   rm -f "$T/outp"; mkfifo "$T/outp"
   n=$((n+1)); P="$T/pause2-$n"; mkdir -p "$P"; touch "$P/before-stdout-write.go"
   AGENTBUS_TEST_PAUSE="before-stdout-write=$P" agentbus $cmd >"$T/outp" 2>"$T/e1" & P1=$!
