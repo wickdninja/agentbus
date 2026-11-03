@@ -5946,8 +5946,9 @@ def hook_index_candidates(data):
     """The hash sizes (20 for SHA-1, 32 for SHA-256) this file can be an index of: the digest of everything before the
     trailer equals it, or the trailer is all zero (index.skipHash writes no checksum)."""
     found = []
+    view = memoryview(data)    # hashing the bytes before the trailer without copying them
     for size, algo in ((20, hashlib.sha1), (32, hashlib.sha256)):
-        if len(data) >= 12 + size and (data[-size:] == bytes(size) or algo(data[:-size]).digest() == data[-size:]):
+        if len(data) >= 12 + size and (data[-size:] == bytes(size) or algo(view[:-size]).digest() == data[-size:]):
             found.append(size)
     if not found:
         raise ValueError("index checksum")
@@ -6036,7 +6037,7 @@ def hook_index_quick(repo):
         if version == 4 and data[:4] == b"DIRC":
             return None
         raise ValueError("signature or version")
-    low = data[:-size].lower()
+    low = data.lower()    # the trailer's few bytes may match by chance; that only sends the index to the full read
     # A component that folds to .agentbus is ASCII except possibly the last letter (U+017F, long s, is the only other
     # character whose Unicode case folding is a letter of that name), so ".agentbu" appears in every candidate.
     if b"link" in low or b"sdir" in low or b".agentbu" in low:
@@ -6160,12 +6161,16 @@ def hook_read_file_exact(path):
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_size > HOOK_INDEX_MAX:
             raise ValueError("not a plain file of a size we read")
-        data = b""
-        while len(data) < st.st_size:
-            chunk = os.read(fd, 1 << 20)
+        # One read for the whole file where the system gives it (no copying: appending 1 MiB chunks to one bytes object
+        # copied the file once per chunk, 0.8 s for 87 MB), else the pieces joined once.
+        chunks, got = [], 0
+        while got < st.st_size:
+            chunk = os.read(fd, st.st_size - got)
             if not chunk:
                 break
-            data += chunk
+            chunks.append(chunk)
+            got += len(chunk)
+        data = chunks[0] if len(chunks) == 1 else b"".join(chunks)
     finally:
         os.close(fd)
     if len(data) != st.st_size:

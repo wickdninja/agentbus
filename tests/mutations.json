@@ -655,5 +655,14 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "hard link"
+  },
+  {
+    "name": "a big index is read in 1 MiB pieces appended one after another",
+    "file": "bin/agentbus",
+    "find": "chunk = os\\.read\\(fd, st\\.st_size - got\\)",
+    "replace": "chunk = os.read(fd, min(1 << 20, st.st_size - got))",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a big file was read in many small reads"
   }
 ]

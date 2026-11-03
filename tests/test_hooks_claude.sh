@@ -832,6 +832,56 @@ done
 ok "empty, relative and missing folders: the hook runs on, nothing is written into the project"
 
 echo
+echo "TEST 39: the name and identity rules, shown directly (they do not depend on the file system folding names)"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T" <<'PY' || fail "the name and identity rules"
+import os, runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_names")
+cands = m["hook_index_candidate_paths"]
+long_s, up, lo = "ſ".encode(), "Ä".encode(), "ä".encode()
+got = cands([(b".agentbu" + long_s + b"/bus.db", 0o100644), (lo + b"/.agentbus/bus.db", 0o100644), (b"x/.AgentBus/y", 0o100644),
+             (b"src/main.c", 0o100644), (b"docs/agentbus.md", 0o100644), (b"sparse/", 0o040000), (up + b"/readme", 0o100644)])
+assert b".agentbu" + long_s in got, got                  # folds to .agentbus
+assert lo + b"/.agentbus" in got and b"x/.AgentBus" in got and b"sparse" in got, got
+assert not any(g in got for g in (b"src/main.c", b"docs/agentbus.md", up + b"/readme")), got
+# a bus folder whose entry name on disk is not exactly .agentbus is foreign
+d = sys.argv[2] + "/names"; os.makedirs(d + "/.agentbus")
+real = os.listdir
+os.listdir = lambda p: [os.fsencode(".AgentBu") + long_s] if os.fsdecode(p) == os.path.realpath(d) else real(p)
+assert m["hook_untracked"](d) is False
+os.listdir = real
+assert m["hook_untracked"](d) is True
+PY
+# a big index is read in one go (appending 1 MiB chunks to one bytes object copied the file once per chunk: 0.8 s for 87 MB)
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/bigread" <<'PY' || fail "a big file was read in many small reads"
+import os, runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_read")
+with open(sys.argv[2], "wb") as f:
+    f.write(os.urandom(1 << 20) * 9)
+calls = []
+real = os.read
+os.read = lambda fd, n: (calls.append(n), real(fd, n))[1]
+try:
+    data = m["hook_read_file_exact"](sys.argv[2])
+finally:
+    os.read = real
+assert len(data) == 9 << 20 and len(calls) <= 2, (len(data), calls)
+PY
+# the shortcut for a plain index must not say "nothing here" for a name that only folds to .agentbus
+mkdir -p "$T/quick/.git"; mkgenindex "$T/quick/.git/index" 3 "$(printf '.agentbu\xc5\xbf/bus.db')"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index shortcut said nothing was there for a long-s bus folder name"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_quick")
+assert m["hook_index_quick"]({"gitdir": sys.argv[2] + "/.git"}) is None
+PY
+mkgenindex "$T/quick/.git/index" 3
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index shortcut did not clear an index with no bus folder name in it"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_quick")
+assert m["hook_index_quick"]({"gitdir": sys.argv[2] + "/.git"}) is False
+PY
+ok "folded spellings are candidates; look-alikes are not; a foreign spelling of the folder is refused; the shortcut keeps long-s names"
+
+echo
 echo "TEST 37: a bus tracked under another spelling of its name (case- and normalization-insensitive file systems) is refused"
 # Probe the file system, never the platform: does it find "ProbeDir" as "probedir"?
 mkdir -p "$T/ProbeCase"; CI_FS=0; [ -d "$T/probecase" ] && CI_FS=1
@@ -887,41 +937,6 @@ unset HCWD; rm -f "$PB38/.agentbus/bus.db"          # A's own link count is back
 P="$PA38"; [ "$(sha "$PA38/.agentbus/bus.db")" = "$before" ] || fail "SessionEnd wrote through a hard link into a tracked project"
 [[ " $(roster) " == *" $N "* ]] || fail "SessionEnd left through a hard link (the inode matched, nothing else stopped it)"
 ok "a hard-linked bus.db is refused by the link count even though its inode matches"
-
-echo
-echo "TEST 39: the name and identity rules, shown directly (they do not depend on the file system folding names)"
-"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T" <<'PY' || fail "the name and identity rules"
-import os, runpy, sys
-m = runpy.run_path(sys.argv[1], run_name="agentbus_names")
-cands = m["hook_index_candidate_paths"]
-long_s, up, lo = "ſ".encode(), "Ä".encode(), "ä".encode()
-got = cands([(b".agentbu" + long_s + b"/bus.db", 0o100644), (lo + b"/.agentbus/bus.db", 0o100644), (b"x/.AgentBus/y", 0o100644),
-             (b"src/main.c", 0o100644), (b"docs/agentbus.md", 0o100644), (b"sparse/", 0o040000), (up + b"/readme", 0o100644)])
-assert b".agentbu" + long_s in got, got                  # folds to .agentbus
-assert lo + b"/.agentbus" in got and b"x/.AgentBus" in got and b"sparse" in got, got
-assert not any(g in got for g in (b"src/main.c", b"docs/agentbus.md", up + b"/readme")), got
-# a bus folder whose entry name on disk is not exactly .agentbus is foreign
-d = sys.argv[2] + "/names"; os.makedirs(d + "/.agentbus")
-real = os.listdir
-os.listdir = lambda p: [os.fsencode(".AgentBu") + long_s] if os.fsdecode(p) == os.path.realpath(d) else real(p)
-assert m["hook_untracked"](d) is False
-os.listdir = real
-assert m["hook_untracked"](d) is True
-PY
-# the shortcut for a plain index must not say "nothing here" for a name that only folds to .agentbus
-mkdir -p "$T/quick/.git"; mkgenindex "$T/quick/.git/index" 3 "$(printf '.agentbu\xc5\xbf/bus.db')"
-"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index shortcut said nothing was there for a long-s bus folder name"
-import runpy, sys
-m = runpy.run_path(sys.argv[1], run_name="agentbus_quick")
-assert m["hook_index_quick"]({"gitdir": sys.argv[2] + "/.git"}) is None
-PY
-mkgenindex "$T/quick/.git/index" 3
-"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index shortcut did not clear an index with no bus folder name in it"
-import runpy, sys
-m = runpy.run_path(sys.argv[1], run_name="agentbus_quick")
-assert m["hook_index_quick"]({"gitdir": sys.argv[2] + "/.git"}) is False
-PY
-ok "folded spellings are candidates; look-alikes are not; a foreign spelling of the folder is refused; the shortcut keeps long-s names"
 
 echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"
