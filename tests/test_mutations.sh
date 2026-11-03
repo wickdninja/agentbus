@@ -143,8 +143,64 @@ entry "cwd" "$T/cwd.sh" "$F" 1 "marker seen"
 [ "$(status cwd)" = 0 ] && grep -q '^KILLED cwd: .*FAIL: marker seen' "$T/out" || fail "a baseline or mutated run started under the checkout: $(cat "$T/out")"
 ok "baseline and mutated runs both start outside the checkout"
 
-echo "TEST 8: every mutation in tests/mutations.json is killed"
-rc=0; MUTATE_TIMEOUT=400 $M --all >"$T/all.out" 2>&1 || rc=$?
+echo "TEST 7d: --shard I/N: disjoint shards, together every entry, the file's order inside each, only the baselines a shard needs"
+"$PY" - "$T" "$ROOT" "$M" <<'PY' || fail "shard"
+import json, subprocess, sys
+T, root, mutate = sys.argv[1], sys.argv[2], sys.argv[3].split()
+def entry(name, run):
+    return {"name": name, "file": "bin/agentbus", "find": "x", "replace": "y", "count": 1, "run": run, "expect": "x"}
+# nine entries over five test files of different sizes, interleaved so the file order is not the group order
+plan = [("a1", "t/a"), ("b1", "t/b"), ("a2", "t/a"), ("c1", "t/c"), ("a3", "t/a"), ("d1", "t/d"), ("b2", "t/b"), ("a4", "t/a"), ("e1", "t/e")]
+json.dump([entry(*x) for x in plan], open(T + "/shards.json", "w"))
+def names(mfile, *extra):
+    r = subprocess.run(mutate + ["--mutations", mfile, "--list"] + list(extra), capture_output=True, text=True)
+    assert r.returncode == 0, r
+    return r.stdout.splitlines()
+everything = names(T + "/shards.json")
+assert everything == [x[0] for x in plan], everything
+for mfile, whole in ((T + "/shards.json", everything), (root + "/tests/mutations.json", names(root + "/tests/mutations.json"))):
+    for n in (1, 2, 3, 4, 5, 6, 9, 12):
+        parts = [names(mfile, "--shard", "%d/%d" % (i, n)) for i in range(1, n + 1)]
+        flat = [x for part in parts for x in part]
+        assert len(flat) == len(set(flat)), ("a shard overlaps another", n)
+        assert sorted(flat) == sorted(whole), ("the shards miss or add an entry", n)
+        for part in parts:
+            assert part == [x for x in whole if x in set(part)], ("a shard is out of file order", n, part)
+        again = [names(mfile, "--shard", "%d/%d" % (i, n)) for i in range(1, n + 1)]
+        assert again == parts, ("the split is not deterministic", n)
+# whole files stay together
+by = {}
+for n_, run in plan:
+    by[n_] = run
+for i in range(1, 4):
+    runs = [by[x] for x in names(T + "/shards.json", "--shard", "%d/3" % i)]
+    for other in range(1, 4):
+        if other != i:
+            assert not set(runs) & {by[x] for x in names(T + "/shards.json", "--shard", "%d/3" % other)}, "a test file is split over two shards"
+for bad in ("0/3", "4/3", "1/0", "x", "1", "1/", "/3", "-1/3", "1/3/5"):
+    r = subprocess.run(mutate + ["--mutations", T + "/shards.json", "--list", "--shard", bad], capture_output=True, text=True)
+    assert r.returncode == 2 and "--shard needs I/N" in r.stderr, (bad, r)
+r = subprocess.run(mutate + ["--mutations", T + "/shards.json", "a1", "--shard", "1/2"], capture_output=True, text=True)
+assert r.returncode == 2 and "goes with --all or --list" in r.stderr, r
+PY
+# A shard runs only its own test files, once each: two files that each log their runs, one entry apiece.
+for x in one two; do printf '#!/bin/bash\necho %s >> "%s/runs.log"\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then echo "FAIL: marker seen"; exit 1; fi\n' "$x" "$T" > "$T/$x.sh"; done
+"$PY" - "$T" "$F" "$VER" <<'PY'
+import json, sys
+T, find, ver = sys.argv[1:4]
+rep = '__version__ = "%s"  # MUTATION-MARKER' % ver
+json.dump([{"name": n, "file": "bin/agentbus", "find": find, "replace": rep, "count": 1, "run": T + "/" + n + ".sh", "expect": "marker seen"} for n in ("one", "two")], open(T + "/m4.json", "w"))
+PY
+for i in 1 2; do
+  : > "$T/runs.log"; rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m4.json" --all --shard "$i/2" >"$T/sh.out" 2>&1 || rc=$?
+  [ "$rc" = 0 ] && grep -q '^1 killed, 0 survived' "$T/sh.out" || fail "shard $i/2 did not kill its one entry: $(cat "$T/sh.out")"
+  [ "$(sort "$T/runs.log" | uniq -c | wc -l | tr -d ' ')" = 1 ] && [ "$(wc -l < "$T/runs.log" | tr -d ' ')" = 2 ] || fail "shard $i/2 ran a test file it does not own, or more than a baseline and a mutated run: $(cat "$T/runs.log")"
+done
+ok "shards are disjoint, complete, in file order, deterministic, keep a test file whole, and run only their own baselines"
+
+echo "TEST 8: every mutation in tests/mutations.json is killed${AGENTBUS_MUTATION_SHARD:+ (shard $AGENTBUS_MUTATION_SHARD)}"
+# AGENTBUS_MUTATION_SHARD=I/N runs one shard of the entries (CI); without it every entry runs.
+rc=0; MUTATE_TIMEOUT=400 $M --all ${AGENTBUS_MUTATION_SHARD:+--shard "$AGENTBUS_MUTATION_SHARD"} >"$T/all.out" 2>&1 || rc=$?
 cat "$T/all.out"
 [ "$rc" = 0 ] || fail "a mutation survived, was killed for another reason, crashed, timed out or went stale (exit $rc)"
 n=$(grep -c '^KILLED ' "$T/all.out")
