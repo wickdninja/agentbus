@@ -997,5 +997,122 @@
     "count": 1,
     "run": "tests/test_launch.sh",
     "expect": "the launcher is not faster than the script"
+  },
+  {
+    "name": "brief unread forgets where a broadcast history starts",
+    "file": "bin/agentbus",
+    "find": "\\(m\\.recipient='\\*' AND m\\.id>\\?\\)",
+    "replace": "(m.recipient='*' AND m.id>?-1000000)",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "FAIL: unread handoffs and alerts"
+  },
+  {
+    "name": "brief counts only direct answers, not answers to replies",
+    "file": "bin/agentbus",
+    "find": "JOIN thread t ON m\\.reply_to = t\\.id\\)",
+    "replace": "JOIN thread t ON m.reply_to = t.id AND t.root = t.id)",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "worker's open questions"
+  },
+  {
+    "name": "brief treats any reply as an answer",
+    "file": "bin/agentbus",
+    "find": "a\\.kind = 'answer'",
+    "replace": "a.id <> t.root",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "worker's open questions"
+  },
+  {
+    "name": "brief moves the inbox cursor",
+    "file": "bin/agentbus",
+    "find": "        unread = _brief_rows\\(rows\\)\\n",
+    "replace": "        unread = _brief_rows(rows)\n        con.execute(\"UPDATE cursors SET last_read_id=(SELECT COALESCE(MAX(id),0) FROM messages) WHERE agent=?\", (me_name,))\n        con.commit()\n",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "brief moved an inbox cursor"
+  },
+  {
+    "name": "brief without a name takes a write open",
+    "file": "bin/agentbus",
+    "find": "READ_ONLY_COMMANDS = \\(\"who\", \"status\", \"read\", \"brief\"\\)",
+    "replace": "READ_ONLY_COMMANDS = (\"who\", \"status\", \"read\")",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "brief without a name wrote to the bus"
+  },
+  {
+    "name": "brief lists my own facts as changed",
+    "file": "bin/agentbus",
+    "find": "where \\+= \" AND updated_by<>\\?\"",
+    "replace": "where += \" AND ?<>''\"",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "a worker who never read the inbox sees every fact"
+  },
+  {
+    "name": "brief changed facts ignore the last read",
+    "file": "bin/agentbus",
+    "find": "since = r\\[0\\] if r else None",
+    "replace": "since = None",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "facts.since is the time of the last message read"
+  },
+  {
+    "name": "brief does not shorten stored text",
+    "file": "bin/agentbus",
+    "find": "    text = \" \"\\.join\\(str\\(text\\)\\.split\\(\\)\\)\\n    return text if len\\(text\\) <= n else text\\[:n - 3\\]\\.rstrip\\(\\) \\+ \"\\.\\.\\.\"",
+    "replace": "    return str(text)",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "a hostile bus makes brief"
+  },
+  {
+    "name": "demo does not remove its directory",
+    "file": "bin/agentbus",
+    "find": "        shutil\\.rmtree\\(folder, ignore_errors=True\\)\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_demo.sh",
+    "expect": "the demo left files behind"
+  },
+  {
+    "name": "demo passes the caller's environment to its steps",
+    "file": "bin/agentbus",
+    "find": " if not k\\.startswith\\(\"AGENTBUS_\"\\)\\}\\n    home = ",
+    "replace": "}\n    home = ",
+    "count": 1,
+    "run": "tests/test_demo.sh",
+    "expect": "a test hook or the inherited bus reached the demo's steps"
+  },
+  {
+    "name": "demo does not clean up on SIGTERM",
+    "file": "bin/agentbus",
+    "find": "        old\\[sig\\] = signal\\.signal\\(sig, stop\\)",
+    "replace": "        old[sig] = signal.getsignal(sig)",
+    "count": 1,
+    "run": "tests/test_demo.sh",
+    "expect": "SIGTERM: exit"
+  },
+  {
+    "name": "demo ignores a step that fails",
+    "file": "bin/agentbus",
+    "find": "        if rc != want:\\n",
+    "replace": "        if False:\n",
+    "count": 1,
+    "run": "tests/test_demo.sh",
+    "expect": "an injected failure exited 0, not 4"
+  },
+  {
+    "name": "example drops the resolved relative AGENTBUS",
+    "file": "examples/two-agent-handoff.sh",
+    "find": "  if \\[\\[ \\$word == \\*/\\* && \\$word != /\\* && -e \\$word \\]\\]; then installed_bus\\[\\$i\\]=\\$PWD/\\$word; fi\\n",
+    "replace": "  :\n",
+    "count": 1,
+    "run": "tests/test_example.sh",
+    "expect": "the relative AGENTBUS form failed"
   }
 ]

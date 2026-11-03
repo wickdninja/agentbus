@@ -34,6 +34,13 @@
 
 - `init DIR` creates a folder that does not exist, with its parents (`mkdir -p`), and says so. A path whose nearest existing parent is not a writable directory, or that is a file, is `bad_input`, with nothing created.
 
+- `agentbus brief` is one call that tells an agent that has just joined what is going on, in under 400 tokens: the goal, who is here and what each holds and why, open questions (kind `question`, to you or everyone, no answer replying to them, directly or through a chain of replies), your unread handoffs and alerts, facts changed since your last inbox read, and a `next:` command. It only reads and never marks anything read. `--limit N` bounds each section; `--json` is a typed object (`BriefGoal`, `BriefAgent`, `BriefMessage`, `BriefFact`) with `omitted` counts. The skill now starts with `join`, then `brief`, one call fewer than `join`, `status`, `inbox`.
+- `agentbus demo` is a 30-second hands-off tour for a person: two scripted agents on a temporary bus (join, goal, a task, a claim, a refused conflicting claim, a handoff, `brief`, a release), each command printed as it runs, then an offer to open `watch` (`--watch` opens it directly, `--no-pause` skips the pauses). It never touches the bus of the folder it runs in and removes its directory on success, error, Ctrl-C and SIGTERM. `--json` runs the tour silently and reports each step.
+
+### Fixed
+
+- `examples/two-agent-handoff.sh` resolves a relative `AGENTBUS` before it changes directory, so `AGENTBUS="python3 bin/agentbus" bash examples/two-agent-handoff.sh` from a clone works.
+
 ### Changed (breaking, contract version 1)
 
 - `watch`: `Esc` no longer quits (it goes back, or clears a filter) and `q` quits only from the main view; in a detail or help `q` goes back one level. Before: `q`, `Q` and `Esc` quit from anywhere. Use `q` from the main view or Ctrl-C.

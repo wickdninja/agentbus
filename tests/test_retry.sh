@@ -172,6 +172,8 @@ OBSERVED = {
     "status": observe((), ("status",), EVERYTHING),
     "goal": observe((), ("--as", "a", "goal", "g"), {**FACTS, **LOG}),
     "watch": observe((), ("watch",), EVERYTHING),
+    "brief": observe((), ("--as", "a", "brief"), EVERYTHING),
+    "demo": observe((), ("demo",), EVERYTHING),
     "buses": observe((), ("buses",), EVERYTHING),
     "schema": observe((), ("schema",), EVERYTHING),
     "skill": observe((), ("skill",), EVERYTHING),
