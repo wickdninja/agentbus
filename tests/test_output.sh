@@ -429,7 +429,7 @@ for name, entry in index["commands"].items():
         fail("schema --index args differ for %s" % name)
     if any(e not in whole["commands"][name]["errors"] for e in entry["errors"]) or not set(index["common_errors"]) <= set(whole["errors"]):
         fail("schema --index names an error %s does not have" % name)
-if index["commands"]["post"]["errors"] != ["no_message", "request_id_reused"]:
+if index["commands"]["post"]["errors"] != ["no_message", "not_on_roster", "request_id_reused"]:
     fail("schema --index must keep a command's own error codes: %r" % index["commands"]["post"])
 text = ok(db, "schema", "--index")
 if "  post  body --to --kind --topic --reply-to --request-id  errors: no_message request_id_reused" not in text:
