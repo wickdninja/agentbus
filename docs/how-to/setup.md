@@ -64,6 +64,21 @@ A link to anything that is not an agentbus skill is left alone.
 
 In a clone of the repository, `skill/SKILL.md` is itself a symlink to `skills/agentbus/SKILL.md`, so the old line keeps working. On Windows, a checkout needs `git config core.symlinks true` (and permission to create links) for that file to be a link; otherwise it is a one-line text file. Use `agentbus setup claude` instead, which needs no clone.
 
+## Bring it up to date after a release
+
+```
+agentbus setup claude --refresh
+agentbus setup codex --refresh
+```
+
+`--refresh` is what `agentbus update` runs for you. It rewrites only what setup itself installed, when the
+text it wrote is older: the skill file, the `agentbus` block of `AGENTS.md`, and the hooks tagged
+`agentbus:managed` in Claude Code's `settings.json` (your own hooks and settings stay as they are). It adds
+nothing that is not there and removes nothing. Anything you edited is kept exactly as it is, with no backup, and
+named: `kept (edited). To replace it: agentbus setup claude`. A file agentbus did not write, or a link, is kept
+the same way. When everything is current it says `done. Nothing to change.` and exits 0. `--scope project`
+refreshes the project's own files; it cannot be combined with `--uninstall`.
+
 ## Remove it
 
 ```bash

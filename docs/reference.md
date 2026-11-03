@@ -137,6 +137,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `schema` | `{"contract": integer, "agentbus": string, "commands": object, "objects": object, "error_fields": object, "errors": object, "exit_codes": object, "env": object}` |
 | `skill` | `{"text": string}` |
 | `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved)}]}` |
+| `update` | `{"from": string, "to": string, "latest": string or null, "install": {"method": string, "url": string or null}, "tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string} or null (only when update downloads the release wheel)}, "buses": [UpgradeRow], "setup": [SetupResult], "plugin": {"fix": string} or null, "restart": boolean, "scope": {"narrowed": boolean, "why": string or null}}, or with --check {"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, "url": string or null}, "argv": [string] or null, "commands": [string] or null, "notes": string or null}` |
 | `doctor` | `{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" \| "warn" \| "fail" \| "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0` |
 <!-- /generated:results -->
 
@@ -154,8 +155,21 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `Goal` | `goal`, `set_by`, `set_at`, `unchanged` (optional) |
 | `BusLevel` | `level`, `directory`, `exists`, `copy_version`, `stale` |
 | `UpgradeRow` | `directory`, `status`, `old`, `new`, `schema_old`, `schema_new`, `backup`, `error` |
+| `SetupResult` | `target`, `scope`, `directory`, `changes`, `error` |
 | `DoctorCheck` | `id`, `status`, `detail`, `fix`, `hint`, `scope` (optional) |
 <!-- /generated:objects -->
+
+#### `update --json`
+
+A real `update`, `update --dry-run` and `update --check` print one object each (shapes in the table above). A failure is not a status in that object: it is an error on stderr (`installer_failed`, `manual_step`, `release_offline`, `rate_limited`, `release_unknown`, `download_failed`, `update_running`, `items_failed`), with nothing on stdout, except `items_failed`, whose stdout holds the whole result.
+
+- `tool.status`: `updated` (the installer ran and the new version answers), `current` (no newer release, or nothing needed installing), `dry_run` (`--dry-run`: `argv` is what would run, `download` names the two files it would fetch), `manual` (`--dry-run` only: `commands` hold what a person runs; a real run that cannot update exits 1 with `manual_step` instead).
+- `tool.argv` is the installer command, run on the downloaded, checksum-verified wheel; `tool.download` is `{"wheel", "sha256sums"}` (URLs) when `update` downloads the release, else `null`.
+- `from` and `to` are the versions before and after (equal when nothing was installed); `latest` is the newest release found, `null` when none is published.
+- `restart` is `true` when the tool was replaced: running sessions and `watch` keep the old code until restarted.
+- `scope.narrowed` is `true` in an agent session without `--all-buses`: only the current bus was upgraded and setup was skipped; `scope.why` names the signal (`CLAUDECODE`, a Codex variable, `AGENTBUS_AGENT_SESSION`, or `no terminal`).
+- `buses` are the `UpgradeRow`s of the bus step. `setup` is a list of `SetupResult`s, one per `setup TARGET --refresh` run: `target` (`claude` or `codex`), `scope` (`user` or `project`), `directory` (the project folder, `null` for user scope), `changes` (`path`, `detail`, `action`; a piece that is not installed is `unchanged`, and one you edited is `skipped`, kept), and `error` (`null`, or `{code, message}` when that run failed). `plugin` is `{fix}` when the Claude Code plugin is installed, else `null`.
+- `--check`: `running`, `latest`, `update_available`, `install` (`method` and `url`), `argv`, `commands` and `notes` (the release page).
 
 `watch --json` returns once, with or without `--once`; its row projections differ from `status`. Data written directly through SQLite can have other types; JSON renders BLOBs and non-finite numbers as strings.
 
@@ -209,8 +223,15 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `bus_unavailable` | 3 | no | `file` (optional), `outcome_unknown` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; committed is then true when that write was the command's own. Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat it only with its request id. |
 | `ack_failed` | 3 | yes | `delivered` | inbox printed its messages but could not mark them read. The output was complete: use it, expect the same messages again, and dedupe by id. |
 | `output_failed` | 1 | yes | none | stdout could not be written; committed effects stand. Retry with the same token. |
-| `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun). |
+| `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional), `argv` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun). |
 | `items_failed` | 1 | no | `failed` | Some of the items the command works on failed or were refused (buses of upgrade --all, files of setup, checks of doctor); stdout holds the whole result, and failed lists those items. Read each failed item's error, fix it, then run the command again. |
+| `installer_failed` | 1 | no | `argv`, `exit_status`, `reason`, `recovery` | The installer update ran did not finish, or finished without moving agentbus to the new release (reason: exit, signal, timeout, version_unchanged). Run agentbus update again (recovery); the installer's own output is above the error. |
+| `download_failed` | 1 | no | `reason`, `asset` | The release's wheel or SHA256SUMS could not be downloaded or did not check out (reason: http, redirect, tls, malformed, too_large, hash_mismatch). Nothing was installed. Try again later: agentbus update. |
+| `manual_step` | 1 | no | `commands` | This copy of agentbus is not one update may replace (a clone, a fork, an install of unknown origin, or no safe installer on PATH); the commands to run are listed. Run the listed commands, then agentbus update. |
+| `release_offline` | 1 | yes | `reason` | GitHub could not be reached to look for a release (reason: offline, timeout). Retry when online. |
+| `rate_limited` | 1 | yes | `retry_after` | GitHub is limiting requests from this network. Retry after retry_after seconds. |
+| `release_unknown` | 1 | no | `reason` | GitHub's answer about releases could not be used (reason: http, redirect, tls, malformed, too_large). Try again later, or read the releases page. |
+| `update_running` | 1 | yes | `lock` | Another agentbus update is running. Wait for it, then retry. |
 | `internal` | 4 | no | none | A bug in agentbus. Report it. |
 <!-- /generated:errors -->
 
@@ -259,6 +280,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `schema` | safe | repeat freely |
 | `skill` | safe | repeat freely |
 | `setup` | idempotent | a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object |
+| `update` | idempotent | repeat |
 | `doctor` | safe | repeat freely |
 <!-- /generated:retry -->
 
@@ -275,6 +297,9 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `AGENTBUS_NO_EMOJI` | Turns emoji off in watch. | unset |
 | `AGENTBUS_ASCII` | Draws watch's own marks in ASCII, with emoji off (also under TERM=linux). | unset |
 | `COLUMNS` | Width human output is wrapped to. | the terminal width, else 80 |
+| `AGENTBUS_AGENT_SESSION` | Set to anything but 0 to mark a run as an agent's: no release notice, and update covers only the current bus. Use it from an agent harness that agentbus does not recognise. | unset |
+| `AGENTBUS_NO_UPDATE_NOTICE` | Set to anything but 0 to silence the release notice and the stale-copy notice. | unset |
+| `AGENTBUS_NO_UPDATE_CHECK` | Set to anything but 0 to turn off the once-a-day release check (DO_NOT_TRACK and NO_UPDATE_NOTIFIER do the same). | unset |
 <!-- /generated:env -->
 
 ## Locking

@@ -4,7 +4,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
 cd "$T"
-export AGENTBUS_DB="$T/bus.db"
+export AGENTBUS_DB="$T/bus.db"; unset XDG_CACHE_HOME XDG_STATE_HOME   # update --check reads the cache under HOME
 "$PY" - "$BIN" "$T" <<'PY'
 import argparse, json, os, pathlib, runpy, subprocess, sys, tempfile
 import os as _os, sys as _sys
@@ -98,6 +98,14 @@ shape(j('--as', 'a', 'leave'), left=str, released=list, released_count=int)
 repo = pathlib.Path(tmp)/'install'; repo.mkdir()
 shape(j('init', str(repo)), directory=str, copy=str, old=str, new=str, exclude_added=bool, gitignore_rule=bool, outer=null)
 shape(j('upgrade', str(repo)), directory=str, old=str, new=str, schema_old=(int, type(None)), schema_new=(int, type(None)), backup=(str, type(None)))
+# update --check answers from a good cache entry under an hour old (no request)
+ucache = pathlib.Path(os.environ['HOME'])/('Library/Caches/agentbus' if sys.platform == 'darwin' else '.cache/agentbus')
+ucache.mkdir(parents=True, mode=0o700)
+(ucache/'release-check.json').write_text(json.dumps({'v': 1, 'checked_at': int(__import__('time').time()), 'ok': True, 'reason': None,
+                                                     'retry_after': None, 'stable': '0.9.0', 'pre': None, 'notified': None}))
+(ucache/'release-check.json').chmod(0o600)
+upd = shape(j('update', '--check'), running=str, latest=(str, null), update_available=bool, install=dict, argv=null, commands=list, notes=(str, null))
+assert upd['update_available'] is True and upd['latest'] == '0.9.0' and set(upd['install']) == {'method', 'url'}, upd   # a clone here, another method when run installed
 schema = shape(j('schema'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, exit_codes=dict, env=dict)
 assert schema['contract'] == 1 and 'post' in schema['commands']
 shape(j('schema', 'post'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, exit_codes=dict, env=dict)
