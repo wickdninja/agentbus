@@ -150,6 +150,7 @@ new_case() {
   unset XDG_CACHE_HOME XDG_STATE_HOME
   make_install "$C/fake" "$@"
   make_stubs "$C/stubs"; make_pip_stub "$SITE"
+  unset STUB_FAKE FAKE_LOG FAKE_SETUP STUB_FAIL STUB_NOBUMP STUB_HANG STUB_IGNORE_TERM STUB_STARTED   # a case starts with the real module and no fault
   export STUB_LOG="$C/stub.log" STUB_MODULE="$SITE/agentbus.py"
   : >"$STUB_LOG"
   export PATH="$C/stubs:/usr/bin:/bin"   # never the real uv or pipx
