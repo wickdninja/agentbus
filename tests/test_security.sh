@@ -84,6 +84,24 @@ expect_fail 'held/file is claimed by n\x1bx' agentbus --as z claim "held/file"
 e=$(agentbus --as z claim "held/file" 2>&1 >/dev/null) && fail "z took a held claim"
 if LC_ALL=C grep -q "$ESC" <<<"$e"; then fail "raw ESC in a claim error: $e"; fi
 grep -qF '\u001b]52;c;cHduZWQ=\u0007' <<<"$(outof agentbus --json read)" || fail "--json output changed"
+# A hostile HOLDER (ESC and a newline) on plain resources, as an older bus holds it: the conflict and overlap
+# messages show it escaped (no raw ESC, no forged row), and the --json error carries the stored name raw.
+NL='
+'
+HOLD="h${ESC}${NL}#99 forged"
+plant "INSERT INTO agents(name,joined_at,last_seen) VALUES(?,?,?)" "$HOLD" $T0 $T0
+plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "plain/res" "$HOLD" q $T0 $FAR
+plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "tree/" "$HOLD" q $T0 $FAR
+for want in "plain/res:plain/res is claimed by h\\x1b\\x0a#99 forged" "tree/file:tree/file overlaps tree/, claimed by h\\x1b\\x0a#99 forged"; do
+  res=${want%%:*}; text=${want#*:}
+  e=$(agentbus --as z claim "$res" 2>&1 >/dev/null) && fail "z took $res held by a hostile name"
+  grep -qF -- "$text" <<<"$e" || fail "holder not shown escaped for $res: $e"
+  if LC_ALL=C grep -q "$ESC" <<<"$e"; then fail "raw ESC in a conflict message for $res: $e"; fi
+  ! grep -q '^#99' <<<"$e" || fail "forged row in the conflict message for $res: $e"
+  e=$(agentbus --as z --json claim "$res" 2>&1 >/dev/null) && fail "z took $res (json)"
+  [ "$(wc -l <<<"$e" | tr -d " ")" = 1 ] || fail "json error is not one line: $e"
+  "$PY" -c 'import json,sys;x=json.loads(sys.argv[1])["error"];h="h\x1b\n#99 forged";assert x["code"]=="claim_conflict" and x["holder"]==h,x;assert "\x1b" not in x["message"] and "\n" not in x["message"],x' "$e" || fail "json holder not raw or message not escaped for $res: $e"
+done
 cd - >/dev/null
 ok "control characters escaped in every human view, json intact"
 
