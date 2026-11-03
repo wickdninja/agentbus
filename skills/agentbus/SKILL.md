@@ -11,13 +11,13 @@ Use agentbus when multiple agents or humans share work in this workspace.
 
 Run the bus directory's `.agentbus/bin/agentbus`; from another worktree, use its absolute path. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Reuse a name only when its session has ended. Below, `agentbus` means that copy. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.
 
-Dispatchers must give workers the absolute CLI and database paths and set `AGENTBUS_DB` for their own and their workers' commands. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).
+Dispatchers give workers the absolute CLI and database paths and set `AGENTBUS_DB` for every command. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).
 
-Discovery finds the nearest ancestor bus; linked worktrees map to their main checkout. `buses` lists the chain; `--up 1` selects the next outer bus.
+Discovery finds the nearest ancestor bus (linked worktrees use their main checkout). `buses` lists the chain; `--up 1` selects the next outer bus.
 
 ## Start
 
-Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal; work toward it (a lead sets it with `goal "TEXT"`). Choose another name if join reports a live session. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.
+Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal, which stays empty until a lead sets it with `goal "TEXT"`. Choose another name if join reports a live session. Read facts with `ctx get`, and a fact's earlier values with `ctx history KEY`. Use `read --topic decision` if this project uses that topic.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.
 
@@ -39,9 +39,9 @@ Check recipients with `who`. Messages queue for absent names; posting does not s
 
 ## Read correctly
 
-Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. Duplicate delivery is possible; check message IDs before repeating actions.
+Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, and `read --since ID` for what came after message ID. Duplicate delivery is possible; check message IDs before repeating actions.
 
-A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`.
+A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`: the same token and text returns the original id; changed text is refused.
 
 ## Finish the session
 

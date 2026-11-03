@@ -60,7 +60,7 @@ AGENTBUS_AGENT=<tool>-<project>-<lane>         # one name per lane
 PATH=<bus directory>/.agentbus/bin:$PATH
 ```
 
-Put the protocol in the brief: join, read rulings, claim before editing, hand off, leave. The
+Put the protocol in the brief: join, read decisions, claim before editing, hand off, leave. The
 lane's own sandbox makes `--as` unnecessary only if the environment survives between its tool
 calls; when in doubt, have it pass `--as` on every call.
 

@@ -75,7 +75,8 @@ both(db, ["--as", "a", "post"], 2, "bad_input")
 both(db, ["post"], 2, "bad_input")        # no identity
 both(db, ["--as", "a", "claim", "../x"], 2, "bad_input")
 both(db, ["--as", "a", "claim", "x", "--ttl-min", "0"], 2, "bad_input")
-both(db, [], 2, "bad_input")               # no command at all
+both(db, ["claim"], 2, "bad_input")        # a command missing its argument (no command at all prints the guide, exit 0: tests/test_help.sh)
+both(db, ["--as", "a", "release"], 2, "bad_input")
 both(db, ["schema", "nope"], 2, "bad_input")
 # argparse accepts any unambiguous prefix of a long option: --js would be --json to it, but the tool
 # decides how to print errors before parsing, so prefixes are not accepted at all

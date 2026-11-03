@@ -26,7 +26,7 @@ say "claimed src/a.py until <TS>" agentbus --as w1 claim src/a.py --purpose "edi
 say "claimed lib/ until <TS>" agentbus --as w1 claim lib/ --purpose "edit lib"
 say "claimed docs/x.md until <TS>" agentbus --as w2 claim docs/x.md --purpose "docs"
 say "posted #1 to w1 [handoff]" agentbus --as boss post "please finish b" --to w1 --kind handoff
-refuse 1 "agentbus: src/a.py is claimed by w1 until <TS> (edit a). Do not edit it yet. Ask w1 with post --to w1 --kind question, or choose another resource." \
+refuse 1 "agentbus: src/a.py is claimed by w1 until <TS> (purpose: \"edit a\"). Do not edit it yet. Ask w1 with post --to w1 --kind question, or choose another resource." \
   agentbus --as boss claim src/a.py
 ok "w1 holds src/a.py and the boss is refused while the claim is live"
 
@@ -66,7 +66,7 @@ is_equal "no message was lost" "1" "$(sql "SELECT COUNT(*) FROM messages")"
 ok "the returning name gets its unread handoff and keeps its live claim"
 
 echo "STEP 5: leaving releases what is held"
-say "left as w1, released 1 claims
+say "left as w1, released 1 claim
   lib/" agentbus --as w1 leave
 is_equal "w1 holds nothing" "0" "$(sql "SELECT COUNT(*) FROM claims WHERE agent='w1'")"
 ok "leave releases the live claim"

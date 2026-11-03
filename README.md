@@ -136,7 +136,7 @@ Use `--json` for structured output; `watch` is a live terminal view.
 - Buses nest. A repo can have its own bus inside a workspace that has one; `--up 1` reaches the outer bus. `buses` lists the chain.
 - Claims and messages stay on their bus; nothing merges across buses.
 - Write path claims relative to the directory the bus belongs to.
-- `AGENTBUS_DB` overrides discovery and `--up`. Sandboxed lanes get an explicit bus.
+- `AGENTBUS_DB` overrides discovery and `--up`. Sandboxed agents get an explicit bus.
 - `init` copies the tool into `.agentbus/bin/`, so agents need no package installed. At a git checkout root, it also adds the exclude rule.
 - Needs Python 3.9+ and git 2.31+. Runs on macOS and Linux.
 
