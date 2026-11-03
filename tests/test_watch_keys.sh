@@ -189,7 +189,7 @@ print("state machine cases passed")
 PY
 ok "Tab Tab j Enter opens the second claim; k pauses on the newest and holds it; G follows and clears +N new; refreshes keep the selected key; filters keep 6 and 9; kind:fyi says the kinds; filter input takes q, j, k and digits as text; Esc in the overview does nothing; details stack and go back one level; y copies"
 
-echo "TEST 2b: y copies plain text as written, and a copied reply command run by bash runs nothing but agentbus"
+echo "TEST 2b: y copies plain text safely, and a copied reply command means the same and runs nothing in every shell"
 "$PY" - "$T" <<'PY' || fail "copy and paste"
 import os, subprocess, sys
 sys.path.insert(0, os.environ["TESTS_DIR"])
@@ -206,30 +206,42 @@ for k in ("3", "Enter"):
     v = step(v, k, snap, (100, 30), T0)
 v = step(v, "y", snap, (100, 30), T0, W.detail_for(v, snap))
 assert v.copied == "C:\\Users\\nate          x", repr(v.copied)
-# Quoted: senders a shell would run, pasted into sh with a stub agentbus that records its arguments.
+# W7: non-ASCII next to $, ` or a backslash is copied with the non-ASCII escaped (bash 3.2 under LANG=C reads
+# bytes 0x80 and up as Meta keys on paste); plain non-ASCII, and ASCII with $, are copied as written.
+assert g["copy_text"]("$(touch x)\u00c5") == "$(touch x)\\xc5", g["copy_text"]("$(touch x)\u00c5")
+assert g["copy_text"]("caf\u00e9") == "caf\u00e9" and g["copy_text"]("$HOME") == "$HOME"
+# Plain words: the copied reply command means the same in every shell (dash, sh, bash, zsh, fish when present),
+# run here with a stub agentbus that records its arguments. A name or sender that is not a plain word is copied as
+# NAME or SENDER for the person to fill in, so nothing in it can run.
+import shutil
 stub = os.path.join(T, "stubbin")
 os.makedirs(stub, exist_ok=True)
 with open(os.path.join(stub, "agentbus"), "w") as f:
     f.write('#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > "$ARGS_OUT"\n')
 os.chmod(os.path.join(stub, "agentbus"), 0o755)
+shells = [["sh", "-c"]] + [[p, "-c"] for p in ("/bin/dash", shutil.which("bash"), shutil.which("zsh"), shutil.which("fish"))
+                           if p and os.path.exists(p)]
 evil = ["ops$(touch PWNED1)", "a;touch PWNED2", "`touch PWNED3`", "x' ; touch PWNED4 ; '", "$HOME", "a b\n touch PWNED5",
-        "-n", "q\x1b]52;c;eA==\x07"]
-for i, sender in enumerate(evil):
-    m = {"id": 9, "sender": sender, "kind": "question"}
-    for me in ("NAME", sender):
-        cmd = g["reply_command"](m, me)
-        out = os.path.join(T, f"args{i}")
-        assert not any(ord(c) < 0x20 or 0x7f <= ord(c) < 0xa0 for c in cmd), ("a control byte in the copy", cmd)
-        r = subprocess.run(["bash", "-c", cmd], cwd=T, env=dict(os.environ, PATH=stub + ":/usr/bin:/bin", ARGS_OUT=out),
-                           capture_output=True, text=True, timeout=10)
-        assert r.returncode == 0, (sender, r.stderr)
-        got = open(out).read().split("\n")[:-1]
-        want = ["--as", me, "post", "--to", sender, "--reply-to", "9", "--kind", "answer", "..."]
-        assert got == [w for w in "\n".join(want).split("\n")], (sender, got)
-assert not [f for f in os.listdir(T) if f.startswith("PWNED")], "a pasted reply command ran a command"
-print(len(evil), "hostile senders pasted into sh: agentbus got each as one argument, nothing else ran")
+        "-n", "q\x1b]52;c;eA==\x07", "x\x1b'; touch PWNED6; #", "a\\", "it's\\'; touch PWNED7 #", "~root", ""]
+plain = ["tests", "ws03-claude", "claude@host", "a.b_c+d=e:f,g/h"]
+for sh in shells:
+    for i, sender in enumerate(evil + plain):
+        m = {"id": 9, "sender": sender, "kind": "question"}
+        for me in ("NAME", sender):
+            cmd = g["reply_command"](m, me)
+            assert not any(ord(c) < 0x20 or 0x7f <= ord(c) for c in cmd), ("not plain ASCII", cmd)
+            out = os.path.join(T, f"args{i}")
+            r = subprocess.run(sh + [cmd], cwd=T, env=dict(os.environ, PATH=stub + ":/usr/bin:/bin", ARGS_OUT=out, HOME=T),
+                               capture_output=True, text=True, timeout=60)
+            assert r.returncode == 0, (sh, sender, r.stderr)
+            got = open(out).read().split("\n")[:-1]
+            word = lambda v, ph: v if v in plain else ph
+            want = ["--as", word(me, "NAME"), "post", "--to", word(sender, "SENDER"), "--reply-to", "9", "--kind", "answer", "..."]
+            assert got == want, (sh, sender, got)
+assert not [f for f in os.listdir(T) if f.startswith("PWNED")], "a copied reply command ran a command"
+print(len(evil + plain), "senders through", ", ".join(s[0] for s in shells), "- agentbus got the same words, nothing else ran")
 PY
-ok "y copies the raw value (C:\\Users as written); a reply command with a hostile sender, pasted into sh, runs only agentbus with the sender as one argument"
+ok "y copies C:\\Users as written and escapes non-ASCII beside \$; a reply command copies plain words only (NAME or SENDER otherwise) and runs the same in sh, dash, bash, zsh"
 
 echo "TEST 2c: a filter holds at most FILTER_MAX characters; a 4 KB paste settles the selection at most that many times"
 "$PY" - <<'PY' || fail "filter cap"
@@ -298,21 +310,58 @@ env = dict(os.environ, HOME=T)
 def bus(name, body):
     d = os.path.join(T, name, ".agentbus")
     os.makedirs(d, exist_ok=True)
-    r = subprocess.run(agentbus_argv() + ["--as", "a", "post", body], env=dict(env, AGENTBUS_DB=os.path.join(d, "bus.db")),
-                       capture_output=True, text=True, timeout=30)
+    e = dict(env, AGENTBUS_DB=os.path.join(d, "bus.db"))
+    j = subprocess.run(agentbus_argv() + ["--as", "a", "join", "--takeover"], env=e, capture_output=True, text=True, timeout=30)
+    assert j.returncode == 0, j.stderr
+    r = subprocess.run(agentbus_argv() + ["--as", "a", "post", body], env=e, capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     return os.path.join(d, "bus.db")
-live, other = bus("cache1", "alpha"), bus("cache2", "beta")
+live = bus("cache1", "alpha")
 cache = {}
-first = g["watch_snapshot"](live, False, 200, body_head=4096, bodies=cache)["messages"][0]["body"]
-os.replace(other, live)  # a new file (another inode) in its place, with the same id 1
-second = g["watch_snapshot"](live, False, 200, body_head=4096, bodies=cache)["messages"][0]["body"]
-assert (first, second) == ("alpha", "beta"), (first, second)
-c = sqlite3.connect(live)  # the same file, id 1 now another message
-c.execute("UPDATE messages SET body='gamma', ts='2026-01-01T00:00:00Z' WHERE id=1")
+body = lambda: g["watch_snapshot"](live, False, 200, body_head=4096, bodies=cache)["messages"][0]["body"]
+def same_message(path, text):
+    """path's message 1 with only its body changed: same id, time and sender (and, for bravo, the same length)."""
+    c = sqlite3.connect(path)
+    c.execute("UPDATE messages SET body=? WHERE id=1", (text,))
+    c.commit(); c.close()
+assert body() == "alpha"
+# W5: another file (another inode) in its place, same id, time, sender and body length: read again.
+other = os.path.join(T, "cache1", ".agentbus", "other.db")
+shutil.copyfile(live, other)
+same_message(other, "bravo")
+os.replace(other, live)
+assert body() == "bravo", "a replaced bus.db (another inode) was served from the cache"
+# W6: the same file copied over in place (same inode), same id, time and sender, another length: read again.
+shutil.copyfile(live, os.path.join(T, "cache1", "copy.db"))
+same_message(os.path.join(T, "cache1", "copy.db"), "charlie!")
+with open(os.path.join(T, "cache1", "copy.db"), "rb") as src, open(live, "r+b") as dst:
+    data = src.read()
+    dst.seek(0); dst.write(data); dst.truncate()
+assert body() == "charlie!", "a bus.db copied over in place was served from the cache"
+# An id that comes back as another message (another time) is read again too.
+c = sqlite3.connect(live)
+c.execute("UPDATE messages SET body='delta', ts='2026-01-01T00:00:00Z' WHERE id=1")
 c.commit(); c.close()
-third = g["watch_snapshot"](live, False, 200, body_head=4096, bodies=cache)["messages"][0]["body"]
-assert third == "gamma", third
+assert body() == "delta"
+# W2: help on a short pane: scrolling reaches every row of the help page, at heights 5 to 8.
+for cols in (40, 50, 60, 80):
+    for ascii_ in (False, True):
+        full = [r.rstrip() for r in g["render"](W.view(mode="help"), S, W.WHERE, (cols, 400), T0,
+                                                g["Paint"](False, False, ascii_))]
+        content = {r for r in full[1:-1] if r.strip()}
+        for rows in (5, 6, 7, 8):
+            seen = set()
+            for scroll in range(0, 400):
+                t = [r.rstrip() for r in g["render"](W.view(mode="help", scroll=scroll), S, W.WHERE, (cols, rows), T0,
+                                                     g["Paint"](False, False, ascii_))]
+                assert len(t) == rows, (cols, rows, scroll)
+                seen.update(t[1:-1])
+            missing = content - seen
+            assert not missing, (cols, rows, ascii_, "help rows scrolling never reaches", sorted(missing)[:3])
+# W8: only the probe's own answer (row 2, column 2 or 3) counts; a modified F3 (ESC [ 1 ; m R) never does.
+pa = g["probe_answer"]
+assert (pa("CPR 2;2"), pa("CPR 2;3")) == (False, True)
+assert all(pa(k) is None for k in ("CPR 1;5", "CPR 1;2", "CPR 1;3", "CPR 30;3", "CPR 2;4", "q"))
 # M3, counted: with the cache, a body is read once (SQLite's trace shows the statements), at most BODY_HEAD long.
 bigdb = bus("cache3", "x" * 10000)
 for _ in range(3):
@@ -328,7 +377,7 @@ first = [q for q in seen if "substr(body" in q]
 assert len(first) == 1, first  # one read of the four new bodies
 seen.clear()
 g["watch_snapshot"](bigdb, False, 200, body_head=g["BODY_HEAD"], bodies=cache, opened=traced)
-assert not [q for q in seen if "body" in q.split("FROM")[0]], ("a later tick read bodies again", seen)
+assert not [q for q in seen if "substr(body" in q], ("a later tick read bodies again", seen)  # octet_length reads none
 print("dated history fits 40 to 100; latin-1 rows fit as written; the cache read beta and gamma, not alpha; "
       "a body is read once, cut to 4096")
 PY
@@ -687,7 +736,7 @@ ok "the header bar is 30;43, never bold, and 1;7 in ASCII; waiting is 33;40; the
 # The bus: the fixture's sample bus three days back, plus #10, a 400-character answer to #9 (watch_live_cases.py setup).
 export AGENTBUS_DB="$T/live/.agentbus/bus.db"
 mkdir -p "$T/live/.agentbus"
-agentbus --as seed post "seed" >/dev/null
+agentbus --as seed join >/dev/null; agentbus --as seed post "seed" >/dev/null
 "$PY" "$TESTS_DIR/watch_live_cases.py" setup >/dev/null || fail "live bus setup"
 cp "$AGENTBUS_DB" "$T/good.db"
 live() { "$PY" "$TESTS_DIR/watch_live_cases.py" restore >/dev/null && "$PY" "$TESTS_DIR/watch_live_cases.py" "$1"; }
@@ -712,9 +761,9 @@ echo "TEST 10: a refused bus says so and names the fix; the filter, selection, p
 live refused || fail "refused bus"
 ok "This bus could not be read and Run: agentbus upgrade; after the bus is put back, r shows the same frame"
 
-echo "TEST 11: key to redraw under 100 ms for 20 keys, also while another process holds the bus; q then exits in under 350 ms"
+echo "TEST 11: keys redraw and q exits while a read is in flight; a locked bus keeps the last frame"
 live latency || fail "latency"
-ok "keys redraw under 100 ms idle and with the bus locked; waiting · Ns old keeps the frame; q exits fast with the terminal restored"
+ok "20 keys redraw and q exits while a snapshot read is parked; with the bus locked, waiting · Ns old keeps the frame; the terminal is restored"
 
 echo "TEST 12: TERM=dumb prints one frame without escape codes and says why on stderr"
 live dumb || fail "TERM=dumb"
@@ -748,9 +797,9 @@ echo "TEST 19: Ctrl-Z in a shell gives the terminal back and stops; fg takes it 
 live jobctl || fail "job control"
 ok "Ctrl-Z shows the cursor and leaves the alternate screen before the prompt; fg restores cbreak, the alternate screen and a full frame; Tab works without Enter; q exits"
 
-echo "TEST 20: 200 held messages of 1 MB each: keys redraw under 100 ms and the process stays small"
+echo "TEST 20: 200 held messages of 1 MB each: j and k move the selection and the process stays small"
 live bigbodies || fail "large bodies"
-ok "with 200 bodies of 1 MB a tick reads only each body's head: keys redraw under 100 ms, under 150 MB resident"
+ok "with 200 bodies of 1 MB, 20 keys alternate the selection between #200 and #201, under 150 MB resident"
 
 echo "TEST 21: when the watchdog ends a hung read, the terminal is restored and the exit says why"
 live watchdog || fail "watchdog exit"

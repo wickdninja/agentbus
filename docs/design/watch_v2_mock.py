@@ -1229,7 +1229,9 @@ class Frame:
         rows = [self.header("keys")]
         rows += self.wrap("watch only reads the bus. It never marks a message read and never changes a claim.",
                           W - 2, "  ")
-        pinned = len(rows)  # the header and the whole intro stay; the keys below scroll, so no sentence is cut
+        # The header and the whole intro stay while the keys scroll, so no sentence is cut, unless the page is so
+        # short that pinning them would leave fewer than 3 rows for the keys: then only the header stays.
+        pinned = len(rows) if self.rows - 1 - len(rows) - 2 >= 3 else 1
         rows.append(Row())
 
         def entry(k, d, width, kwid=kw):

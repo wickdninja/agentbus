@@ -215,7 +215,7 @@ assert activity in skill and activity in ' '.join(top.split())
 assert 'Omit --as to look without counting as present.' in skill
 assert 'Omit --as to look without counting as present.' in ' '.join(top.split())
 start = skill.split('## Start\n', 1)[1].split('\n## ', 1)[0]
-assert re.search(r'`join`, then `status --limit 20` and `inbox --limit 20`', start), start
+assert re.search(r'`join`, then `brief`', start) and '`inbox --limit 20`' in start and 'status --limit 20' not in start, start
 assert 'run `claims`, then' not in skill
 assert 'claim itself is the check' in skill
 assert len(skill.split()) < 720, 'keep the protocol short (the byte cap, 4800, is pinned in tests/test_skill.sh)'
@@ -269,6 +269,12 @@ assert len(checked) >= 25, checked
 version = runpy.run_path(bin_, run_name='agentbus_docs')['__version__']
 pins = set()
 pinned = 0
+# GitHub Releases is the only channel: the name `agentbus` on PyPI belongs to an unrelated project, so no document
+# may tell anyone to install the bare name.
+BARE = re.compile(r'(?:uv tool install|uv pip install|pipx install|pip3? install)(?:\s+--?[\w-]+)*\s+agentbus(?=[\s`\'"<>~=]|$)')
+for name in ['README.md', 'SECURITY.md', 'RELEASING.md', *sorted(str(p.relative_to(root)) for p in (root/'docs').rglob('*.md'))]:
+    assert not any(BARE.search(ln) for ln in (root/name).read_text().splitlines() if 'different project' not in ln and 'unrelated' not in ln), (name, 'installs agentbus by its bare name, which is not this project on PyPI')
+assert BARE.search('run: pipx install agentbus') and BARE.search('uv tool install --force agentbus') and not BARE.search('pipx install git+https://github.com/wickdninja/agentbus@v0.1.0'), 'the bare-name check is vacuous or too wide'
 for name in ['README.md', *sorted(str(p.relative_to(root)) for p in (root/'docs').rglob('*.md'))]:
     for m in re.finditer(r'git\+https://github\.com/wickdninja/agentbus(@[^\s`"\')]*)?', (root/name).read_text()):
         assert m.group(1) and re.fullmatch(r'@v\d+\.\d+\.\d+', m.group(1)), (name, 'install line must pin a release tag', m.group(0))
@@ -287,11 +293,45 @@ assert pin[1:] in released, (f'tests/released_commands.txt has no line for {pin[
 for m in re.finditer(r'\bagentbus[ ]+(?:--[a-z-]+[ ]+(?:[A-Za-z0-9_.-]+[ ]+)?)*([a-z][a-z-]*)', readme):
     word = m.group(1)
     assert word not in commands or word in released[pin[1:]], (f'README tells users to run `agentbus {word}`, which {pin[1:]} does not have', m.group(0))
-assert pinned >= 2, 'README must show both pinned install lines'
+# The README's Update section (U1): staged in RELEASING.md until the pinned release has `update`, then required in the README.
+rel = (root/'RELEASING.md').read_text()
+m = re.search(r'<!-- readme-update:begin -->\n(.*?)<!-- readme-update:end -->', rel, re.S)
+assert m, 'RELEASING.md lost the staged README Update section'
+staged = m.group(1).strip()
+for must in ('agentbus update', 'AGENTBUS_NO_UPDATE_CHECK=1', 'different project', 'pip install agentbus'):
+    assert must in staged, ('the staged README Update section lacks', must)
+if 'update' in released[pin[1:]]:
+    assert staged in readme, 'the pinned release has `agentbus update`, so the README must carry the staged Update section from RELEASING.md'
+else:
+    assert 'agentbus update' not in readme, 'the README names agentbus update, which the release it pins lacks'
+# The README's first-install lines (the decision): the release wheel's URL once the pinned release publishes a wheel
+# (tests/released_wheels.txt), the git+ lines before. scripts/release_check.py --lines is the generator; RELEASING.md
+# shows the wheel form for the release-prep commit and must agree with it; the git+ form is documented once, in upgrade.md,
+# as the from-source route.
+wheels = {ln.split()[0] for ln in (root/'tests/released_wheels.txt').read_text().splitlines() if ln.strip() and not ln.startswith('#')}
+def lines_for(tag, *flags):
+    return subprocess.check_output([sys.executable, str(root/'scripts/release_check.py'), *flags, '--lines', tag], text=True).splitlines()
+gen = lines_for('v9.9.9', '--wheel')
+shown = re.search(r'<!-- readme-install:begin -->\n```bash\n(.*?)```\n<!-- readme-install:end -->', rel, re.S)
+assert shown and shown.group(1).strip().splitlines() == [x.replace('9.9.9', 'X.Y.Z') for x in gen], 'RELEASING.md shows install lines that scripts/release_check.py --lines does not print'
+assert len(lines_for('v9.9.9')) == 2 and all('git+' in x for x in lines_for('v9.9.9')), 'the git+ form of --lines changed'
+expected = lines_for(pin[1:])
+if pin[1:] in wheels:
+    assert all(x in readme for x in expected) and 'git+' not in readme, ('the pinned release publishes a wheel, so the README installs its wheel URL', expected)
+else:
+    assert all(x in readme for x in expected), ('the README must carry the git+ install lines until the pinned release publishes a wheel', expected)
+    assert 'releases/download/' not in readme, 'the README names a wheel URL, but the pinned release is not listed in tests/released_wheels.txt'
+upgrade = (root/'docs/how-to/upgrade.md').read_text()
+assert upgrade.count('git+https://github.com/wickdninja/agentbus@v') == 1, 'upgrade.md documents the from-source route exactly once'
+security = (root/'SECURITY.md').read_text()
+assert 'first-install lines' in security and 'Installing from source' in security and 'hatchling' in security, 'SECURITY.md describes the first install and the from-source route'
+readme_pinned = len(re.findall(r'git\+https://github\.com/wickdninja/agentbus@|releases/download/v', readme))
+assert readme_pinned >= 2, 'README must show both pinned install lines'
 assert 'examples/two-agent-handoff.sh' in readme, 'README must link the executable demo'
 # Inline command names and forms in the README's table and prose.
 inline = re.sub(r'```.*?```', '', readme, flags=re.S)
 non_commands = {
+    *[l for l in lines_for(pin[1:]) if l.startswith('pipx')],
     'pipx install git+https://github.com/wickdninja/agentbus@v0.1.0',
     'examples/two-agent-handoff.sh',
     'mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus',

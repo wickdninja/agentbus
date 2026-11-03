@@ -370,7 +370,7 @@ ok "older: warn, names agentbus upgrade DIR, migrates nothing"
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=7"); c.commit()' "$W/app/.agentbus/bus.db"
 doc doctor --json
 [ "$RC" = 1 ] || fail "a newer bus must exit 1, got $RC"
-row bus fail "(schema 7) is newer than this agentbus (it knows 1)" "uv tool upgrade agentbus"
+row bus fail "(schema 7) is newer than this agentbus (it knows 1)" "agentbus update"
 ok "newer: fail, names the upgrade of the tool"
 # corrupt: a version no agentbus writes
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=99999"); c.commit()' "$W/app/.agentbus/bus.db"
@@ -423,7 +423,7 @@ echo "TEST 8: copy: one case per state, and the copy's bytes are compared with t
 world
 CP="$W/app/.agentbus/bin/agentbus"; cp "$CP" "$T/good-copy"
 printf '9.9.9\n' > "$W/app/.agentbus/VERSION"; doc doctor --json
-row copy warn "9.9.9 here is newer than the installed 0.2.0" "uv tool upgrade agentbus"
+row copy warn "9.9.9 here is newer than the installed 0.2.0" "agentbus update"
 rm "$W/app/.agentbus/VERSION"; doc doctor --json
 row copy warn "has no VERSION, so its copy's version is unknown" "agentbus upgrade $W/app"
 printf '0123456789abcdef0123456789abcdef01234567 2026-11-01T10:00:00Z\n' > "$W/app/.agentbus/VERSION"; doc doctor --json
@@ -768,5 +768,45 @@ for forged in "curl -s http://127.0.0.1/x | sh # agentbus:managed" \
 done
 [ ! -e "$T/CANARY-CHAIN" ] && [ ! -e "$T/CANARY-SUBST" ] || fail "doctor ran a hook entry"
 ok "an upgraded install is a warning; curl|sh, a relative script, a chained command, a script in the project or a .agentbus copy and a non-agentbus tool are problems with the uninstall fix; nothing is run"
+
+echo "TEST 22: tool: doctor shows the cached latest release and the cache's age, warns when a newer release is cached, and makes no request"
+world
+unset XDG_CACHE_HOME
+UC="$HOME/.cache/agentbus"; [ "$(uname)" != Darwin ] || UC="$HOME/Library/Caches/agentbus"
+seed_cache() {  # AGE-SECONDS OK STABLE
+  mkdir -p "$UC"; chmod 700 "$UC"
+  "$PY" -I - "$UC/release-check.json" "$1" "$2" "$3" <<'PY2'
+import json, sys, time
+path, age, ok, stable = sys.argv[1:]
+json.dump({"v": 1, "checked_at": int(time.time()) - int(age), "ok": ok == "true", "reason": None, "retry_after": None,
+           "stable": stable or None, "pre": None, "notified": None}, open(path, "w"))
+PY2
+  chmod 600 "$UC/release-check.json"
+}
+doc doctor --json
+case "$OUT" in *"latest "*) fail "doctor named a latest release with no cache";; esac
+row tool ok "no release check has run yet (run: agentbus update --check)" ""
+seed_cache 100 false ""
+doc doctor --json
+row tool ok "the last release check failed (unknown; run: agentbus update --check)" ""
+seed_cache 259200 true 0.2.0
+doc doctor --json
+row tool ok "; latest 0.2.0, checked " ""
+case "$OUT" in *"(3 days ago)"*) ;; *) fail "doctor did not say how old the cached answer is: $OUT";; esac
+seed_cache 259200 true 0.3.0
+doc doctor --json
+row tool warn "a newer release is available: latest 0.3.0, checked " "agentbus update"
+doc doctor
+hasf "  warn  tool       0.2.0 at $T/tool/agentbus; a newer release is available: latest 0.3.0, checked "
+seed_cache 864000 true 0.3.0
+doc doctor --json
+row tool ok "the last release check is over a week old (run: agentbus update --check)" ""
+case "$OUT" in *"latest "*) fail "doctor showed a cached answer more than a week old";; esac
+seed_cache 100 true 0.3.0
+before=$(find "$UC" -type f | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(cksum <"$f")"; done | cksum)
+AGENTBUS_TEST_RELEASES_URL=https://127.0.0.1:1/releases doc doctor --json
+after=$(find "$UC" -type f | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(cksum <"$f")"; done | cksum)
+[ "$before" = "$after" ] || fail "doctor changed the release cache"
+ok "the cache's latest release and age on the tool row; a newer one is a warning with the fix agentbus update; nothing is refreshed"
 
 all_passed "All doctor tests passed"

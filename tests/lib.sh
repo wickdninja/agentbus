@@ -9,6 +9,16 @@ unset AGENTBUS_DB AGENTBUS_AGENT
 # Nor may a test reach the caller's real Claude Code or Codex config: setup honours both variables, so a caller
 # who exported either would get its skill or AGENTS.md block written there. A test that wants one sets it itself.
 unset CODEX_HOME CLAUDE_CONFIG_DIR
+# Nor may the caller's agent or CI signals decide what a test sees: update's release notice is silent for an agent
+# session (CLAUDECODE, a Codex shell's marker, no terminal) and in CI, and off with the switches below, so a test that
+# wants one sets it itself (CI stays: tests/test_package.sh reads it; the update tests unset it in tests/update_lib.sh). CODEX_MARKER_VARS is bin/agentbus's list of the variables a Codex shell carries.
+CODEX_MARKER_VARS="CODEX_THREAD_ID CODEX_SANDBOX CODEX_SANDBOX_NETWORK_DISABLED"
+unset AGENTBUS_AGENT_SESSION CLAUDECODE BUILD_NUMBER RUN_ID NO_UPDATE_NOTIFIER DO_NOT_TRACK AGENTBUS_NO_UPDATE_CHECK AGENTBUS_NO_UPDATE_NOTICE GH_TOKEN GITHUB_TOKEN
+for _v in $CODEX_MARKER_VARS; do unset "$_v"; done
+# The update cache and the list of known bus folders follow HOME, which every test sets to its own folder: a caller's
+# (or tests/run_all.sh's) XDG_CACHE_HOME / XDG_STATE_HOME must not send them somewhere else. run_all.sh pins both under
+# its scratch HOME and fails a file that leaves a cache or bus list there, i.e. one that never set a HOME of its own.
+unset XDG_CACHE_HOME XDG_STATE_HOME
 # Setup asks `claude plugin list --json` whether the plugin is installed. A test never starts the real claude: this names
 # no executable (setup then reads the plugin files), and a test that wants an answer points it at a stub it wrote.
 export AGENTBUS_CLAUDE_BIN=/nonexistent/claude

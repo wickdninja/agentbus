@@ -6,7 +6,7 @@ set -euo pipefail
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export HOME="$T/home"; mkdir -p "$HOME"
 "$PY" - "$BIN" "$T" <<'PY'
-import base64, json, os, sqlite3, subprocess, sys
+import base64, json, os, re, sqlite3, subprocess, sys
 sys.path.insert(0, os.environ["TESTS_DIR"])
 from agentbus_cmd import agentbus_argv
 bin_, tmp = sys.argv[1:]
@@ -157,12 +157,14 @@ ok(db, "--as", "a", "join")
 for i in range(6):
     ok(db, "--as", "a", "post", "m%d" % i, "--topic", "t"); ok(db, "--as", "a", "ctx", "set", "k", "v%d" % i)
 good = ok(db, "read", "--limit", "2", "--topic", "t")["next"]
-body = json.loads(base64.urlsafe_b64decode(good[3:] + "=" * (-len(good[3:]) % 4)))
-assert set(body) == {"c", "f", "id"} and body["c"] == "read", body
+assert re.fullmatch(r"v1\.r\.[0-9a-f]{6}\.[0-9]+", good), good   # versioned, short enough for an 80-column `next:` line
 other = ok(db, "ctx", "history", "k", "--limit", "2")["next"]
 usage_error(db, "read", "--before", "garbage")
 usage_error(db, "read", "--before", "v1.!!!")
 usage_error(db, "read", "--before", "v1." + base64.urlsafe_b64encode(b"[1]").decode())
+usage_error(db, "read", "--before", "v1.r.zzzzzz.1")
+usage_error(db, "read", "--before", good.rsplit(".", 1)[0] + ".007")   # a spelling this tool does not make
+usage_error(db, "read", "--before", "v1.r.%s.9223372036854775808" % good.split(".")[2])
 usage_error(db, "read", "--before", other)                       # from another command
 usage_error(db, "read", "--before", good)                        # different filters (no --topic)
 usage_error(db, "read", "--before", good, "--topic", "other")
@@ -193,10 +195,10 @@ for n in "abcde":
 for i in range(15):
     ok(db, "--as", "a", "post", "m%d" % i)
 st = ok(db, "status", "--limit", "2")
-assert [len(st[k]) for k in ("agents", "context", "claims", "messages")] == [2, 2, 2, 10], st
-assert st["omitted"] == {"agents": 3, "context": 3, "claims": 3, "messages": 5}, st["omitted"]
+assert [len(st[k]) for k in ("agents", "context", "claims", "messages")] == [2, 2, 2, 2], st
+assert st["omitted"] == {"agents": 3, "context": 3, "claims": 3, "messages": 13}, st["omitted"]
 full = ok(db, "status", "--limit", "-1")
-assert full["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 5}, full["omitted"]
+assert full["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 0}, full["omitted"]
 print("PASS: status omitted counts equal rows left out per section")
 
 # watch shows at most 200 per section: plant 205 rows in each directly, as another tool could
@@ -215,7 +217,7 @@ print("PASS: watch --json omitted counts equal rows left out per section")
 
 # ---- human output keeps its truncation hints ----
 p = run(db, "who", "--limit", "1")
-assert p.returncode == 0 and p.stdout.rstrip().endswith("... 209 more (use --limit)"), p.stdout[-80:]
-print("PASS: human listings keep their '... N more (use --limit)' hint")
+assert p.returncode == 0 and p.stdout.rstrip().endswith("... 209 more\n  next: agentbus who --limit 210"), p.stdout[-80:]
+print("PASS: human listings keep their '... N more' hint and name the command that shows the rest")
 PY
 echo "All pagination tests passed"

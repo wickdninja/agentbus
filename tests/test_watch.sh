@@ -165,7 +165,10 @@ assert b"Traceback" not in buf[0]
 os.close(master); os.close(slave)
 print(f"post beside watch: {took:.2f}s")
 PY
-ok "live view updates and marks new messages; arrows ignored; resize redraws at once; q and Ctrl-C restore the terminal, even when started with SIGINT blocked"
+if [ -z "${AGENTBUS_CMD:-}" ]; then  # it wraps the script's own render; an installed command has no script to wrap
+  "$PY" "$TESTS_DIR/watch_live_cases.py" post_during_draw >/dev/null || fail "a post waited for a drawing watch"
+else skip_part "post during a draw: AGENTBUS_CMD names an installed command"; fi
+ok "live view updates and marks new messages; arrows ignored; resize redraws at once; q and Ctrl-C restore the terminal, even when started with SIGINT blocked; a post during a draw takes the bus at its first try"
 
 echo "TEST 5: watch writes nothing to the bus"
 before=$("$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute("select group_concat(name||last_seen) from agents").fetchone()[0], c.execute("select count(*) from log").fetchone()[0])' "$AGENTBUS_DB")
@@ -191,8 +194,8 @@ echo "TEST 6: --up selects the workspace bus and its header names the workspace 
 unset AGENTBUS_DB
 WS="$T/workspace"; mkdir "$WS"; agentbus init "$WS" >/dev/null
 R="$WS/repo"; mkrepo "$R"; agentbus init "$R" >/dev/null
-(cd "$WS" && agentbus --as outer post "workspace message" >/dev/null)
-(cd "$R" && agentbus --as inner post "repo message" >/dev/null)
+(cd "$WS" && agentbus --as outer join >/dev/null && agentbus --as outer post "workspace message" >/dev/null)
+(cd "$R" && agentbus --as inner join >/dev/null && agentbus --as inner post "repo message" >/dev/null)
 # Keep the full path visible even under a harness with a long temporary directory.
 o=$(cd "$R" && outof env COLUMNS=1000 "${AB[@]}" watch --once --up 1)
 grep -qF "$(cd "$WS" && pwd -P)" <<<"$o" || fail "header does not name the workspace: $o"
@@ -289,7 +292,7 @@ ok "40, 60, 80 and 120 columns, with and without emoji: every row fits, the newe
 
 echo "TEST 9 (pin): watch --once and watch --json on a refused bus exit 3 with the error, never empty sections"
 RB="$T/refused/bus.db"; mkdir -p "$T/refused"
-AGENTBUS_DB="$RB" agentbus --as a post "kept" >/dev/null
+AGENTBUS_DB="$RB" agentbus --as a join >/dev/null; AGENTBUS_DB="$RB" agentbus --as a post "kept" >/dev/null
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("ALTER TABLE messages ADD COLUMN extra TEXT"); c.commit(); c.close()' "$RB"
 rc=0; o=$(AGENTBUS_DB="$RB" "${AB[@]}" watch --once 2>"$T/err") || rc=$?
 [ "$rc" = 3 ] || fail "watch --once on a refused bus exited $rc"
@@ -302,7 +305,7 @@ ok "watch --once and --json on a refused bus exit 3 with the error"
 
 echo "TEST 10: the live view of a bus it cannot read says so and names the fix, instead of drawing empty sections"
 NB="$HOME/newerbus/bus.db"; mkdir -p "$HOME/newerbus"
-AGENTBUS_DB="$NB" agentbus --as a post "kept" >/dev/null
+AGENTBUS_DB="$NB" agentbus --as a join >/dev/null; AGENTBUS_DB="$NB" agentbus --as a post "kept" >/dev/null
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=5"); c.close()' "$NB"
 "$PY" - "$RB" "$NB" <<'PY' || fail "live watch on an unreadable bus"
 import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
@@ -349,7 +352,7 @@ ok "a refused bus shows \"could not be read\" and the fix line, not \"no one yet
 
 echo "TEST 11: a watch left running after its bus copy was upgraded says restart for X.Y.Z in the Messages title"
 SD="$T/stalebus"; mkdir -p "$SD"; agentbus init "$SD" >/dev/null
-AGENTBUS_DB="$SD/.agentbus/bus.db" agentbus --as a post "kept" >/dev/null
+AGENTBUS_DB="$SD/.agentbus/bus.db" agentbus --as a join >/dev/null; AGENTBUS_DB="$SD/.agentbus/bus.db" agentbus --as a post "kept" >/dev/null
 "$PY" - "$SD/.agentbus" <<'PY' || fail "restart for"
 import os, sys
 sys.path.insert(0, os.environ["TESTS_DIR"])
@@ -383,3 +386,4 @@ for want in "Keys: j/k move, Tab section, Enter open, / filter, p pause, y copy,
   grep -qF -- "$want" <<<"$o" || fail "watch --help lacks '$want': $o"
 done
 ok "watch --help states the keys, read-only, Esc and q, --once and --json"
+all_passed "All watch tests passed"

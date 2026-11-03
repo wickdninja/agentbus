@@ -59,7 +59,7 @@ before = logs()
 first = ok(db, "--as", "a", "leave")
 assert first["released_count"] == 2 and logs() == before + 1, first
 second = ok(db, "--as", "a", "leave")
-assert second == {"left": "a", "released": [], "released_count": 0} and logs() == before + 1, second
+assert second == {"left": "a", "was_joined": False, "released": [], "released_count": 0} and logs() == before + 1, second
 ok(db, "--as", "b", "claim", "r3"); ok(db, "--as", "b", "release", "--all")
 mid = logs()
 assert ok(db, "--as", "b", "release", "--all") == {"released": [], "released_count": 0} and logs() == mid
@@ -88,7 +88,7 @@ print("PASS: ctx set and goal set with the same value twice write one history ro
 db = bus()
 a1 = ok(db, "--as", "a", "post", "hello", "--request-id", "t1")
 a2 = ok(db, "--as", "a", "post", "hello", "--request-id", "t1")
-assert a2 == {"id": a1["id"], "duplicate": True} and rows(db, "SELECT COUNT(*) FROM messages")[0][0] == 1, (a1, a2)
+assert a2 == {"id": a1["id"], "duplicate": True, "warnings": []} and rows(db, "SELECT COUNT(*) FROM messages")[0][0] == 1, (a1, a2)
 ok(db, "--as", "a", "post", "again"); ok(db, "--as", "a", "post", "again")
 assert rows(db, "SELECT COUNT(*) FROM messages WHERE body='again'")[0][0] == 2, "without a token each post is a message"
 p = run(db, "--json", "--as", "a", "post", "late", "--request-id", "t2", env={"AGENTBUS_TEST_FAIL": "emit"})
@@ -172,10 +172,14 @@ OBSERVED = {
     "status": observe((), ("status",), EVERYTHING),
     "goal": observe((), ("--as", "a", "goal", "g"), {**FACTS, **LOG}),
     "watch": observe((), ("watch",), EVERYTHING),
+    "brief": observe((), ("--as", "a", "brief"), EVERYTHING),
+    "demo": observe((), ("demo",), EVERYTHING),
     "buses": observe((), ("buses",), EVERYTHING),
     "schema": observe((), ("schema",), EVERYTHING),
     "skill": observe((), ("skill",), EVERYTHING),
     "hooks": observe((), ("hooks", "codex"), EVERYTHING),
+    "help": observe((), ("help", "ctx", "set"), EVERYTHING),
+    "completion": observe((), ("completion", "zsh"), EVERYTHING),
     "doctor": observe((), ("doctor",), EVERYTHING),
 }
 # init and upgrade write files, not rows: a second run leaves the folder as the first did
@@ -191,6 +195,19 @@ OBSERVED["upgrade"] = "idempotent" if tree() == t2 else "unsafe"
 cfg = {"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")}
 def cfg_tree():
     return sorted((r, f, open(os.path.join(r, f), "rb").read()) for d in cfg.values() for r, _, fs in os.walk(d) for f in fs)
+# update writes the tool, bus copies and a cache; its retry-safe forms are observed on the one that needs no network, --check
+# answering from a good cache entry (a second run leaves the cache as the first did).
+ucache = os.path.join(tmp, "Library", "Caches", "agentbus") if sys.platform == "darwin" else os.path.join(tmp, ".cache", "agentbus")
+os.makedirs(ucache, mode=0o700)
+with open(os.path.join(ucache, "release-check.json"), "w") as f:
+    json.dump({"v": 1, "checked_at": int(__import__("time").time()), "ok": True, "reason": None, "retry_after": None,
+               "stable": "0.9.0", "pre": None, "notified": None}, f)
+os.chmod(os.path.join(ucache, "release-check.json"), 0o600)
+def ucache_tree():
+    return sorted((r, f, open(os.path.join(r, f), "rb").read()) for r, _, fs in os.walk(ucache) for f in fs)
+uenv = {"XDG_CACHE_HOME": os.path.join(tmp, ".cache")}
+ok(fresh(), "update", "--check", env=uenv); t4 = ucache_tree(); ok(fresh(), "update", "--check", env=uenv)
+OBSERVED["update"] = "idempotent" if ucache_tree() == t4 else "unsafe"
 for target in ("claude", "codex"):
     ok(fresh(), "setup", target, env=cfg); t3 = cfg_tree(); ok(fresh(), "setup", target, env=cfg)
     assert t3, ("setup wrote nothing", target)

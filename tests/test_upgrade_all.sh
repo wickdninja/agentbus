@@ -25,7 +25,7 @@ W="$HOME/src"
 old_bus "$W/alpha"
 old_bus "$W/beta"
 old_bus "$W/beta/nested"                       # a bus inside another bus's folder
-mkdir -p "$W/cur"; agentbus init "$W/cur" >/dev/null; (cd "$W/cur" && agentbus --as a post "current" >/dev/null)
+mkdir -p "$W/cur"; agentbus init "$W/cur" >/dev/null; (cd "$W/cur" && agentbus --as a join >/dev/null && agentbus --as a post "current" >/dev/null)
 old_bus "$W/linked"; mv "$W/linked/.agentbus/bin/agentbus" "$T/elsewhere"; ln -s "$T/elsewhere" "$W/linked/.agentbus/bin/agentbus"
 old_bus "$W/locked"
 mkdir -p "$W/node_modules/dep"; old_bus "$W/node_modules/dep"   # skipped folder: never walked
@@ -144,7 +144,7 @@ grep -qxF "~/dx/app   current (0.2.0)" <<<"$o" || fail "second run: $o"
 old_bus "$D/one"
 o=$(cd "$T" && "$PY" "$T/tool/v2.py" upgrade "$D/one") || fail "upgrade DIR: $o"
 b=$(cd "$D/one/.agentbus/backups" && ls bus-v*.db)
-grep -qxF "$D/one: 0.1.0 -> 0.2.0   schema 0 -> 2   backup $D/one/.agentbus/backups/$b" <<<"$o" || fail "upgrade DIR line: $o"
+grep -qxF "~/dx/one: 0.1.0 -> 0.2.0   schema 0 -> 2   backup ~/dx/one/.agentbus/backups/$b" <<<"$o" || fail "upgrade DIR line: $o"
 st=${b#bus-v0-}; st=${st%.db}
 cmp -s "$D/one/.agentbus/backups/agentbus-$st" "$OLD" && [ "$(cat "$D/one/.agentbus/backups/VERSION-$st")" = 0.1.0 ]   || fail "the replaced 0.1.0 copy was not kept beside its backup: $(ls "$D/one/.agentbus/backups")"
 ok "0.1.0 -> 0.2.0 with schema 0 -> 1 and no backup; a migration shows its one backup; upgrade DIR prints the same line"

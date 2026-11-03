@@ -229,7 +229,7 @@ row_4() {
   done
   is "row 4: no refusal changed a byte of the bus folder" "$before" "$(snap "$W/r4")"
   run "$W/r4" "${NEW[@]}" doctor; is "row 4: doctor exits 1" 1 "$RC"
-  doctor_row "$W/r4" bus fail "(schema 2) is newer than this agentbus (it knows 1)" "uv tool upgrade agentbus"
+  doctor_row "$W/r4" bus fail "(schema 2) is newer than this agentbus (it knows 1)" "agentbus update"
   is "row 4: doctor changed nothing either" "$before" "$(snap "$W/r4")"
   hook_session "$W/r4" "${NEW[@]}"
   hook_notice "row 4: the hook on a newer bus" "agentbus: this folder's bus is newer than this agentbus, so the hooks are off for it. Update agentbus (or the plugin), then start a new session."
@@ -355,7 +355,7 @@ row_9() {
   has "row 9: upgrade from the new copy says why" "upgrade runs from the installed agentbus or a clone of its repo; this is a project copy" "$ERR"
   # the installed tool (schema 1) calls the same bus newer, and doctor fails it with the fix
   run "$W/r9" "${NEW[@]}" doctor; is "row 9: doctor exits 1 on a bus newer than the tool" 1 "$RC"
-  doctor_row "$W/r9" bus fail "(schema 2) is newer than this agentbus (it knows 1)" "uv tool upgrade agentbus"
+  doctor_row "$W/r9" bus fail "(schema 2) is newer than this agentbus (it knows 1)" "agentbus update"
   is "row 9: doctor wrote nothing either" "$before" "$(snap "$W/r9")"
 }
 

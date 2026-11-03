@@ -36,7 +36,7 @@ ok "handoff delivered once, to the right agent"
 
 echo "STEP 3: the worker claims a folder; the reviewer is refused with the exact conflict text"
 jcall claim --as worker claim app/api --purpose "health route" | jis "the claim reply" 'r["resource"] == "app/api" and r["agent"] == "worker" and r["purpose"] == "health route"'
-refuse 1 "agentbus: app/api/health.py overlaps app/api, claimed by worker until <TS> (health route). Do not edit it yet. Ask worker with post --to worker --kind question, or choose another resource." \
+refuse 1 "agentbus: app/api/health.py overlaps app/api, claimed by worker until <TS> (purpose: \"health route\"). Do not edit it yet. Ask worker with post --to worker --kind question, or choose another resource." \
   agentbus --as reviewer claim app/api/health.py --purpose "review"
 is_equal "only the worker holds a claim" "app/api|worker|health route" "$(sql "SELECT resource, agent, purpose FROM claims")"
 ok "claim conflict refused with the documented text"
@@ -66,7 +66,7 @@ ok "fact value and both history entries visible to a reader with no identity"
 
 echo "STEP 6: release, reclaim by the reviewer, done, leave"
 jcall release --as worker release app/api | jis "release reply" 'r["released"] == ["app/api"]'
-say "claimed app/api/health.py until <TS>" agentbus --as reviewer claim app/api/health.py --purpose "review"
+say "claimed app/api/health.py <left>" agentbus --as reviewer claim app/api/health.py --purpose "review"
 is_equal "the reviewer holds the file" "app/api/health.py|reviewer|review" "$(sql "SELECT resource, agent, purpose FROM claims")"
 jcall post --as worker post "done: /health" --kind done --reply-to 1 | jis "done post reply" 'r["id"] == 4'
 say "#4 worker -> everyone [done] re #1 · <time>

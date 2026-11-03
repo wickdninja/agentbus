@@ -9,9 +9,9 @@
 # stops at the first FAIL (--keep-going continues). AGENTBUS_NO_SKIP=1 turns a SKIP into a FAIL (CI sets it); only a known platform skip (skip_platform KEY, KEY in PLATFORM_SKIPS) stays a skip then.
 # The last line is `ALL TESTS PASSED (N files)` or `(N files, M skipped)`, or `FAILED: tests/test_x.sh ...`; exit 0 or 1.
 #
-# Isolation: every file runs with a poisoned caller environment (AGENTBUS_DB, AGENTBUS_AGENT, HOME, CODEX_HOME and
-# CLAUDE_CONFIG_DIR point into a scratch folder, and so does TMPDIR). After each file the scratch folder must hold no bus,
-# no ~/.agentbus, no Codex or Claude Code config and nothing in TMPDIR,
+# Isolation: every file runs with a poisoned caller environment (AGENTBUS_DB, AGENTBUS_AGENT, HOME, CODEX_HOME,
+# CLAUDE_CONFIG_DIR, XDG_CACHE_HOME and XDG_STATE_HOME point into a scratch folder, and so does TMPDIR). After each file the scratch folder must hold no bus,
+# no ~/.agentbus, no Codex or Claude Code config, no update cache or bus list and nothing in TMPDIR,
 # and every file of the checkout (tracked, untracked, ignored) must have the checksum it had before; otherwise that file
 # fails with `FAIL tests/test_x.sh (isolation: ...)`.
 # --skip-heavy leaves out the two files that run other tests again (mutations, the eval harness); CI runs them once
@@ -93,7 +93,7 @@ for f in ${files[@]+"${files[@]}"}; do
   t=("${capped[@]}" "$cap")
   if is_heavy "$f"; then t=("${capped[@]}" "$((cap*3))"); fi
   env AGENTBUS_DB="$iso/caller.db" AGENTBUS_AGENT=caller HOME="$iso/h" TMPDIR="$iso/t" PYTHONDONTWRITEBYTECODE=1 \
-    CODEX_HOME="$iso/cx" CLAUDE_CONFIG_DIR="$iso/cc" \
+    CODEX_HOME="$iso/cx" CLAUDE_CONFIG_DIR="$iso/cc" XDG_CACHE_HOME="$iso/h/.cache" XDG_STATE_HOME="$iso/h/.local/state" \
     "${t[@]}" bash "$f" >"$out" 2>&1 </dev/null || rc=$?
   secs=$((SECONDS-start))
   # Isolation, per file, so the file that leaked is the one named: the poisoned caller environment must come back
@@ -103,12 +103,16 @@ for f in ${files[@]+"${files[@]}"}; do
   [ ! -e "$iso/h/.agentbus" ] || leaks+=("it wrote the caller's ~/.agentbus")
   [ ! -e "$iso/cx" ] || leaks+=("it wrote the caller's CODEX_HOME")
   [ ! -e "$iso/cc" ] || leaks+=("it wrote the caller's CLAUDE_CONFIG_DIR")
+  # agentbus update's release cache and its list of known bus folders, at the XDG paths and at the macOS ones under HOME
+  for u in .cache/agentbus .local/state/agentbus "Library/Caches/agentbus" "Library/Application Support/agentbus"; do
+    [ ! -e "$iso/h/$u" ] || leaks+=("it wrote the caller's update cache or bus list ($u)")
+  done
   left=$(ls -A "$iso/t" | head -n 5 | tr '\n' ' ')
   [ -z "$left" ] || leaks+=("it left files in TMPDIR: ${left% }")
   post=$(tree)
   [ "$post" = "$pre" ] || leaks+=("it changed the checkout: $(diff <(echo "$pre") <(echo "$post") | grep '^[<>]' | awk '{print $NF}' | sort -u | head -n 5 | tr '\n' ' ')")
   pre=$post
-  rm -rf "$iso"/caller.db* "$iso/h/.agentbus" "$iso/cx" "$iso/cc" "$iso/t"
+  rm -rf "$iso"/caller.db* "$iso/h/.agentbus" "$iso/h/.cache" "$iso/h/.local" "$iso/h/Library" "$iso/cx" "$iso/cc" "$iso/t"
   mkdir "$iso/t"
   result=pass
   if [ ${#leaks[@]} -gt 0 ]; then
