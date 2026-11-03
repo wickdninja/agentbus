@@ -4557,7 +4557,7 @@ class Parser(argparse.ArgumentParser):
         shown = helpers[:1] + [x for x in own if x.option_strings] + helpers[1:]
         if not self.cmd_path:
             shown = helpers[:1] + [x for x in self._actions if x.dest in GLOBAL_DESTS] + helpers[1:]
-        rows = [(", ".join(x.option_strings) + ("" if x.nargs == 0 else " " + ("|".join(map(str, x.choices)) if x.choices else
+        rows = [(", ".join(x.option_strings) + ("" if x.nargs == 0 else " " + ("{" + ",".join(map(str, x.choices)) + "}" if x.choices else
                  (x.metavar if isinstance(x.metavar, str) else x.dest.upper()))), x.help or "") for x in shown]
         blocks.append("FLAGS\n" + help_table(rows, width))
         if self.cmd_path:
