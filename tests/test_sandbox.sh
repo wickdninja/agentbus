@@ -10,21 +10,35 @@ T=$(mktemp -d); T=$(cd "$T" && pwd -P); export HOME="$T/home"; mkdir -p "$HOME";
 R="$T/repo"; mkrepo "$R"; agentbus init "$R" >/dev/null
 B="$R/.agentbus"; echo keep > "$T/victim"
 LT="$T/lanetmp"; mkdir -p "$LT"   # a real lane always has some writable dir outside the bus
-# profile BUSDIR [no-symlink-rule]: the documented lane profile for that bus folder (the second
-# argument drops the global symlink rule, for the negative control below).
+# The /dev files a lane may write: never all of /dev, which holds every other terminal of this user.
+DEV_RULE='(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper") (regex #"^/dev/fd/"))'
+# other_tty PROFILE: exits 0 when a lane under PROFILE wrote to another terminal (a pty this test opens).
+other_tty() { "$PY" "$T/tty.py" "$1"; }
+cat > "$T/tty.py" <<'PY'
+import os, select, subprocess, sys
+m, s = os.openpty(); name = os.ttyname(s)  # s stays open: the pty lives as long as this test holds it
+r = subprocess.run(["/usr/bin/sandbox-exec", "-f", sys.argv[1], "/bin/sh", "-c", 'printf x > "$0"', name],
+                   stderr=subprocess.DEVNULL)
+got = os.read(m, 16) if select.select([m], [], [], 2)[0] else b""
+sys.exit(0 if r.returncode == 0 and got == b"x" else 1)
+PY
+# profile BUSDIR [no-symlink-rule|no-special-rule|dev-subpath]: the documented folder-grant lane profile for
+# that bus folder (the second argument drops one rule, or grants all of /dev, for the negative controls below).
 profile() {
   local sym='(deny file-write-create (vnode-type SYMLINK))'; [ "${2:-}" = no-symlink-rule ] && sym=''
   local special='(deny file-write-create (vnode-type FIFO SOCKET CHARACTER-DEVICE BLOCK-DEVICE))'
   [ "${2:-}" = no-special-rule ] && special=''
+  local dev="$DEV_RULE"; [ "${2:-}" = dev-subpath ] && dev='(allow file-write* (subpath "/dev"))'
   cat <<SB
 (version 1)
 (allow default)
 (deny file-write*)
-(allow file-write* (subpath "/dev"))
+$dev
 (allow file-write* (subpath "$LT"))
 (allow file-write* (subpath "$1"))
 (deny file-write* (literal "$1"))
 (deny file-write* (subpath "$1/bin"))
+(deny file-write* (subpath "$1/backups"))
 $sym
 $special
 (deny file-link (subpath "$1"))
@@ -57,9 +71,22 @@ if [ -e "$LT/own2" ] && lane mv "$LT/own2" "$B/bus.db-journal" 2>/dev/null; then
 lane mkdir "$LT/d" && lane mv "$LT/d" "$B/d" || fail "moving a plain directory into the bus folder"
 lane "${AB[@]}" --as lane post "after the move probes" >/dev/null || fail "post after the move probes"
 [ "$(sed -n 2p "$B/bin/agentbus")" = "$(sed -n 2p "$BIN")" ] || fail "bin/agentbus changed"
+# Bug these catch: backups/ was lane-writable, and the upgrade guide restores the tool copy from it into bin/,
+# which the brain then runs unsandboxed. backups/ is made here as `upgrade` makes it, by the unsandboxed CLI.
+mkdir -m 700 "$B/backups"; cp -p "$B/bin/agentbus" "$B/backups/agentbus-STAMP"
+if lane sh -c "echo x > '$B/backups/agentbus-STAMP'" 2>/dev/null; then fail "backups/ copy writable"; fi
+if lane sh -c "echo x > '$B/backups/agentbus-NEW'" 2>/dev/null; then fail "a file can be created in backups/"; fi
+if lane mv "$B/backups" "$B/backups2" 2>/dev/null; then fail "backups/ can be renamed"; fi
+if lane rm "$B/backups/agentbus-STAMP" 2>/dev/null; then fail "a backup can be deleted"; fi
+cmp -s "$B/bin/agentbus" "$B/backups/agentbus-STAMP" || fail "the backup copy changed"
+rm -r "$B/backups"
+# Bug it catches: the profile allowed writes to all of /dev, so a lane could type escape sequences into
+# another of the user's terminals. The control shows the probe can see a write.
+if other_tty "$T/lane.sb"; then fail "a lane can write to another terminal"; fi
+profile "$B" dev-subpath > "$T/devsub.sb"; other_tty "$T/devsub.sb" || fail "control: no write to the pty even with all of /dev"
 if lane sh -c "echo x > '$R/elsewhere'" 2>/dev/null; then fail "write outside the grant"; fi
 [ "$(cat "$T/victim")" = keep ] || fail "victim changed"
-ok "profile: bus works; no symlink anywhere, no hard link in the bus folder (a planted -journal included), the folder and bin/ cannot be moved or written"
+ok "profile: bus works; no symlink anywhere, no hard link in the bus folder (a planted -journal included), the folder, bin/ and backups/ cannot be moved or written, no other terminal"
 
 echo "TEST: a symlink made before the sandbox started cannot be swapped into the bus folder"
 # renamex_np(RENAME_SWAP) exchanges two names without creating either, so a create rule on the
@@ -144,3 +171,45 @@ for gi in no-gitignore gitignore; do
   fi
 done
 ok "join, post and read work under the profile with no exclude rule, with and without the .gitignore rule"
+
+echo "TEST: the narrow grant (bus.db, -wal and -shm only) runs the bus and denies the rest of the folder"
+# The recommended macOS grant in docs/sandboxed-agents.md. Bug it catches: a grant of the whole folder lets a
+# lane create bus.db-journal, new files and dirs, and rename or delete what the brain made there.
+R3="$T/repo-narrow"; mkrepo "$R3"; agentbus init "$R3" >/dev/null; B3="$R3/.agentbus"
+AGENTBUS_DB="$B3/bus.db" agentbus --as lead join >/dev/null   # the brain makes bus.db before the lane starts
+B3RE=$(printf '%s' "$B3" | sed 's/[][\\.*^$+?(){}|]/\\&/g')
+cat > "$T/narrow.sb" <<SB
+(version 1)
+(allow default)
+(deny file-write*)
+$DEV_RULE
+(allow file-write* (subpath "$LT"))
+(deny file-write* (subpath "$B3"))
+(allow file-write* (regex #"^$B3RE/bus\.db(-wal|-shm)?\$"))
+(deny file-write-create (vnode-type SYMLINK))
+(deny file-write-create (vnode-type FIFO SOCKET CHARACTER-DEVICE BLOCK-DEVICE))
+(deny file-link (subpath "$B3"))
+SB
+nl() { AGENTBUS_DB="$B3/bus.db" /usr/bin/sandbox-exec -f "$T/narrow.sb" "$@"; }
+nl "${AB[@]}" --as worker join >/dev/null || fail "narrow: join"
+nl "${AB[@]}" --as worker claim src/a.py >/dev/null || fail "narrow: claim"
+nl "${AB[@]}" --as worker post "narrow grant" --to lead >/dev/null || fail "narrow: post"
+nl "${AB[@]}" --as worker release src/a.py >/dev/null || fail "narrow: release"
+o=$(AGENTBUS_DB="$B3/bus.db" agentbus --as lead inbox) || fail "narrow: lead inbox"
+grep -q "narrow grant" <<<"$o" || fail "narrow: the lead did not get the post"
+nl "${AB[@]}" --as worker read >/dev/null || fail "narrow: read"
+nl "${AB[@]}" --as worker leave >/dev/null || fail "narrow: leave"
+mkdir -m 700 "$B3/backups"; echo copy > "$B3/backups/agentbus-STAMP"
+for w in "$B3/bus.db-journal" "$B3/VERSION" "$B3/bin/agentbus" "$B3/backups/agentbus-STAMP" "$B3/new"; do
+  if nl sh -c "echo x > '$w'" 2>/dev/null; then fail "narrow: $w writable"; fi
+done
+if nl mkdir "$B3/d" 2>/dev/null; then fail "narrow: mkdir in the bus folder"; fi
+if nl rm "$B3/VERSION" 2>/dev/null; then fail "narrow: VERSION deleted"; fi
+if nl mv "$B3" "$LT/ab3" 2>/dev/null; then fail "narrow: the bus folder moved"; fi
+if nl ln "$B3/bus.db" "$B3/bus.db-shm" 2>/dev/null; then fail "narrow: hard link at a granted name"; fi
+if nl ln -s "$T/victim" "$B3/bus.db-shm" 2>/dev/null; then fail "narrow: symlink at a granted name"; fi
+if nl mkfifo "$B3/bus.db-shm" 2>/dev/null; then fail "narrow: FIFO at a granted name"; fi
+if other_tty "$T/narrow.sb"; then fail "narrow: a lane can write to another terminal"; fi
+left=$(find "$B3" \( -type l -o -type p -o -type s -o -type b -o -type c -o \( -type f -links +1 \) \) -print)
+[ -z "$left" ] || fail "narrow: the sweep found $left"
+ok "narrow grant: join, claim, post, release, read, leave work; journal, VERSION, bin/, backups/, new files and dirs, links and FIFOs denied"
