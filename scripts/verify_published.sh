@@ -1,20 +1,18 @@
 #!/bin/bash
-# bash scripts/verify_published.sh vX.Y.Z [--dry-run] [--allow-skip] [--sums SHA256SUMS] [--pypi]
+# bash scripts/verify_published.sh vX.Y.Z [--dry-run] [--allow-skip] [--sums SHA256SUMS]
 # After the tag exists: runs the LITERAL pinned install lines from README.md, on a clean runner, in
 # isolated tool folders and a temp HOME, then scripts/verify_installed.sh on each installed command (its
 # output is shown whole, SKIP lines included). With --sums FILE it also downloads the release assets and
-# compares their sha256 to the ones recorded when the files were verified before publishing; --pypi does
-# the same for the files on PyPI. Never before the tag exists (before it, tests/test_readme.sh runs the
+# compares their sha256 to the ones recorded when the files were verified before publishing. Never before the tag exists (before it, tests/test_readme.sh runs the
 # Try-it block on the built wheel). A missing pipx is a failure unless --allow-skip.
 # --dry-run prints the lines it would run. Last line on success: `published install verified: vX.Y.Z`.
 set -u
-TAG="${1:?usage: verify_published.sh vX.Y.Z [--dry-run] [--allow-skip] [--sums FILE] [--pypi]}"; shift
-DRY=0; ALLOW=0; SUMS=""; PYPI=0
+TAG="${1:?usage: verify_published.sh vX.Y.Z [--dry-run] [--allow-skip] [--sums FILE]}"; shift
+DRY=0; ALLOW=0; SUMS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
     --allow-skip) ALLOW=1 ;;
-    --pypi) PYPI=1 ;;
     --sums) shift; SUMS="${1:?--sums needs a file}" ;;
     *) echo "FAIL: unknown argument $1" >&2; exit 2 ;;
   esac
@@ -65,19 +63,11 @@ fi
 if [ -n "$SUMS" ]; then
   [ -f "$SUMS" ] || { echo "FAIL: $SUMS not found" >&2; exit 1; }
   sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
-  mkdir -p "$T/assets" "$T/pypi"
+  mkdir -p "$T/assets"
   while read -r recorded name; do
     curl -fsSL -o "$T/assets/$name" "https://github.com/wickdninja/agentbus/releases/download/$TAG/$name" || { echo "FAIL: cannot download the release asset $name" >&2; exit 1; }
     [ "$(sum "$T/assets/$name")" = "$recorded" ] || { echo "FAIL: release asset $name differs from the file that was verified before publishing" >&2; exit 1; }
     echo "ok   release asset $name matches the recorded sha256"
   done < "$SUMS"
-  if [ "$PYPI" = 1 ]; then
-    python3 -m pip download "agentbus==$want" --no-deps -d "$T/pypi" >/dev/null 2>&1 || { echo "FAIL: pip cannot download agentbus==$want from PyPI" >&2; exit 1; }
-    python3 -m pip download "agentbus==$want" --no-deps --no-binary :all: -d "$T/pypi" >/dev/null 2>&1 || { echo "FAIL: pip cannot download the agentbus==$want sdist from PyPI" >&2; exit 1; }
-    while read -r recorded name; do
-      [ "$(sum "$T/pypi/$name")" = "$recorded" ] || { echo "FAIL: PyPI file $name differs from the file that was verified before publishing" >&2; exit 1; }
-      echo "ok   PyPI file $name matches the recorded sha256"
-    done < "$SUMS"
-  fi
 fi
 echo "published install verified: $TAG"

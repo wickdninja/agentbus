@@ -32,27 +32,26 @@ rel = text['release.yml']
 # 3. Jobs, and who may write: contents: write only in publish; id-token only where it is used.
 jobs = re.split(r'(?m)^  (?=[a-z_]+:\n)', rel.split('\njobs:\n', 1)[1])
 by = {j.split(':', 1)[0]: j for j in jobs if j.strip()}
-assert {'check', 'test', 'build', 'publish', 'pypi', 'verify_published'} <= set(by), sorted(by)
+assert set(by) == {'check', 'test', 'build', 'publish', 'verify_published'}, ('GitHub Releases is the only channel: no pypi job', sorted(by))
 for name, j in by.items():
     writes = 'contents: write' in j
     assert writes == (name == 'publish'), (name, 'contents: write belongs to publish only')
-assert 'id-token: write' in by['pypi'] and 'attestations: write' in by['publish'] and 'id-token: write' in by['publish']
+assert 'attestations: write' in by['publish'] and 'id-token: write' in by['publish']
+assert not re.search(r'(?i)pypi', rel.replace('(the name agentbus on PyPI belongs to an unrelated project)', '')), 'release.yml must not publish to or check PyPI'
 
 # 4. One build, verified, then those exact files are published and re-checked against recorded hashes.
 assert 'uv build' in by['build'] and 'uv build' not in ''.join(by[n] for n in by if n != 'build'), 'build once, in the build job'
 assert 'scripts/verify_dist.sh' in by['build'] and 'SHA256SUMS' in by['build'], 'the build job verifies the files and records sha256s'
-for n in ('publish', 'pypi'):
+for n in ('publish',):
     assert 'scripts/check_sums.sh dist expected-sums' in by[n], (n, 'must check the exact file set, the bytes and SHA256SUMS against the sums the build job emitted')
     assert 'actions/checkout' in by[n], (n, 'needs the repository for scripts/check_sums.sh')
 assert '--verify-tag' in by['publish'], 'gh release create --verify-tag'
 assert 'GITHUB_SHA' in by['publish'], 'the tag must still point at the built commit before the release is created'
 assert 'actions/attest-build-provenance' in by['publish'], 'GitHub artifact attestations for the release assets'
-assert re.search(r'attestations:\s*true', by['pypi']), 'PyPI attestations are explicit'
-assert "vars.PUBLISH_PYPI == 'true'" in by['pypi']
 assert '--sums expected-sums' in by['verify_published'] and 'scripts/verify_published.sh' in by['verify_published']
 # The sums travel as a job output the build job emitted, not only inside the artifact they vouch for.
 assert re.search(r'outputs:\s*\n\s+sums:\s*\$\{\{\s*steps\.\w+\.outputs\.sums\s*\}\}', by['build']), 'the build job must output the sums'
-for n in ('publish', 'pypi', 'verify_published'):
+for n in ('publish', 'verify_published'):
     assert 'needs.build.outputs.sums' in by[n], (n, 'must check against the sums the build job emitted')
     assert re.search(r'needs:.*\bbuild\b', by[n].split('steps:')[0]) or n == 'verify_published', (n, 'needs build')
 assert re.search(r'needs:\s*\[[^\]]*\bbuild\b', by['verify_published'].split('steps:')[0])

@@ -16,6 +16,9 @@ problem and exits 1, or prints `release check passed: X.Y.Z`. Checks:
     whose ref is the tag, never a ./ source (skipped when the files are absent);
   - the current SKILL.md and AGENTS.md block hashes are in SKILL_SHA256_HISTORY and AGENTS_SHA256_HISTORY
     (python3 scripts/embed_skill.py --release);
+  - DIST_NAME in bin/agentbus equals the name in pyproject.toml (the update check names no other project);
+  - a final tag is not below the highest final tag that already exists (git tag --list 'v*', rc tags
+    ignored), so GitHub's "latest release" (the most recent by date) is also the highest final version;
   - git status is clean.
 """
 import argparse
@@ -60,6 +63,26 @@ def main():
             problems.append("origin/main is not available (git fetch origin main), so the tag cannot be checked against main")
         elif subprocess.run(["git", "-C", ROOT, "merge-base", "--is-ancestor", rev, "refs/remotes/origin/main"]).returncode != 0:
             problems.append(f"the tagged commit is not an ancestor of origin/main; releases come from main")
+
+    dist = re.search(r'^DIST_NAME = "([^"]+)"$', src, re.M)
+    try:
+        proj = re.search(r'^\[project\]\n(?:.*\n)*?name = "([^"]+)"', read("pyproject.toml"), re.M)
+    except OSError:
+        proj = None
+    if not dist:
+        problems.append("bin/agentbus has no DIST_NAME")
+    elif not proj:
+        problems.append("pyproject.toml has no [project] name")
+    elif dist.group(1) != proj.group(1):
+        problems.append(f"DIST_NAME is {dist.group(1)}, but pyproject.toml names the project {proj.group(1)}")
+
+    if a.tag and re.fullmatch(r"v\d+\.\d+\.\d+", a.tag):
+        listed = subprocess.run(["git", "-C", ROOT, "tag", "--list", "v*"], capture_output=True, text=True).stdout.split()
+        finals = [t for t in listed if re.fullmatch(r"v(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})", t) and t != a.tag]
+        key = lambda t: tuple(int(x) for x in t[1:].split("."))
+        if finals and key(a.tag) < key(max(finals, key=key)):
+            problems.append(f"the tag {a.tag} is below the highest final release tag {max(finals, key=key)}; "
+                            "GitHub's latest release must be the highest final version")
 
     pin_to = final
     if version != final or (dev and not a.tag):  # an rc or a dev build: the README keeps naming the last final release

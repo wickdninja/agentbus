@@ -1,8 +1,8 @@
 # Releasing agentbus
 
-A release is a tag. The workflow (`.github/workflows/release.yml`) refuses a tag that fails the checks below, runs the whole test workflow, builds the wheel and sdist **once**, verifies those exact files (members, an install of each, a broken-install negative control) and records their sha256s in `SHA256SUMS`. It then publishes those same files as GitHub release assets (with build provenance attestations) and, when the owner turns it on, to PyPI (trusted publishing, attestations on). Every job re-checks the files against `SHA256SUMS`, and `verify_published` installs what was published and compares the sha256s again. Tags, releases and PyPI are the owner's call.
+A release is a tag. The workflow (`.github/workflows/release.yml`) refuses a tag that fails the checks below, runs the whole test workflow, builds the wheel and sdist **once**, verifies those exact files (members, an install of each, a broken-install negative control) and records their sha256s in `SHA256SUMS`. It then publishes those same files as GitHub release assets (with build provenance attestations). GitHub Releases is the only channel: the name `agentbus` on PyPI belongs to an unrelated project, so nothing is ever published there and no install line names the bare package. Every job re-checks the files against `SHA256SUMS`, and `verify_published` installs what was published and compares the sha256s again. Tags and releases are the owner's call.
 
-Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release candidate builds version `X.Y.ZrcN` (`__version__` carries the suffix), is a GitHub prerelease, and is never published to PyPI; its README pin and CHANGELOG heading are the final `X.Y.Z`.
+Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release candidate builds version `X.Y.ZrcN` (`__version__` carries the suffix), is a GitHub prerelease, and its README pin and CHANGELOG heading are the final `X.Y.Z`.
 
 ## Checklist
 
@@ -22,7 +22,7 @@ Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release c
 3. **Gates.** `bash tests/run_all.sh` prints `ALL TESTS PASSED (N files)` on the oldest and newest Python (`PYTHON=/usr/bin/python3`, `PYTHON=python3.15`), with `AGENTBUS_EMBED_CHECK=1 python3 scripts/embed_skill.py --check` printing `embedded skill is current`. CI's `test` and all `package` jobs are green.
 4. **Tag.** `git tag vX.Y.Z && git push origin vX.Y.Z`. A release candidate is `vX.Y.ZrcN`: it creates a prerelease and skips the published-install check.
 5. **Workflow.** `release.yml` is green: `check`, `test`, `build`, `publish`, and `verify_published` (final tags only).
-6. **Verify the published install.** `bash scripts/verify_published.sh vX.Y.Z --sums SHA256SUMS` (download `SHA256SUMS` from the release; add `--pypi` once PyPI is on) runs the literal install lines from the README on a clean machine, compares the published files with the recorded sha256s, and prints `published install verified: vX.Y.Z`. The same script runs in the workflow.
+6. **Verify the published install.** `bash scripts/verify_published.sh vX.Y.Z --sums SHA256SUMS` (download `SHA256SUMS` from the release) runs the literal install lines from the README on a clean machine, compares the published files with the recorded sha256s, and prints `published install verified: vX.Y.Z`. The same script runs in the workflow.
 7. **Look.** `uv tool install git+https://github.com/wickdninja/agentbus@vX.Y.Z`, then `agentbus --version`.
 8. **Launch** (see `docs/launch/`). Drafts are shown to the owner whole before anything is posted.
 
@@ -33,9 +33,4 @@ Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release c
 ## Repository settings (the owner's call; nothing here changes them)
 
 - A tag ruleset for `v*`: only the owner (or release managers) can create tags, and nobody can move or delete one. The workflow also checks that the tag still points at the commit it built and passes `--verify-tag`, but only a ruleset stops a tag from being created on an unreviewed commit.
-- Required reviewers on the `pypi` environment, so a PyPI upload waits for a human.
 - Branch protection on `main`: a release must come from it, and `release_check.py` fails on a tagged commit that is not an ancestor of `origin/main`.
-
-## PyPI
-
-Off. Setting the repository variable `PUBLISH_PYPI` to `true` turns on the `pypi` job (trusted publishing, final tags only). That is the owner's decision.

@@ -13,8 +13,9 @@ SHA=$(printf '%s' "$SKILL_TEXT" | shasum -a 256 | cut -d' ' -f1)
 FX="$T/fixture"; mkdir -p "$FX/scripts" "$FX/bin" "$FX/skills/agentbus" "$FX/docs/how-to" "$FX/.claude-plugin"
 cp "$ROOT/scripts/release_check.py" "$FX/scripts/"
 ASHA=$(printf 'agents block\n' | shasum -a 256 | cut -d' ' -f1)
-printf '__version__ = "0.2.0"\nAGENTS_SNIPPET = (\n    "agents block\\n"\n)\nSKILL_SHA256_HISTORY = (\n    "%s",\n)\nAGENTS_SHA256_HISTORY = (\n    "%s",\n)\n' "$SHA" "$ASHA" >"$FX/bin/agentbus"
+printf 'DIST_NAME = "agentbus"\n__version__ = "0.2.0"\nAGENTS_SNIPPET = (\n    "agents block\\n"\n)\nSKILL_SHA256_HISTORY = (\n    "%s",\n)\nAGENTS_SHA256_HISTORY = (\n    "%s",\n)\n' "$SHA" "$ASHA" >"$FX/bin/agentbus"
 printf '%s' "$SKILL_TEXT" >"$FX/skills/agentbus/SKILL.md"
+printf '[build-system]\nrequires = []\n\n[project]\nname = "agentbus"\ndynamic = ["version"]\n' >"$FX/pyproject.toml"
 mkdir -p "$FX/tests"; printf '# Commands of each released tag\nv0.1.0: join leave\n' >"$FX/tests/released_commands.txt"
 printf '# Changelog\n\n## Unreleased\n\n- next\n\n## 0.2.0 - 2026-11-20\n\nthings\n\n## 0.1.0 - 2026-11-01\n\nfirst\n' >"$FX/CHANGELOG.md"
 printf '# agentbus\n\n```bash\nuv tool install git+https://github.com/wickdninja/agentbus@v0.2.0\n```\n\nor `pipx install git+https://github.com/wickdninja/agentbus@v0.2.0`.\n' >"$FX/README.md"
@@ -129,6 +130,19 @@ fresh all; edit "$D/CHANGELOG.md" '## 0.2.0 - 2026-11-20' '## 0.2.0'; echo x >"$
 [ "$RC" = 1 ] && [ "$(grep -c '^release check failed' <<<"$OUT")" -ge 3 ] || fail "several problems must all be listed: $OUT"
 grep -q 'release check passed' <<<"$OUT" && fail "printed success with problems"
 ok "tag, heading, pins, dirty tree, marketplace, plugin version and skill hash each fail by name"
+
+echo "TEST: DIST_NAME must equal the pyproject name, and a final tag may not sit below the highest final tag"
+fresh dist; edit "$D/bin/agentbus" 'DIST_NAME = "agentbus"' 'DIST_NAME = "agentbus-other"'; commit; check
+expect_fail_with "DIST_NAME vs pyproject" "DIST_NAME is agentbus-other, but pyproject.toml names the project agentbus"
+fresh nodist; edit "$D/bin/agentbus" 'DIST_NAME = "agentbus"' 'XDIST_NAME = "agentbus"'; commit; check
+expect_fail_with "no DIST_NAME" "bin/agentbus has no DIST_NAME"
+fresh lower; git -C "$D" tag v0.3.0; check --tag v0.2.0
+expect_fail_with "a final tag below the highest" "the tag v0.2.0 is below the highest final release tag v0.3.0"
+fresh lowerrc; git -C "$D" tag v0.3.0rc1; check --tag v0.2.0
+[ "$RC" = 0 ] || fail "an rc tag above the final one is ignored (control): exit $RC: $OUT"
+fresh lowerok; git -C "$D" tag v0.1.5; check --tag v0.2.0
+[ "$RC" = 0 ] || fail "a final tag above every existing final passes (control): exit $RC: $OUT"
+ok "DIST_NAME is checked against pyproject; a final tag below the highest final fails, rc tags are ignored"
 
 echo "TEST: check_sums.sh publishes exactly the files named in the sums: none extra, none missing, none changed"
 fresh sums; cp "$ROOT/scripts/check_sums.sh" "$D/scripts/"
