@@ -987,7 +987,7 @@
     "replace": "            code = loader.get_code(\"agentbus\")\n            compile(open(source, \"rb\").read(), source, \"exec\")  # the cost the cache exists to avoid",
     "count": 1,
     "run": "tests/test_launch.sh",
-    "expect": "the launcher is not faster than the script"
+    "expect": "the launcher compiled agentbus on a run that had its cache"
   },
   {
     "name": "update: the release notice also fires in an agent session",
