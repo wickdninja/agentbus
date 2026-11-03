@@ -58,6 +58,7 @@ cases = [
     (["post", "x", "--bad"], "agentbus post", "post", "unrecognized arguments: --bad"),
     (["ctx", "set"], "agentbus ctx set KEY VALUE", "ctx set", "See: agentbus ctx set --help"),
     (["claim"], "agentbus claim RESOURCE", "claim", "--purpose, --request-id, --ttl-min"),
+    (["post", "x", "--to", "a", "--to", "b"], "agentbus post", "post", "leave --to off to tell everyone. Usage: agentbus post"),
     (["inbox", "--before", "x"], "agentbus inbox", "inbox", "unrecognized arguments: --before x"),
     (["read", "--since", "x"], "agentbus read", "read", "not an integer"),
     (["log", "show", "--bogus"], "agentbus log show", "log show", "unrecognized arguments: --bogus"),

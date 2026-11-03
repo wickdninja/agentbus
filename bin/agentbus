@@ -177,6 +177,9 @@ def _fd_width(fd):
         return None
 
 
+HELP_WIDTH = 80  # the layout width of help text when output is not a terminal
+
+
 def wrap_width(stream="out"):
     """The width human output is hard-wrapped to, or None for no wrapping. COLUMNS set to a number is
     an explicit choice and wraps anywhere; otherwise only a terminal is wrapped (its own width, 80
@@ -4856,7 +4859,8 @@ class Parser(argparse.ArgumentParser):
         """This command's usage error: what is wrong, its usage and flags, and the command that explains it
         (see: another command that does, when there is one)."""
         flags = own_flag_names(self)
-        text = (f"{message}. Usage: {usage_text(self)}. " + (f"Flags: {', '.join(flags)}. " if flags else "")
+        lead = message if message.endswith((".", "!", "?")) else message + "."
+        text = (f"{lead} Usage: {usage_text(self)}. " + (f"Flags: {', '.join(flags)}. " if flags else "")
                 + f"See: {see or ' '.join(cmd_words(self)) + ' --help'}")
         if _JSON_ERRORS:
             die(text, "bad_input")
@@ -4878,7 +4882,7 @@ class Parser(argparse.ArgumentParser):
             super()._print_message(message, file)
 
     def format_help(self):
-        width = max(term_width() - 2, 40)
+        width = max((wrap_width() or HELP_WIDTH) - 2, 40)   # help is a table, not prose: off a terminal it keeps one fixed layout
         command = " ".join(self.cmd_path)
         sp = subparsers_of(self)
         blocks = [wrap_text("usage: " + usage_text(self), width, hang="    ")]
@@ -12263,7 +12267,9 @@ def _demo_tour(a, folder, current):
     home = os.path.join(folder, "home")
     os.makedirs(home)
     os.makedirs(os.path.join(folder, "bus"))
-    env.update(AGENTBUS_DB=os.path.join(folder, "bus", "bus.db"), HOME=home, COLUMNS=str(term_width()))  # a pipe has no width of its own
+    env.update(AGENTBUS_DB=os.path.join(folder, "bus", "bus.db"), HOME=home)
+    if wrap_width():
+        env["COLUMNS"] = str(wrap_width())  # the tour's commands print into a pipe, which has no width of its own; off a terminal nothing wraps
     steps = []
     for caption, args, want in DEMO_STEPS:
         _test_pause("demo-step")
