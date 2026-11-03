@@ -137,20 +137,25 @@ check('5 concise init with safe version and next step', init)
 def errors():
     db = fresh('errors')
     hostile = 'lane\n#99 forged\x1b[31m'
-    e = error('not_on_roster','--as',hostile,'claim','x',db=db); assert e['agent'] == hostile
-    e = error('no_context_key','ctx','get',hostile,db=db); assert e['key'] == hostile
-    assert '\\x0a#99' in e['message'] and '\x1b' not in e['message']
+    # Identifiers refuse control characters since 0.2 (tests/test_control_chars.sh), so a hostile name, key or
+    # resource can only come from an older bus: the hostile rows below are planted with SQLite.
+    e = error('not_on_roster','--as','ghost','claim','x',db=db); assert e['agent'] == 'ghost'
+    e = error('no_context_key','ctx','get','nokey',db=db); assert e['key'] == 'nokey'
     e = error('no_message','--as','a','post','hi','--reply-to','99',db=db); assert e['id'] == 99
-    e = error('not_held','--as','a','release',hostile,db=db); assert e['resource'] == hostile
+    e = error('not_held','--as','a','release','nothing',db=db); assert e['resource'] == 'nothing'
     error('no_bus','who')
     for args in [('lgo',), ('read','--limit','bad'), ('--as','a','post','hi','--kind','fyi'), ('--as','a','post',''),
                  ('--as','a','claim','../x'), ('--as','a','claim','x','--ttl-min','0')]:
         error('bad_input', *args, db=db)
-    ok('--as',hostile,'join',db=db); ok('--as','b','join',db=db)
-    ok('--as',hostile,'claim','x','--purpose',hostile,db=db)
+    ok('--as','b','join',db=db)
+    with contextlib.closing(sqlite3.connect(db)) as c:
+        c.execute("INSERT INTO agents(name,joined_at,last_seen) VALUES(?,?,?)", (hostile,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'))
+        c.execute("INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES('x',?,?,'2026-01-01T00:00:00Z','2999-01-01T00:00:00Z')", (hostile,hostile))
+        c.commit()
     for resource in ('x','x/y'):
         e = error('claim_conflict','--as','b','claim',resource,db=db)
         assert e['resource'] == resource and e['holder'] == hostile and e['purpose'] == hostile
+        assert '\\x0a#99' in e['message'] and '\x1b' not in e['message'], e['message']
         assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', e['expires_at']), e
     with contextlib.closing(sqlite3.connect(db)) as c:
         c.execute('CREATE TABLE foreign_table(x)')
