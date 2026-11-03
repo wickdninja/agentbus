@@ -942,7 +942,7 @@
     "replace": "if False:",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "an installer that changed nothing exited 0"
+    "expect": "unchanged:"
   },
   {
     "name": "update: a hung installer is killed without SIGTERM",

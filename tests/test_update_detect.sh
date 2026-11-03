@@ -26,7 +26,7 @@ new_case uv uv; want "uv" "uv|$REPO_URL|uv|-"
 new_case pipx pipx; want "pipx" "pipx|$REPO_URL|pipx|-"
 new_case pip pip; want "pip" "pip|$REPO_URL|python|-"
 out=$(ab update --check --json | "$PY" -I -c 'import json,sys; d=json.load(sys.stdin); assert d["argv"] is None, d; print(" ".join(d["download"]["install_with"]), d["download"]["wheel"])')
-grep -qF -- "-I -m pip install --upgrade https://github.com/wickdninja/agentbus/releases/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" <<<"$out" || fail "pip plan: $out"
+grep -qF -- "-I -m pip install --upgrade https://127.0.0.1:$PORT/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" <<<"$out" || fail "pip plan: $out"
 ok "uv, pipx and pip each run their own installer"
 
 echo "TEST 2: the .git suffix is stripped before the URL is compared; a fork gets a printed line and no argv"
