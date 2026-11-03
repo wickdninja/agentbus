@@ -354,7 +354,8 @@ BS="$T/bs.db"
 AGENTBUS_DB="$BS" agentbus --as seed join --tool t >/dev/null
 AGENTBUS_DB="$BS" agentbus --as seed post '\x23 not a hash' >/dev/null
 AGENTBUS_DB="$BS" agentbus --as seed ctx set bk '\x1b not an escape' >/dev/null
-AGENTBUS_DB="$BS" agentbus --as 'lane\u202e' join --tool t >/dev/null
+# a name with a backslash can only come from an older bus (join no longer accepts it): plant it
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("INSERT INTO agents(name,tool,joined_at,last_seen) VALUES(?,?,?,?)", ("lane\\u202e","t","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z")); c.commit(); c.close()' "$BS"
 for cmd in read "ctx get bk" "ctx get" who; do
   o=$(outof env AGENTBUS_DB="$BS" "${AB[@]}" $cmd)
   case $cmd in

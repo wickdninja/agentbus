@@ -162,7 +162,7 @@ def errors():
         c.execute('CREATE TABLE foreign_table(x)')
         c.commit()
     error('schema_refused','who',db=db)
-    db = fresh('busy')
+    db = fresh('busy'); ok('--as','a','join',db=db)
     c = sqlite3.connect(db); c.execute('SELECT * FROM agents').fetchall()
     try: assert error('busy','claims',db=db)['bus'] == str(db)  # a write open; who reads beside it
     finally: c.close()
