@@ -513,6 +513,7 @@ CONTRACT = {
                               "meaning": "That request id was used with a different message.",
                               "action": "Use a new token for a different message."},
         "bad_input": {"exit": 2, "retryable": False, "fields": [],
+                      "optional_fields": ["field"],
                       "meaning": "The arguments are not valid (a usage error).", "action": "Fix the arguments."},
         "no_bus": {"exit": 3, "retryable": False, "fields": [],
                    "meaning": "There is no bus here or above.", "action": "Run agentbus init DIR, or set AGENTBUS_DB."},
@@ -1449,12 +1450,43 @@ def bus_copy_version(db_path):
     return v if release_key(v) is not None else None
 
 
+def make_target(root):
+    """init's DIR: an existing directory is used as is; one that does not exist is created with its
+    missing parents (mkdir -p), unless the nearest existing parent is not a writable directory
+    (bad_input, nothing created). A path that exists but is not a directory is refused. Returns the
+    folders it created, outermost first."""
+    if os.path.isdir(root):
+        return []
+    if os.path.lexists(root):
+        die(f"not a directory: {root}", "bad_input")
+    near = os.path.dirname(root)
+    while not os.path.lexists(near) and near != os.path.dirname(near):
+        near = os.path.dirname(near)
+    if not os.path.isdir(near):
+        die(f"cannot create {root}: {near} is not a directory", "bad_input")
+    if not os.access(near, os.W_OK | os.X_OK):
+        die(f"cannot create {root}: {near} is not writable. Create the folder yourself, or pick a path you can write to", "bad_input")
+    missing = []
+    d = root
+    while d != near:
+        missing.append(d)
+        d = os.path.dirname(d)
+    for d in reversed(missing):
+        try:
+            os.mkdir(d)
+        except FileExistsError:
+            pass
+        except OSError as e:
+            die(f"cannot create {d}: {e.strerror}", "bad_input")
+        file_changed(d)
+    return list(reversed(missing))
+
+
 def cmd_init(a):
     if is_repo_local_copy():
         die("init runs from the installed agentbus or a clone of its repo, not a project copy", "bad_input")
     root = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo or os.getcwd())))
-    if not os.path.isdir(root):
-        die(f"not a directory: {root}", "bad_input")
+    made = make_target(root)
     info = repo_info(root)
     if info and os.path.realpath(info[0]) != root:
         top = git(["rev-parse", "--show-toplevel"], cwd=root)
@@ -1473,6 +1505,8 @@ def cmd_init(a):
     version = shown_version(new)
     if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})? .*", version):
         version = version[:7] + (" +dirty" if version.endswith(" +dirty") else "")
+    if made:
+        say("created {}", root)
     say("installed agentbus {} into {}/.agentbus/", version, root)
     added = ensure_exclude(exclude) if exclude else False
     if added:
@@ -4243,7 +4277,7 @@ def register_buses(sub):
 
 def register_init(sub):
     ini = sub("init", help="Install this tool into DIR/.agentbus/ (installed tool or clone only)")
-    ini.add_argument("repo", nargs="?", metavar="DIR", help="Existing directory to initialize; default current directory. Run from the installed tool or source clone.")
+    ini.add_argument("repo", nargs="?", metavar="DIR", help="Directory to initialize, created (with its parents) if missing; default current directory. Run from the installed tool or source clone.")
 
 
 def register_upgrade(sub):
@@ -4327,6 +4361,36 @@ def not_utf8(v):
     return isinstance(v, str) and any("\ud800" <= c <= "\udfff" for c in v)
 
 
+# Identifiers (agent names, topics, context keys, claim resources) never hold a control character:
+# a C0 or C1 control (ESC, newline, tab, NUL, DEL, ...) or a bidirectional override or isolate.
+# Message bodies and values are free text and are cleaned when shown. Rows an older bus already
+# holds are read and shown escaped (clean()); only new writes and arguments are refused, so such a
+# name can no longer be passed as --as and its claims end by expiry.
+_BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def control_char(v):
+    """The first control or bidi character in text, or None."""
+    return next((c for c in v if unicodedata.category(c) == "Cc" or c in _BIDI), None)
+
+
+def refuse_control(name, v):
+    c = control_char(v) if isinstance(v, str) else None
+    if c is not None:
+        die(f"{name} must not contain control characters (found U+{ord(c):04X}); use plain text", "bad_input", field=name)
+
+
+def refuse_control_inputs(a):
+    """bad_input, naming the field, for a control character in any identifier the command takes:
+    --as and AGENTBUS_AGENT (join, and every command that acts as a name), post --to and --topic,
+    read --topic, ctx KEY, claim and release RESOURCE."""
+    for k in ("AGENTBUS_AGENT",):
+        refuse_control(k, os.environ.get(k))
+    refuse_control("--as", getattr(a, "as_", None))
+    for dest, name in (("to", "--to"), ("topic", "--topic"), ("key", "KEY"), ("resource", "RESOURCE")):
+        refuse_control(name, getattr(a, dest, None))
+
+
 def refuse_bad_inputs(a):
     """Refuse an argument or environment value that is not valid UTF-8, naming it."""
     _test_fail("parse")
@@ -4337,6 +4401,7 @@ def refuse_bad_inputs(a):
     for k in ENV_INPUTS:
         if not_utf8(os.environ.get(k)):
             die(f"{k} is not valid UTF-8", "bad_input")
+    refuse_control_inputs(a)
 
 
 # ==== watch ====

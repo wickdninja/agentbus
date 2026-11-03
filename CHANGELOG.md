@@ -24,6 +24,8 @@
 - `agentbus setup claude|codex` installs the skill for Claude Code or the agentbus block in Codex's `AGENTS.md`, with `--scope`, `--dry-run`, `--uninstall` and `--json`. A refused or failed file exits 1 with the `items_failed` error; a change that saved a backup names it (`backup`). See [Set up your agents](docs/how-to/setup.md).
 - `agentbus skill` prints the bundled skill; `agentbus skill --agents-md` prints the `AGENTS.md` block. Both work without a bus.
 
+- `init DIR` creates a folder that does not exist, with its parents (`mkdir -p`), and says so. A path whose nearest existing parent is not a writable directory, or that is a file, is `bad_input`, with nothing created.
+
 ### Changed (breaking, contract version 1)
 
 - Listings return an envelope under `--json`: `who`, `inbox`, `read`, `claims`, `ctx get` (without a key), `ctx history`, `log show` and `buses`. Before: a bare array, `[{"name": "a", ...}]`, with truncation announced only as prose on stderr. After: `{"v": 1, "items": [{"name": "a", ...}], "has_more": false, "next": null}`. `items` is the old array with the same rows and order; `has_more` is `true` when `--limit` left rows out (so `inbox --limit 0 --json` is no longer an unmarked `[]` while messages wait); `next` is a cursor for `ctx history`, `read`, `log show` and `inbox --peek`, used with the new `--before NEXT` (and `--after NEXT` for `inbox --peek`). The `N more not shown` line on stderr is gone. Scripts that read a bare array must read `.items`; a bare `[...]` from a listing means a 0.1.x copy.
@@ -39,6 +41,7 @@
 
 ### Fixed
 
+- Agent names (`--as`, `AGENTBUS_AGENT`), `post --to` and `--topic`, `read --topic`, `ctx` keys and claim resources refuse control characters and bidirectional overrides with `bad_input` (exit 2); the message and `error.field` name the field and the character is shown as `U+XXXX`. Rows an older bus already holds are still read and shown escaped.
 - Deleting claims no longer rewrites the freed pages. SQLite as Debian and Ubuntu build it zeroes every page a delete frees, so `release --all` or `leave` over 500 planted 1 MB claim names wrote about 600 MB with the bus held and could outlive the hold watchdog, making the next agent's command wait. agentbus now sets `secure_delete=FAST`: deleted cells are still zeroed on the pages the delete writes, with no extra I/O.
 
 ### Tests

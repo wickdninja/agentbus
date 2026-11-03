@@ -67,4 +67,25 @@ agentbus init "$N/sub" > "$T/sub-init"
 [ "$(cat "$N/.git/info/exclude")" = "$before" ] || fail "subdirectory init wrote an exclude"
 grep -qxF "outer bus: $(cd "$N" && pwd -P)" "$T/sub-init" || fail "subdirectory init did not name nearest outer bus"
 ok "nested init names the nearest outer bus; non-top-level init writes no exclude"
+
+echo "TEST: init on a folder that does not exist creates it (mkdir -p); a path it cannot create is refused with nothing made"
+agentbus init "$T/new/deep/dir" > "$T/mk-out" || fail "init on a missing folder failed instead of creating it"
+[ -x "$T/new/deep/dir/.agentbus/bin/agentbus" ] || fail "init did not create the missing folder and its parents"
+grep -q "^created " "$T/mk-out" || fail "init did not say it created the folder"
+agentbus init "$T/new/deep/dir" > "$T/mk-out2"
+grep -q "^created " "$T/mk-out2" && fail "a second init claims to have created the folder"
+mkdir "$T/ro"; chmod 555 "$T/ro"
+if [ -w "$T/ro" ]; then echo "NOTE: running as a user that ignores directory modes; the unwritable-parent case was not exercised"; else
+  rc=0; agentbus init "$T/ro/x/y" 2> "$T/ro-err" || rc=$?
+  [ "$rc" = 2 ] || fail "unwritable parent: exit $rc, want 2"
+  grep -q "is not writable" "$T/ro-err" || fail "unwritable parent: unclear message: $(cat "$T/ro-err")"
+  [ ! -e "$T/ro/x" ] || fail "unwritable parent: something was created"
+fi
+chmod 755 "$T/ro"
+: > "$T/afile"
+rc=0; agentbus init "$T/afile" 2> "$T/f-err" || rc=$?
+[ "$rc" = 2 ] && grep -q "not a directory" "$T/f-err" || fail "init on a file was not refused as not a directory"
+rc=0; agentbus init "$T/afile/sub" 2> "$T/f-err" || rc=$?
+[ "$rc" = 2 ] && grep -q "not a directory" "$T/f-err" || fail "init under a file was not refused"
+ok "missing folders are created; unwritable parent, a file, and a path under a file are refused with exit 2"
 echo "All init tests passed"

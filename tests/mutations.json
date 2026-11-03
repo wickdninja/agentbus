@@ -223,5 +223,50 @@
     "count": 1,
     "run": "tests/test_planted.sh",
     "expect": "database disk image is malformed"
+  },
+  {
+    "name": "control characters pass the input boundary",
+    "file": "bin/agentbus",
+    "find": "    refuse_control_inputs\\(a\\)\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "exit 0, want 2"
+  },
+  {
+    "name": "AGENTBUS_AGENT is not checked for control characters",
+    "file": "bin/agentbus",
+    "find": "refuse_control\\(k, os\\.environ\\.get\\(k\\)\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "AGENTBUS_AGENT: exit 0, want 2"
+  },
+  {
+    "name": "bidi overrides are not control characters",
+    "file": "bin/agentbus",
+    "find": "or c in _BIDI\\)",
+    "replace": ")",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "exit 0, want 2"
+  },
+  {
+    "name": "init refuses a missing folder again",
+    "file": "bin/agentbus",
+    "find": "    made = make_target\\(root\\)\\n",
+    "replace": "    made = []\\n    if not os.path.isdir(root):\\n        die(f\"not a directory: {root}\", \"bad_input\")\\n",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "init on a missing folder failed instead of creating it"
+  },
+  {
+    "name": "init creates a folder under an unwritable parent",
+    "file": "bin/agentbus",
+    "find": "    if not os\\.access\\(near, os\\.W_OK \\| os\\.X_OK\\):\\n",
+    "replace": "    if False:\\n",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "unwritable parent"
   }
 ]
