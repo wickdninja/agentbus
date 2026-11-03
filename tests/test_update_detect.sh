@@ -13,7 +13,7 @@ probe() {
   ab update --check --json | "$PY" -I -c '
 import json, sys
 d = json.load(sys.stdin)
-print("|".join([d["install"]["method"], d["install"]["url"] or "-", (d["argv"] or ["-"])[0].rsplit("/", 1)[-1],
+print("|".join([d["install"]["method"], d["install"]["url"] or "-", (d["argv"] or (d["download"] or {}).get("install_with") or ["-"])[0].rsplit("/", 1)[-1],
                 (d["commands"] or ["-"])[0]]))'
 }
 want() {  # NAME METHOD-AND-REST
@@ -25,8 +25,8 @@ echo "TEST 1: one fake install per method gives its row, and its installer (argv
 new_case uv uv; want "uv" "uv|$REPO_URL|uv|-"
 new_case pipx pipx; want "pipx" "pipx|$REPO_URL|pipx|-"
 new_case pip pip; want "pip" "pip|$REPO_URL|python|-"
-out=$(ab update --check --json | "$PY" -I -c 'import json,sys; print(" ".join(json.load(sys.stdin)["argv"]))')
-grep -qF -- "-I -m pip install --upgrade $(cache_path)/downloads/agentbus-0.3.0-py3-none-any.whl" <<<"$out" || fail "pip argv: $out"
+out=$(ab update --check --json | "$PY" -I -c 'import json,sys; d=json.load(sys.stdin); assert d["argv"] is None, d; print(" ".join(d["download"]["install_with"]), d["download"]["wheel"])')
+grep -qF -- "-I -m pip install --upgrade https://127.0.0.1:$PORT/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" <<<"$out" || fail "pip plan: $out"
 ok "uv, pipx and pip each run their own installer"
 
 echo "TEST 2: the .git suffix is stripped before the URL is compared; a fork gets a printed line and no argv"
@@ -44,13 +44,17 @@ want "externally managed" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
 ok "unknown installs never get an argv"
 
 echo "TEST 3b: an install from a release wheel (what update itself installs) is recognised; a wheel from anywhere else is not"
-new_case wheel uv; printf '{"url": "file://%s/dl/agentbus-0.2.0-py3-none-any.whl", "archive_info": {"hash": "sha256=00"}}\n' "$HOME" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+new_case wheel uv; printf '{"url": "file://%s/downloads/agentbus-0.2.0-py3-none-any.whl", "archive_info": {"hash": "sha256=00"}}\n' "$(cache_path)" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
 want "release wheel" "uv|$REPO_URL|uv|-"
+printf '{"url": "file://%s/dl/agentbus-0.2.0-py3-none-any.whl", "archive_info": {}}\n' "$HOME" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+want "a wheel with the release name from a folder update does not use" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
+printf '{"url": "file://%s/downloads/agentbus-0.2.0-py3-none-any.whl", "archive_info": {}}\n' "$HOME/elsewhere/agentbus" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+want "a dev wheel in another cache folder" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
 printf '{"url": "file://%s/dl/other-0.2.0-py3-none-any.whl", "archive_info": {}}\n' "$HOME" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
 want "another wheel" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
 printf '{"url": "https://example.invalid/agentbus-0.2.0-py3-none-any.whl", "archive_info": {}}\n' >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
 want "a wheel from a web address" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
-ok "only a local agentbus release wheel counts"
+ok "only the wheel update itself downloaded (into its own downloads folder) counts"
 
 echo "TEST 4: a dist-info whose RECORD does not list this file gives unknown; the matching one (control) gives uv"
 new_case record uv

@@ -135,7 +135,7 @@ fi
 [ -z "${STUB_FAIL:-}" ] || { echo "stub installer failing" >&2; exit 1; }
 echo "stub installer output"
 if [ -z "${STUB_NOBUMP:-}" ]; then
-  v="${@: -1}"; v="${v##*/agentbus-}"; v="${v%%-py3-none-any.whl}"
+  v="${@: -1}"; v="${v##*/agentbus-}"; v="${v%%-py3-none-any.whl}"; v="${STUB_VERSION:-$v}"
   sed "s/^__version__ = .*/__version__ = \"$v\"/" "${STUB_FAKE:-$STUB_MODULE}" >"$STUB_MODULE.new" && mv "$STUB_MODULE.new" "$STUB_MODULE"
   rm -rf "$(dirname "$STUB_MODULE")/__pycache__"   # a same-size rewrite in the same second would be served from the old bytecode
 fi
@@ -158,7 +158,7 @@ else:
 if os.environ.get("STUB_FAIL"):
     sys.exit(1)
 if not os.environ.get("STUB_NOBUMP"):
-    v = os.path.basename(sys.argv[-1])[len("agentbus-"):-len("-py3-none-any.whl")]
+    v = os.environ.get("STUB_VERSION") or os.path.basename(sys.argv[-1])[len("agentbus-"):-len("-py3-none-any.whl")]
     p = os.environ["STUB_MODULE"]
     s = open(os.environ.get("STUB_FAKE") or p).read()
     open(p, "w").write(re.sub(r'(?m)^__version__ = .*$', '__version__ = "%s"' % v, s))
@@ -184,7 +184,7 @@ new_case() {
   unset XDG_CACHE_HOME XDG_STATE_HOME
   make_install "$C/fake" "$@"
   make_stubs "$C/stubs"; make_pip_stub "$SITE"
-  unset STUB_FAKE FAKE_LOG FAKE_SETUP STUB_FAIL STUB_NOBUMP STUB_HANG STUB_IGNORE_TERM STUB_STARTED   # a case starts with the real module and no fault
+  unset STUB_VERSION STUB_FAKE FAKE_LOG FAKE_SETUP STUB_FAIL STUB_NOBUMP STUB_HANG STUB_IGNORE_TERM STUB_STARTED   # a case starts with the real module and no fault
   export STUB_LOG="$C/stub.log" STUB_MODULE="$SITE/agentbus.py"
   : >"$STUB_LOG"
   export PATH="$C/stubs:/usr/bin:/bin"   # never the real uv or pipx
