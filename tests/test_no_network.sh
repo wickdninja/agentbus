@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
-# The release check is silent where it must be (plan 13, Design 2): no attempt, no child, no request. A canary
-# sitecustomize.py sits in the fake install's site-packages, so the detached `-I` check child loads it too: it leaves a
+# The release check is silent where it must be (plan 13, Design 2): no attempt, no child, no request. A canary module,
+# imported by a .pth file (not sitecustomize: Homebrew's python ships its own, which wins) in the fake install's
+# site-packages, so the detached `-I` check child loads it too: it leaves a
 # LOAD marker whenever a python of that install starts, and a TRIPPED file when anything calls socket.getaddrinfo or
 # socket.connect (then raises, so no real name lookup or connection is ever made). First a control: an eligible run at a
 # terminal trips it in the child. Then each case that must stay silent runs with the load marker present (the canary
@@ -15,7 +16,8 @@ export https_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9   # even a 
 setup_canary() {  # after new_case
   export CANARY_LOAD="$C/canary.load" CANARY_TRIP="$C/canary.trip"
   rm -f "$CANARY_LOAD" "$CANARY_TRIP"
-  cat >"$SITE/sitecustomize.py" <<'EOF'
+  printf 'import zz_canary\n' >"$SITE/zz_canary.pth"
+  cat >"$SITE/zz_canary.py" <<'EOF'
 import os, socket
 open(os.environ["CANARY_LOAD"], "a").write("loaded\n")
 def _trip(*a, **k):
