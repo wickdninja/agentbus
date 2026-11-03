@@ -151,7 +151,7 @@ row_1() {
   run "$W/a/r1" "${NEW[@]}" --json --as n2 join
   is "row 1: no notice under --json" "" "$ERR"
   json_is "row 1: join --json carries agentbus and contract" 'r["agentbus"] == "0.2.0" and r["contract"] == 1' "$OUT"
-  doctor_row "$W/a/r1" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade --all $W/a"
+  doctor_row "$W/a/r1" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade $W/a/r1"
   run "$W/a/r1" "${NEW[@]}" doctor; is "row 1: a copy warning is not a failure" 0 "$RC"
   # the untouched twin: nothing of the new tool has written to it, so upgrade --all sees the v0.1.0 shape
   is "row 1: the twin is unstamped" 0 "$(uv "$W/b/r1")"
@@ -189,7 +189,7 @@ row_3() {
   is "row 3: the 0.1.0 copy's writes leave user_version at 1" 1 "$(uv "$W/r3")"
   run "$W/r3" "${NEW[@]}" --as n inbox; has "row 3: the new tool reads what the old copy wrote" "from the old copy" "$OUT"
   doctor_row "$W/r3" bus ok "(schema 1)" ""
-  doctor_row "$W/r3" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade --all $W"
+  doctor_row "$W/r3" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade $W/r3"
   run "$W/r3" "${NEW[@]}" doctor; is "row 3: doctor exits 0 with the copy warning" 0 "$RC"
 }
 
@@ -255,19 +255,43 @@ row_7() {
   has "row 7: setup says nothing was changed" "nothing was changed." "$OUT"
   has "row 7: setup names the file" "was not written by agentbus; not changed." "$OUT"
   is "row 7: setup wrote nothing" "$before" "$(snap "$HOME")"
-  doctor_row "$W/r7" skill warn "was not written by agentbus, so setup will not overwrite it" "agentbus setup claude"
+  doctor_row "$W/r7" skill warn "was not written by agentbus" ""   # setup refuses this file, so doctor names no setup command
   run "$W/r7" "${NEW[@]}" doctor; is "row 7: doctor exits 0 (a warning)" 0 "$RC"
   is "row 7: doctor wrote nothing" "$before" "$(snap "$HOME")"
 }
 
 row_8() {
-  # Nothing builds a hook or a plugin yet (streams 03 and 04), so a duplicate cannot exist. row_13 fails when one can.
-  "$PY" - <<'PY' || fail "row 8: hooks exist now, so the duplicate-hook cell must be written"
-import h
+  # Duplicate hook entries, through the real hook-piece interface: the plugin and setup both writing is stream 03's, so the
+  # cell that doctor FAILS on a plugin/setup duplicate waits for it (row 13 is the tripwire). What runs here is doctor over
+  # a settings file holding the same managed hook twice: it must flag `hooks` and name the setup command that dedupes it.
+  reset; install_pieces; mkdir -p "$W/r8"; "${NEW[@]}" init "$W/r8" >/dev/null 2>&1
+  before=$(snap "$W" "$HOME")
+  cat > "$T/settings.json" <<'JSON'
+{"hooks": {"SessionStart": [
+  {"hooks": [{"type": "command", "command": "/new/agentbus hook start 2>/dev/null || true # agentbus:managed"}]},
+  {"hooks": [{"type": "command", "command": "/new/agentbus hook start 2>/dev/null || true # agentbus:managed"}]}]}}
+JSON
+  "$PY" - "$W/r8" "$T/settings.json" <<'PY' || fail "row 8: doctor did not flag a duplicated managed hook entry"
+import json, os, sys, h
 m = h.load()
-assert "hook" not in m.EARLY_COMMANDS and not any(hasattr(p, "entries_for") for t in m.SETUP_TARGETS.values() for p in t)
+os.chdir(sys.argv[1])
+path = sys.argv[2]
+m.SETUP_TARGETS["claude"].append(m.JsonEntriesPiece("claude_hooks", lambda scope: path,
+    lambda scope: [("SessionStart", None, {"type": "command", "command": "/new/agentbus hook start 2>/dev/null || true " + m.MANAGED_TAG})]))
+import io, contextlib
+out, err = io.StringIO(), io.StringIO()
+sys.argv = ["agentbus", "--json", "doctor", "--scope", "user"]
+try:
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        m.contract_main()
+except SystemExit as e:
+    assert e.code in (0, None), e.code
+hooks = [c for c in json.loads(out.getvalue())["checks"] if c["id"] == "hooks"]
+assert len(hooks) == 1 and hooks[0]["status"] == "warn" and hooks[0]["fix"] == "agentbus setup claude", hooks
+assert "needs the agentbus hooks" in hooks[0]["detail"], hooks
 PY
-  echo "NOTE: row 8 waits for streams 03 and 04 (no hook or plugin exists to duplicate); row 13 fails when one does"
+  is "row 8: doctor wrote nothing" "$before" "$(snap "$W" "$HOME")"
+  echo "NOTE: row 8's plugin-vs-setup duplicate (a fail) waits for stream 03; the setup-only duplicate runs above; row 13 fails when a hook command exists"
 }
 
 row_9() {
@@ -321,7 +345,7 @@ row_11() {
   has "row 11: the block quotes that message and names the fix" "if it says \`unknown command 'skill'\`, the copy is 0.1.x: stop and tell the user to run \`agentbus upgrade --all PARENT_DIR\`." "$block"
   is "row 11: setup codex wrote the block agentbus skill --agents-md prints" "$block" "$("$PY" -c 'import sys, h; print(h.agents_block(sys.argv[1]), end="")' "$HOME/.codex/AGENTS.md" | sed 's/$//')"
   doctor_row "$W/r11" agents-md ok "has the current block" ""
-  doctor_row "$W/r11" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade --all $W"
+  doctor_row "$W/r11" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade $W/r11"
 }
 
 row_12() {

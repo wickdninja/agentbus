@@ -218,8 +218,8 @@
   {
     "name": "doctor treats an older copy as newer",
     "file": "bin/agentbus",
-    "find": "    if theirs < mine:\\n        parent = ",
-    "replace": "    if theirs > mine:\\n        parent = ",
+    "find": "    if copy is not None and release_key\\(copy\\) < mine:",
+    "replace": "    if copy is not None and release_key(copy) > mine:",
     "count": 1,
     "run": "tests/test_doctor.sh",
     "expect": "output lacks: 0.1.0 here, 0.2.0 installed"
@@ -234,21 +234,66 @@
     "expect": "FAIL: busy"
   },
   {
-    "name": "doctor discovery starts git",
+    "name": "doctor starts a process of its own in discovery",
     "file": "bin/agentbus",
-    "find": "    cwd = os\\.path\\.realpath\\(os\\.getcwd\\(\\)\\)\\n    d = cwd\\n    while True:\\n        dotgit",
-    "replace": "    cwd = os.path.realpath(os.getcwd())\\n    repo_info(cwd)\\n    d = cwd\\n    while True:\\n        dotgit",
+    "find": "    try:\\n        ctx\\.db, ctx\\.strict = find_bus_path\\(up\\)",
+    "replace": "    os.waitpid(os.posix_spawnp(\"true\", [\"true\"], {}), 0)\\n    try:\\n        ctx.db, ctx.strict = find_bus_path(up)",
     "count": 1,
     "run": "tests/test_doctor.sh",
-    "expect": "doctor ran git"
+    "expect": "doctor started a subprocess or an executable"
   },
   {
-    "name": "doctor names upgrade DIR instead of upgrade --all for an older copy",
+    "name": "doctor names upgrade --all PARENT for an older copy",
     "file": "bin/agentbus",
-    "find": "f\"agentbus upgrade --all \\{parent\\}\"",
-    "replace": "f\"agentbus upgrade {parent}\"",
+    "find": "return \\[doctor_result\\(\"copy\", \"warn\", f\"\\{copy\\} here, \\{ctx\\.version\\} installed\", upgrade\\)\\]",
+    "replace": "return [doctor_result(\"copy\", \"warn\", f\"{copy} here, {ctx.version} installed\", f\"agentbus upgrade --all {os.path.dirname(ctx.directory)}\")]",
     "count": 1,
     "run": "tests/test_version_policy.sh",
     "expect": "doctor entry copy (warn, '0.1.0 here, 0.2.0 installed') is not as documented"
+  },
+  {
+    "name": "doctor creates the missing agent config folder",
+    "file": "bin/agentbus",
+    "find": "    if scope == \"user\" and not os\\.path\\.isdir\\(cfg\\):\\n        return doctor_result",
+    "replace": "    if scope == \"user\" and not os.path.isdir(cfg):\\n        os.makedirs(cfg, exist_ok=True)\\n        return doctor_result",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
+  },
+  {
+    "name": "doctor compares the copy's version but not its bytes",
+    "file": "bin/agentbus",
+    "find": "    if theirs is None or ours is None or theirs != ours:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "the copy is from source (0123456)"
+  },
+  {
+    "name": "doctor reports a refused discovery as no bus",
+    "file": "bin/agentbus",
+    "find": "        if r\\[\"code\"\\] == \"no_bus\" and r\\[\"message\"\\]\\.startswith\\(DOCTOR_NO_BUS\\):",
+    "replace": "        if r[\"code\"] == \"no_bus\":",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor must exit 1 where join exits 3"
+  },
+  {
+    "name": "doctor offers setup for a file setup refuses",
+    "file": "bin/agentbus",
+    "find": "return doctor_result\\(\"skill\", \"warn\", f\"\\{skill\\} was not written by agentbus\", scope=scope, hint=refused \\+ \"\\.\"\\)",
+    "replace": "return doctor_result(\"skill\", \"warn\", f\"{skill} was not written by agentbus\", fix, scope=scope, hint=refused + \".\")",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "was not written by agentbus', fix ''"
+  },
+  {
+    "name": "doctor drops null keys from the failed list",
+    "file": "bin/agentbus",
+    "find": "        bad = \\[doctor_json_check\\(r\\) for r in results if r\\[\"status\"\\] == \"fail\"\\]",
+    "replace": "        bad = [{k: v for k, v in doctor_json_check(r).items() if v is not None} for r in results if r[\"status\"] == \"fail\"]",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "stdout is not the full result"
   }
 ]

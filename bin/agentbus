@@ -494,7 +494,8 @@ CONTRACT = {
                           "old": _NSTR, "new": _STR, "schema_old": _NINT, "schema_new": _NINT, "backup": _NSTR,
                           "error": {"anyOf": [{"type": "null"}, _o({"code": _STR, "message": _STR, "file": _STR}, optional=("file",))]}}),
         "DoctorCheck": _o({"id": _STR, "status": {"type": "string", "enum": ["ok", "warn", "fail", "n/a"]}, "detail": _STR,
-                           "fix": _NSTR, "scope": {"type": "string", "enum": ["user", "project"]}}, optional=("scope",)),
+                           "fix": _NSTR, "hint": _NSTR, "scope": {"type": "string", "enum": ["user", "project"]}},
+                           optional=("scope",)),
         "Envelope": _env({}),
     },
     "errors": {
@@ -548,7 +549,7 @@ CONTRACT = {
                         "action": "Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun)."},
         "items_failed": {"exit": 1, "retryable": False, "fields": ["failed"],
                          "meaning": "Some of the items the command works on failed or were refused (buses of upgrade --all, "
-                                    "files of setup); stdout holds the whole result, and failed lists those items.",
+                                    "files of setup, checks of doctor); stdout holds the whole result, and failed lists those items.",
                          "action": "Read each failed item's error, fix it, then run the command again."},
         "internal": {"exit": 4, "retryable": False, "fields": [],
                      "meaning": "A bug in agentbus.", "action": "Report it."},
@@ -672,7 +673,7 @@ CONTRACT = {
                        _o({"agentbus": _STR, "path": _STR, "contract": _INT, "checks": _list(_ref("DoctorCheck")),
                            "fail": _INT, "warn": _INT}),
                        ["items_failed"], text='{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": '
-                       '"ok" | "warn" | "fail" | "n/a", "detail": string, "fix": string or null, "scope": string (when it applies)}], '
+                       '"ok" | "warn" | "fail" | "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], '
                        '"fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0',
                        base=_PLAIN_ERRORS),
     },
@@ -1909,15 +1910,24 @@ def selected_bus(up):
     die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus")
 
 
-def db_path(args):
-    """An explicit database wins over discovery and --up."""
+def find_bus_path(up):
+    """(the bus database path, strict): an explicit database wins over discovery and --up. The one way a
+    bus is found, for every command and for doctor; it writes nothing."""
     path = explicit_db()
     strict = path is None
     if strict:
-        path = os.path.join(selected_bus(args.up), ".agentbus", "bus.db")
+        path = os.path.join(selected_bus(up), ".agentbus", "bus.db")
     folder = os.path.dirname(path)
     if os.path.basename(folder) == ".agentbus" and os.path.isdir(folder):
         check_bus_folder(folder)
+    return path, strict
+
+
+def db_path(args):
+    """find_bus_path, then the git exclude rule for the bus folder."""
+    path, strict = find_bus_path(args.up)
+    folder = os.path.dirname(path)
+    if os.path.basename(folder) == ".agentbus" and os.path.isdir(folder):
         info = repo_info(os.path.dirname(folder))
         if info and os.path.realpath(info[0]) == os.path.realpath(os.path.dirname(folder)):
             keep_excluded(*info)
@@ -5711,9 +5721,10 @@ REGISTER_COMMANDS.append(register_setup)
 # ==== hooks ====
 # ==== doctor ====
 # `agentbus doctor` reports what is installed, which version each piece is, what is wrong and the one
-# command that fixes it. It READS and never writes, and it EXECUTES nothing it finds: no subprocess is
-# started (not even git: discovery below reads files), no hook or copy found on disk is run, and the bus is
-# opened read-only with a short wait. The fix is printed, never run (docs/how-to/doctor.md).
+# command that fixes it. It READS and writes no data, and it EXECUTES nothing it finds: the only process it
+# starts is git, through the same discovery every command uses (find_bus_path); no hook or copy found on disk
+# is run, and the bus is opened read-only with a short wait (SQLite may finish a crashed writer's recovery
+# on that open: it changes no row or schema). The fix is printed, never run (docs/how-to/doctor.md).
 #
 # A check is a function fn(ctx) -> [result] registered with register_doctor_check(id, fn); a result is
 # doctor_result(id, status, detail, fix). Statuses: ok | warn | fail | n/a. Streams that add pieces add
@@ -5731,9 +5742,10 @@ DOCTOR_VERSION_LINE = re.compile(rb'^__version__\s*=\s*["\']([^"\'\r\n]{1,64})["
 DOCTOR_VERSION_READ = 64 * 1024
 
 
-def doctor_result(id, status, detail, fix="", scope=None):
+def doctor_result(id, status, detail, fix="", scope=None, hint=""):
+    """fix is a command that can be run as written, or None; hint is prose for a person when there is no such command."""
     assert status in DOCTOR_STATUSES, status
-    return {"id": id, "status": status, "detail": detail, "fix": fix or None, "scope": scope}
+    return {"id": id, "status": status, "detail": detail, "fix": fix or None, "hint": hint or None, "scope": scope}
 
 
 def register_doctor_check(id, fn):
@@ -5772,8 +5784,9 @@ def doctor_executable_info(path):
 class DoctorContext:
     """What the checks share: the scope asked for, the running tool, and (set by the bus check) the bus found."""
 
-    def __init__(self, scope):
+    def __init__(self, scope, up=0):
         self.scope = scope
+        self.up = up  # --up N, as for every command
         self.version = __version__
         self.path = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] and os.path.exists(sys.argv[0]) else self_path()
         self.db = None  # the bus database found, if any
@@ -5792,66 +5805,45 @@ def doctor_check_tool(ctx):
     # DOCTOR_UPDATE_CHECK_SLOT: the release-cache check of the update story (issue 16) goes here, comparing
     # ctx.version with a cached latest release. Doctor makes no network call.
     if is_repo_local_copy():
-        return [doctor_result("tool", "warn", f"running the copy at {ctx.path}, not the installed agentbus; setup and upgrade refuse to run from a copy",
-                              "uv tool upgrade agentbus")]
+        return [doctor_result("tool", "warn", f"this is the folder's own copy at {ctx.path}, not the installed agentbus, so it cannot be compared with itself",
+                              "agentbus doctor")]
     return [doctor_result("tool", "ok", f"{ctx.version} at {ctx.path}")]
 
 
 # ---- the bus and its copy ----
 
-def doctor_start():
-    """Where discovery starts, found from files only (the commands use git for this, and doctor starts no
-    subprocess): the working directory, or in a linked worktree the same place in its main checkout."""
-    cwd = os.path.realpath(os.getcwd())
-    d = cwd
-    while True:
-        dotgit = os.path.join(d, ".git")
-        st = setup_lstat(dotgit)
-        if st is not None:
-            if not stat.S_ISREG(st.st_mode):
-                return cwd  # a main checkout (a directory), or something doctor does not follow
-            raw = setup_read(dotgit)
-            m = re.match(rb"gitdir: (.{1,4096})\n?\Z", raw or b"")
-            if not m:
-                return cwd
-            gitdir = os.path.realpath(os.path.join(d, m.group(1).decode("utf-8", "replace").strip()))
-            common = os.path.dirname(os.path.dirname(gitdir))
-            if os.path.basename(os.path.dirname(gitdir)) == "worktrees" and os.path.basename(common) == ".git" \
-                    and os.path.isdir(common):
-                return os.path.normpath(os.path.join(os.path.dirname(common), os.path.relpath(cwd, d)))
-            return cwd
-        parent = os.path.dirname(d)
-        if parent == d:
-            return cwd
-        d = parent
+DOCTOR_NO_BUS = "no bus here or in any parent folder"  # what selected_bus says when discovery finds nothing
 
 
-def doctor_find_bus(ctx):
-    """Sets ctx.db and ctx.directory; returns a result when there is no bus or the folder is refused."""
+def doctor_find_bus(ctx, up):
+    """Finds the bus the way every command does (find_bus_path). Sets ctx.db and ctx.directory; returns a result when
+    there is none or the way to it is refused."""
     try:
-        db = explicit_db()
-        ctx.strict = db is None
-        if db is None:
-            found = next(walk_buses(doctor_start()), None)
-            if found is None:
-                ctx.bus_state = "none"
-                return doctor_result("bus", "n/a", "no bus here or in any parent folder", "agentbus init .")
-            db = os.path.join(found, ".agentbus", "bus.db")
-        folder = os.path.dirname(db)
-        if os.path.basename(folder) == ".agentbus" and os.path.isdir(folder):
-            check_bus_folder(folder)
+        ctx.db, ctx.strict = find_bus_path(up)
     except SystemExit as e:
-        ctx.bus_state = "refused"
-        return doctor_result("bus", "fail", refusal(e)["message"], "see docs/how-to/upgrade.md")
-    ctx.db, ctx.directory = db, bus_directory(db)
+        r = refusal(e)
+        if r["code"] == "no_bus" and r["message"].startswith(DOCTOR_NO_BUS):
+            ctx.bus_state = "none"
+            return doctor_result("bus", "n/a", DOCTOR_NO_BUS, "agentbus init .")
+        ctx.bus_state = "refused"   # the commands fail here too (a bare repository's worktree, a suspect folder, git too old)
+        return doctor_result("bus", "fail", r["message"], hint="Fix what the message names, then run agentbus doctor again.")
+    ctx.directory = bus_directory(ctx.db)
     return None
 
 
+def doctor_own_folder(ctx):
+    """True when the bus database sits in <dir>/.agentbus, the layout init and upgrade work on."""
+    return os.path.basename(os.path.dirname(ctx.db)) == ".agentbus" and os.path.isdir(os.path.dirname(ctx.db))
+
+
 def doctor_check_bus(ctx):
-    early = doctor_find_bus(ctx)
+    early = doctor_find_bus(ctx, ctx.up)
     if early:
         return [early]
-    where = f"{ctx.directory}"
+    where = ctx.directory
+    upgrade = f"agentbus upgrade {ctx.directory}" if os.path.lexists(os.path.join(ctx.directory, ".agentbus", "bin", "agentbus")) \
+        and ctx.db == os.path.join(ctx.directory, ".agentbus", "bus.db") else ""
+    restore = "Restore a backup (docs/how-to/upgrade.md in the agentbus repository), or inspect " + ctx.db + "."
     try:
         con = open_bus(ctx.db, ctx.strict, read_only=True, busy_wait=DOCTOR_BUSY_WAIT_S)
     except SystemExit as e:
@@ -5860,32 +5852,37 @@ def doctor_check_bus(ctx):
         code = r["code"]
         if code == "no_bus":
             # init makes the folder and the copy; the database appears with the first command
-            ctx.bus_state = "none" if not os.path.lexists(os.path.dirname(ctx.db)) else "new"
-            if ctx.bus_state == "none":
+            if os.path.lexists(os.path.dirname(ctx.db)):
+                ctx.bus_state = "new"
+                return [doctor_result("bus", "ok", f"{where} (no database yet; the first command creates it)")]
+            ctx.bus_state = "none"
+            if os.path.basename(os.path.dirname(ctx.db)) == ".agentbus" and os.path.isdir(ctx.directory):
                 return [doctor_result("bus", "n/a", f"no bus at {ctx.db}", f"agentbus init {ctx.directory}")]
-            return [doctor_result("bus", "ok", f"{where} (no database yet; the first command creates it)")]
+            return [doctor_result("bus", "n/a", f"no bus at {ctx.db}",
+                                  hint="AGENTBUS_DB names a bus that does not exist yet: any agentbus command creates it there, or unset AGENTBUS_DB.")]
         if code == "busy":
             ctx.bus_state = "busy"
             return [doctor_result("bus", "warn", f"{where} is busy: another process holds it (a sqlite3 shell or a dashboard?)",
-                                  "close it, then run agentbus doctor again")]
+                                  hint="Close it, then run agentbus doctor again.")]
         if code == "schema_older":
             ctx.bus_state = "older"
             return [doctor_result("bus", "warn", f"{where} (schema {fields.get('bus_schema')}) is older than this agentbus; "
-                                  "the next write migrates it after a backup", f"agentbus upgrade {ctx.directory}")]
+                                  "the next write migrates it after a backup", upgrade,
+                                  hint="" if upgrade else "Run any agentbus command that writes, with this AGENTBUS_DB, to migrate it.")]
         if code == "schema_newer":
             ctx.bus_state = "newer"
             return [doctor_result("bus", "fail", f"{where} (schema {fields.get('bus_schema')}) is newer than this agentbus "
                                   f"(it knows {SCHEMA_VERSION}); commands from this copy refuse it", "uv tool upgrade agentbus")]
         if code == "schema_corrupt":
             ctx.bus_state = "refused"
-            return [doctor_result("bus", "fail", f"{where} records schema version {fields.get('bus_schema')}, which no agentbus writes",
-                                  "see docs/how-to/upgrade.md")]
+            return [doctor_result("bus", "fail", f"{where} records schema version {fields.get('bus_schema')}, which no agentbus writes", hint=restore)]
         ctx.bus_state = "refused" if code == "schema_refused" else "unavailable"
-        return [doctor_result("bus", "fail", f"{where}: {r['message']}", "see docs/how-to/upgrade.md")]
+        return [doctor_result("bus", "fail", f"{where}: {r['message']}",
+                              hint=restore if code == "schema_refused" else "Fix the file or folder the message names, then run agentbus doctor again.")]
     except (sqlite3.Error, OSError) as e:
         ctx.bus_state = "unavailable"
         return [doctor_result("bus", "fail", f"{where} could not be read ({getattr(e, 'strerror', None) or e})",
-                              "see docs/how-to/upgrade.md")]
+                              hint="Check the permissions of " + ctx.db + " and its folder, then run agentbus doctor again.")]
     try:
         have = user_version(con)
     finally:
@@ -5895,32 +5892,45 @@ def doctor_check_bus(ctx):
     return [doctor_result("bus", "ok", f"{where} ({note})")]
 
 
+def doctor_read_bytes(path):
+    """At most COPY_LIMIT bytes of a regular file (never through a link), or None."""
+    try:
+        return _read_file(path, COPY_LIMIT)
+    except (SystemExit, OSError):
+        return None
+
+
 def doctor_check_copy(ctx):
     if ctx.directory is None:
         return [doctor_result("copy", "n/a", "no bus, so no copy to compare")]
     folder = os.path.join(ctx.directory, ".agentbus")
-    if os.path.basename(os.path.dirname(ctx.db)) != ".agentbus":
+    if not doctor_own_folder(ctx):
         return [doctor_result("copy", "n/a", "the database is not in an .agentbus folder, so there is no copy to compare")]
-    if not os.path.isdir(folder):
-        return [doctor_result("copy", "n/a", "no bus folder yet, so no copy to compare")]
-    if not os.path.lexists(os.path.join(folder, "bin", "agentbus")):
+    copy_path = os.path.join(folder, "bin", "agentbus")
+    if not os.path.lexists(copy_path):
         return [doctor_result("copy", "warn", f"{folder} has no copy of agentbus (bin/agentbus is missing); agents cannot run it",
                               f"agentbus init {ctx.directory}")]
+    if os.path.realpath(copy_path) == self_path():
+        return [doctor_result("copy", "n/a", "this is the folder's own copy; run the installed agentbus doctor to compare it", hint="Run: agentbus doctor")]
+    upgrade = f"agentbus upgrade {ctx.directory}"
     copy = bus_copy_version(ctx.db)
-    if copy is None:
-        label = copy_label(ctx.directory)
-        if label == "none":
-            return [doctor_result("copy", "warn", f"{folder} has no VERSION, so its copy's version is unknown", f"agentbus upgrade {ctx.directory}")]
-        if label == "unreadable":
-            return [doctor_result("copy", "warn", f"{folder}/VERSION cannot be read", f"agentbus upgrade {ctx.directory}")]
-        return [doctor_result("copy", "n/a", f"the copy is from source ({label}), not a release; versions are not compared")]
-    mine, theirs = release_key(ctx.version), release_key(copy)
-    if theirs == mine:
-        return [doctor_result("copy", "ok", f"{copy}, same as the installed agentbus")]
-    if theirs < mine:
-        parent = os.path.dirname(ctx.directory)
-        return [doctor_result("copy", "warn", f"{copy} here, {ctx.version} installed", f"agentbus upgrade --all {parent}")]
-    return [doctor_result("copy", "warn", f"{copy} here is newer than the installed {ctx.version}", "uv tool upgrade agentbus")]
+    mine = release_key(ctx.version)
+    label = copy_label(ctx.directory) if copy is None else copy
+    if copy is not None and release_key(copy) < mine:
+        return [doctor_result("copy", "warn", f"{copy} here, {ctx.version} installed", upgrade)]
+    if copy is not None and release_key(copy) > mine:
+        return [doctor_result("copy", "warn", f"{copy} here is newer than the installed {ctx.version}", "uv tool upgrade agentbus")]
+    if copy is None and label in ("none", "unreadable"):
+        why = "has no VERSION, so its copy's version is unknown" if label == "none" else "VERSION cannot be read"
+        return [doctor_result("copy", "warn", f"{folder} {why}", upgrade)]
+    # the same version, or a source build: the copy's own bytes must be the installed agentbus's
+    theirs, ours = doctor_read_bytes(copy_path), doctor_read_bytes(self_path())
+    if theirs is None or ours is None or theirs != ours:
+        if copy is None:
+            return [doctor_result("copy", "n/a", f"the copy is from source ({label}), not a release; its contents differ from the installed agentbus",
+                                  hint="Run agentbus upgrade " + ctx.directory + " to replace it.")]
+        return [doctor_result("copy", "warn", f"{copy} here has the installed version's number but not its contents (damaged, edited or empty)", upgrade)]
+    return [doctor_result("copy", "ok", f"{copy or label}, same as the installed agentbus")]
 
 
 # ---- the skill and the AGENTS.md block ----
@@ -5937,6 +5947,22 @@ def doctor_config_missing(ctx, scope, target, id):
     return None
 
 
+def doctor_scoped(id, fn, ctx):
+    """fn(ctx, scope) for each scope asked for; an unreadable file is a warning on that scope, with what to check."""
+    out = []
+    for scope in ctx.scopes:
+        if doctor_same_config(id, scope, ctx):
+            continue
+        try:
+            r = fn(ctx, scope)
+        except OSError as e:
+            r = doctor_result(id, "warn", f"{e.filename or setup_config_dir('claude' if id == 'skill' else 'codex', scope)} cannot be read ({e.strerror or e})",
+                              scope=scope, hint="Check the permissions of that path, then run agentbus doctor again.")
+        if r:
+            out.append(r)
+    return out
+
+
 def doctor_skill_scope(ctx, scope):
     piece = doctor_piece("claude", "skill")
     absent = doctor_config_missing(ctx, scope, "claude", "skill")
@@ -5944,46 +5970,44 @@ def doctor_skill_scope(ctx, scope):
         return absent
     folder, skill = piece.paths(scope)
     fix = "agentbus setup claude" + (" --scope project" if scope == "project" else "")
-    here = skill
+    refused = "setup will not change it. Inspect it, and move it aside if it is yours to move"
     st = setup_lstat(folder)
     if st is not None and stat.S_ISLNK(st.st_mode):
         old = os.readlink(folder)
         alive = os.path.isdir(folder)
         ours = is_agentbus_skill_dir(folder) if alive else old.rstrip("/").endswith(("/skill", "/skills/agentbus"))
         if ours:
-            return doctor_result("skill", "warn", f"{folder} is a link to {old} (the old install line); it breaks when that folder moves",
-                                 fix, scope)
-        return doctor_result("skill", "warn", f"{folder} is a link to {old}, which is not an agentbus skill; setup leaves it alone. Remove it first",
-                             fix, scope)
+            return doctor_result("skill", "warn", f"{folder} is a link to {old} (the old install line); it breaks when that folder moves", fix, scope)
+        return doctor_result("skill", "warn", f"{folder} is a link to {old}, which is not an agentbus skill", scope=scope, hint=refused + ".")
     if st is not None and not stat.S_ISDIR(st.st_mode):
-        return doctor_result("skill", "warn", f"{folder} exists and is not a folder; setup leaves it alone. Move it aside first", fix, scope)
+        return doctor_result("skill", "warn", f"{folder} exists and is not a folder", scope=scope, hint=refused + ".")
     sk = setup_lstat(skill)
     if sk is not None and stat.S_ISLNK(sk.st_mode):
-        return doctor_result("skill", "warn", f"{here} is a symlink; setup will not write through it. Remove it first", fix, scope)
+        return doctor_result("skill", "warn", f"{skill} is a symlink", scope=scope, hint="setup will not write through a symlink. Inspect it, and replace it with a plain file if it is yours.")
     code, detail, _fix = piece.check(scope)[0][1:]
     if code == "ok":
-        return doctor_result("skill", "ok", f"{here} is current", scope=scope)
+        return doctor_result("skill", "ok", f"{skill} is current", scope=scope)
     if code == "missing":
         if ctx.scope == "all" and scope == "project":
             return None
-        return doctor_result("skill", "warn", f"{here} is not installed; agents do not know the protocol", fix, scope)
+        return doctor_result("skill", "warn", f"{skill} is not installed; agents do not know the protocol", fix, scope)
     data = setup_read(skill)
     if data is None or not has_marker(data):
-        return doctor_result("skill", "warn", f"{here} was not written by agentbus, so setup will not overwrite it. Move it aside first", fix, scope)
+        return doctor_result("skill", "warn", f"{skill} was not written by agentbus", scope=scope, hint=refused + ".")
     if sha256_hex(data) in SKILL_SHA256_HISTORY:
-        return doctor_result("skill", "warn", f"{here} is an older version of the skill", fix, scope)
-    return doctor_result("skill", "warn", f"{here} was edited, or comes from a newer agentbus; setup saves it as a .bak file before replacing it",
+        return doctor_result("skill", "warn", f"{skill} is an older version of the skill", fix, scope)
+    return doctor_result("skill", "warn", f"{skill} was edited, or comes from a newer agentbus; setup saves it as a .bak file before replacing it",
                          fix, scope)
 
 
 def doctor_check_skill(ctx):
-    out = [doctor_skill_scope(ctx, s) for s in ctx.scopes if not doctor_same_config("claude", s, ctx)]
-    return [r for r in out if r]
+    return doctor_scoped("skill", doctor_skill_scope, ctx)
 
 
-def doctor_same_config(target, scope, ctx):
+def doctor_same_config(id, scope, ctx):
     """True for the project scope when it is the same folder as the user scope (the working directory is home)."""
-    return scope == "project" and "user" in ctx.scopes and \
+    target = "claude" if id == "skill" else "codex"
+    return scope == "project" and "user" in ctx.scopes and id in ("skill", "agents-md") and \
         os.path.realpath(setup_config_dir(target, "project")) == os.path.realpath(setup_config_dir(target, "user"))
 
 
@@ -5994,37 +6018,39 @@ def doctor_agents_scope(ctx, scope):
         return absent
     path = piece.path(scope)
     fix = "agentbus setup codex" + (" --scope project" if scope == "project" else "")
-    here = path
     st = setup_lstat(path)
     if st is None:
         if ctx.scope == "all" and scope == "project":
             return None
-        return doctor_result("agents-md", "warn", f"{here} does not exist; Codex has no agentbus block", fix, scope)
+        return doctor_result("agents-md", "warn", f"{path} does not exist; Codex has no agentbus block", fix, scope)
     link = stat.S_ISLNK(st.st_mode)
+    # setup refuses a symlink, so a block that needs a change there has no setup command; the hint says where to edit
+    no_cmd = "setup will not write through a symlink. Edit the file it points to." if link else ""
     raw = setup_read(path, follow=True)
     if raw is None:
-        return doctor_result("agents-md", "warn", f"{here} is not a plain text file agentbus can read", fix, scope)
+        return doctor_result("agents-md", "warn", f"{path} is not a plain text file agentbus can read", scope=scope,
+                             hint="Inspect it; setup will not change it.")
     text = raw.decode("utf-8", "replace").replace("\r\n", "\n")
     lines, begins, ends, _ = piece.scan(text)
     if not begins and not ends:
         if ctx.scope == "all" and scope == "project":
             return None
-        return doctor_result("agents-md", "warn", f"{here} has no agentbus block", fix, scope)
+        return doctor_result("agents-md", "warn", f"{path} has no agentbus block", "" if link else fix, scope, hint=no_cmd)
     if len(begins) != 1 or len(ends) != 1 or begins[0] > ends[0]:
-        return doctor_result("agents-md", "warn", f"{here} has damaged agentbus markers, so setup will not touch it. Repair them by hand first", fix, scope)
+        return doctor_result("agents-md", "warn", f"{path} has damaged agentbus markers", scope=scope,
+                             hint="setup will not touch it. Repair the <!-- agentbus:begin --> and <!-- agentbus:end --> lines by hand.")
     body = "".join(lines[begins[0] + 1:ends[0]])
     via = " (through a symlink; setup will not write through it)" if link else ""
     if body == piece.text:
-        return doctor_result("agents-md", "ok", f"{here} has the current block" + via, scope=scope)
+        return doctor_result("agents-md", "ok", f"{path} has the current block" + via, scope=scope)
     if sha256_hex(body.encode("utf-8")) in AGENTS_SHA256_HISTORY:
-        return doctor_result("agents-md", "warn", f"{here} has an older agentbus block" + via, fix, scope)
-    return doctor_result("agents-md", "warn", f"{here} has an edited agentbus block, or one from a newer agentbus; setup saves the file as a .bak before replacing it" + via,
-                         fix, scope)
+        return doctor_result("agents-md", "warn", f"{path} has an older agentbus block", "" if link else fix, scope, hint=no_cmd)
+    return doctor_result("agents-md", "warn", f"{path} has an edited agentbus block, or one from a newer agentbus"
+                         + ("" if link else "; setup saves the file as a .bak before replacing it"), "" if link else fix, scope, hint=no_cmd)
 
 
 def doctor_check_agents(ctx):
-    out = [doctor_agents_scope(ctx, s) for s in ctx.scopes if not doctor_same_config("codex", s, ctx)]
-    return [r for r in out if r]
+    return doctor_scoped("agents-md", doctor_agents_scope, ctx)
 
 
 # ---- hooks (streams 03 and 04 fill this in) ----
@@ -6042,7 +6068,11 @@ def doctor_check_hooks(ctx):
                 continue
             for scope in ctx.scopes:
                 for _id, code, detail, fix in piece.check(scope):
-                    out.append(doctor_result("hooks", DOCTOR_PIECE_STATUS.get(code, "warn"), detail, fix, scope))
+                    if code == "problem":   # setup refuses a file it cannot parse, so it is no fix
+                        out.append(doctor_result("hooks", "fail", detail, scope=scope,
+                                                 hint="Inspect " + piece.path_for(scope) + "; setup will not change a file it cannot parse."))
+                    else:
+                        out.append(doctor_result("hooks", DOCTOR_PIECE_STATUS.get(code, "warn"), detail, fix, scope))
     for fn in DOCTOR_HOOK_CHECKS:
         out.extend(fn(ctx))
     return out or [doctor_result("hooks", "n/a", DOCTOR_NO_HOOKS)]
@@ -6061,34 +6091,42 @@ def doctor_run(ctx):
         try:
             results.extend(fn(ctx))
         except Exception as e:  # a check that breaks is a finding, not a crash: the others still report
-            results.append(doctor_result(id, "fail", f"this check could not run ({type(e).__name__}); report it at the agentbus repo"))
+            results.append(doctor_result(id, "fail", f"this check could not run ({type(e).__name__})",
+                                         hint="This is a bug in agentbus: report it at the agentbus repository."))
     return results
 
 
-def doctor_summary(fail, warn):
+def doctor_summary(fail, warn, ctx):
     parts = ([f"{fail} problem" + ("s" if fail != 1 else "")] if fail else []) + ([f"{warn} warning" + ("s" if warn != 1 else "")] if warn else [])
-    return (", ".join(parts) if parts else "No problems") + "."
+    if parts:
+        return ", ".join(parts) + "."
+    return "Nothing to fix, but there is no bus here." if ctx.bus_state == "none" else "No problems."
+
+
+def doctor_json_check(r):
+    return {k: v for k, v in r.items() if k != "scope" or v}
 
 
 def cmd_doctor(a):
-    ctx = DoctorContext(a.scope)
+    ctx = DoctorContext(a.scope, a.up)
     results = doctor_run(ctx)
     fail = sum(r["status"] == "fail" for r in results)
     warn = sum(r["status"] == "warn" for r in results)
     if a.json:
-        checks = [{k: v for k, v in r.items() if k != "scope" or v} for r in results]
-        print_json({"agentbus": ctx.version, "path": ctx.path, "contract": CONTRACT["contract"], "checks": checks,
-                    "fail": fail, "warn": warn})
+        print_json({"agentbus": ctx.version, "path": ctx.path, "contract": CONTRACT["contract"],
+                    "checks": [doctor_json_check(r) for r in results], "fail": fail, "warn": warn})
     else:
         show("agentbus {} ({})", ctx.version, doctor_text(ctx.path))
         for r in results:
             if r["id"] == "tool" and r["status"] == "ok":
                 continue  # the header line above is the tool's ok
-            line = doctor_text(r["detail"]) + (f". Run: {doctor_text(r['fix'])}" if r["fix"] and r["status"] != "ok" else "")
+            line = doctor_text(r["detail"]).rstrip(".")
+            if r["status"] != "ok":
+                line += f". Run: {doctor_text(r['fix'])}" if r["fix"] else (f". {doctor_text(r['hint'])}" if r["hint"] else "")
             show("{}{}{}", r["status"].ljust(6), r["id"].ljust(DOCTOR_ID_WIDTH), line, row=True)
-        show("{}", doctor_summary(fail, warn), path_first=True)
+        show("{}", doctor_summary(fail, warn, ctx), path_first=True)
     if fail:
-        bad = [{k: v for k, v in r.items() if v is not None} for r in results if r["status"] == "fail"]
+        bad = [doctor_json_check(r) for r in results if r["status"] == "fail"]
         emit_pending(a)
         die(f"doctor found {fail} problem{'s' if fail != 1 else ''}: " + ", ".join(r["id"] for r in bad), "items_failed", failed=bad)
 

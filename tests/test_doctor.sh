@@ -20,6 +20,7 @@ export MOD
 # version); the v0.1.0 fixture is the old bus copy. TOOLH adds one hash to the skill and AGENTS.md history (below).
 mkdir -p "$T/tool"; sed 's/^__version__ = .*/__version__ = "0.2.0"/' "$MOD" > "$T/tool/agentbus"
 DOC=("$PY" "$T/tool/agentbus")
+export TOOLFILE="$T/tool/agentbus"
 # outside any checkout, so the copy it installs records VERSION 0.1.0 and not a commit
 mkdir -p "$T/old"; cp "$TESTS_DIR/fixtures/legacy/agentbus-0.1.0" "$T/old/agentbus"
 OLD=("$PY" "$T/old/agentbus")
@@ -33,7 +34,8 @@ def load():
     spec = importlib.util.spec_from_loader("agentbus_mod", loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
-    m.__version__ = "0.2.0"  # the same stamp as the tool the CLI cases run
+    m.__version__ = "0.2.0"  # the same stamp as the tool the CLI cases run...
+    m.self_path = lambda: os.environ["TOOLFILE"]   # ...and the same file, so the bus copies (made by that tool) compare equal
     return m
 
 def run(m, argv):
@@ -49,13 +51,15 @@ def run(m, argv):
         sys.argv = old
     return rc, out.getvalue(), err.getvalue()
 
-def tree(*roots):
-    """Every path under the roots with its type, mode, size, mtime, link target and content hash."""
+def tree(*roots, skip=()):
+    """Every path under the roots with its type, mode, size, mtime, link target and content hash (names in skip left out)."""
     h = hashlib.sha256()
     for root in roots:
         for d, dirs, files in os.walk(root):
             dirs.sort()
             for n in sorted(files + dirs):
+                if n in skip:
+                    continue
                 p = os.path.join(d, n)
                 st = os.lstat(p)
                 # SQLite makes an empty bus.db-wal when it opens a WAL database, and on some builds leaves it: that
@@ -71,6 +75,21 @@ def tree(*roots):
                 elif os.path.isfile(p):
                     h.update(open(p, "rb").read())
     return h.hexdigest()
+
+def logical(db):
+    """Every row, the schema and user_version, read from a copy of the bus and its -wal (so this reads nothing in the bus folder)."""
+    import shutil, sqlite3, tempfile
+    tmp = tempfile.mkdtemp()
+    for suffix in ("", "-wal"):
+        if os.path.exists(db + suffix):
+            shutil.copyfile(db + suffix, os.path.join(tmp, "bus.db" + suffix))
+    c = sqlite3.connect(os.path.join(tmp, "bus.db"))
+    try:
+        tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+        return (c.execute("PRAGMA user_version").fetchone()[0], c.execute("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").fetchall(),
+                {t: c.execute(f'SELECT * FROM "{t}" ORDER BY rowid').fetchall() for t in tables})
+    finally:
+        c.close(); shutil.rmtree(tmp)
 PY
 export PYTHONPATH="$T"
 snap() { "$PY" -c 'import sys, h; print(h.tree(*sys.argv[1:]))' "$@"; }
@@ -96,22 +115,25 @@ hasf() { grep -qF -- "$1" <<<"$OUT" || { echo "output was:" >&2; echo "$OUT" >&2
 # row ID STATUS DETAIL-FRAGMENT FIX [SCOPE]: the --json entry for ID (first with that scope) has that status, detail containing the
 # fragment and exactly that fix ("" for none). The human line for the same entry is checked by the caller where it matters.
 row() {
-  "$PY" - "$T/out" "$1" "$2" "$3" "$4" "${5:-}" <<'PY' || { echo "json was:" >&2; cat "$T/out" >&2; fail "row $1: status $2, detail with '$3', fix '$4' not found"; }
+  "$PY" - "$T/out" "$1" "$2" "$3" "$4" "${5:-}" "${6:-}" <<'PY' || { echo "json was:" >&2; cat "$T/out" >&2; fail "row $1: status $2, detail with '$3', fix '$4' not found"; }
 import json, sys
-path, id, status, frag, fix, scope = sys.argv[1:]
+path, id, status, frag, fix, scope, hint = sys.argv[1:]
 rows = [c for c in json.load(open(path))["checks"] if c["id"] == id and (not scope or c.get("scope") == scope)]
 assert rows, "no entry " + id
 c = rows[0]
 assert c["status"] == status, c
 assert frag in c["detail"], c
 assert (c["fix"] or "") == fix, c
+assert "hint" in c and (hint in (c["hint"] or "") if hint else True), c
+assert not (c["fix"] and c["hint"]), "a fix and a hint on one entry: " + repr(c)   # a command, or prose, never both
 PY
 }
 
-echo "TEST 1: doctor writes nothing: HOME and the project are equal, byte for byte, before and after, in every state, with every piece installed"
-states=(current fresh-bus v010-shape stale-copy edited-skill old-link unmanaged damaged-markers newer-bus)
+echo "TEST 1: doctor writes nothing: HOME and the project are equal, byte for byte, before and after, in every state, run from a bus folder and from a folder with none"
+states=(current fresh-bus v010-shape stale-copy edited-skill old-link unmanaged damaged-markers newer-bus no-claude-dir no-codex-dir bare-home)
 for state in "${states[@]}"; do
   world
+  mkdir -p "$W/none"
   (cd "$W/app" && "${DOC[@]}" setup claude --scope project >/dev/null && "${DOC[@]}" setup codex --scope project >/dev/null)
   case $state in
     fresh-bus) rm -f "$W/app/.agentbus/bus.db"* ;;
@@ -122,60 +144,119 @@ for state in "${states[@]}"; do
     unmanaged) printf 'mine\n' > "$HOME/.claude/skills/agentbus/SKILL.md" ;;
     damaged-markers) printf '<!-- agentbus:begin -->\nx\n' > "$HOME/.codex/AGENTS.md" ;;
     newer-bus) "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=7"); c.commit()' "$W/app/.agentbus/bus.db" ;;
+    no-claude-dir) rm -rf "$HOME/.claude" ;;
+    no-codex-dir) rm -rf "$HOME/.codex" ;;
+    bare-home) rm -rf "$HOME"; mkdir -p "$HOME" ;;
   esac
   before=$(snap "$HOME" "$W")
-  for args in "" "--json" "--scope user" "--scope project" "--json --scope all"; do
-    # shellcheck disable=SC2086
-    doc doctor $args
-    [ "$RC" = 0 ] || [ "$RC" = 1 ] || { echo "$ERR" >&2; fail "doctor exited $RC in state $state"; }
+  for dir in "$W/app" "$W/none"; do
+    for args in "" "--json" "--scope user" "--scope project" "--json --scope all"; do
+      # shellcheck disable=SC2086
+      doc "$dir" doctor $args
+      [ "$RC" = 0 ] || [ "$RC" = 1 ] || { echo "$ERR" >&2; fail "doctor exited $RC in state $state"; }
+    done
   done
   [ "$(snap "$HOME" "$W")" = "$before" ] || fail "doctor changed a file under HOME or the project (state $state)"
 done
-ok "nine states, five invocations each: not a byte, mode or mtime changed"
+ok "twelve states, ten invocations each: not a byte, mode or mtime changed (nothing created either)"
 
-echo "TEST 2: doctor executes nothing it finds and starts no subprocess"
+echo "TEST 1b: a crashed writer's journal: the open may let SQLite fold it in, so rows, schema and version stay and every other file is byte-identical"
+world
+"$PY" - "$W/app/.agentbus/bus.db" <<'PY' || fail "could not leave committed frames in the journal"
+import os, sqlite3, sys
+c = sqlite3.connect(sys.argv[1], isolation_level=None)
+c.execute("PRAGMA wal_autocheckpoint=0")
+c.execute("INSERT INTO log(ts,agent,action) VALUES('t','crashed','x')")
+os._exit(0)   # no checkpoint, no close: the committed row lives only in the -wal
+PY
+[ -s "$W/app/.agentbus/bus.db-wal" ] || fail "the crashed-writer state has no journal frames to fold in"
+logical_before=$("$PY" -c 'import sys, h; print(h.logical(sys.argv[1]))' "$W/app/.agentbus/bus.db")
+others=$("$PY" -c 'import sys, h; print(h.tree(*sys.argv[1:], skip=("bus.db", "bus.db-wal", "bus.db-shm")))' "$HOME" "$W")
+doc doctor; [ "$RC" = 0 ] || fail "doctor failed on a bus with a crashed writer's journal: $ERR"
+doc doctor --json
+is_same() { [ "$2" = "$3" ] || fail "$1"; }
+is_same "doctor changed a row, the schema or the version of a bus with a journal to fold in" "$logical_before" "$("$PY" -c 'import sys, h; print(h.logical(sys.argv[1]))' "$W/app/.agentbus/bus.db")"
+is_same "doctor changed a file other than the bus's database files after a crash" "$others" "$("$PY" -c 'import sys, h; print(h.tree(*sys.argv[1:], skip=("bus.db", "bus.db-wal", "bus.db-shm")))' "$HOME" "$W")"
+grep -q crashed <<<"$logical_before" || fail "the crashed row was not in the state compared"
+ok "rows, schema and version unchanged; the checkpoint is the only thing the open may do"
+
+echo "TEST 2: doctor executes nothing it finds; the only process it starts is git, with read-only arguments"
 world
 mkrepo "$W/app"
 mkdir -p "$T/fakebin"
-printf '#!/bin/sh\necho ran >> "%s/canary-git"\nexit 1\n' "$T" > "$T/fakebin/git"; chmod 755 "$T/fakebin/git"
-# The bus's own copy is planted code: doctor reads VERSION, it does not run the file.
+REALGIT=$(command -v git)
+# A git on PATH that logs its arguments and runs the real one: every command trusts PATH for git, so doctor may run it, but only as below.
+printf '#!/bin/sh\necho "$*" >> "%s/git.log"\nexec "%s" "$@"\n' "$T" "$REALGIT" > "$T/fakebin/git"; chmod 755 "$T/fakebin/git"
+# The bus's own copy is planted code: doctor reads it as bytes, it does not run the file.
 cp "$W/app/.agentbus/bin/agentbus" "$T/real-copy"
 printf '#!/bin/sh\necho ran >> "%s/canary-copy"\n' "$T" > "$W/app/.agentbus/bin/agentbus"; chmod 755 "$W/app/.agentbus/bin/agentbus"
 printf '0.1.0\n' > "$W/app/.agentbus/VERSION"
 RC=0; (cd "$W/app" && PATH="$T/fakebin:$PATH" "${DOC[@]}" doctor >"$T/out" 2>"$T/err") || RC=$?; OUT=$(cat "$T/out")
 [ "$RC" = 0 ] || fail "doctor failed beside planted code: $(cat "$T/err")"
-[ ! -e "$T/canary-git" ] || fail "doctor ran git (a planted git on PATH wrote its canary)"
 [ ! -e "$T/canary-copy" ] || fail "doctor ran the bus folder's copy of agentbus"
+[ -s "$T/git.log" ] || fail "doctor did not use git for discovery (the control for the git log is empty)"
+"$PY" - "$T/git.log" <<'PY' || fail "doctor ran git with arguments other than discovery's read-only ones"
+import sys
+for line in open(sys.argv[1]).read().splitlines():
+    t = line.split()
+    while t and t[0] in ("-C", "--git-dir"):
+        t = t[2:]
+    assert t and (t[0] in ("--version", "rev-parse") or (t[0] == "config" and "--get" in t)), line
+PY
 hasf "0.1.0 here, 0.2.0 installed"
 cp "$T/real-copy" "$W/app/.agentbus/bin/agentbus"
-# In process: every way to start a process is replaced by a recorder that raises; a control proves the recorder is live.
+# In process: every other way to start a process is replaced by a recorder that raises; Popen passes only git's read-only calls.
 "$PY" - "$W/app" <<'PY' || fail "doctor started a subprocess or an executable"
-import os, subprocess, sys, h
+import os, pty, subprocess, sys, h
 m = h.load()
-calls = []
+calls, gits = [], []
 def trap(name):
     def f(*a, **k):
         calls.append(name)
         raise AssertionError("process started: " + name)
     return f
-for mod, names in ((subprocess, ("run", "Popen", "call", "check_call", "check_output")),
-                   (os, ("system", "fork", "posix_spawn", "popen", "execv", "execve", "execvp", "execl"))):
-    for n in names:
-        if hasattr(mod, n):
-            setattr(mod, n, trap(mod.__name__ + "." + n))
+real_popen = subprocess.Popen
+def popen(args, *a, **k):
+    t = list(args) if isinstance(args, (list, tuple)) else None
+    ok = t and t[0] == "git" and not k.get("shell")
+    if ok:
+        while len(t) > 1 and t[1] in ("-C", "--git-dir"):
+            del t[1:3]
+        ok = len(t) > 1 and (t[1] in ("--version", "rev-parse") or (t[1] == "config" and "--get" in t))
+    if not ok:
+        calls.append("subprocess.Popen " + repr(args))
+        raise AssertionError("process started: " + repr(args))
+    gits.append(args)
+    return real_popen(args, *a, **k)
+OS = ["system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp",
+      "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe",
+      "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"]
+for n in OS:
+    if hasattr(os, n):
+        setattr(os, n, trap("os." + n))
+for n in ("spawn", "fork"):
+    setattr(pty, n, trap("pty." + n))
+subprocess.Popen = popen
 os.chdir(sys.argv[1])
-try:
-    m.repo_info()
-except AssertionError:
-    pass
-assert calls, "the control did not reach the recorder: repo_info starts git, so the trap must fire"
-del calls[:]
+# controls: each trap is live, and git still gets through
+for fn in (lambda: os.posix_spawnp("true", ["true"], {}), lambda: os.system("true"), lambda: os.fork(), lambda: pty.spawn("true"),
+           lambda: subprocess.run(["true"]), lambda: subprocess.Popen("true", shell=True), lambda: os.execv("/usr/bin/true", ["true"])):
+    try:
+        fn()
+    except AssertionError:
+        continue
+    raise SystemExit("a trap did not fire")
+assert len(calls) == 7, calls
+m.repo_info()
+assert gits, "git did not get through the guard"
+del calls[:], gits[:]
 for argv in (["doctor"], ["--json", "doctor"], ["doctor", "--scope", "project"]):
     rc, out, err = h.run(m, argv)
     assert rc == 0 and out, (argv, rc, err)
     assert not calls, (argv, calls)
+assert gits, "doctor's discovery did not run git through the guard"
 PY
-ok "a planted git and a planted copy never ran; no process was started in process"
+ok "a planted copy never ran; git ran only as rev-parse, --version or config --get; every other spawn API is trapped and tested live"
 
 echo "TEST 3: a recorded executable is read as text: its __version__ line is found, nothing runs"
 world
@@ -199,7 +280,7 @@ doc doctor
 [ "$RC" = 0 ] || fail "exit $RC, wanted 0 for a warning: $ERR"
 want="agentbus 0.2.0 (<TOOL>)
   ok    bus        <WS>/app (schema 1)
-  warn  copy       0.1.0 here, 0.2.0 installed. Run: agentbus upgrade --all <WS>
+  warn  copy       0.1.0 here, 0.2.0 installed. Run: agentbus upgrade <WS>/app
   ok    skill      ~/.claude/skills/agentbus/SKILL.md is current
   n/a   agents-md  no ~/.codex found
   n/a   hooks      not installed by this version
@@ -209,17 +290,19 @@ got=$(norm)
 [ -z "$ERR" ] || fail "a warning wrote to stderr: $ERR"
 ok "header, five rows in table order, the summary; exit 0"
 
-echo "TEST 5: tool: a copy run from a project warns, the installed tool prints the header only"
+echo "TEST 5: tool: a copy run from a project says so, names the installed tool and does not compare itself; the installed tool prints the header only"
 world
 RC=0; (cd "$W/app" && "$PY" .agentbus/bin/agentbus doctor >"$T/out" 2>"$T/err") || RC=$?; OUT=$(cat "$T/out")
 [ "$RC" = 0 ] || fail "doctor from a project copy failed: $(cat "$T/err")"
-hasf "  warn  tool       running the copy at $W/app/.agentbus/bin/agentbus, not the installed agentbus; setup and upgrade refuse to run from a copy. Run: uv tool upgrade agentbus"
+hasf "  warn  tool       this is the folder's own copy at $W/app/.agentbus/bin/agentbus, not the installed agentbus, so it cannot be compared with itself. Run: agentbus doctor"
+hasf "  n/a   copy       this is the folder's own copy; run the installed agentbus doctor to compare it. Run: agentbus doctor"
 hasf "  ok    bus        $W/app (schema 1)"
 (cd "$W/app" && "$PY" .agentbus/bin/agentbus --json doctor >"$T/out" 2>/dev/null) || fail "doctor --json from a project copy failed"
-row tool warn "running the copy at" "uv tool upgrade agentbus"
+row tool warn "this is the folder's own copy at" "agentbus doctor"
+row copy n/a "this is the folder's own copy" "" "" "Run: agentbus doctor"
 doc doctor
 ! grep -q '^  [a-z/]* *tool ' <<<"$OUT" || fail "the installed tool printed a tool row beside the header"
-ok "doctor from a project copy runs and warns on tool; the installed tool's ok is the header line"
+ok "doctor from a project copy runs, names the installed command as the fix, and does not call a copy current by comparing it with itself"
 
 echo "TEST 6: bus: one case per state, each with the documented text and fix"
 world; rm -rf "$W/none"; mkdir -p "$W/none"
@@ -227,6 +310,9 @@ doc "$W/none" doctor --json
 [ "$RC" = 0 ] || fail "no bus must not be a failure (exit $RC)"
 row bus n/a "no bus here or in any parent folder" "agentbus init ."
 row copy n/a "no bus" ""
+doc "$W/none" doctor; has "Nothing to fix, but there is no bus here."
+! grep -qF "No problems." <<<"$OUT" || fail "a folder with no bus printed No problems."
+doc "$W/none" doctor --json
 row skill ok "is current" ""
 doc "$W/none" doctor
 has "  n/a   bus        no bus here or in any parent folder. Run: agentbus init ."
@@ -241,7 +327,7 @@ ok "a fresh init is ok, not a problem"
 mkdir -p "$W/legacy"; "${OLD[@]}" init "$W/legacy" >/dev/null 2>&1; (cd "$W/legacy" && "$PY" .agentbus/bin/agentbus --as a join >/dev/null 2>&1)
 doc "$W/legacy" doctor --json
 row bus ok "schema 0, the v0.1.0 shape; the next write stamps it 1" ""
-row copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade --all $W"
+row copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade $W/legacy"
 [ "$("$PY" -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("PRAGMA user_version").fetchone()[0])' "$W/legacy/.agentbus/bus.db")" = 0 ] || fail "doctor stamped a v0.1.0 bus"
 ok "a v0.1.0 bus is ok and stays unstamped"
 # older: a tool one schema version ahead would migrate it
@@ -271,14 +357,14 @@ ok "newer: fail, names the upgrade of the tool"
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=99999"); c.commit()' "$W/app/.agentbus/bus.db"
 doc doctor --json
 [ "$RC" = 1 ] || fail "a corrupt version must exit 1, got $RC"
-row bus fail "records schema version 99999, which no agentbus writes" "see docs/how-to/upgrade.md"
+row bus fail "records schema version 99999, which no agentbus writes" "" "" "Restore a backup"
 ok "corrupt: fail"
 # refused: tables that are not agentbus's shape
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=0"); c.execute("ALTER TABLE log ADD COLUMN extra TEXT"); c.commit()' "$W/app/.agentbus/bus.db"
 doc doctor --json
 [ "$RC" = 1 ] || fail "a bus with another shape must exit 1, got $RC"
-row bus fail "$W/app" "see docs/how-to/upgrade.md"
-ok "refused: fail"
+row bus fail "$W/app" "" "" "Restore a backup"
+ok "refused: fail, with a hint and no fix"
 
 echo "TEST 7: a bus held by a sqlite3 shell: bus is warn busy within 1 s"
 world
@@ -302,22 +388,32 @@ finally:
 assert r.returncode == 0, r
 bus = [c for c in json.loads(r.stdout)["checks"] if c["id"] == "bus"][0]
 assert bus["status"] == "warn" and "is busy: another process holds it" in bus["detail"], bus
-assert bus["fix"] == "close it, then run agentbus doctor again", bus
+assert bus["fix"] is None and bus["hint"] == "Close it, then run agentbus doctor again.", bus
 assert took < 1.0, took
 PY
-ok "busy is a warning with the fix, in under a second"
+ok "busy is a warning with a hint (no command), in under a second"
 
-echo "TEST 8: copy: one case per state"
+echo "TEST 8: copy: one case per state, and the copy's bytes are compared with the installed agentbus's"
 world
+CP="$W/app/.agentbus/bin/agentbus"; cp "$CP" "$T/good-copy"
 printf '9.9.9\n' > "$W/app/.agentbus/VERSION"; doc doctor --json
 row copy warn "9.9.9 here is newer than the installed 0.2.0" "uv tool upgrade agentbus"
 rm "$W/app/.agentbus/VERSION"; doc doctor --json
 row copy warn "has no VERSION, so its copy's version is unknown" "agentbus upgrade $W/app"
 printf '0123456789abcdef0123456789abcdef01234567 2026-11-01T10:00:00Z\n' > "$W/app/.agentbus/VERSION"; doc doctor --json
-row copy n/a "the copy is from source (0123456), not a release; versions are not compared" ""
-rm -f "$W/app/.agentbus/bin/agentbus"; printf '0.2.0\n' > "$W/app/.agentbus/VERSION"; doc doctor --json
+row copy ok "0123456, same as the installed agentbus" ""
+printf '# edited\n' >> "$CP"; doc doctor --json
+row copy n/a "the copy is from source (0123456), not a release; its contents differ from the installed agentbus" "" "" "agentbus upgrade $W/app"
+printf '0.2.0\n' > "$W/app/.agentbus/VERSION"; doc doctor --json
+row copy warn "0.2.0 here has the installed version's number but not its contents (damaged, edited or empty)" "agentbus upgrade $W/app"
+: > "$CP"; doc doctor --json
+row copy warn "has the installed version's number but not its contents" "agentbus upgrade $W/app"
+doc doctor; has "  warn  copy       0.2.0 here has the installed version's number but not its contents (damaged, edited or empty). Run: agentbus upgrade $W/app"
+cp "$T/good-copy" "$CP"; doc doctor --json
+row copy ok "0.2.0, same as the installed agentbus" ""
+rm -f "$CP"; doc doctor --json
 row copy warn "has no copy of agentbus (bin/agentbus is missing); agents cannot run it" "agentbus init $W/app"
-ok "newer, no VERSION, a source commit, no copy"
+ok "newer, no VERSION, a source commit (same and different bytes), edited and empty copies under the right version, no copy"
 
 echo "TEST 9: skill and agents-md: each state names its text and fix"
 world
@@ -343,8 +439,8 @@ row skill warn "$SK/SKILL.md is an older version of the skill" "agentbus setup c
 doc doctor --json
 row skill warn "$SK/SKILL.md was edited, or comes from a newer agentbus; setup saves it as a .bak file before replacing it" "agentbus setup claude" user
 printf 'mine\n' > "$SK/SKILL.md"; doc doctor --json
-row skill warn "$SK/SKILL.md was not written by agentbus, so setup will not overwrite it. Move it aside first" "agentbus setup claude" user
-doc doctor; has "  warn  skill      ~/.claude/skills/agentbus/SKILL.md was not written by agentbus, so setup will not overwrite it. Move it aside first. Run: agentbus setup claude"
+row skill warn "$SK/SKILL.md was not written by agentbus" "" user "setup will not change it. Inspect it, and move it aside if it is yours to move"
+doc doctor; has "  warn  skill      ~/.claude/skills/agentbus/SKILL.md was not written by agentbus. setup will not change it. Inspect it, and move it aside if it is yours to move."
 # the old README install line: a link to a folder (alive, with an agentbus skill, or gone)
 rm -rf "$SK"; mkdir -p "$T/clone/skill"; printf -- '---\nname: agentbus\n---\n' > "$T/clone/skill/SKILL.md"; ln -s "$T/clone/skill" "$SK"
 doc doctor --json
@@ -352,7 +448,7 @@ row skill warn "$SK is a link to $T/clone/skill (the old install line); it break
 rm -rf "$T/clone"; doc doctor --json
 row skill warn "$SK is a link to $T/clone/skill (the old install line)" "agentbus setup claude" user
 rm "$SK"; mkdir -p "$T/other"; printf -- '---\nname: other\n---\n' > "$T/other/SKILL.md"; ln -s "$T/other" "$SK"; doc doctor --json
-row skill warn "is a link to $T/other, which is not an agentbus skill; setup leaves it alone. Remove it first" "agentbus setup claude" user
+row skill warn "is a link to $T/other, which is not an agentbus skill" "" user "setup will not change it"
 rm "$SK"; (cd "$W/app" && "${DOC[@]}" setup claude >/dev/null)
 ok "skill: missing, older, edited, unmanaged, old install-line link (alive and dangling), foreign link"
 # AGENTS.md
@@ -361,7 +457,7 @@ row agents-md warn "$AG does not exist; Codex has no agentbus block" "agentbus s
 printf 'my own notes\n' > "$AG"; doc doctor --json
 row agents-md warn "$AG has no agentbus block" "agentbus setup codex" user
 printf '<!-- agentbus:begin -->\nonly the start\n' > "$AG"; doc doctor --json
-row agents-md warn "$AG has damaged agentbus markers, so setup will not touch it. Repair them by hand first" "agentbus setup codex" user
+row agents-md warn "$AG has damaged agentbus markers" "" user "Repair the <!-- agentbus:begin --> and <!-- agentbus:end --> lines by hand"
 printf '<!-- agentbus:begin -->\nolder block\n<!-- agentbus:end -->\n' > "$AG"
 RC=0; (cd "$W/app" && "${DOC_H[@]}" doctor --json >"$T/out" 2>/dev/null) || RC=$?
 row agents-md warn "$AG has an older agentbus block" "agentbus setup codex" user
@@ -369,8 +465,10 @@ doc doctor --json
 row agents-md warn "$AG has an edited agentbus block, or one from a newer agentbus" "agentbus setup codex" user
 rm "$AG"; (cd "$W/app" && "${DOC[@]}" setup codex >/dev/null); mv "$AG" "$T/real-agents"; ln -s "$T/real-agents" "$AG"; doc doctor --json
 row agents-md ok "has the current block (through a symlink; setup will not write through it)" "" user
+printf 'my own notes\n' > "$T/real-agents"; doc doctor --json
+row agents-md warn "$AG has no agentbus block" "" user "setup will not write through a symlink. Edit the file it points to."
 rm "$AG"; mv "$T/real-agents" "$AG"
-ok "agents-md: missing file, no block, damaged markers, older, edited, current through a symlink"
+ok "agents-md: missing file, no block, damaged markers, older, edited, current through a symlink, a symlink that needs a block (hint, no setup)"
 
 echo "TEST 10: exit 0 with only warnings, 1 with a fail; the summary line counts both"
 world
@@ -388,6 +486,16 @@ r = json.load(open(sys.argv[1]))
 assert r["fail"] == 1 and r["warn"] == 2 and len(r["checks"]) >= 6, r
 e = json.loads(open(sys.argv[2]).read())["error"]
 assert e["code"] == "items_failed" and e["failed"][0]["id"] == "bus" and e["retryable"] is False, e
+bus = [c for c in r["checks"] if c["id"] == "bus"][0]
+assert e["failed"][0] == bus and "fix" in e["failed"][0] and "hint" in e["failed"][0], (e["failed"][0], bus)   # null keys kept, like stdout
+PY
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=99999"); c.commit()' "$W/app/.agentbus/bus.db"
+doc doctor --json
+"$PY" - "$T/out" "$T/err" <<'PY' || fail "a failed entry without a fix does not keep its null fix beside its hint, as stdout does"
+import json, sys
+r = json.load(open(sys.argv[1])); e = json.loads(open(sys.argv[2]).read())["error"]
+f = e["failed"][0]
+assert f["fix"] is None and f["hint"].startswith("Restore a backup") and f == [c for c in r["checks"] if c["id"] == "bus"][0], f
 PY
 world
 doc doctor; [ "$RC" = 0 ] || fail "a clean doctor must exit 0, got $RC"
@@ -408,7 +516,9 @@ errors = validate(r, s["commands"]["doctor"]["result"], s["objects"])
 assert not errors, errors
 assert [c["id"] for c in r["checks"]] == ["tool", "bus", "copy", "skill", "agents-md", "hooks"], [c["id"] for c in r["checks"]]
 assert r["agentbus"] == "0.2.0" and r["contract"] == 1 and r["fail"] == 0 and r["warn"] == 0 and r["path"].endswith("tool/agentbus"), r
-assert all(c["status"] in ("ok", "warn", "fail", "n/a") and "fix" in c for c in r["checks"]), r
+assert all(c["status"] in ("ok", "warn", "fail", "n/a") and "fix" in c and "hint" in c for c in r["checks"]), r
+assert "checks of doctor" in s["errors"]["items_failed"]["meaning"], s["errors"]["items_failed"]
+assert "hint" in s["objects"]["DoctorCheck"]["properties"] and "hint" in s["objects"]["DoctorCheck"]["required"], s["objects"]["DoctorCheck"]
 bad = {"agentbus": "x", "checks": [{"id": "bus", "status": "fine", "detail": "", "fix": None}], "fail": 0, "warn": 0, "path": "p", "contract": 1}
 assert validate(bad, s["commands"]["doctor"]["result"], s["objects"]), "an unknown status passed the schema"
 PY
@@ -431,7 +541,7 @@ doc "$HOME" doctor --json
 "$PY" -c 'import json,sys; r=json.load(open(sys.argv[1])); assert [c.get("scope") for c in r["checks"] if c["id"]=="skill"] == ["user"], r' "$T/out" || fail "run from HOME the user and project scopes are one folder and must be listed once"
 ok "all lists installed project pieces only; project names what is missing; HOME is not listed twice"
 
-echo "TEST 13: a linked worktree finds its main checkout's bus, as every command does, without git"
+echo "TEST 13: a linked worktree finds its main checkout's bus, as every command does"
 world
 mkrepo "$W/main"; "${DOC[@]}" init "$W/main" >/dev/null 2>&1
 git -C "$W/main" worktree add -q "$W/wt" 2>/dev/null || git -C "$W/main" worktree add -q -b wtb "$W/wt"
@@ -449,8 +559,13 @@ RC=0; (cd "$T" && AGENTBUS_DB="$W/app/.agentbus/bus.db" "${DOC[@]}" doctor --jso
 row bus ok "$W/app (schema 1)" ""
 RC=0; (cd "$T" && AGENTBUS_DB="$T/nowhere/.agentbus/bus.db" "${DOC[@]}" doctor --json >"$T/out" 2>"$T/err") || RC=$?
 [ "$RC" = 0 ] || fail "a missing AGENTBUS_DB bus must not fail (exit $RC)"
-row bus n/a "no bus at $T/nowhere/.agentbus/bus.db" "agentbus init $T/nowhere"
-ok "explicit database honoured; a missing one names the init command"
+row bus n/a "no bus at $T/nowhere/.agentbus/bus.db" "" "" "AGENTBUS_DB names a bus that does not exist yet"
+mkdir -p "$T/there"
+RC=0; (cd "$T" && AGENTBUS_DB="$T/there/.agentbus/bus.db" "${DOC[@]}" doctor --json >"$T/out" 2>"$T/err") || RC=$?
+row bus n/a "no bus at $T/there/.agentbus/bus.db" "agentbus init $T/there"
+mkdir -p "$T/plain"; RC=0; (cd "$T" && AGENTBUS_DB="$T/plain/bus.db" "${DOC[@]}" --as a join >/dev/null 2>&1 && AGENTBUS_DB="$T/plain/bus.db" "$PY" "$T/v2.py" doctor --json >"$T/out" 2>"$T/err") || RC=$?
+row bus warn "$T/plain (schema 1) is older than this agentbus" "" "" "Run any agentbus command that writes, with this AGENTBUS_DB"
+ok "explicit database honoured; a missing one names the init command only where init works, else a hint; an older one outside .agentbus gets a hint, not an upgrade DIR that cannot work"
 
 echo "TEST 15: text from files is escaped, and long lines wrap"
 world
@@ -490,7 +605,7 @@ assert "needs the agentbus hooks" in checks[0]["detail"], checks
 open(path, "w").write("not json")
 rc, out, err = h.run(m, ["--json", "doctor", "--scope", "user"])
 checks = [c for c in json.loads(out)["checks"] if c["id"] == "hooks"]
-assert rc == 1 and checks[0]["status"] == "fail", (rc, checks)
+assert rc == 1 and checks[0]["status"] == "fail" and checks[0]["fix"] is None and "setup will not change a file it cannot parse" in checks[0]["hint"], (rc, checks)
 # 3. A check registered by a hook stream is appended to hooks; a check with a new id is a new row after the others.
 m.SETUP_TARGETS["claude"].remove(piece)
 m.DOCTOR_HOOK_CHECKS.append(lambda ctx: [m.doctor_result("hooks", "fail", "runs /old/path/agentbus, which does not exist", "agentbus setup claude")])
@@ -527,5 +642,36 @@ sed -n '/^# ==== doctor ====/,/^COMMANDS = {/p' "$MOD" > "$T/doctor-region.py"
 [ -s "$T/doctor-region.py" ] || fail "the doctor region markers are gone"
 ! grep -qE '\b(socket|urllib|http\.client|urlopen|requests)\b' "$T/doctor-region.py" || fail "the doctor region uses the network"
 ok "the slot is marked; the doctor region has no network code"
+
+echo "TEST 19: doctor finds the bus as every command does, and a state where commands fail is never 'No problems.'"
+world
+# a bare repository's linked worktree under a folder that has an outer bus: join refuses (no main checkout git can name)
+mkdir -p "$W/outer"; "${DOC[@]}" init "$W/outer" >/dev/null 2>&1
+mkrepo "$W/outer/src"; git -C "$W/outer" clone -q --bare "$W/outer/src" "$W/outer/bare.git"; git -C "$W/outer/bare.git" worktree add -q "$W/outer/bwt" >/dev/null 2>&1 || git -C "$W/outer/bare.git" worktree add -q -b wt2 "$W/outer/bwt"
+RC=0; (cd "$W/outer/bwt" && "${DOC[@]}" --as a join >/dev/null 2>"$T/err") || RC=$?
+[ "$RC" = 3 ] && grep -q "cannot find the main checkout" "$T/err" || fail "the premise failed: join from a bare repository's worktree must refuse (rc $RC): $(cat "$T/err")"
+doc "$W/outer/bwt" doctor; [ "$RC" = 1 ] || fail "doctor must exit 1 where join exits 3 (got $RC)"
+hasf "cannot find the main checkout for this worktree"
+! grep -qF "No problems." <<<"$OUT" || fail "doctor said No problems. where every command fails"
+grep -qF "1 problem" <<<"$OUT" || fail "doctor did not count the failed bus"
+# --up is honoured, as for commands
+mkdir -p "$W/outer/inner"; "${DOC[@]}" init "$W/outer/inner" >/dev/null 2>&1
+doc "$W/outer/inner" doctor --json
+row bus ok "$W/outer/inner" ""
+RC=0; (cd "$W/outer/inner" && "${DOC[@]}" --up 1 doctor --json >"$T/out" 2>"$T/err") || RC=$?
+row bus ok "$W/outer " ""
+RC=0; (cd "$W/outer/inner" && "${DOC[@]}" --up 5 doctor --json >"$T/out" 2>"$T/err") || RC=$?
+[ "$RC" = 1 ] || fail "--up 5 names no bus and every command fails there, so doctor must exit 1 (got $RC)"
+ok "same discovery as the commands (find_bus_path); a refused discovery is a fail, never a clean bill"
+
+echo "TEST 20: an unreadable config folder is a warning on its scope with a hint, not a crash"
+world
+chmod 000 "$HOME/.claude/skills/agentbus"
+doc doctor --json
+chmod 700 "$HOME/.claude/skills/agentbus"
+[ "$RC" = 0 ] || fail "an unreadable skill folder must be a warning (exit $RC): $ERR"
+row skill warn "cannot be read" "" user "Check the permissions of that path"
+doc doctor; hasf "~/.claude/skills/agentbus"
+ok "permission errors name the path, the scope and what to check"
 
 all_passed "All doctor tests passed"
