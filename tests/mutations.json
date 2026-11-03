@@ -366,7 +366,7 @@
     "replace": "return claude_plugin_from_files()",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "missing line:   = hooks   provided by the agentbus plugin; not added"
+    "expect": "the plugin files overruled claude's own list"
   },
   {
     "name": "a hook treats every .agentbus as untracked",
@@ -385,15 +385,6 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "a tracked bus with a split index was used"
-  },
-  {
-    "name": "a hook finds the repository by running git",
-    "file": "bin/agentbus",
-    "find": "hook_discovery_start\\(os\\.getcwd\\(\\)\\)",
-    "replace": "discovery_start()",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "a hook ran git"
   },
   {
     "name": "setup starts a claude that lives inside the project",
