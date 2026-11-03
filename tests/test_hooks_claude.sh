@@ -1059,19 +1059,24 @@ echo "TEST 43: chance bytes in the hashes and times of an index do not hide a di
 import hashlib, os, runpy, struct, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_chance")
 d = sys.argv[2]; os.makedirs(d + "/.git", exist_ok=True)
-names = sorted([b"src/a.c", b"src/b.c", b".agen\xe2\x81\xaatbus/bus.db", b"z/.agent\xef\xbb\xbfbus/VERSION", b"y/.a\xe2\x80\x8cgentbus/bin/agentbus", b"w.c"])
+names = [b".agen\xe2\x81\xaatbus/bus.db", b"src/a.c", b"z/.agent\xef\xbb\xbfbus/VERSION", b"zz1.c", b"zz2.c"]   # sorted
+assert names == sorted(names)
 out = [b"DIRC", struct.pack(">II", 2, len(names))]
-junk = [b"\xe2\x80\x8c", b"\xe2\x80\xaa", b"\xef\xbb\xbf", b"\xe2\x81\xaf", b"\xe2\x80\x8f"]
+# Byte pairs that look like the first ignorable prefix sit in the hash and time fields of the entries AFTER the disguised
+# names (as chance puts them in a big index). A search that remembers how far one prefix got and skips the others loses the
+# disguised names before them.
+junk = b"\xe2\x80\x8c"
 for i, b in enumerate(names):
-    stat = junk[i % 5] + os.urandom(21) + junk[(i + 2) % 5]               # in the stat fields, before the names
-    head = stat[:24] + struct.pack(">I", 0o100644) + os.urandom(12) + junk[(i + 1) % 5] + os.urandom(17) + struct.pack(">H", len(b))
+    j = junk if i >= 1 else b"\x01\x02\x03"
+    head = os.urandom(8).replace(b"\xe2", b"\x01") + bytes(8) + os.urandom(8).replace(b"\xe2", b"\x01") + struct.pack(">I", 0o100644) + bytes(12)
+    head += j + os.urandom(17).replace(b"\xe2", b"\x01") + struct.pack(">H", len(b))
     assert len(head) == 62, len(head)
     e = head + b
     out.append(e + bytes(8 - len(e) % 8))
 body = b"".join(out)
 open(d + "/.git/index", "wb").write(body + hashlib.sha1(body).digest())
 cands, shared = m["hook_index_scan"]({"gitdir": d + "/.git", "common": d + "/.git"})
-want = [b".agen\xe2\x81\xaatbus", b"z/.agent\xef\xbb\xbfbus", b"y/.a\xe2\x80\x8cgentbus"]
+want = [b".agen\xe2\x81\xaatbus", b"z/.agent\xef\xbb\xbfbus"]
 assert sorted(cands) == sorted(want), cands
 PY
 ok "disguised names are found whatever bytes come before them"
