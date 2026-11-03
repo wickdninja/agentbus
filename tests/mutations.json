@@ -592,5 +592,14 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "stopped or broke the hook"
+  },
+  {
+    "name": "the index shortcut says untracked whatever the file holds",
+    "file": "bin/agentbus",
+    "find": " or want\\[:-1\\] in low:",
+    "replace": ":",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
   }
 ]

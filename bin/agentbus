@@ -6024,6 +6024,24 @@ def hook_index_stamp(path):
     return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
 
 
+def hook_index_quick(repo, want):
+    """False when a plain index (version 2 or 3, not split, not sparse) cannot hold `want` at all: its paths are stored
+    whole, so the folder's name appearing nowhere in the lower-cased file proves nothing under it is tracked, without parsing
+    a million entries. None when this shortcut does not apply (it appears, or the index is version 4, split or sparse) and
+    the entries must be read. A file that is not an index at all raises, like the full read."""
+    data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
+    size = hook_index_candidates(data)[0]
+    version = struct.unpack(">I", data[4:8])[0] if data[:4] == b"DIRC" else 0
+    if version not in (2, 3):
+        if version == 4 and data[:4] == b"DIRC":
+            return None
+        raise ValueError("signature or version")
+    low = data[:-size].lower()
+    if b"link" in low or b"sdir" in low or want[:-1] in low:
+        return None
+    return False
+
+
 def hook_index_entries(repo):
     """([(path bytes, mode)], stamp of the shared index or None) for the repository's index, a split index joined with
     its shared index. FileNotFoundError when there is no index; ValueError or OSError for anything unreadable."""
@@ -6068,9 +6086,15 @@ def hook_index_tracks(repo, prefix):
             return saved["tracked"]
     except (ValueError, OSError, TypeError):
         pass
-    names, shared_stamp = hook_index_entries(repo)
     want = prefix.lower()
-    tracked = False
+    shared_stamp = None
+    quick = hook_index_quick(repo, want)
+    if quick is not None:
+        names = []
+        tracked = quick
+    else:
+        names, shared_stamp = hook_index_entries(repo)
+        tracked = False
     for name, mode in names:
         n = name.lower()
         if n.startswith(want) or n == want[:-1] or (mode == 0o040000 and n.endswith(b"/") and want.startswith(n)):
