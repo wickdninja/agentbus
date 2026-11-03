@@ -48,7 +48,9 @@ done
 ok "stdin is read before the bus is opened"
 
 echo "TEST 2: a reader whose stdout is not being drained does not hold the bus"
-python3 -c 'print("x" * 300000)' | agentbus --as a post - >/dev/null   # more than a pipe buffer
+# 60 bodies of 3 KB: a listing cuts each at 2 KB, so read is still more than a pipe buffer. The proof below is the pause
+# point just before the stdout write, which every command reaches whatever its size.
+for i in $(seq 1 60); do python3 -c 'print("x" * 3000)' | agentbus --as a post - >/dev/null; done
 for cmd in read "--json read" status; do
   rm -f "$T/outp"; mkfifo "$T/outp"
   n=$((n+1)); P="$T/pause2-$n"; mkdir -p "$P"; touch "$P/before-stdout-write.go"
@@ -108,15 +110,16 @@ took=$(python3 -c 'import sys,time; print("%.1f" % (time.time() - float(sys.argv
 # time bound is only a backstop, with ample headroom for a loaded machine: capped, status takes
 # well under 1 s here; the old code took 5 s and more (20 s and more with longer rows).
 python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 15 else 1)' "$took" || fail "status with 200k agents took ${took}s"
-grep -qx "  ... $((total - 500)) more (use --limit)" "$T/o4" || fail "status did not cap the agents at 500: $(grep -c '' "$T/o4") lines"
-[ "$(sed -n '/^== agents$/,/^$/p' "$T/o4" | grep -c '^  ')" = 501 ] || fail "status did not show 500 agents and the more row"
-grep -q '^== last 10 messages$' "$T/o4" || fail "status lost its later sections"
+grep -qx "  ... $((total - 20)) more" "$T/o4" || fail "status did not cap the agents at 20: $(grep -c '' "$T/o4") lines"
+grep -qx "  next: agentbus who --limit $total" "$T/o4" || fail "status did not name the command that lists every agent"
+[ "$(sed -n '/^== agents$/,/^$/p' "$T/o4" | grep -c '^  ')" = 22 ] || fail "status did not show 20 agents, the more row and the next row"
+grep -q '^== recent messages$' "$T/o4" || fail "status lost its later sections"
 o=$(outof agentbus who --limit 3)
-[ "$(grep -c '^  ' <<<"$o")" = 4 ] && grep -qx "  ... $((total - 3)) more (use --limit)" <<<"$o" || fail "who --limit 3: $o"
-[ "$(njson env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who 2>"$T/e4")" = 500 ] || fail "--json who not capped at 500"
+[ "$(grep -c '^  ' <<<"$o")" = 5 ] && grep -qx "  ... $((total - 3)) more" <<<"$o" || fail "who --limit 3: $o"
+[ "$(njson env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who 2>"$T/e4")" = 50 ] || fail "--json who not capped at 50"
 [ "$(env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["has_more"])')" = True ] || fail "--json who did not say rows were left out"
 [ "$(njson env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who --limit -1 2>/dev/null)" = "$total" ] || fail "--limit -1 is not every row"
-ok "status with $total agents took ${took}s, capped at 500 rows, while another agent posted"
+ok "status with $total agents took ${took}s, capped at 20 rows, while another agent posted"
 
 echo "TEST 5: a --json notice into a stderr nobody drains does not hold the bus"
 # Bug it catches: under --json, who and status wrote "N more not shown" to stderr while the bus was
@@ -328,16 +331,16 @@ c.executemany("INSERT INTO messages(ts,sender,recipient,kind,body) VALUES(?,?,?,
 c.commit()
 PY
 o=$(outof agentbus --as e inbox)
-[ "$(grep -c '^  to e ' <<<"$o")" = 500 ] && grep -qx '  ... 100 more unread; run inbox again' <<<"$o" || fail "inbox not capped at 500: $(grep -c '^  to e ' <<<"$o") shown"
-grep -q '^  to e 499$' <<<"$o" && ! grep -q '^  to e 500$' <<<"$o" || fail "inbox did not show the oldest 500"
+[ "$(grep -c '^  to e ' <<<"$o")" = 20 ] && grep -qx '  ... 580 more unread' <<<"$o" || fail "inbox not capped at 20: $(grep -c '^  to e ' <<<"$o") shown"
+grep -q '^  to e 019$' <<<"$o" && ! grep -q '^  to e 020$' <<<"$o" || fail "inbox did not show the oldest 20"
 o=$(outof agentbus --as e inbox --limit 30)
-[ "$(grep -c '^  to e ' <<<"$o")" = 30 ] && grep -q '^  to e 500$' <<<"$o" && grep -q '^  to e 529$' <<<"$o" || fail "second inbox did not start at the first unshown message"
-o=$(json_ok agentbus --json --as e inbox --peek)
-[ "$(python3 -c 'import json,sys; j=json.loads(sys.argv[1])["items"]; print(len(j), j[0]["body"])' "$o")" = "70 to e 530" ] || fail "--peek after the capped reads: $o"
+[ "$(grep -c '^  to e ' <<<"$o")" = 30 ] && grep -q '^  to e 020$' <<<"$o" && grep -q '^  to e 049$' <<<"$o" || fail "second inbox did not start at the first unshown message"
+o=$(json_ok agentbus --json --as e inbox --peek --limit -1)
+[ "$(python3 -c 'import json,sys; j=json.loads(sys.argv[1])["items"]; print(len(j), j[0]["body"])' "$o")" = "550 to e 050" ] || fail "--peek after the capped reads: $o"
 o=$(outof agentbus --as e inbox --limit -1)
-[ "$(grep -c '^  to e ' <<<"$o")" = 70 ] || fail "inbox --limit -1 did not show the remaining 70"
+[ "$(grep -c '^  to e ' <<<"$o")" = 550 ] || fail "inbox --limit -1 did not show the remaining 550"
 [ "$(outof agentbus --as e inbox)" = "inbox empty" ] || fail "inbox not empty after every message was shown"
-ok "leave and release --all list and log 500 of 20000 claims; inbox shows the oldest 500 and keeps the rest unread"
+ok "leave and release --all list and log 500 of 20000 claims; inbox shows the oldest 20 and keeps the rest unread"
 
 echo "TEST 8: 400k stored claims do not slow every open"
 # Bug it catches: normalize_stored_claims read every claim into Python on every open, with the lock

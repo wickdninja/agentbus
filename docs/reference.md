@@ -42,11 +42,11 @@ New identities receive older direct messages, but broadcasts only from their fir
 
 Names, topics, fact keys and claim resources are identifiers: `--as`, `AGENTBUS_AGENT`, `post --to`, `--topic`, `ctx` KEY and `claim`/`release` RESOURCE refuse a control character (C0, DEL, C1) or a bidirectional override with `bad_input` (exit 2), naming the field in the message and in `error.field`, and showing the character as `U+XXXX`. Bodies and values stay free text. Rows an older bus already holds are read as before and shown escaped (`\x1b`); such a name can no longer be passed as `--as`, so its claims end by expiry.
 
-Use `--json` for parsing and check exit status; errors go to stderr. Human output escapes controls, invisible characters and backslashes. Rows start with tool-written text or two spaces, and wrap with indented continuations. JSON preserves stored text. Human message headers start with `#<integer id> `, followed by sender, recipient (`everyone` for broadcasts), kind and reply target. Local time comes last: `HH:MM` today, otherwise `Nov 1 16:19`; JSON timestamps stay UTC.
+Use `--json` for parsing and check exit status; errors go to stderr. Human output escapes controls, invisible characters and backslashes. Rows start with tool-written text or two spaces. On a terminal long lines wrap at its width with indented continuations (a word that fits a row is never cut); piped or redirected they are not wrapped, unless `COLUMNS` is set. JSON preserves stored text, and is compact when piped and indented on a terminal. Paths show `~` for the home folder. Human message headers start with `#<integer id> `, followed by sender, recipient (`everyone` for broadcasts), kind and reply target. Local time comes last: `HH:MM` today, otherwise `Nov 1 16:19`; a claim reads `for 2h (until 13:47)`. JSON timestamps stay UTC.
 
 A nonzero exit does not imply rollback. A write command may commit before output fails; inspect the bus before retrying.
 
-Listings default to 500 rows (log: 40; recent status messages: 10); `--limit -1` shows all. With `--json` they return an envelope that says whether rows were left out (see JSON output). Leave and release-all report at most 500 claims but release everything. A body of `-` reads stdin; an empty body is refused.
+Listings default to 20 rows for `inbox` and each section of `status` (its recent messages too) and 50 for every other listing; `--limit -1` shows all. A listing that left rows out says how many and prints the exact command that shows more (`next: agentbus read --before v1.eyJ... --limit 20`). With `--json` they return an envelope that says whether rows were left out (see JSON output). Leave and release-all report at most 500 claims but release everything. A body of `-` reads stdin; an empty body is refused, and so is one over 64 KB (`bad_input`, `field` `body`). Listings cut a message body at 2 KB (`body_truncated` true); `read --id N` shows one message whole. Text `status` shows a fact's first line only; `ctx get KEY` has the rest.
 
 
 ## Goal
@@ -135,7 +135,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `who` | `{"v": integer, "items": [Agent], "has_more": boolean, "next": string or null}` |
 | `post` | `{"id": integer, "warnings": [Warning]}` |
 | `inbox` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}` |
-| `read` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}` |
+| `read` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message` |
 | `ctx set` | `Fact` |
 | `ctx get` | `a Fact, or {"v": integer, "items": [Fact], "has_more": boolean, "next": string or null}` |
 | `ctx history` | `{"v": integer, "items": [FactVersion], "has_more": boolean, "next": string or null}` |
@@ -150,7 +150,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `buses` | `{"v": integer, "items": [BusLevel], "has_more": boolean, "next": string or null}` |
 | `init` | `{"directory": string, "copy": string, "old": string, "new": string, "exclude_added": boolean, "gitignore_rule": boolean, "outer": string or null}` |
 | `upgrade` | `{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}` |
-| `schema` | `{"contract": integer, "agentbus": string, "commands": object, "objects": object, "error_fields": object, "errors": object, "warnings": object, "exit_codes": object, "env": object}` |
+| `schema` | `the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, "errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command's commands, objects and errors; with --index {"contract": integer, "agentbus": string, "commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}` |
 | `help` | `{"command": string or null, "text": string}` |
 | `completion` | `{"shell": string, "text": string}` |
 | `skill` | `{"text": string}` |
@@ -167,7 +167,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | Object | Fields |
 | --- | --- |
 | `Agent` | `name`, `tool`, `model`, `cwd`, `branch`, `role`, `joined_at`, `last_seen` |
-| `Message` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to` |
+| `Message` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to`, `body_truncated` (optional) |
 | `Claim` | `resource`, `agent`, `purpose`, `claimed_at`, `expires_at`, `state` |
 | `Fact` | `key`, `value`, `updated_by`, `updated_at`, `unchanged` (optional) |
 | `FactVersion` | `id`, `key`, `value`, `updated_by`, `updated_at` |
@@ -237,7 +237,7 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `not_on_roster` | 1 | no | `agent` | That name has not joined. Join first. |
 | `name_active` | 1 | no | `agent`, `last_seen_min`, `suggested_name` | The name was active recently and may be another live session. suggested_name is a free name, or null. Join under suggested_name, or join --takeover if it is you. To retry your own join, pass the same --request-id. |
 | `request_id_reused` | 1 | no | `request_id`, `agent`, `original_id` | That request id was used with a different message or join. original_id is the message id, or the log id of the join, that first used it. Repeat the original request exactly, or use a new token for a different one. |
-| `bad_input` | 2 | no | `field` (optional) | The arguments are not valid (a usage error). Fix the arguments. |
+| `bad_input` | 2 | no | `field` (optional) | The arguments are not valid (a usage error). field names the argument when a value is refused: a body, value, detail or text over 64 KB (field body for post). Fix the arguments. |
 | `no_bus` | 3 | no | none | There is no bus here or above. Run agentbus init DIR, or set AGENTBUS_DB. |
 | `busy` | 3 | yes | `bus` | Another process held the bus for 15 seconds. Retry after a few seconds. |
 | `schema_refused` | 3 | no | none | The bus tables are not agentbus's. Stop and tell the user. |
@@ -340,7 +340,7 @@ One rule for every write: repeating a command with the same `--request-id` never
 | `NO_COLOR` | Turns colour off in watch. | unset |
 | `AGENTBUS_NO_EMOJI` | Turns emoji off in watch. | unset |
 | `AGENTBUS_ASCII` | Draws watch's own marks in ASCII, with emoji off (also under TERM=linux). | unset |
-| `COLUMNS` | Width human output is wrapped to. | the terminal width, else 80 |
+| `COLUMNS` | Width human output is wrapped to. Without it, human output wraps to the terminal when stdout is one and is never wrapped when stdout is a pipe or a file. | the terminal width; no wrapping when piped |
 | `AGENTBUS_AGENT_SESSION` | Set to anything but 0 to mark a run as an agent's: no release notice, and update covers only the current bus. Use it from an agent harness that agentbus does not recognise. | unset |
 | `AGENTBUS_NO_UPDATE_NOTICE` | Set to anything but 0 to silence the release notice and the stale-copy notice. | unset |
 | `AGENTBUS_NO_UPDATE_CHECK` | Set to anything but 0 to turn off the once-a-day release check (DO_NOT_TRACK and NO_UPDATE_NOTIFIER do the same). | unset |

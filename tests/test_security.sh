@@ -126,7 +126,8 @@ for c in status "ctx get" who claims "log show" read; do
   o=$(outof agentbus $c)
   # The negative checks below pass on an empty view, so first require every forged field in it, escaped.
   case "$c" in
-    status) want=("$F_NAME" "$F_ROLE" "$F_KEY" "$F_VAL" "$F_RES" "$F_PUR" "$F_TOP") ;;
+    # status shows a fact's first line only, so the forged lines of F_VAL are not in it at all; the key's line shows `v...`
+    status) want=("$F_NAME" "$F_ROLE" "$F_KEY = v..." "$F_RES" "$F_PUR" "$F_TOP") ;;
     "ctx get") want=("$F_NAME" "$F_KEY" "$F_VAL") ;;
     who) want=("$F_NAME" "$F_ROLE") ;;
     claims) want=("$F_NAME" "$F_RES" "$F_PUR") ;;

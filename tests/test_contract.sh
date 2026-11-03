@@ -19,7 +19,7 @@ BASE = {k: v for k, v in os.environ.items() if not k.startswith("AGENTBUS_")}
 BASE.update(COLUMNS="4096", PYTHONDONTWRITEBYTECODE="1")
 count = [0]
 
-def run(*args, db=None, env=None, cwd=None, closed=False, home=None):
+def run(*args, db=None, env=None, cwd=None, closed=False, home=None, stdin=None):
     count[0] += 1
     e = dict(BASE, **(env or {}))
     home = home or os.path.join(tmp, "h%d" % count[0]); os.makedirs(home, exist_ok=True)
@@ -30,7 +30,7 @@ def run(*args, db=None, env=None, cwd=None, closed=False, home=None):
     if closed:  # the child's stdout is closed (>&-), not redirected
         kw["preexec_fn"] = lambda: os.close(1)
         kw["stdout"] = None
-    return subprocess.run([*agentbus_argv(), *args], cwd=cwd or home, env=e, text=True, timeout=60, **kw)
+    return subprocess.run([*agentbus_argv(), *args], cwd=cwd or home, env=e, text=True, timeout=60, input=stdin, **kw)
 
 def fresh(name):
     d = os.path.join(tmp, name); os.makedirs(d)
@@ -140,6 +140,23 @@ assert args["body"]["positional"] is True and args["--to"]["default"] == "*", ar
 assert args["--kind"]["choices"] == ["note", "question", "answer", "handoff", "decision", "alert", "done"], args["--kind"]
 assert args["--request-id"]["type"] == "string" and "default" not in args["--request-id"], args["--request-id"]
 assert commands["who"]["args"][-1]["name"] == "--limit" and commands["who"]["args"][-1]["type"] == "integer"
+# the output-discipline additions (WS L-out): written out here, independently of the registry
+assert [g["name"] for g in doc["global_args"]] == ["--as", "--json", "--up"], doc["global_args"]
+assert "global_args" in commands["schema"]["result"]["anyOf"][0]["required"], "schema's own result must list global_args"
+assert objects["Message"]["properties"]["body_truncated"] == {"type": "boolean"} and "body_truncated" not in objects["Message"]["required"]
+read_args = {a["name"]: a for a in commands["read"]["args"]}
+assert read_args["--id"]["type"] == "integer" and read_args["--limit"]["default"] == 50, read_args
+assert "no_message" in commands["read"]["errors"] and len(commands["read"]["result"]["anyOf"]) == 2, commands["read"]
+assert {a["name"]: a for a in commands["schema"]["args"]}["--index"]["type"] == "boolean"
+assert {a["name"]: a for a in commands["inbox"]["args"]}["--limit"]["default"] == 20
+assert {a["name"]: a for a in commands["status"]["args"]}["--limit"]["default"] == 20
+for name in ("who", "claims"):
+    assert {a["name"]: a for a in commands[name]["args"]}["--limit"]["default"] == 50, name
+assert doc["errors"]["bad_input"]["optional_fields"] == ["field"] and "64 KB" in doc["errors"]["bad_input"]["meaning"]
+assert "pipe" in doc["env"]["COLUMNS"]["meaning"]
+trim = ok("schema", "post")
+assert set(trim["objects"]) == set() and set(trim["errors"]) <= set(doc["errors"]) and "claim_conflict" not in trim["errors"], trim.keys()
+assert set(ok("schema", "ctx")["objects"]) == {"Fact", "FactVersion"}
 print("PASS: schema COMMAND prints one command's entry, with arguments read from the parser")
 
 # ---- the human table: one line per command ----
@@ -373,9 +390,9 @@ ok("--as", "a", "ctx", "set", "k1", "v", db=wdb); ok("--as", "a", "ctx", "set", 
 for i in range(12):
     ok("--as", "a", "post", "m%d" % i, db=wdb)
 st = ok("status", "--limit", "1", db=wdb)
-# 3 agents and claims, 2 facts, 12 messages: one of each is shown by --limit 1, and messages always show the latest 10
-assert st["omitted"] == {"agents": 2, "context": 1, "claims": 2, "messages": 2}, st["omitted"]
-assert ok("status", db=wdb)["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 2}
+# 3 agents and claims, 2 facts, 12 messages: one of each is shown by --limit 1 (messages too), and all of them by default
+assert st["omitted"] == {"agents": 2, "context": 1, "claims": 2, "messages": 11}, st["omitted"]
+assert ok("status", db=wdb)["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 0}
 w = ok("watch", db=wdb)
 assert w["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 0}, w["omitted"]
 print("PASS: status and watch --json carry omitted counts")
@@ -396,6 +413,7 @@ q = step("post", "--as", "a", "post", "q", "--to", "b", "--kind", "question")
 step("post", "--as", "a", "post", "q", "--to", "b", "--kind", "question", "--request-id", "r1")
 step("post", "--as", "a", "post", "q", "--to", "b", "--kind", "question", "--request-id", "r1")
 step("post", "--as", "b", "post", "ans", "--to", "a", "--reply-to", str(q["id"]), "--kind", "answer")
+long_post = step("post", "--as", "a", "post", "-", stdin="long body " * 400)   # 4 KB: a listing cuts it
 step("ctx set", "--as", "a", "ctx", "set", "k", "v1")
 step("ctx get", "ctx", "get", "k")
 step("goal", "--as", "a", "goal", "ship it")
@@ -412,6 +430,7 @@ step("brief", "brief")
 step("brief", "--as", "b", "brief")
 step("schema", "schema")
 step("schema", "schema", "post")
+step("schema", "schema", "--index")
 # update --check from the checkout (a clone) answers from a good cache entry: no request is made. (The full update
 # result is validated in tests/test_update.sh.)
 uhome = os.path.join(tmp, "uhome")
@@ -444,6 +463,10 @@ if NEEDS_ENVELOPE:
     step("who", "who")
     step("inbox", "--as", "b", "inbox")
     step("read", "read")
+    cut = [m for m in RESULTS["read"][-1]["items"] if m["id"] == long_post["id"]][0]
+    assert cut["body_truncated"] is True and len(cut["body"].encode()) == 2048, cut
+    whole = step("read", "read", "--id", str(long_post["id"]))   # one Message, whole: not a listing
+    assert len(whole["body"]) == 4000 - 1 and "body_truncated" not in whole, whole
     step("claims", "claims")
     step("ctx get", "ctx", "get")
     step("ctx history", "ctx", "history", "k")

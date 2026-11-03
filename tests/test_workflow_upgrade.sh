@@ -68,7 +68,7 @@ ok "counts equal, unread kept, claim and history intact"
 
 echo "STEP 4: the agents carry on, and a second upgrade changes nothing"
 say "posted #5 to planner [done]" lbus --as worker post "done" --to planner --kind done --reply-to 2
-say "claimed src/b.py until <TS>" lbus --as worker claim src/b.py
+say "claimed src/b.py <left>" lbus --as worker claim src/b.py
 agentbus upgrade "$R" >/dev/null
 is_equal "VERSION unchanged by a second upgrade" "$NEW_VERSION" "$(cat "$R/.agentbus/VERSION")"
 is_equal "messages after the second upgrade" "5" "$(sql "SELECT COUNT(*) FROM messages")"

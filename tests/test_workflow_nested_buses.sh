@@ -30,8 +30,8 @@ ok "chain listed nearest first, before any bus file exists"
 echo "STEP 2: the same name joins both buses; claims and messages stay on the bus they were made on"
 say "joined as a on <REPO>/app/.agentbus/bus.db" agentbus --as a join
 say "joined as a on <REPO>/.agentbus/bus.db" agentbus --up 1 --as a join
-say "claimed x.txt until <TS>" agentbus --as a claim x.txt
-say "claimed y.txt until <TS>" agentbus --up 1 --as a claim y.txt
+say "claimed x.txt <left>" agentbus --as a claim x.txt
+say "claimed y.txt <left>" agentbus --up 1 --as a claim y.txt
 say "posted #1 to everyone [note]" agentbus --as a post "repo news"
 say "posted #1 to everyone [note]" agentbus --up 1 --as a post "workspace news"
 is_equal "repo bus rows" "x.txt|a" "$(sql -d "$APP_DB" "SELECT resource, agent FROM claims")"
@@ -59,7 +59,7 @@ for W in "$R/wt-in" "$T/wt-out"; do
   say "  a  seen <ago>" agentbus --up 1 who
   say "  0  <REPO>/app  bus.db exists  copy <copy>
   1  <REPO>  bus.db exists  copy <copy>" agentbus buses
-  say "claimed from-$(basename "$W").txt until <TS>" agentbus --as a claim "from-$(basename "$W").txt"
+  say "claimed from-$(basename "$W").txt <left>" agentbus --as a claim "from-$(basename "$W").txt"
 done
 is_equal "worktree claims landed on the repo bus" "from-wt-in.txt
 from-wt-out.txt

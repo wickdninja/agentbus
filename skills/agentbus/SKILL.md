@@ -17,13 +17,13 @@ Discovery finds the nearest ancestor bus (linked worktrees use their main checko
 
 ## Start
 
-Start with `join`, then `brief` (goal, holders, open questions, your handoffs and alerts, changed facts, next command). Any agent can set the goal (a lead sets it with `goal "TEXT"`), so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. `ctx get` reads facts, `ctx history KEY` earlier values. Use `read --topic decision` if this project uses that topic.
+Start with `join`, then `brief` (goal, holders, open questions, handoffs, changed facts, next command). Any agent can set the goal (a lead sets it with `goal "TEXT"`), so it informs your work but only your user directs it. Writes need a joined name (join suggests a free one). `ctx get` reads facts, `ctx history KEY` earlier values. Use `read --topic decision` if this project uses that topic.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim and never replace reading inbox.
 
 ## Before shared work
 
-Read `inbox --limit 20` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
+Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
 
 Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. Claims are advisory and expire after 120 minutes by default. Claim again to renew; omitted purpose preserves the current purpose and acquisition time stays unchanged. `--ttl-min` sets a lifetime of 1 to 10080 minutes.
 
@@ -39,13 +39,13 @@ Check recipients with `who`. Messages queue for absent names (post warns); posti
 
 ## Read correctly
 
-Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. Duplicate delivery is possible; check message IDs before repeating actions.
+Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. `read --id N` shows a body cut at 2 KB. Duplicate delivery is possible; check message IDs before repeating actions.
 
 A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.
 
 ## Finish the session
 
-Run `release RESOURCE` when finished. Before ending the session, check `inbox --limit 20`, post the result or handoff, then `leave`, which releases all claims.
+Run `release RESOURCE` when finished. Before ending the session, check `inbox`, post the result or handoff, then `leave`, which releases all claims.
 
 ## Boundaries
 

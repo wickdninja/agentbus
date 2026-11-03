@@ -81,7 +81,7 @@ def listings():
         lines = text.splitlines()
         assert len(lines) == count, text
         assert all(l.startswith('  ') and len(physical_rows(l, 80)) == 1 for l in lines), text
-        assert ('seen 2m ago' in text if cmd == 'who' else '1h 59m left' in text and text.count('expired') == 1), text
+        assert ('seen 2m ago' in text if cmd == 'who' else len(re.findall(r'for 2h \(until \d\d:\d\d\)', text)) == 2 and text.count('expired') == 1), text
         section = ok('status', db=db).split('== '+('agents' if cmd == 'who' else 'claims')+'\n', 1)[1].split('\n\n', 1)[0]
         assert section.splitlines() == lines, (section, text)
     expected = {'  '+name.ljust(26)+'  '+role.ljust(11)+'  codex  seen 2m ago'
@@ -107,15 +107,15 @@ def hints():
     for n in ('a','b'): ok('--as', n, 'join', db=db)
     for i in range(3): ok('--as','a','post',str(i),'--to','b', db=db)
     text = ok('--as','b','inbox','--limit','1', db=db)
-    assert text.endswith('  ... 2 more unread; run inbox again\n'), text
+    assert text.endswith('  ... 2 more unread\n  next: agentbus --as b inbox --limit 1\n'), text
     text = ok('read','--limit','1', db=db)
-    assert text.startswith('  ... 2 earlier (use --limit)\n#3 '), text
+    assert re.match(r'  \.\.\. 2 earlier\n  next: agentbus read --before v1\.\S+ --limit 1\n#3 ', text), text
     text = ok('read','--since','0','--limit','1', db=db)
-    assert text.startswith('#1 ') and text.endswith('  ... 2 more (use --limit)\n'), text
+    assert text.startswith('#1 ') and text.endswith('  ... 2 more\n  next: agentbus read --since 1 --limit 1\n'), text
     text = ok('log','show','--limit','1', db=db)
-    assert text.startswith('  ... 1 earlier (use --limit)\n'), text
+    assert re.match(r'  \.\.\. 1 earlier\n  next: agentbus log show --before v1\.\S+ --limit 1\n', text), text
     text = ok('who','--limit','1', db=db)
-    assert text.endswith('  ... 1 more (use --limit)\n'), text
+    assert text.endswith('  ... 1 more\n  next: agentbus who --limit 2\n'), text
 check('4 more hints name unread or earlier rows and appear on the correct side', hints)
 
 def init():
