@@ -1213,5 +1213,86 @@
     "count": 1,
     "run": "tests/test_release_check.sh",
     "expect": "a wheel URL naming another tag"
+  },
+  {
+    "name": "update: any local release-named wheel counts as this repository",
+    "file": "bin/agentbus",
+    "find": "\\n                and os\\.path\\.realpath\\(os\\.path\\.dirname\\(path\\)\\) == os\\.path\\.realpath\\(os\\.path\\.join\\(cache_dir\\(\\), \"downloads\"\\)\\)\\)",
+    "replace": ")",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "a wheel with the release name from a folder update does not use"
+  },
+  {
+    "name": "update: a hook set up through a link to this install is rewritten",
+    "file": "bin/agentbus",
+    "find": "    linked = len\\(tool\\) == 1 and os\\.path\\.realpath\\(first\\) == os\\.path\\.realpath\\(entry\\) and os\\.access\\(first, os\\.X_OK\\)",
+    "replace": "    linked = False",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "update rewrote a hook set up through a link to this install"
+  },
+  {
+    "name": "update: a different installed version is accepted",
+    "file": "bin/agentbus",
+    "find": "        if got != newer:",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "an installer that put another version in place was accepted"
+  },
+  {
+    "name": "update: Ctrl-C while downloading blames the installer",
+    "file": "bin/agentbus",
+    "find": "            if phase == \"download\":",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "Ctrl-C in the download talks about the installer"
+  },
+  {
+    "name": "update: a slow download says to wait until online",
+    "file": "bin/agentbus",
+    "find": "\\(no answer in time\\)\\. Nothing was installed\\. Try again: agentbus update",
+    "replace": "(no answer in time). Nothing was installed. When you are online, run: agentbus update",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "slow download message"
+  },
+  {
+    "name": "update: a refused redirect is reported as an HTTP status",
+    "file": "bin/agentbus",
+    "find": "\"redirect\": \"GitHub\\'s download pointed somewhere that is not GitHub, which agentbus refused\",",
+    "replace": "\"redirect\": \"GitHub answered with an error (HTTP 302)\",",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "redirect message:"
+  },
+  {
+    "name": "update: a hash mismatch does not end with the next command",
+    "file": "bin/agentbus",
+    "find": "/issues\\. Try again: agentbus update\"",
+    "replace": "/issues.\"",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "bad: the message does not end with the next command"
+  },
+  {
+    "name": "update: --dry-run shows an installer argv for a wheel that is not there",
+    "file": "bin/agentbus",
+    "find": "tool\\.update\\(\\{\"status\": \"dry_run\", \"argv\": None, \"download\": planned_download\\(plan\\)\\}\\)",
+    "replace": "tool.update({\"status\": \"dry_run\", \"argv\": plan[\"argv\"], \"download\": planned_download(plan)})",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "dry-run json shows an installer argv"
+  },
+  {
+    "name": "update: --check shows an installer argv for a wheel that is not there",
+    "file": "bin/agentbus",
+    "find": "\"argv\": None if plan\\[\"download\"\\] else plan\\[\"argv\"\\]",
+    "replace": "\"argv\": plan[\"argv\"]",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "check json shows an installer argv"
   }
 ]
