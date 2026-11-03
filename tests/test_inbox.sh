@@ -10,8 +10,8 @@ agentbus --as a join --tool t >/dev/null
 # Each test reads the inbox of its own name, so any one of them can run alone.
 for n in b c d e f g; do agentbus --as $n join --tool t >/dev/null; done
 unread() { njson agentbus --json --as "${1:-b}" inbox --peek --limit -1; }
-# big NAME N: N messages to NAME of 30 KB each, so the output is well past a pipe buffer.
-big() { for i in $(seq 1 "$2"); do python3 -c 'import sys; print("m%s " % sys.argv[1] + "x" * 30000)' "$i" | agentbus --as a post - --to "$1" >/dev/null; done; }
+# big NAME N: N long messages to NAME (plant_big_messages, tests/lib.sh), so the output is well past a pipe buffer.
+big() { plant_big_messages "$AGENTBUS_DB" "$1" "$2"; }
 
 echo "TEST 1: inbox with stdout closed fails and marks nothing read"
 for i in 1 2 3; do agentbus --as a post "short $i" --to b >/dev/null; done
@@ -24,18 +24,19 @@ outof agentbus --as b inbox >/dev/null
 ok "inbox >&- marks nothing read"
 
 echo "TEST 2: inbox | head -1 beyond the pipe buffer fails and marks nothing read"
-# A listing cuts each body at 2 KB, so it takes 60 messages (120 KB) to pass the pipe buffer.
-big c 60
+# A listing cuts each body at 2 KB, so it takes 600 messages (1.2 MB) to pass the pipe buffer plus the first block a reader
+# can take before it leaves (a 126 KB output fitted in them on CI, where head reads 64 KB at once).
+big c 600
 rc=0; agentbus --as c inbox --limit -1 2>"$T/e2" | head -1 >/dev/null || rc=$?
-[ "$(unread c)" = 60 ] || fail "inbox | head -1 marked $((60 - $(unread c))) unshown messages read"
+[ "$(unread c)" = 600 ] || fail "inbox | head -1 marked $((600 - $(unread c))) unshown messages read"
 grep -q "reader closed stdout" "$T/e2" || fail "no error for the cut-off reader: $(cat "$T/e2")"
 ! grep -q Traceback "$T/e2" || fail "traceback: $(cat "$T/e2")"
-ok "inbox | head -1: all 60 still unread"
+ok "inbox | head -1: all 600 still unread"
 
 echo "TEST 3: a reader killed mid-output: nothing marked read"
-big d 60
+big d 600
 rc=0; ( agentbus --as d inbox --limit -1 2>"$T/e3" | python3 -c 'import os, sys; sys.stdin.buffer.read(1000); os.kill(os.getpid(), 9)' ) 2>/dev/null || rc=$?
-[ "$(unread d)" = 60 ] || fail "a reader killed mid-output: $((60 - $(unread d))) messages marked read"
+[ "$(unread d)" = 600 ] || fail "a reader killed mid-output: $((600 - $(unread d))) messages marked read"
 grep -q "reader closed stdout" "$T/e3" || fail "no error for the killed reader: $(cat "$T/e3")"
 outof agentbus --as d inbox --limit -1 >/dev/null
 [ "$(unread d)" = 0 ] || fail "the full inbox did not mark everything read"

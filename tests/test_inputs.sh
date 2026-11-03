@@ -206,8 +206,8 @@ for j in "" --json; do
   rm -f "$errf"
   outof env AGENTBUS_DB="$D8/b.db" "${AB[@]}" read | grep -qF "posted with stdout closed$j" || fail "the post itself did not run"
 done
-# A listing cuts each body at 2 KB, so it takes 60 long messages (more than 120 KB) to fill a pipe.
-for i in $(seq 1 60); do python3 -c 'print("y" * 3000)' | AGENTBUS_DB="$D8/b.db" agentbus --as s8 post - >/dev/null; done
+# A listing cuts each body at 2 KB, so it takes 600 long messages (1.2 MB) to pass a pipe and the first block a reader can take.
+plant_big_messages "$D8/b.db" "*" 600 s8
 errf=$(mktemp)
 { AGENTBUS_DB="$D8/b.db" "${AB[@]}" read 2>"$errf" || true; } | head -c 10 >/dev/null
 grep -q Traceback "$errf" && { cat "$errf" >&2; fail "traceback when the reader closed the pipe"; }
