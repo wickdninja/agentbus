@@ -673,14 +673,14 @@ RC=0; (cd "$W/outer/inner" && "${DOC[@]}" --up 5 doctor --json >"$T/out" 2>"$T/e
 [ "$RC" = 1 ] || fail "--up 5 names no bus and every command fails there, so doctor must exit 1 (got $RC)"
 ok "same discovery as the commands (find_bus_path); a refused discovery is a fail, never a clean bill"
 
-echo "TEST 20: an unreadable config folder is a warning on its scope with a hint, not a crash"
+echo "TEST 20: a config path that cannot be read is a warning on its scope with a hint, not a crash"
 world
-chmod 000 "$HOME/.claude/skills/agentbus"
+# A path that fails for every user, root included (a mode-000 folder would not for root): skills is a file, so the skill's path is ENOTDIR.
+rm -rf "$HOME/.claude/skills"; printf 'not a folder\n' > "$HOME/.claude/skills"
 doc doctor --json
-chmod 700 "$HOME/.claude/skills/agentbus"
-[ "$RC" = 0 ] || fail "an unreadable skill folder must be a warning (exit $RC): $ERR"
-row skill warn "cannot be read" "" user "Check the permissions of that path"
+[ "$RC" = 0 ] || fail "an unreadable skill path must be a warning (exit $RC): $ERR"
+row skill warn "cannot be read (Not a directory)" "" user "Check the permissions of that path"
 doc doctor; hasf "~/.claude/skills/agentbus"
-ok "permission errors name the path, the scope and what to check"
+ok "unreadable paths name the path, the scope and what to check (also as root)"
 
 all_passed "All doctor tests passed"
