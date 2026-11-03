@@ -459,8 +459,9 @@ def wrap_linear():
         finally:
             g["cell_width"] = real
         return seen[0]
-    one, two = work(16000), work(32000)
-    assert 16000 <= one <= 4 * 16000, f"wrapping measured {one} cells for 16000 characters"  # never passes on 0
+    one = work(4000)  # checked before the 2x run, so quadratic wrapping fails fast
+    assert 4000 <= one <= 4 * 4000, f"wrapping measured {one} cells for 4000 characters"  # never passes on 0
+    two = work(8000)
     assert two <= 2.1 * one, f"wrapping is not linear: 2x text measured {two / one:.2f}x the cells"
     assert wl("a b", 5) is wl("a b", 5), "wrapping is cached by text and width"
 
