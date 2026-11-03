@@ -1511,7 +1511,7 @@ Look closer
   t               show or hide the thread of an open
                   message
   y               copy the selected id, or in a message its
-  … 46 more lines · PgDn
+  … 48 more lines · PgDn
   j/k scroll · Esc/q back
 ```
 
@@ -1535,7 +1535,7 @@ Look closer
   t               show or hide the thread of an open
                   message
   y               copy the selected id, or in a message its
-  … 41 more lines · PgDn
+  … 43 more lines · PgDn
   j/k scroll · Esc/q back
 ```
 
@@ -2921,7 +2921,7 @@ Look closer
   t               show or hide the thread of an open
                   message
   y               copy the selected id, or in a message its
-  ... 41 more lines - PgDn
+  ... 43 more lines - PgDn
   j/k scroll - Esc/q back
 ```
 

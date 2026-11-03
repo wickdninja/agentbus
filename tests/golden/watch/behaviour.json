@@ -80,6 +80,18 @@
    "checks": "The open message is marked *, nothing is selected on open, the reply command shows, Esc/q back replaces q quit, an ancestor outside the 200 can be selected, and a nested detail says where back goes."
   },
   {
+   "name": "help-pages",
+   "from": "w2-06 review M4",
+   "runs": "mock",
+   "checks": "Every page of help, 40 to 80 columns, three heights, Unicode, emoji and ASCII: every row within the width."
+  },
+  {
+   "name": "no-zero-more",
+   "from": "w2-06 review L1",
+   "runs": "mock",
+   "checks": "No 0 more, 0 earlier or 0 later at 40 to 100 columns and 6 to 30 rows, with five filters and every focus, also when a section has one row."
+  },
+  {
    "name": "mentions-instr",
    "from": "opus 12; brain 9",
    "runs": "mock",

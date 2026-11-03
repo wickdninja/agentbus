@@ -12,5 +12,5 @@ Move
                   section
   1 2 3 4         Agents, Claims,
                   Facts, Messages
-  … 79 more lines · PgDn
+  … 81 more lines · PgDn
   j/k scroll · Esc/q back

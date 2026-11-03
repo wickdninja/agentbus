@@ -3,9 +3,12 @@
   claim.
 
 Move
-  j k  Down Up    one row                g G  Home End   first, last row
-  PgUp PgDn       one page               Ctrl-u Ctrl-d   half a page
-  Tab  Shift-Tab  next, previous         1 2 3 4         Agents, Claims, Facts,
+  j k  Down Up    one row
+  g G  Home End   first, last row
+  PgUp PgDn       one page
+  Ctrl-u Ctrl-d   half a page
+  Tab  Shift-Tab  next, previous section
+  1 2 3 4         Agents, Claims, Facts, Messages
 
 Look closer
   Enter           open the selected row; in a detail, open the selected related
@@ -17,8 +20,5 @@ Look closer
   p               pause the whole view, or follow again
   r               read the bus now
   Esc  q          back one level: a detail, the filter or this page; q quits
-                  from the overview
-  Ctrl-C          quit from anywhere
-
-  ... 24 more lines - PgDn
+  ... 27 more lines - PgDn
   j/k scroll - Esc/q back

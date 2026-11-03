@@ -20,5 +20,5 @@ Look closer
                   the footer says where it is on screen)
   /               filter: from:NAME to:NAME kind:KIND
                   topic:NAME, or any words
-  … 37 more lines · PgDn
+  … 39 more lines · PgDn
   j/k scroll · Esc/q back

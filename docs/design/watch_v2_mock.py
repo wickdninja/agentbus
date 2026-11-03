@@ -297,6 +297,11 @@ EXTRA = [
     ("facts-focus-40x16", S("facts-focus", "", "", {"focus": "facts", "sel": {"facts": "runtime"}}), 40, 16),
     ("agents-focus-40x16", S("agents-focus", "", "", {"focus": "agents", "sel": {"agents": "tests"}}), 40, 16),
     ("too-narrow-39x8", S("too-narrow", "", "", {}), 39, 8),
+    # Help's last page (G): every row wrapped within the width (revision 3, the w2-06 review's M4).
+    ("help-end-60x20", S("help-end", "", "", {"mode": "help", "scroll": 999}), 60, 20),
+    ("help-end-40x16", S("help-end", "", "", {"mode": "help", "scroll": 999}), 40, 16),
+    ("ascii-help-end-72x24", S("ascii-help-end", "", "", {"mode": "help", "scroll": 999}, ascii=True), 72, 24),
+    ("ascii-help-end-40x16", S("ascii-help-end", "", "", {"mode": "help", "scroll": 999}, ascii=True), 40, 16),
 ]
 
 # ---------------------------------------------------------------- rows made of painted segments
@@ -851,6 +856,8 @@ class Frame:
                 out.append(self.title(name, count, hint))
                 out.extend(rows_[start:start + k])
                 out.append(self.more_row(f"… {hidden} more" + (f" · agentbus {s['cmd']}" if extra else "")))
+            elif avail <= 0:  # no row at all: the title says how many are hidden (never 0)
+                out.append(self.title(name, count, [f"… {nr + extra} more"]))
             else:  # one row: the selected one, and the title says how many are hidden
                 hidden = nr - 1 + extra
                 mark = f"… {hidden} more"
@@ -1179,7 +1186,7 @@ class Frame:
         if n <= avail:
             return self.pad(head + rest, footer)
         si = next((i for i, r in enumerate(rest) if r.sel), None)
-        s = min(self.v["scroll"], n - 1)
+        s = max(0, min(self.v["scroll"], n - (avail - 1)))  # never past the page that ends at the last row
         for _ in range(4):
             top = 1 if s else 0
             k = avail - top
@@ -1226,9 +1233,9 @@ class Frame:
             return [Row(("  " + (k if i == 0 else "").ljust(kwid), "1"), (line.text, ""))
                     for i, line in enumerate(self.wrap(self.tx(d), width - 2 - kwid, ""))]
         rows.append(Row(("Move", "1")))
-        if self.wide:  # two entries a row
-            half = W // 2
-            for i in range(0, len(move), 2):
+        half = W // 2
+        if self.wide and all(len(entry(k, d, half if i % 2 == 0 else W - half)) == 1 for i, (k, d) in enumerate(move)):
+            for i in range(0, len(move), 2):  # two entries a row, when each fits its half on one row
                 r = Row(*entry(*move[i], half)[0].segs)
                 r.add(" " * (half - r.width))
                 r.extend(entry(*move[i + 1], W - half)[0])
@@ -1248,7 +1255,14 @@ class Frame:
                  ("🎯" if E else g["goal"].strip(), "the team's goal"), (f"{g['reply']}6", "a reply to message 6"),
                  (f"{g['lines']}1", "one more line; Enter shows it")]
         mw = max(tw(m) for m, _ in marks) + 1
+        cells = ["  " + gl + " " * (mw - tw(gl)) + d for gl, d in marks]
+
+        def fits(per):  # every row of `per` cells, each but the last padded to W // per, within W
+            return all(sum(max(tw(c), W // per) for c in cells[i:i + per][:-1]) + tw(cells[i:i + per][-1]) <= W
+                       for i in range(0, len(cells), per))
         per = 3 if W >= 99 else 2 if self.wide else 1
+        while per > 1 and not fits(per):
+            per -= 1
         cw = W // per
         for i in range(0, len(marks), per):
             r = Row()
@@ -1273,18 +1287,24 @@ class Frame:
         for k, d in words:
             rows += entry(self.tx(k), d, W, ww)
         rows.append(Row())
-        rows.append(Row(("Kinds", "1"), ("  kind: takes the word or the short code; narrow rows show the code", "2")))
+        rows += self.titled("Kinds", "kind: takes the word or the short code; narrow rows show the code")
         kinds = ["handoff", "question", "answer", "done", "decision", "alert", "note"]
         cells = [((KIND_EMOJI[k] + " ") if E else "") + (f"{KIND_CODE[k]} {k}" if KIND_CODE[k] != k else k)
                  for k in kinds]
         rows += self.flow(cells, [str(KIND_COLOURS.get(k, 2)) for k in kinds])
         if E:
             rows.append(Row())
-            rows.append(Row(("Roles", "1"), ("  matched on words in the role", "2")))
+            rows += self.titled("Roles", "matched on words in the role")
             roles = [("🧠", "brain, lead, planner"), ("✋", "hand, implementer"), ("🧪", "tests"), ("🔍", "review"),
                      ("📚", "docs"), ("🚀", "ops, release"), ("🎨", "design"), ("🙋", "human"), ("🤖", "anyone else")]
             rows += self.flow([f"{e} {d}" for e, d in roles], [""] * len(roles))
         return self.page(rows, self.footer([("j/k", "scroll", 60), ("Esc/q", "back", 95)]))
+
+    def titled(self, title, note):
+        """A help title with a dim note beside it, or wrapped under it when the row is short."""
+        if tw(title) + 2 + tw(note) <= self.W:
+            return [Row((title, "1"), ("  " + note, "2"))]
+        return [Row((title, "1"))] + [Row((r.text, "2")) for r in self.wrap(note, self.W - 2, "  ")]
 
     def flow(self, cells, sgrs):
         """Cells laid out left to right, three spaces apart, wrapped at the row width."""
@@ -1741,7 +1761,7 @@ def case_wrap_linear():
             g["cell_width"] = real
         return seen[0]
     one, two = work(16000), work(32000)
-    assert one <= 4 * 16000, f"wrapping measured {one} cells for 16000 characters"
+    assert 16000 <= one <= 4 * 16000, f"wrapping measured {one} cells for 16000 characters"
     assert two <= 2.1 * one, f"wrapping is not linear: 2x text measured {two / one:.2f}x the cells"
     assert wrap_lines("a b", 5) is wrap_lines("a b", 5), "wrapping is cached by text and width"
 
@@ -1790,6 +1810,38 @@ def case_detail_marks():
     assert "back to #10" in t[-1], t[-1]
 
 
+def case_help_pages():
+    # Every page of help (scrolled from the top to past the end), 40 to 80 columns, three heights, every glyph
+    # mode: each row within the width, the frame its height.
+    for cols in range(40, 81):
+        for rows in (16, 20, 24):
+            for ascii_, emoji in ((False, False), (False, True), (True, False)):
+                last = None
+                for scroll in range(0, 120, 3):
+                    t = text_of(cols, rows, {"mode": "help", "scroll": scroll}, ascii=ascii_, emoji=emoji)
+                    assert len(t) == rows, (cols, rows, scroll, len(t))
+                    for l in t:
+                        assert tw(l) <= cols - 1, (cols, rows, ascii_, emoji, scroll, l)
+                    if t == last:
+                        break
+                    last = t
+
+
+def case_no_zero_more():
+    # No "… 0 more", "0 earlier" or "0 later" at any size, with or without a filter, whatever has the focus,
+    # also on a bus where a section has one row (the one-row and no-row branches).
+    one_fact = dict(SAMPLE, context=CONTEXT[:1])
+    for snap in (SAMPLE, one_fact):
+        for cols in (40, 47, 60, 80, 100):
+            for rows in range(6, 31, 2):
+                for f in ("", "x", "kind:ask", "from:c", "auth"):
+                    for focus in ("agents", "claims", "facts", "messages"):
+                        t = text_of(cols, rows, {"filter": f, "focus": focus}, snapshot=snap)
+                        assert len(t) == rows, (cols, rows, f, focus, len(t))
+                        bad = [l for l in t if re.search(r"(…|\.\.\.) 0 (more|earlier|later)", l)]
+                        assert not bad and all(tw(l) <= cols - 1 for l in t), (cols, rows, f, focus, bad or t)
+
+
 def case_mentions_instr():
     snap = dict(SAMPLE, claims=[{"resource": "src/my_mod/", "agent": "codex", "purpose": None, "expires_at": at("18:43")}],
                 messages=[msg(1, at("16:00"), "a", "b", "note", "edited src/myXmod/ today")],
@@ -1833,6 +1885,11 @@ MOCK_CASES = [
     ("detail-marks", "opus 7, 17; astra 4; brain 5, Missing", case_detail_marks,
      "The open message is marked *, nothing is selected on open, the reply command shows, Esc/q back replaces "
      "q quit, an ancestor outside the 200 can be selected, and a nested detail says where back goes."),
+    ("help-pages", "w2-06 review M4", case_help_pages,
+     "Every page of help, 40 to 80 columns, three heights, Unicode, emoji and ASCII: every row within the width."),
+    ("no-zero-more", "w2-06 review L1", case_no_zero_more,
+     "No 0 more, 0 earlier or 0 later at 40 to 100 columns and 6 to 30 rows, with five filters and every focus, "
+     "also when a section has one row."),
     ("mentions-instr", "opus 12; brain 9", case_mentions_instr,
      "A resource with _ matches only itself (instr, not LIKE)."),
 ]

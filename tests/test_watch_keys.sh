@@ -355,7 +355,7 @@ def wrap_linear():
             g["cell_width"] = real
         return seen[0]
     one, two = work(16000), work(32000)
-    assert one <= 4 * 16000, f"wrapping measured {one} cells for 16000 characters"
+    assert 16000 <= one <= 4 * 16000, f"wrapping measured {one} cells for 16000 characters"  # never passes on 0
     assert two <= 2.1 * one, f"wrapping is not linear: 2x text measured {two / one:.2f}x the cells"
     assert wl("a b", 5) is wl("a b", 5), "wrapping is cached by text and width"
 
@@ -409,6 +409,34 @@ def detail_marks():
     assert "back to #10" in t[-1], t[-1]
 
 @case
+def help_pages():
+    for cols in range(40, 81):
+        for rows in (16, 20, 24):
+            for ascii_, emoji in ((False, False), (False, True), (True, False)):
+                last = None
+                for scroll in range(0, 120, 3):
+                    t = text_of(cols, rows, {"mode": "help", "scroll": scroll}, ascii=ascii_, emoji=emoji)
+                    assert len(t) == rows, (cols, rows, scroll, len(t))
+                    for l in t:
+                        assert tw(l) <= cols - 1, (cols, rows, ascii_, emoji, scroll, l)
+                    if t == last:
+                        break
+                    last = t
+
+@case
+def no_zero_more():
+    one_fact = dict(S, context=S["context"][:1])
+    for snap in (S, one_fact):
+        for cols in (40, 47, 60, 80, 100):
+            for rows in range(6, 31, 2):
+                for f in ("", "x", "kind:ask", "from:c", "auth"):
+                    for focus in ("agents", "claims", "facts", "messages"):
+                        t = text_of(cols, rows, {"filter": f, "focus": focus}, snapshot=snap)
+                        assert len(t) == rows, (cols, rows, f, focus, len(t))
+                        bad = [l for l in t if re.search(r"(…|\.\.\.) 0 (more|earlier|later)", l)]
+                        assert not bad and all(tw(l) <= cols - 1 for l in t), (cols, rows, f, focus, bad or t)
+
+@case
 def mentions_instr():
     snap = dict(S, claims=[{"resource": "src/my_mod/", "agent": "codex", "purpose": None, "expires_at": at("18:43")}],
                 messages=[msg(1, at("16:00"), "a", "b", "note", "edited src/myXmod/ today")],
@@ -423,7 +451,7 @@ mock = {c["name"] for c in cases if c["runs"] == "mock"}
 assert {n.replace("_", "-") for n in done} == mock, (sorted(mock - {n.replace("_", "-") for n in done}))
 print(len(done), "behaviour cases passed on bin/agentbus")
 PY
-ok "all 14 of the design mock's behaviour cases pass on bin/agentbus's render"
+ok "all 16 of the design mock's behaviour cases pass on bin/agentbus's render"
 
 echo "TEST 4: detail queries scan at most the newest 5000 messages, by primary key, and match mentions with instr"
 "$PY" - "$T" <<'PY' || fail "detail queries"
