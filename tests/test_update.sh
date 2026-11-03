@@ -307,4 +307,21 @@ ab update --dry-run --json >"$C/r2"; validate "$C/r2" || fail "dry-run result"
 ab update --json --all-buses "$C/b" >"$C/r3" || fail "real update"; validate "$C/r3" || fail "real result"
 ok "check, dry-run and real results validate"
 
+echo "TEST 20: a full update (setup included) succeeds on the real new executable when setup has nothing to change, and refreshes an older unedited skill"
+rel_latest 0.3.0
+new_case full uv; new_bus "$C/b"
+export CLAUDE_CONFIG_DIR="$C/cc" CODEX_HOME="$C/cx"
+out=$(ab update --all-buses "$C/b") || fail "a full update with nothing to refresh failed: $out"
+grep -qF "done: 0.2.0 -> 0.3.0." <<<"$out" && ! grep -qF "  ! setup" <<<"$out" || fail "a full update printed a setup failure: $out"
+[ ! -e "$C/cc" ] && [ ! -e "$C/cx" ] || fail "update --refresh installed something that was not there"
+new_case full2 uv; new_bus "$C/b"
+export CLAUDE_CONFIG_DIR="$C/cc" CODEX_HOME="$C/cx"
+(cd "$C/cwd" && "$ENTRY" setup claude >/dev/null) || fail "setup of the fake install failed"
+printf 'mine\n\n<!-- agentbus:managed -->\n' >"$C/cc/skills/agentbus/SKILL.md"
+out=$(ab update --all-buses "$C/b") || fail "a full update with an edited skill failed: $out"
+grep -qF "kept (edited). To replace it: agentbus setup claude" <<<"$out" && [ "$(head -1 "$C/cc/skills/agentbus/SKILL.md")" = mine ] || fail "an edited skill was not kept by a full update: $out"
+unset CLAUDE_CONFIG_DIR CODEX_HOME
+export CLAUDE_CONFIG_DIR="$T/cc"
+ok "exit 0, nothing added, an edit kept"
+
 all_passed "All update tests passed"
