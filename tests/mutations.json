@@ -1060,5 +1060,140 @@
     "count": 1,
     "run": "tests/test_isolation.sh",
     "expect": "a write to .cache/agentbus passed"
+  },
+  {
+    "name": "update: setup --refresh rewrites a hook that already runs this install",
+    "file": "bin/agentbus",
+    "find": "            if words and hook_tool_runs_this_install\\(words\\):",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "update rewrote a python-and-module hook whose module is there"
+  },
+  {
+    "name": "update: a hook naming a module that is gone is not repaired",
+    "file": "bin/agentbus",
+    "find": "    return entry if parts and os\\.path\\.isabs\\(parts\\[0\\]\\) and os\\.path\\.basename\\(parts\\[0\\]\\) != \\\"env\\\" else None",
+    "replace": "    return None",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "update did not repair a hook that names a module that is gone"
+  },
+  {
+    "name": "update: the downloaded wheel's sha256 is not checked",
+    "file": "bin/agentbus",
+    "find": "    if got != want:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a wheel with the wrong sha256 was installed"
+  },
+  {
+    "name": "update: a download is redirected anywhere",
+    "file": "bin/agentbus",
+    "find": "    return host == first or host == \"github\\.com\" or host\\.endswith\\(\"\\.github\\.com\"\\) or host\\.endswith\\(\"\\.githubusercontent\\.com\"\\)",
+    "replace": "    return True",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "redirect: {"
+  },
+  {
+    "name": "update: a release without a wheel falls through to the download",
+    "file": "bin/agentbus",
+    "find": "    if newer and plan\\[\"argv\"\\] and assets is not None and not \\(wheel_name\\(newer\\) in assets and \"SHA256SUMS\" in assets\\):",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "nowheel: manual_step with the exact command"
+  },
+  {
+    "name": "update: the wheel size limit is 50 MiB",
+    "file": "bin/agentbus",
+    "find": "WHEEL_MAX_BYTES = 5 << 20",
+    "replace": "WHEEL_MAX_BYTES = 50 << 20",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "an oversized wheel was installed"
+  },
+  {
+    "name": "update: the installer runs from the home folder",
+    "file": "bin/agentbus",
+    "find": "cwd=private_dir\\(cache_dir\\(\\)\\) or os\\.path\\.expanduser\\(\"~\"\\),\\n                         stdout=sys\\.stderr",
+    "replace": "cwd=os.path.expanduser(\"~\"),\n                         stdout=sys.stderr",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "the installer did not run from the cache folder"
+  },
+  {
+    "name": "update: a name lookup is waited for",
+    "file": "bin/agentbus",
+    "find": "    t\\.join\\(seconds\\)",
+    "replace": "    t.join(600)",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "the lookup was not bounded"
+  },
+  {
+    "name": "update: the bus list is not checked again on read",
+    "file": "bin/agentbus",
+    "find": " and os\\.path\\.isabs\\(p\\) and listed_folder_ok\\(p\\)\\)\\)",
+    "replace": " and os.path.isabs(p)))",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "the list entries were not re-checked"
+  },
+  {
+    "name": "update: the lock does not fall back to the cache folder",
+    "file": "bin/agentbus",
+    "find": "    for folder in \\(private_dir\\(state_dir\\(\\)\\), private_dir\\(cache_dir\\(\\)\\)\\):",
+    "replace": "    for folder in (private_dir(state_dir()),):",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "fallback lock:"
+  },
+  {
+    "name": "update: AGENTBUS_AGENT_SESSION is ignored",
+    "file": "bin/agentbus",
+    "find": "    if v not in \\(\"\", \"0\"\\):\\n        return \"AGENTBUS_AGENT_SESSION\"",
+    "replace": "    if False:\n        return \"AGENTBUS_AGENT_SESSION\"",
+    "count": 1,
+    "run": "tests/test_no_network.sh",
+    "expect": "AGENTBUS_AGENT_SESSION=1: the canary tripped"
+  },
+  {
+    "name": "update: clone commands are not quoted",
+    "file": "bin/agentbus",
+    "find": "        q = shlex\\.quote",
+    "replace": "        q = str",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "clone commands are not quoted"
+  },
+  {
+    "name": "update: no setup line when nothing was refreshed",
+    "file": "bin/agentbus",
+    "find": "                tell\\(\"setup: nothing to refresh\\.\"\\)",
+    "replace": "                pass",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "no setup line when nothing was refreshed"
+  },
+  {
+    "name": "doctor does not say when nothing is cached",
+    "file": "bin/agentbus",
+    "find": "        return \"no release check has run yet \\(run: agentbus update --check\\)\", None",
+    "replace": "        return \"\", None",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "row tool: status ok, detail with 'no release check has run yet"
+  },
+  {
+    "name": "update: an HTTP error is not named",
+    "file": "bin/agentbus",
+    "find": "\\{f' \\(HTTP \\{status\\}\\)' if status else ''\\}",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "the 500 message"
   }
 ]

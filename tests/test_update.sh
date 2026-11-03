@@ -444,7 +444,7 @@ import socket, time
 _real = socket.getaddrinfo
 def slow(*a, **k):
     time.sleep(120)
-    return _real(*a, **k)
+    raise OSError("no network in tests")
 socket.getaddrinfo = slow
 PY2
 unset AGENTBUS_TEST_RELEASES_URL AGENTBUS_TEST_DOWNLOAD_URL
