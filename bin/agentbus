@@ -7153,7 +7153,7 @@ SKILL_TEXT = (
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal (a lead sets it with `goal "TEXT"`); any agent can set it, so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.\n'
+    'Start with `join`, then `brief` (goal, holders, open questions, your handoffs and alerts, changed facts, next command). It marks nothing read. Any agent can set the goal (a lead sets it with `goal "TEXT"`), so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. `ctx get` fetches truncated facts. Use `read --topic ruling` if this project uses that topic.\n'
     '\n'
     'Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.\n'
     '\n'
@@ -11110,6 +11110,387 @@ EARLY_COMMANDS = {
 }
 
 
+# ==== brief and demo ====
+
+# ---- brief: what is going on, in one short read -------------------------------------------------------------------
+# A late-joining agent used to need join, status and inbox (three calls, status and inbox long). brief answers the
+# questions it actually has, in a few hundred tokens: the goal, who is here and what each holds, which questions
+# are still open, what waits for it, what changed, and what to run next. It reads; it never moves an inbox cursor.
+
+BRIEF_LIMIT = 5          # rows per section unless --limit says otherwise
+BRIEF_BODY_JSON = 200    # characters of a message body or a fact value in --json (body_truncated says more exists)
+BRIEF_BODY_TEXT = 90     # characters of a body in the text view
+BRIEF_GOAL_MAX = 300     # characters of the goal
+BRIEF_NAME_MAX = 200     # characters of any stored name, role, tool, key or resource (text a lane wrote can be any length)
+BRIEF_KINDS = ("handoff", "alert")
+
+
+def _brief_msg_columns(p):
+    """The message columns brief shows, every stored text cut in SQL (p: the table alias with its dot)."""
+    return (f"{p}id AS id, {p}ts AS ts, {cut(p + 'sender', BRIEF_NAME_MAX)} AS sender, "
+            f"{cut(p + 'recipient', BRIEF_NAME_MAX)} AS recipient, {p}kind AS kind, {cut(p + 'topic', BRIEF_NAME_MAX)} AS topic, "
+            f"substr({p}body, 1, {BRIEF_BODY_JSON}) AS body, substr({p}body, {BRIEF_BODY_JSON + 1}, 1) <> '' AS body_truncated, "
+            f"{p}reply_to AS reply_to")
+
+
+def _brief_rows(rows):
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in ("body_truncated", "value_truncated"):
+            if k in d:
+                d[k] = bool(d[k])
+        out.append(d)
+    return out
+
+
+def _brief_open_questions(con, me_name, limit):
+    """Questions with no answer in their thread, addressed to me or to everyone (to everyone only without a name),
+    oldest first. A question is answered when a message of kind answer replies to it, directly or through a chain
+    of replies (a reply to a reply). A reply of another kind (a note, another question) does not answer it."""
+    def mine(p):
+        who = f"({p}recipient=? OR {p}recipient='*')" if me_name else f"{p}recipient='*'"
+        return f"{p}kind='question' AND {who}"
+    params = [me_name] if me_name else []
+    # UNION (not UNION ALL) drops a (root, id) pair it has seen, so a reply cycle written into the table ends the walk.
+    sql = (f"WITH RECURSIVE thread(root, id) AS (SELECT id, id FROM messages WHERE {mine('')} "
+           f"UNION SELECT t.root, m.id FROM messages m JOIN thread t ON m.reply_to = t.id) "
+           f"SELECT {_brief_msg_columns('q.')} FROM messages q WHERE {mine('q.')} "
+           f"AND NOT EXISTS (SELECT 1 FROM thread t JOIN messages a ON a.id = t.id WHERE t.root = q.id AND a.kind = 'answer') "
+           f"ORDER BY q.id")
+    rows, more = capped(con, sql, params * 2, limit)
+    return _brief_rows(rows), more
+
+
+def _brief_next(me_name, joined, unread_total, questions):
+    if not me_name:
+        return "agentbus --as NAME join"
+    who = shlex.quote(me_name)
+    if not joined:
+        return f"agentbus --as {who} join"
+    if unread_total:
+        return f"agentbus --as {who} inbox"
+    for q in questions:
+        if q["sender"] != me_name:
+            return f"agentbus --as {who} post ANSWER --to {shlex.quote(q['sender'])} --reply-to {q['id']} --kind answer"
+    return f"agentbus --as {who} claim PATH --purpose WHY"
+
+
+def cmd_brief(con, a):
+    me_name, limit, t = ident(a), a.limit, now()
+    goal_row = con.execute(f"SELECT substr(value, 1, {BRIEF_GOAL_MAX}) AS goal, substr(value, {BRIEF_GOAL_MAX + 1}, 1) <> '' AS truncated, "
+                           f"{cut('updated_by', BRIEF_NAME_MAX)} AS set_by, updated_at AS set_at FROM context WHERE key=?", (GOAL_KEY,)).fetchone()
+    goal = None if goal_row is None else {**dict(goal_row), "truncated": bool(goal_row["truncated"])}
+
+    # who is here, and what each holds
+    agent_rows, agents_more = capped(
+        con, f"SELECT rowid AS rid, {cut('name', BRIEF_NAME_MAX)} AS name, {cut('role', BRIEF_NAME_MAX)} AS role, "
+             f"{cut('tool', BRIEF_NAME_MAX)} AS tool, last_seen FROM agents ORDER BY last_seen DESC, name", (), limit)
+    agents = []
+    for r in agent_rows:
+        held, held_more = capped(
+            con, f"SELECT {cut('resource', BRIEF_NAME_MAX)} AS resource, {cut('purpose', BRIEF_NAME_MAX)} AS purpose, expires_at FROM claims "
+                 f"WHERE agent=(SELECT name FROM agents WHERE rowid=?) AND expires_at > ? "
+                 f"ORDER BY substr(resource, 1, {RESOURCE_MAX + 1}), rowid", (r["rid"], t), limit)
+        agents.append({"name": r["name"], "role": r["role"], "tool": r["tool"], "last_seen": r["last_seen"],
+                       "claims": [dict(c) for c in held], "claims_omitted": held_more})
+    joined = bool(me_name) and con.execute("SELECT 1 FROM agents WHERE name=?", (me_name,)).fetchone() is not None
+
+    questions, questions_more = _brief_open_questions(con, me_name, limit)
+
+    # unread: the inbox's own rule (after the cursor, to me or broadcast since I first joined, not from me)
+    unread_total, unread, unread_more, last_read = 0, [], 0, 0
+    if me_name:
+        row = con.execute("SELECT last_read_id, bcast_from FROM cursors WHERE agent=?", (me_name,)).fetchone()
+        if row:
+            last_read, bcast = row
+        else:
+            bcast = con.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
+        params = (last_read, me_name, me_name, bcast)
+        unread_total = con.execute("SELECT COUNT(*) FROM messages WHERE id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?))",
+                                   params).fetchone()[0]
+        rows, unread_more = capped(
+            con, f"SELECT {_brief_msg_columns('m.')} FROM messages m WHERE m.id>? AND m.sender<>? AND (m.recipient=? OR (m.recipient='*' AND m.id>?)) "
+                 f"AND m.kind IN ({','.join('?' * len(BRIEF_KINDS))}) ORDER BY m.id", params + BRIEF_KINDS, limit)
+        unread = _brief_rows(rows)
+
+    # facts changed since my last inbox read (every fact before a first read), not mine, not the goal
+    since = None
+    if last_read:
+        r = con.execute("SELECT ts FROM messages WHERE id=?", (last_read,)).fetchone()
+        since = r[0] if r else None
+    where, params = "key<>?", [GOAL_KEY]
+    if me_name:
+        where += " AND updated_by<>?"
+        params.append(me_name)
+    if since is not None:
+        where += " AND updated_at>=?"
+        params.append(since)
+    fact_rows, facts_more = capped(
+        con, f"SELECT {cut('key', BRIEF_NAME_MAX)} AS key, substr(value, 1, {BRIEF_BODY_JSON}) AS value, "
+             f"substr(value, {BRIEF_BODY_JSON + 1}, 1) <> '' AS value_truncated, {cut('updated_by', BRIEF_NAME_MAX)} AS updated_by, updated_at "
+             f"FROM context WHERE {where} ORDER BY updated_at DESC, key", params, limit)
+
+    result = {"bus": a._db, "me": {"name": me_name, "joined": joined} if me_name else None, "goal": goal,
+              "agents": {"items": agents}, "questions": {"items": questions},
+              "unread": {"total": unread_total, "items": unread}, "facts": {"since": since, "items": _brief_rows(fact_rows)},
+              "omitted": {"agents": agents_more, "questions": questions_more, "unread": unread_more, "facts": facts_more},
+              "next": _brief_next(me_name, joined, unread_total, questions)}
+    if a.json:
+        print_json(result)
+    else:
+        _brief_show(result, limit)
+
+
+def _brief_line(text, n):
+    """Stored text on one line, at most n characters."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[:n - 3].rstrip() + "..."
+
+
+def _brief_show(r, limit):
+    more_hint = f"(brief --limit {max(limit * 4, 20)})"
+    now_dt = datetime.now(timezone.utc)
+    omitted = r["omitted"]
+
+    def more(n):
+        if n:
+            show("... {} more {}", n, more_hint, row=True)
+
+    g = r["goal"]
+    if g:
+        show("goal: {} (set by {})", _brief_line(g["goal"], BRIEF_GOAL_MAX) + ("..." if g["truncated"] else ""), _brief_line(g["set_by"], 40))
+    else:
+        show("goal: none set")
+
+    agents = r["agents"]["items"]
+    if agents:
+        show("here ({}):", len(agents) + omitted["agents"])
+        for ag in agents:
+            seen = ago(ag["last_seen"], now_dt)
+            what = ", ".join(_brief_line(x, 20) for x in (ag["role"], ag["tool"]) if x)
+            line = _brief_line(ag["name"], 40) + (f" ({what})" if what else "") + ", " + ("now" if seen == "now" else seen + " ago")
+            if ag["claims"]:
+                held = ", ".join(_brief_line(c["resource"], 48) + (f" [{_brief_line(c['purpose'], 40)}]" if c["purpose"] else "") for c in ag["claims"])
+                line += ", holds " + held + (f", +{ag['claims_omitted']} more" if ag["claims_omitted"] else "")
+            show("{}", line, row=True)
+        more(omitted["agents"])
+    else:
+        show("here: nobody has joined")
+
+    qs = r["questions"]["items"]
+    if qs:
+        show("open questions ({}):", len(qs) + omitted["questions"])
+        for q in qs:
+            to = "everyone" if q["recipient"] == "*" else _brief_line(q["recipient"], 40)
+            show("#{} {} -> {}: {}", q["id"], _brief_line(q["sender"], 40), to, _brief_line(q["body"], BRIEF_BODY_TEXT), row=True)
+        more(omitted["questions"])
+    else:
+        show("open questions: none")
+
+    u = r["unread"]
+    if not r["me"]:
+        show("unread: say who you are with --as NAME")
+    elif u["total"]:
+        listed = len(u["items"]) + omitted["unread"]
+        if listed:
+            show("unread handoffs and alerts ({}):", listed)
+            for m in u["items"]:
+                show("#{} {} [{}]: {}", m["id"], _brief_line(m["sender"], 40), m["kind"], _brief_line(m["body"], BRIEF_BODY_TEXT), row=True)
+            more(omitted["unread"])
+        others = u["total"] - listed
+        if others:
+            show("unread: {} other message{} (inbox)", others, "" if others == 1 else "s", row=bool(listed))
+    else:
+        show("unread: none")
+
+    f = r["facts"]
+    if f["items"]:
+        if f["since"]:
+            show("facts changed since your last read ({}):", len(f["items"]) + omitted["facts"])
+        else:
+            show("facts ({}):", len(f["items"]) + omitted["facts"])
+        for x in f["items"]:
+            show("{} = {} ({})", _brief_line(x["key"], 40), _brief_line(x["value"], BRIEF_BODY_TEXT), _brief_line(x["updated_by"], 40), row=True)
+        more(omitted["facts"])
+    elif f["since"]:
+        show("facts: none changed")
+    else:
+        show("facts: none")
+    show("next: {}", r["next"])
+
+
+def register_brief(sub):
+    b = sub("brief", help="What is going on, in one short read: the goal, who holds what, open questions, unread handoffs, changed facts",
+            description="What is going on, in one short read, for an agent that has just joined or come back: the goal; who is here and what "
+                        "each holds and why; open questions; your unread handoffs and alerts; facts changed since your last read; and one "
+                        "next: line with the command to run. It only reads: it never marks anything read, so run inbox afterwards to "
+                        "consume your messages. An open question has the kind question, is addressed to you or to everyone, and has no "
+                        "answer: no message of kind answer replies to it, directly or through a chain of replies. Changed facts are those "
+                        "updated since the last message you read with inbox (every fact before a first read), except your own and the goal. "
+                        "Without --as it shows the bus as a bystander: no unread, and only questions to everyone.")
+    limit_arg(b, default=BRIEF_LIMIT, what="rows in each section")
+
+
+REGISTER_COMMANDS.append(register_brief)
+COMMANDS["brief"] = cmd_brief
+
+CONTRACT["objects"].update({
+    "BriefGoal": _o({"goal": _STR, "set_by": _STR, "set_at": _STR, "truncated": _BOOL}),
+    "BriefMessage": _o({"id": _INT, "ts": _STR, "sender": _STR, "recipient": _STR, "kind": _STR, "topic": _NSTR,
+                        "body": _STR, "reply_to": _NINT, "body_truncated": _BOOL}),
+    "BriefClaim": _o({"resource": _STR, "purpose": _NSTR, "expires_at": _STR}),
+    "BriefAgent": _o({"name": _STR, "role": _NSTR, "tool": _NSTR, "last_seen": _STR,
+                      "claims": _list(_ref("BriefClaim")), "claims_omitted": _INT}),
+    "BriefFact": _o({"key": _STR, "value": _STR, "updated_by": _STR, "updated_at": _STR, "value_truncated": _BOOL}),
+})
+CONTRACT["commands"]["brief"] = _cmd(
+    "What is going on: the goal, who holds what, open questions, unread handoffs and alerts, changed facts, and the next command",
+    _o({"bus": _STR, "me": {"anyOf": [{"type": "null"}, _o({"name": _STR, "joined": _BOOL})]},
+        "goal": {"anyOf": [{"type": "null"}, _ref("BriefGoal")]},
+        "agents": _o({"items": _list(_ref("BriefAgent"))}),
+        "questions": _o({"items": _list(_ref("BriefMessage"))}),
+        "unread": _o({"total": _INT, "items": _list(_ref("BriefMessage"))}),
+        "facts": _o({"since": _NSTR, "items": _list(_ref("BriefFact"))}),
+        "omitted": _o({"agents": _INT, "questions": _INT, "unread": _INT, "facts": _INT}),
+        "next": _STR}))
+
+
+# ---- demo: a hands-off tour for a person -----------------------------------------------------------------------------
+# Two scripted agents on a temporary bus, outside any repo, with each command printed as it runs. The bus lives in a
+# directory this command makes and removes on a normal exit, an error, Ctrl-C and SIGTERM. It never reads or writes
+# the bus of the folder it runs in: every AGENTBUS_* variable is dropped for the commands it runs.
+
+DEMO_PAUSE_S = 2.0
+# (caption, the command's arguments, the exit status it must have)
+DEMO_STEPS = (
+    ("Two agents join the bus. Each names itself with --as.", ("--as", "lead", "join", "--role", "planner"), 0),
+    ("", ("--as", "worker", "join", "--role", "implementer", "--tool", "codex"), 0),
+    ("The lead sets the one goal every agent sees first.", ("--as", "lead", "goal", "Move auth to the new token API"), 0),
+    ("The lead posts the task to the worker.", ("--as", "lead", "post", "Move src/auth/ onto the new token API.", "--to", "worker"), 0),
+    ("The worker reads its inbox.", ("--as", "worker", "inbox"), 0),
+    ("The worker claims the folder before it edits.", ("--as", "worker", "claim", "src/auth/", "--purpose", "token refactor"), 0),
+    ("The lead tries to edit a file inside it. The claim is refused, which is the point.",
+     ("--as", "lead", "claim", "src/auth/login.py", "--purpose", "quick fix"), 1),
+    ("The worker finishes and hands off.",
+     ("--as", "worker", "post", "Auth is moved and tests pass. Over to you for review.", "--to", "lead", "--kind", "handoff"), 0),
+    ("Any agent can catch up in one call.", ("--as", "lead", "brief"), 0),
+    ("The worker lets go of the folder.", ("--as", "worker", "release", "src/auth/"), 0),
+)
+
+
+def _demo_say(text):
+    write_out(text if text.endswith("\n") else text + "\n")
+
+
+def _demo_command_text(args):
+    return "agentbus " + " ".join(shlex.quote(x) for x in args)
+
+
+def _demo_run(args, env, cwd, current):
+    """Run one step: its exit status and its output (stdout and stderr, as the terminal would show them)."""
+    if os.environ.get("AGENTBUS_TEST_FAIL") == "demo":  # test hook: a step that fails unexpectedly
+        return 70, "injected demo failure\n"
+    p = subprocess.Popen([sys.executable, self_path(), *args], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    current.append(p)
+    try:
+        out = p.communicate()[0]
+    finally:
+        current.remove(p)
+    return p.returncode, out.decode("utf-8", "replace")
+
+
+def _demo_tour(a, folder, current):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AGENTBUS_")}
+    home = os.path.join(folder, "home")
+    os.makedirs(home)
+    os.makedirs(os.path.join(folder, "bus"))
+    env.update(AGENTBUS_DB=os.path.join(folder, "bus", "bus.db"), HOME=home, COLUMNS=str(term_width()))  # a pipe has no width of its own
+    steps = []
+    for caption, args, want in DEMO_STEPS:
+        _test_pause("demo-step")
+        if not a.json:
+            if caption:
+                _demo_say(("\n" if steps else "") + "# " + caption)
+            _demo_say("$ " + _demo_command_text(args))
+        rc, out = _demo_run(args, env, folder, current)
+        steps.append({"command": _demo_command_text(args), "exit": rc})
+        if rc != want:
+            die(f"the demo step `{_demo_command_text(args)}` exited {rc}, not {want}: {out.strip()[:300]}. "
+                "This is a bug in agentbus; please report it.", "internal")
+        if not a.json:
+            _demo_say(out.rstrip("\n"))
+            if not a.no_pause:
+                time.sleep(DEMO_PAUSE_S)
+    return steps, env
+
+
+def cmd_demo(a):
+    import tempfile
+    a.no_pause = a.no_pause or a.json
+    folder = tempfile.mkdtemp(prefix="agentbus-demo-")
+    current, old = [], {}
+
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        old[sig] = signal.signal(sig, stop)
+    old[signal.SIGINT] = signal.getsignal(signal.SIGINT)
+    try:
+        if not a.json:
+            _demo_say("agentbus demo: two agents on a temporary bus, about 30 seconds. Nothing here touches your project.")
+            _demo_say(f"(The bus lives in {folder} and is removed when the tour ends.)")
+            _demo_say("")
+        steps, env = _demo_tour(a, folder, current)
+        if not a.json:
+            tty = sys.stdin is not None and sys.stdout is not None and sys.stdin.isatty() and sys.stdout.isatty()
+            if a.watch and not tty:
+                _demo_say("\nNote: watch needs a terminal, so it was skipped.")
+            elif tty and (a.watch or not a.no_pause):
+                answer = "y"
+                if not a.watch:
+                    write_out("\nWatch this bus live? Type y then Enter to open it, anything else to finish: ")
+                    answer = sys.stdin.readline().strip().lower()
+                if answer in ("y", "yes"):
+                    subprocess.run([sys.executable, self_path(), "watch"], cwd=folder, env=env)
+    finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)  # a second Ctrl-C must not leave the directory behind
+        for p in list(current):
+            try:
+                p.kill()
+                p.wait()
+            except OSError:
+                pass
+        shutil.rmtree(folder, ignore_errors=True)
+        for sig, handler in old.items():
+            signal.signal(sig, handler)
+    if a.json:
+        print_json({"steps": steps, "cleaned": not os.path.lexists(folder)})
+        return
+    _demo_say("\nThat was the whole loop, and the demo bus is already gone. To use it in your own repo:")
+    _demo_say("  agentbus init .\n  agentbus setup claude     (or: agentbus setup codex)\n  agentbus watch            (a live view for you; q quits)")
+
+
+def register_demo(sub):
+    d = sub("demo", help="A 30-second tour for a person: two scripted agents on a temporary bus, nothing left behind",
+            description="A hands-off tour for a person, about 30 seconds: two scripted agents join a temporary bus, set a goal, "
+                        "post a task, claim a folder, are refused a conflicting claim, hand off and release. Each command is printed "
+                        "as it runs, so you learn the CLI by watching it. The bus is made outside any repo, never touches the bus of "
+                        "the folder you are in, and is removed at the end, on an error and on Ctrl-C. With --json it runs the same "
+                        "tour without pauses and prints each step's exit status (a quick check that this install works).")
+    d.add_argument("--no-pause", action="store_true", help="Do not pause between commands, and do not offer watch (for scripts and tests).")
+    d.add_argument("--watch", action="store_true", help="Open watch on the demo bus when the tour ends, without asking (needs a terminal).")
+
+
+REGISTER_COMMANDS.append(register_demo)
+NO_DB_COMMANDS["demo"] = cmd_demo
+CONTRACT["commands"]["demo"] = _cmd(
+    "A hands-off 30-second tour on a temporary bus; with --json the same tour without pauses",
+    _o({"steps": _list(_o({"command": _STR, "exit": _INT})), "cleaned": _BOOL}), base=_PLAIN_ERRORS)
+
+
 def main():
     global _JSON_ERRORS
     argv = sys.argv[1:]
@@ -11226,7 +11607,7 @@ def run(a):
 # work beside a live writer; the open changes no data or schema, and may finish SQLite's recovery of a
 # crashed writer's journal. A bus that needs a write first (no tables yet, an older
 # schema) gets the ordinary open, which creates or migrates it as before.
-READ_ONLY_COMMANDS = ("who", "status", "read")
+READ_ONLY_COMMANDS = ("who", "status", "read", "brief")
 
 
 def open_for(a, strict):

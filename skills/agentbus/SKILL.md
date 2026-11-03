@@ -17,7 +17,7 @@ Discovery finds the nearest ancestor bus; linked worktrees map to their main che
 
 ## Start
 
-Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal (a lead sets it with `goal "TEXT"`); any agent can set it, so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. Fetch additional facts with `ctx get` when needed or reported truncated. Use `read --topic ruling` if this project uses that topic.
+Start with `join`, then `brief` (goal, holders, open questions, your handoffs and alerts, changed facts, next command). It marks nothing read. Any agent can set the goal (a lead sets it with `goal "TEXT"`), so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. `ctx get` fetches truncated facts. Use `read --topic ruling` if this project uses that topic.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.
 

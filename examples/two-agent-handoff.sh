@@ -4,6 +4,11 @@ set -euo pipefail
 
 # AGENTBUS may include an interpreter, e.g. "python3 /path/to/bin/agentbus".
 read -r -a installed_bus <<< "${AGENTBUS:-agentbus}"
+# The script changes directory below: a relative path in AGENTBUS (python3 bin/agentbus) is made absolute first.
+for i in "${!installed_bus[@]}"; do
+  word=${installed_bus[$i]}
+  if [[ $word == */* && $word != /* && -e $word ]]; then installed_bus[$i]=$PWD/$word; fi
+done
 for name in ${!AGENTBUS_@}; do unset "$name"; done
 
 demo_dir=$(mktemp -d)

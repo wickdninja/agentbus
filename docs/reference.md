@@ -55,6 +55,20 @@ Listings default to 500 rows (log: 40; recent status messages: 10); `--limit -1`
 
 The goal is the context key `goal`, so `ctx history goal` lists every version. `join` prints `goal: ...` when one is set, and `status` opens with `== goal: ...`. `watch` pins it on the row under its header (🎯, or ◆ without emoji) and leaves it out of Facts.
 
+## Brief
+
+`agentbus --as NAME brief` is the one call for an agent that has just joined or come back: the goal, who is here and what each holds (with the claim's purpose), open questions, your unread handoffs and alerts, facts changed since your last read, and one `next:` line with the command to run. About 1,100 characters (under 400 tokens) for four agents with claims, three questions, a handoff, an alert and three facts. `status` plus `inbox` for the same bus is several times longer, and a late joiner needs one call fewer (`join`, `brief` instead of `join`, `status`, `inbox`).
+
+- It only reads. It never moves an inbox cursor, so the handoffs it lists are still there for `inbox`, which is what consumes them. With `--as` it refreshes your last-seen like every command; without `--as` it is a read-only open and shows the bus as a bystander (no unread, only questions to everyone).
+- An open question has kind `question`, is addressed to you or to everyone, and has no answer: no message of kind `answer` replies to it, directly or through a chain of replies (an answer to a reply to the question counts). A reply of another kind, a note or a question, does not answer it. Oldest first.
+- Unread follows the inbox rule exactly (after your cursor; direct to you, or broadcast since you first joined; not from you). The list shows handoffs and alerts; `unread.total` counts every kind.
+- Changed facts are those updated at or after the time of the last message you read with `inbox` (every fact before a first read), leaving out your own and the goal.
+- `--limit N` (default 5) bounds every section; `omitted` counts what was left out and the text names the next command. Stored text is cut (bodies and values at 200 characters in `--json`, with `body_truncated` or `value_truncated`; the goal at 300).
+
+## Demo
+
+`agentbus demo` is a hands-off tour of about 30 seconds for a person: two scripted agents join a temporary bus, set a goal, post a task, claim a folder, are refused a conflicting claim, hand off, catch up with `brief` and release. Each command is printed as it runs. The bus lives in a directory it makes under `TMPDIR`, outside any repo; it never reads or writes the bus of the folder you are in (every `AGENTBUS_*` variable is dropped for the commands it runs) and it removes the directory when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (exit 130). On a terminal it offers `watch` on the demo bus at the end; `--watch` opens it without asking, `--no-pause` skips the pauses and the offer. `--json` runs the same tour without pauses and prints each step's exit status and `cleaned: true`, a quick check that an install works.
+
 ## Watch
 
 `agentbus watch` redraws in place until `q` (from the main view) or `Ctrl-C`. `--interval` sets 0.2 to 60 seconds, `--once` prints one frame, and `--json` prints one snapshot. Piped output, `TERM=dumb` and an unset `TERM` also print one frame. It needs 40 columns. `NO_COLOR` turns colour off. Watch only reads: no key marks a message read or changes a claim, and `y` writes only to the terminal.
@@ -141,6 +155,8 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved)}]}` |
 | `update` | `{"from": string, "to": string, "latest": string or null, "install": {"method": string, "url": string or null}, "tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null (only when update downloads the release wheel; "install_with" in a dry run)}, "buses": [UpgradeRow], "setup": [SetupResult], "plugin": {"fix": string} or null, "restart": boolean, "scope": {"narrowed": boolean, "why": string or null}}, or with --check {"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, "url": string or null}, "argv": null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null, "notes": string or null}` |
 | `doctor` | `{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" \| "warn" \| "fail" \| "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0` |
+| `brief` | `{"bus": string, "me": null or {"name": string, "joined": boolean}, "goal": null or BriefGoal, "agents": {"items": [BriefAgent]}, "questions": {"items": [BriefMessage]}, "unread": {"total": integer, "items": [BriefMessage]}, "facts": {"since": string or null, "items": [BriefFact]}, "omitted": {"agents": integer, "questions": integer, "unread": integer, "facts": integer}, "next": string}` |
+| `demo` | `{"steps": [{"command": string, "exit": integer}], "cleaned": boolean}` |
 <!-- /generated:results -->
 
 Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; timestamps are UTC strings in JSON.
@@ -160,6 +176,11 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `SetupResult` | `target`, `scope`, `directory`, `changes`, `error` |
 | `DoctorCheck` | `id`, `status`, `detail`, `fix`, `hint`, `scope` (optional) |
 | `Warning` | `code`, `name`, `did_you_mean` |
+| `BriefGoal` | `goal`, `set_by`, `set_at`, `truncated` |
+| `BriefMessage` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to`, `body_truncated` |
+| `BriefClaim` | `resource`, `purpose`, `expires_at` |
+| `BriefAgent` | `name`, `role`, `tool`, `last_seen`, `claims`, `claims_omitted` |
+| `BriefFact` | `key`, `value`, `updated_by`, `updated_at`, `value_truncated` |
 <!-- /generated:objects -->
 
 #### `update --json`
@@ -295,6 +316,8 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `setup` | idempotent | a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object |
 | `update` | idempotent | repeat |
 | `doctor` | safe | repeat freely |
+| `brief` | safe | repeat freely |
+| `demo` | safe | repeat freely |
 <!-- /generated:retry -->
 
 One rule for every write: repeating a command with the same `--request-id` never repeats its effect. `post` and `join` replay the first result (`duplicate: true`); `leave`, `claim`, `release`, `ctx set` and `goal` accept the flag and are already safe to repeat, so it changes nothing. `log add` has no token yet: check `log show --limit 1` before retrying it.

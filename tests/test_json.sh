@@ -118,6 +118,18 @@ doctor = shape(j('doctor'), agentbus=str, path=str, contract=int, checks=list, f
 assert doctor['checks'], doctor
 for check in doctor['checks']:   # scope is there for the checks of a user or project file
     shape(check, id=str, status=str, detail=str, fix=(str, null), hint=(str, null), **({'scope': str} if 'scope' in check else {}))
+brief = shape(j('--as', 'b', 'brief'), bus=str, me=dict, goal=dict, agents=dict, questions=dict, unread=dict, facts=dict, omitted=dict, next=str)
+shape(brief['me'], name=str, joined=bool)
+shape(brief['goal'], goal=str, set_by=str, set_at=str, truncated=bool)
+shape(brief['agents'], items=list); shape(brief['questions'], items=list)
+shape(brief['unread'], total=int, items=list); shape(brief['facts'], since=(str, null), items=list)
+shape(brief['omitted'], agents=int, questions=int, unread=int, facts=int)
+array(brief['agents']['items'], name=str, role=(str, null), tool=(str, null), last_seen=str, claims=list, claims_omitted=int)
+for row in brief['questions']['items'] + brief['unread']['items']:
+    shape(row, id=int, ts=str, sender=str, recipient=str, kind=str, topic=(str, null), body=str, reply_to=(int, null), body_truncated=bool)
+demo = shape(j('demo'), steps=list, cleaned=bool)
+array(demo['steps'], command=str, exit=int)
+assert demo['cleaned'] is True and sorted({s['exit'] for s in demo['steps']}) == [0, 1], demo
 j('--as', 'b', 'claim', 'watch-fixture')
 for after in (False, True):
     for once in ((), ('--once',)):

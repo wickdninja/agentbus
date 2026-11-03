@@ -45,6 +45,8 @@
 - `leave --json` carries `was_joined`; leaving a name that never joined (or already left) says so on stderr.
 - `join --takeover` keeps the tool, model and role it is not told again.
 - `ctx set` text shows what changed: `set mode: fast -> slow`.
+- `agentbus brief` is one call that tells an agent that has just joined what is going on, in under 400 tokens: the goal, who is here and what each holds and why, open questions (kind `question`, to you or everyone, no answer replying to them, directly or through a chain of replies), your unread handoffs and alerts, facts changed since your last inbox read, and a `next:` command. It only reads and never marks anything read. `--limit N` bounds each section; `--json` is a typed object (`BriefGoal`, `BriefAgent`, `BriefMessage`, `BriefFact`) with `omitted` counts. The skill now starts with `join`, then `brief`, one call fewer than `join`, `status`, `inbox`.
+- `agentbus demo` is a 30-second hands-off tour for a person: two scripted agents on a temporary bus (join, goal, a task, a claim, a refused conflicting claim, a handoff, `brief`, a release), each command printed as it runs, then an offer to open `watch` (`--watch` opens it directly, `--no-pause` skips the pauses). It never touches the bus of the folder it runs in and removes its directory on success, error, Ctrl-C and SIGTERM. `--json` runs the tour silently and reports each step.
 
 ### Changed (breaking, contract version 1)
 
@@ -71,6 +73,7 @@
 
 ### Fixed
 
+- `examples/two-agent-handoff.sh` resolves a relative `AGENTBUS` before it changes directory, so `AGENTBUS="python3 bin/agentbus" bash examples/two-agent-handoff.sh` from a clone works.
 - Agent names (`--as`, `AGENTBUS_AGENT`), `post --to` and `--topic`, `read --topic`, `ctx` keys and claim resources refuse control characters and bidirectional overrides with `bad_input` (exit 2); the message and `error.field` name the field and the character is shown as `U+XXXX`. Rows an older bus already holds are still read and shown escaped.
 - Deleting claims no longer rewrites the freed pages. SQLite as Debian and Ubuntu build it zeroes every page a delete frees, so `release --all` or `leave` over 500 planted 1 MB claim names wrote about 600 MB with the bus held and could outlive the hold watchdog, making the next agent's command wait. agentbus now sets `secure_delete=FAST`: deleted cells are still zeroed on the pages the delete writes, with no extra I/O.
 
