@@ -115,6 +115,14 @@ rc=0; AGENTBUS_MUTATION_JOBS=abc $M --mutations "$T/m2.json" --all >"$T/par.out"
 [ "$rc" = 2 ] && grep -q 'AGENTBUS_MUTATION_JOBS must be' "$T/par.out" || fail "a bad AGENTBUS_MUTATION_JOBS was accepted: $(cat "$T/par.out")"
 ok "-j 2: file order, same summary line; bad job counts refused"
 
+echo "TEST 7c: every test the harness runs, baseline and mutated, starts outside the checkout"
+# A checkout sits under a folder that may hold a real bus; a command a test runs before its own cd would find it.
+CHK=$(cd "$ROOT" && pwd -P)
+printf '#!/bin/bash\ncase "$(pwd -P)" in "%s"|"%s"/*) echo "FAIL: cwd is under the checkout: $(pwd -P)"; exit 1;; esac\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then echo "FAIL: marker seen"; exit 1; fi\n' "$CHK" "$CHK" > "$T/cwd.sh"
+entry "cwd" "$T/cwd.sh" "$F" 1 "marker seen"
+[ "$(status cwd)" = 0 ] && grep -q '^KILLED cwd: .*FAIL: marker seen' "$T/out" || fail "a baseline or mutated run started under the checkout: $(cat "$T/out")"
+ok "baseline and mutated runs both start outside the checkout"
+
 echo "TEST 8: every mutation in tests/mutations.json is killed"
 rc=0; MUTATE_TIMEOUT=400 $M --all >"$T/all.out" 2>&1 || rc=$?
 cat "$T/all.out"
