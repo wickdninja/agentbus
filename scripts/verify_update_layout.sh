@@ -12,6 +12,7 @@ tool=${1:?usage: verify_update_layout.sh uv|pipx}
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 unset AGENTBUS_CMD AGENTBUS_BIN
 . "$ROOT/tests/update_lib.sh"
+unset -f agentbus   # lib.sh's helper runs the checkout; this script runs the INSTALLED command
 W=$(mktemp -d); trap 'stop_servers; rm -rf "$W"' EXIT
 export HOME="$W/home"; mkdir -p "$HOME" "$W/srv"
 G=(git -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
