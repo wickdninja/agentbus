@@ -107,6 +107,11 @@ errcase "name active" name_active --as alpha join
 errcase "no identity" bad_input post hi
 errcase "usage error" bad_input --as alpha post hi --kynd note
 errcase "unknown command" bad_input lgo
+# the Codex hooks printer refuses a project copy and names the command to run from the installed tool
+agentbus init "$T/hk" >/dev/null
+AB_INSTALLED=("${AB[@]}"); AB=("$PY" "$T/hk/.agentbus/bin/agentbus")
+errcase "hooks from a project copy" bad_input hooks codex
+AB=("${AB_INSTALLED[@]}")
 # a code with no command to run says so with null (the key is always there)
 agentbus --json --as alpha post other --request-id tok >/dev/null 2>"$T/e" && fail "a reused request id was accepted" || true
 pyj 'e = d["error"]; assert e["code"] == "request_id_reused" and "next" in e and e["next"] is None, d' <"$T/e"
@@ -149,11 +154,11 @@ table = {
     "goal": ["goal"], "watch": ["watch", "--once"], "buses": ["buses"], "init": ["init", T + "/proj2"],
     "upgrade": ["upgrade", T + "/proj"], "update": ["update", "--check"], "schema": ["schema", "post"], "skill": ["skill"],
     "help": ["help", "post"], "completion": ["completion", "bash"], "setup": ["setup", "claude", "--dry-run"],
-    "doctor": ["doctor"], "brief": ["--as", "alpha", "brief"], "demo": ["demo"],
+    "doctor": ["doctor"], "brief": ["--as", "alpha", "brief"], "demo": ["demo"], "hooks": ["hooks", "codex"],
 }
 extra = [["read", "--id", "1"], ["ctx", "get"], ["goal"], ["--as", "alpha", "goal", "ship it"], ["goal"], ["schema", "--index"],
          ["schema"], ["help"], ["skill", "--agents-md"], ["upgrade", "--all", T + "/proj", "--dry-run"], ["--as", "alpha", "claim", "src/b.py"],
-         ["--as", "alpha", "claim", "src/b.py"]]
+         ["--as", "alpha", "claim", "src/b.py"], ["setup", "codex", "--dry-run"], ["hooks", "claude"]]
 assert set(table) == set(schema["commands"]), ("the table and the registry differ", set(table) ^ set(schema["commands"]))
 for args in list(table.values()) + extra:
     p = subprocess.run([*tool, "--json", *args], capture_output=True, text=True, cwd=T, timeout=120)

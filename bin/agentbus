@@ -12135,7 +12135,7 @@ HOOKS_PRINTERS = {"claude": ClaudeHooksPiece, "codex": CodexHooksPiece}
 def cmd_hooks(a):
     if is_repo_local_copy():
         die("hooks runs from the installed agentbus, not a project copy: the printed commands must name the "
-            f"installed tool. Run: agentbus hooks {a.target}", "bad_input")
+            f"installed tool. Run: agentbus hooks {a.target}", "bad_input", next=f"agentbus hooks {a.target}")
     piece = HOOKS_PRINTERS[a.target]()
     doc = piece.merge({}, piece.entries("user"))
     if a.json:
