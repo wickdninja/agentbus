@@ -111,6 +111,12 @@ restored bus; they stay in `bus.db.broken`.
    chmod 700 .agentbus/bin/agentbus
    cp -p .agentbus/backups/VERSION-STAMP .agentbus/VERSION
    ```
+   If a sandboxed lane could write `backups/` (a grant without the `backups/` rule in
+   [Sandboxed agents](../sandboxed-agents.md)), skip this step and run `agentbus upgrade DIR` from
+   the agentbus you installed. The kept copy may not be the file `upgrade` saved, and
+   `bin/agentbus` is code you and your agents run outside any sandbox. `upgrade` writes the
+   installed tool's own file there instead. It also migrates the restored bus again, with a new
+   backup.
 
 The restored bus has the old shape, and the folder's copy reads and writes it as before. Run agents
 through that copy (`.agentbus/bin/agentbus`): a newer agentbus migrates the bus again on its next

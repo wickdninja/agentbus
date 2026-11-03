@@ -527,8 +527,8 @@ def hostile():
         for col in [r[1] for r in con.execute(f"PRAGMA table_info({table})") if r[2].upper() == "TEXT"]:
             con.execute(f"UPDATE {table} SET {col} = REPLACE({col}, ?, ?) WHERE {col} LIKE ?", (H, HOSTILE, "%" + H + "%"))
     con.commit()
-    con.close()
-    assert sqlite3.connect(db).execute("SELECT count(*) FROM agents WHERE name LIKE ?", ("%" + HOSTILE,)).fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM agents WHERE name LIKE ?", ("%" + HOSTILE,)).fetchone()[0] == 1
+    con.close()   # closed before watch starts: an open connection of ours must not be what it waits on
     H = HOSTILE
     evil = "ev" + H
     for emoji in (False, True):

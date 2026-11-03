@@ -20,9 +20,14 @@ CACHE="$HOME/.cache/agentbus/pycache"
 # who runs the plugin has not, so it is dropped here (TEST 7 sets it on purpose).
 L() { env -u PYTHONDONTWRITEBYTECODE "$PY" "$LAUNCH" "$@"; }
 # pycs DIR: the .pyc files under DIR, one per line.
-pycs() { find "$1" -name '*.pyc' 2>/dev/null | sort; }
+pycs() { { find "$1" -name '*.pyc' 2>/dev/null || true; } | sort; }   # a missing folder holds none (find fails; set -e must not end the test silently)
 # mode PATH: its permission bits, as Python's oct() prints them.
 mode() { "$PY" -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
+
+# beside_state: the .pyc files that already sit beside the source or in the project, with their checksums. CI compiles
+# bin/agentbus with py_compile before the suite, which leaves bin/__pycache__; only a file the launcher adds or changes counts.
+beside_state() { { find "$CHECKOUT/bin" "$CHECKOUT/hooks" "$P/.agentbus" -name '*.pyc' -exec cksum {} + 2>/dev/null || true; } | sort; }
+P="$T/proj"; BESIDE_BEFORE=$(beside_state)
 
 # The plugin's own files, copied so a test can change the source: PL/bin/agentbus and PL/hooks/launch.py.
 PL="$TREAL/plugin"; mkdir -p "$PL/bin" "$PL/hooks"; cp "$CHECKOUT/bin/agentbus" "$PL/bin/agentbus"; cp "$LAUNCH" "$PL/hooks/launch.py"
@@ -80,7 +85,7 @@ n=$(pycs "$CACHE" | wc -l | tr -d ' ')
 case "$(pycs "$CACHE")" in */agentbus*.pyc) ;; *) fail "the cached file is not agentbus's: $(pycs "$CACHE")" ;; esac
 [ "$(mode "$CACHE")" = 0o700 ] || fail "the cache folder is not 0700"
 [ "$(mode "$HOME/.cache/agentbus")" = 0o700 ] || fail "the cache's parent folder is not 0700"
-[ -z "$(pycs "$CHECKOUT/bin"; pycs "$CHECKOUT/hooks"; pycs "$P/.agentbus")" ] || fail "bytecode was written beside the source or in the project's .agentbus"
+[ "$(beside_state)" = "$BESIDE_BEFORE" ] || fail "bytecode was written beside the source or in the project's .agentbus"
 ok "one .pyc under ~/.cache/agentbus/pycache (0700); none in the checkout or the project"
 
 echo
