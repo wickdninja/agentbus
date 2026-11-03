@@ -2646,13 +2646,13 @@
     "expect": "named/tool"
   },
   {
-    "name": "check accepts a hook tool inside the project",
+    "name": "check ignores a .agentbus folder anywhere on the path",
     "file": "bin/agentbus",
-    "find": "        if inside:\\n            return True\\n    return False",
-    "replace": "        if False:\n            return True\n    return False",
+    "find": "            inside = claude_in_project\\(real, cwd, home\\)\\n",
+    "replace": "            inside = False\n",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "agentbus-real"
+    "expect": "faraway/.agentbus"
   },
   {
     "name": "doctor flags the running tool when it sits under the working directory",
@@ -2806,5 +2806,68 @@
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
     "expect": "a held bus made a hook speak, fail, or outlast its holder"
+  },
+  {
+    "name": "project scope cannot replace the old install link",
+    "file": "bin/agentbus",
+    "find": "setup_check_chain\\(folder\\), os\\.unlink\\(folder\\)",
+    "replace": "setup_check_chain(skill), os.unlink(folder)",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "project scope cannot replace the old install link"
+  },
+  {
+    "name": "check trusts a program others can write",
+    "file": "bin/agentbus",
+    "find": "            if st\\.st_mode & 0o022:\\n                return f\"is writable by others",
+    "replace": "            if False:\n                return f\"is writable by others",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with a program others can write"
+  },
+  {
+    "name": "check ignores the ancestors of a working directory outside HOME",
+    "file": "bin/agentbus",
+    "find": "    extra = hook_outside_roots\\(cwd, home\\)",
+    "replace": "    extra = []",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a tool in an ancestor of the working directory"
+  },
+  {
+    "name": "check counts the folder that holds HOME as a project",
+    "file": "bin/agentbus",
+    "find": "        if home == here or home\\.startswith\\(here\\.rstrip\\(os\\.sep\\) \\+ os\\.sep\\):\\n            break",
+    "replace": "        if False:\n            break",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with one entry that runs another install among four"
+  },
+  {
+    "name": "the setup report's stop hint drops the scope",
+    "file": "bin/agentbus",
+    "find": "Written before this: \\{wrote\\}\\. Fix that and run again: \\{_RERUN\\}\"\\)",
+    "replace": "Written before this: {wrote}. Fix that and run again: agentbus setup {target}\")",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "the stop hint of the report drops the scope"
+  },
+  {
+    "name": "the setup error's stop hint drops the scope",
+    "file": "bin/agentbus",
+    "find": "stopped: \\{problem\\}\\. Fix that and run again: \\{_RERUN\\}\"",
+    "replace": "stopped: {problem}. Fix that and run again: agentbus setup {target}\"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "the stop hint of the error drops the scope"
+  },
+  {
+    "name": "uninstall removes ~/.codex",
+    "file": "bin/agentbus",
+    "find": "                if _SETUP_SCOPE == \"project\" and os\\.path\\.basename",
+    "replace": "                if os.path.basename",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "uninstall removed ~/.codex"
   }
 ]

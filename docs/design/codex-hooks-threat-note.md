@@ -20,6 +20,10 @@ The Codex hooks share their handlers, identity rules and safety rules with the C
 
 ## Left open
 
+- **The window between the last folder check and the write.** Setup checks the folders from the working directory down to every file it writes or removes when it plans, again right before each write and removal, and once more after a write. A folder swapped for a link in the few microseconds between the last check and the rename can still send that one write (or removal) through the link; the after-write check can only report it. Accepted for now. A follow-up will walk the chain with `O_NOFOLLOW` and write through the parent's directory descriptor (`dir_fd`), which closes it.
+- A hook program is trusted by owner and mode like `claude_trusted_binary`: the program, its interpreter and their folders must belong to the user or root and not be writable by group or others. Ownership by another user is checked but has no test (it needs a second user).
+- Outside the home folder, the ancestors of the working directory count as the project while they are the user's (owned by the user or writable by others, and not holding the home folder), so an unpacked tarball in `/tmp` is not an install; a root-owned folder nobody else can write (`/usr/local`) ends the walk.
+
 - Edits made through the shell (`sed -i`, a redirect) carry no file list; the claim note cannot see them.
 - Subagents of one Codex session share the parent's session id (Codex documentation, not run here), so they share one name.
 - `setup codex` runs the program named by `$SHELL` (or `/bin/sh`), once. The environment is the caller's, not a project's; a caller whose environment is hostile can run anything anyway.
