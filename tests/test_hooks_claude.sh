@@ -900,8 +900,8 @@ assert m["HOOK_IGNORABLE_RE"].search("\u200c".encode()) and not m["HOOK_IGNORABL
 for c in ignorable:
     assert m["HOOK_IGNORABLE_RE"].search(c.encode()), hex(ord(c))
 PY
-# the raw-byte search: a run of ignorable characters counts between two letters of the name, in front of its dot, or after its
-# last s, however long the run; with other neighbours (as in hashes and times) it does not
+# the raw-byte search: a run of ignorable characters counts between two letters of the name, however long; with other
+# neighbours (as in hashes and times) it does not
 "$PY" -I - "${AGENTBUS_BIN:-$BIN}" <<'PY' || fail "the raw-byte search of an index misjudged a run of ignorable characters"
 import runpy, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_raw")
@@ -909,13 +909,12 @@ doubt = m["hook_raw_doubt"]
 Z = "\u200c".encode()
 filler = b"\x01\x02\x03 \x00 " * 8
 assert doubt(filler + b"src/.agent" + Z + b"bus/x" + filler)             # between two letters
-assert doubt(filler + b"src/" + Z + b".agentbus/x" + filler)             # in front of the dot
-assert doubt(filler + b"src/.agentbus" + Z + b"/x" + filler)             # after the last s, before the slash
-assert doubt(filler + b".agentbus" + Z + b"\x00\x00" + filler)            # after the last s, at the end of the path
-assert doubt(filler + b".a" + Z * 1000 + b"gentbus" + filler)           # a long run
+assert doubt(filler + b"src/.a" + Z * 1000 + b"gentbus/x" + filler)     # a long run
+assert doubt(filler + b"src/." + "\ufeff".encode() + b"agentbus/x" + filler) and doubt(filler + b"t" + "\u206f".encode() + b"b" + filler)
+assert doubt(filler + b"src/" + Z + b".agentbus/x" + filler)             # in front of the dot: the name is whole in ASCII
+assert doubt(filler + b".agentbus" + Z + b"/x" + filler)                 # after the last s: whole too
 assert doubt(filler + b".agentbu" + b"\xc5\xbf/x" + filler)             # long s
 assert doubt(filler + b".AgEnTbUs/x" + filler)                           # ASCII, any case
-assert doubt(filler + b".agent" + "\ufeff".encode() + b"bus" + filler) and doubt(filler + b"t" + "\u206f".encode() + b"b" + filler)
 assert not doubt(filler + b"q" + Z + b"r" + filler)                      # neighbours are not letters of the name
 assert not doubt(filler + bytes([0x5a, 0x11]) + Z + bytes([0x77]) + filler)
 assert not doubt(filler + b"src/linker.c" + b"docs/agent.md" + filler)
@@ -1019,6 +1018,13 @@ git clone -q "$P" "$T/p40c"; P="$T/p40c"
 before=$(sha "$P/real/bus.db"); SS; quiet || fail "a tracked symlinked .agentbus was used: rc $RC out $OUT"
 [ "$(sha "$P/real/bus.db")" = "$before" ] || fail "a hook wrote through a tracked symlinked .agentbus"
 "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$P" <<'PY' || fail "hook_untracked took a symlinked .agentbus for the user's"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_link")
+assert m["hook_untracked"](sys.argv[2]) is False
+PY
+# outside any repository a linked .agentbus is no more the user's
+mkdir -p "$T/p40plain/real"; ln -s real "$T/p40plain/.agentbus"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/p40plain" <<'PY' || fail "hook_untracked took a symlinked .agentbus outside a repository for the user's"
 import runpy, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_link")
 assert m["hook_untracked"](sys.argv[2]) is False

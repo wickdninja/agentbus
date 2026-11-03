@@ -6198,10 +6198,11 @@ def hook_ignorable_run(low, p):
 
 def hook_raw_doubt(data):
     """True when the raw bytes of a version 2 or 3 index could hold a path that a file system folds to .agentbus, False
-    when they cannot. No path is read: ASCII ".agentbu" anywhere (every such path has it, long s being the only other
-    letter that folds into the name), or a run of characters HFS+ ignores where a bus name could have one: between two of
-    its letters, in front of its dot, or after its last s. The hashes and times between the paths hold such byte pairs by
-    chance, so a run counts only with the right neighbours (a pair of letters in .agentbus, one chance in about 10^9)."""
+    when they cannot. No path is read. A component that folds to .agentbus either holds ASCII ".agentbu" unbroken (long s
+    and characters HFS+ ignores in front of the dot or after the last s leave it whole), or has a run of characters
+    HFS+ ignores between two of the letters ". a g e n t b u", however long. So: ".agentbu" anywhere in the lower-cased
+    bytes, or such a run with a letter of the name on each side. The hashes and times between the paths hold the bytes
+    of such a character by chance, so a run counts only with those neighbours (one chance in about 10^9)."""
     low = data.lower()
     if b"agentbu" in low:
         return True
@@ -6212,12 +6213,7 @@ def hook_raw_doubt(data):
             if p >= done and HOOK_IGNORABLE_RE.match(low, p):
                 start, end = hook_ignorable_run(low, p)
                 done = end
-                before = low[max(start - 2, 0):start]
-                after = low[end:end + 2]
-                x = before[-1:] in HOOK_LETTERS_SET or before == b"\xc5\xbf"
-                y = after[:1] in HOOK_LETTERS_SET or after == b"\xc5\xbf"
-                last = before[-1:] == b"s" or before == b"\xc5\xbf"
-                if (x and y) or after[:1] == b"." or (last and after[:1] in (b"/", b"\x00")):
+                if low[max(start - 1, 0):start] in HOOK_LETTERS_SET and low[end:end + 1] in HOOK_LETTERS_SET:
                     return True
             p = low.find(mark, p + 1)
     return False

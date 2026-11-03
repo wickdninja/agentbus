@@ -524,8 +524,8 @@
   {
     "name": "SessionEnd trusts any bus once its session has joined one",
     "file": "bin/agentbus",
-    "find": "same = \\(joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\[:2\\]\\)",
-    "replace": "same = (joined_id is not None and True",
+    "find": "same = \\(joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\[:2\\]\\)[\\s\\S]*?same = hook_cached_empty\\(directory\\)",
+    "replace": "same = joined_id is not None",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd wrote to a tracked bus in another project"
@@ -569,8 +569,8 @@
   {
     "name": "SessionEnd trusts a bus.db of the same device whatever its inode",
     "file": "bin/agentbus",
-    "find": "\\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\[:2\\]\\)",
-    "replace": "st.st_dev == joined_id[0]",
+    "find": "same = \\(joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\[:2\\]\\)[\\s\\S]*?same = hook_cached_empty\\(directory\\)",
+    "replace": "same = joined_id is not None and st.st_dev == joined_id[0]",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd wrote to a tracked bus in another project"
@@ -621,13 +621,13 @@
     "expect": "a tracked bus with a v2 index was used"
   },
   {
-    "name": "the index shortcut misses a bus folder spelled with a long s",
+    "name": "the raw search ignores ASCII .agentbu",
     "file": "bin/agentbus",
     "find": "if b\"agentbu\" in low:\\n        return True",
     "replace": "if False:\n        return True",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "the raw-byte search of an index misjudged"
+    "expect": "a tracked bus with a v2 index was used"
   },
   {
     "name": "SessionEnd ignores a creation time that differs from the recorded one",
@@ -666,28 +666,10 @@
     "expect": "the fold does not drop every character HFS+ ignores"
   },
   {
-    "name": "the raw search misses an ignorable run in front of the dot",
-    "file": "bin/agentbus",
-    "find": "or after\\[:1\\] == b\"\\.\" or",
-    "replace": "or False or",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "the raw-byte search of an index misjudged"
-  },
-  {
-    "name": "the raw search misses an ignorable run after the last s",
-    "file": "bin/agentbus",
-    "find": "\\(last and after\\[:1\\] in \\(b\"/\", b\"\\\\x00\"\\)\\)",
-    "replace": "False",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "the raw-byte search of an index misjudged"
-  },
-  {
     "name": "the raw search misses an ignorable run between two letters",
     "file": "bin/agentbus",
-    "find": "if \\(x and y\\) or",
-    "replace": "if False or",
+    "find": "if low\\[max\\(start - 1, 0\\):start\\] in HOOK_LETTERS_SET and low\\[end:end \\+ 1\\] in HOOK_LETTERS_SET:",
+    "replace": "if False:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "the raw-byte search of an index misjudged"
@@ -713,7 +695,7 @@
   {
     "name": "a symlinked .agentbus counts as the user's bus",
     "file": "bin/agentbus",
-    "find": "            return False      # a link is never the user\\'s bus, tracked or not",
+    "find": "            return False      # a link is never the user's bus, tracked or not",
     "replace": "            pass",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
