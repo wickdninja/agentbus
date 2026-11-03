@@ -275,7 +275,10 @@ print("PASS: a realistic bus briefs in %d characters (budget 1,600)" % len(out))
 # the output rules apply to brief: it wraps to an explicit COLUMNS (no line over it, no word broken) and a pipe with no COLUMNS stays whole
 narrow = ok(db, "--as", "api", "brief", env={"COLUMNS": "60"})
 check(max(len(l) for l in narrow.splitlines()) <= 60, "brief at COLUMNS=60 has a longer line:\n%s" % narrow)
-check(sorted(narrow.split()) == sorted(out.split()), "wrapping brief at 60 columns changed its words:\n%s" % narrow)
+import re
+def words(text):   # the words, without the ages (two runs a second apart differ in "now" and "3s ago")
+    return sorted(w for w in re.sub(r"\b(now|ago|\d+[smhd])\b", " ", text).split())
+check(words(narrow) == words(out), "wrapping brief at 60 columns changed its words:\n%s" % narrow)
 unset = subprocess.run([*agentbus_argv(), "--as", "api", "brief"], cwd=tmp, env={k: v for k, v in dict(BASE, AGENTBUS_DB=db).items() if k != "COLUMNS"},
                        capture_output=True, text=True, timeout=60).stdout
 check(unset.splitlines() == out.splitlines() or all(len(l) > 0 for l in unset.splitlines()), "brief off a terminal, no COLUMNS: %r" % unset)
