@@ -716,7 +716,7 @@ set -- $(timed1 SessionStart session_start_startup_print); [ "$2 $3" != "0 0" ] 
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 4.5 else 1)' "$1" || fail "SessionStart with a 1M-entry index took $1 s"
 set -- $(timed1 UserPromptSubmit user_prompt_submit); [ "$3" != 0 ] || fail "UserPromptSubmit with an unchanged 1M-entry index said nothing"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)' "$1" || fail "UserPromptSubmit re-read an unchanged 1M-entry index ($1 s)"
-touch "$P/.git/index"      # git rewrites the index all the time; SessionEnd must not depend on reading it again
+printf garbage >"$P/.git/index"      # git rewrites the index all the time (here: into something unreadable); SessionEnd must not depend on it
 set -- $(timed1 SessionEnd session_end_other); [ "$2" = 0 ] || fail "SessionEnd exit $2"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$1" || fail "SessionEnd with a 1M-entry index took $1 s, past its 1.5 s budget"
 [ "$(roster)" = "peer" ] || fail "SessionEnd with a 1M-entry index did not leave: $(roster)"

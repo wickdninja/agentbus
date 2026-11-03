@@ -393,7 +393,7 @@
     "replace": "if False or ",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "setup started a claude that lives inside the working directory's repo"
+    "expect": "setup started a claude that lives under the working directory"
   },
   {
     "name": "setup starts claude from the project folder",
@@ -465,7 +465,7 @@
     "replace": "joined=False",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "SessionEnd with a 1M-entry index"
+    "expect": "SessionEnd with a 1M-entry index did not leave"
   },
   {
     "name": "setup trusts a claude under an ancestor project root",
