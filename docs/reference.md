@@ -2,7 +2,7 @@
 
 ## Setup
 
-`agentbus init [DIR]` installs `.agentbus/bin/agentbus` and VERSION in an existing directory: a repo or a workspace of repos. DIR defaults to cwd. At a checkout root, it adds `.agentbus/` to the local git exclude. Nested init names the outer bus. The database appears on first use.
+`agentbus init [DIR]` installs `.agentbus/bin/agentbus` and VERSION in a directory: a repo or a workspace of repos. DIR defaults to cwd. A DIR that does not exist is created with its parents (like `mkdir -p`); a path whose nearest existing parent is not a writable directory, or that is a file, is refused with `bad_input` and nothing is created. At a checkout root, it adds `.agentbus/` to the local git exclude. Nested init names the outer bus. The database appears on first use.
 
 Run agents through that copy, using its absolute path from other directories. Run init and `upgrade [DIR]` from the installed tool or a source clone. Upgrade keeps its checkout resolution: DIR selects a repo's main checkout, whose copy is replaced.
 
@@ -37,6 +37,8 @@ Path claims are relative to the bus's directory. Paths normalise `./`, repeated 
 New identities receive older direct messages, but broadcasts only from their first join onward. `read` shows history. Inbox marks returned messages read after stdout writes successfully. This does not confirm that a downstream consumer read or processed them. Do not truncate a consuming inbox with `head`; use `inbox --limit N`. Use `inbox --peek` when inspecting without consuming. Delivery is at least once: a crash or concurrent calls can repeat a message. `--reply-to` links a message without choosing its recipient.
 
 ## Output
+
+Names, topics, context keys and claim resources are identifiers: `--as`, `AGENTBUS_AGENT`, `post --to`, `--topic`, `ctx` KEY and `claim`/`release` RESOURCE refuse a control character (C0, DEL, C1) or a bidirectional override with `bad_input` (exit 2), naming the field in the message and in `error.field`, and showing the character as `U+XXXX`. Bodies and values stay free text. Rows an older bus already holds are read as before and shown escaped (`\x1b`); such a name can no longer be passed as `--as`, so its claims end by expiry.
 
 Use `--json` for parsing and check exit status; errors go to stderr. Human output escapes controls, invisible characters and backslashes. Rows start with tool-written text or two spaces, and wrap with indented continuations. JSON preserves stored text. Human message headers start with `#<integer id> `, followed by sender, recipient (`everyone` for broadcasts), kind and reply target. Local time comes last: `HH:MM` today, otherwise `Nov 1 16:19`; JSON timestamps stay UTC.
 
@@ -195,7 +197,7 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `not_on_roster` | 1 | no | `agent` | That name has not joined. Join first. |
 | `name_active` | 1 | no | `agent`, `last_seen_min` | The name was active recently and may be another live session. Pick another name, or join --takeover if it is you. |
 | `request_id_reused` | 1 | no | `request_id`, `agent` | That request id was used with a different message. Use a new token for a different message. |
-| `bad_input` | 2 | no | none | The arguments are not valid (a usage error). Fix the arguments. |
+| `bad_input` | 2 | no | `field` (optional) | The arguments are not valid (a usage error). Fix the arguments. |
 | `no_bus` | 3 | no | none | There is no bus here or above. Run agentbus init DIR, or set AGENTBUS_DB. |
 | `busy` | 3 | yes | `bus` | Another process held the bus for 15 seconds. Retry after a few seconds. |
 | `schema_refused` | 3 | no | none | The bus tables are not agentbus's. Stop and tell the user. |

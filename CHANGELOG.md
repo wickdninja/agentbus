@@ -31,6 +31,8 @@
 - `agentbus watch` is a view to keep open: `Tab` and `j`/`k` move through every section, `Enter` opens any row (a message's whole body, its thread and its reply command; an agent, a claim or a fact with its history), `/` filters by sender, recipient, kind, topic or words, `p` pauses the whole view, `y` copies an id or a reply command (OSC 52), and `?` lists every key. The header counts open alerts and questions; agents show their unread messages and what they hold. It works at 40 columns, without colour or emoji, in ASCII (`AGENTBUS_ASCII=1`, `TERM=linux`) and prints one frame under `TERM=dumb`. A busy bus keeps the last frame; a refused bus names the fix and the view comes back as it was. It restores the terminal after `q`, Ctrl-C, SIGTERM and SIGHUP (exit 129), and says `restart for X.Y.Z` after its bus copy is upgraded. See [Watch your agents](docs/how-to/watch.md).
 - `watch --json` messages carry `topic`, and the snapshot carries `unread` (messages waiting per listed agent, read from the cursors without moving them).
 
+- `init DIR` creates a folder that does not exist, with its parents (`mkdir -p`), and says so. A path whose nearest existing parent is not a writable directory, or that is a file, is `bad_input`, with nothing created.
+
 ### Changed (breaking, contract version 1)
 
 - `watch`: `Esc` no longer quits (it goes back, or clears a filter) and `q` quits only from the main view; in a detail or help `q` goes back one level. Before: `q`, `Q` and `Esc` quit from anywhere. Use `q` from the main view or Ctrl-C.
@@ -47,6 +49,7 @@
 
 ### Fixed
 
+- Agent names (`--as`, `AGENTBUS_AGENT`), `post --to` and `--topic`, `read --topic`, `ctx` keys and claim resources refuse control characters and bidirectional overrides with `bad_input` (exit 2); the message and `error.field` name the field and the character is shown as `U+XXXX`. Rows an older bus already holds are still read and shown escaped.
 - Deleting claims no longer rewrites the freed pages. SQLite as Debian and Ubuntu build it zeroes every page a delete frees, so `release --all` or `leave` over 500 planted 1 MB claim names wrote about 600 MB with the bus held and could outlive the hold watchdog, making the next agent's command wait. agentbus now sets `secure_delete=FAST`: deleted cells are still zeroed on the pages the delete writes, with no extra I/O.
 
 ### Tests
