@@ -21,6 +21,7 @@ A path under /download/ is a release asset: the file DIR/download/<the rest of t
 type application/octet-stream, unless DIR/download-answer.json exists, which has the same keys as answer.json and
 replaces the answer for every /download/ request (a redirect, a 500, a held or oversized body).
 """
+import faulthandler
 import json
 import os
 import ssl
@@ -41,6 +42,9 @@ class Server(ThreadingHTTPServer):
 
 def main():
     d = os.path.abspath(sys.argv[1])
+    # If startup ever stalls (a lookup, a handshake, a lock), the test's failure output shows where: every thread's stack,
+    # written to this process's stderr (DIR/server.out) 15 s in, cancelled once the server is listening.
+    faulthandler.dump_traceback_later(15, exit=False)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -93,6 +97,7 @@ def main():
     server = Server(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    faulthandler.cancel_dump_traceback_later()
     with open(os.path.join(d, "ready"), "w") as f:  # the test opened the pipe's other end already: this never blocks
         f.write(str(server.server_address[1]) + "\n")
     server.serve_forever()
