@@ -17,9 +17,9 @@ Discovery finds the nearest ancestor bus (linked worktrees use their main checko
 
 ## Start
 
-Start with `join`, then `brief` (goal, holders, questions, handoffs, changed facts, next command), then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name (join suggests a free one). `ctx get` reads facts, `ctx history KEY` earlier values. Use `read --topic decision` if this project uses that topic.
+Start with `join`, then `brief` (goal, holders, questions, handoffs, facts, next command), then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name (join suggests a free one). `ctx get` reads facts, `ctx history KEY` earlier values. Use `read --topic decision` if this project uses that topic.
 
-Hooks: a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim and never replace reading inbox.
+Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as. Hooks never claim and never replace reading inbox.
 
 ## Before shared work
 
@@ -35,7 +35,7 @@ Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewh
 - Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`
 - Record a lasting fact: `ctx set KEY "VALUE"`
 
-Check recipients with `who`. Messages queue for absent names (post warns); posting does not start agents. Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.
+Check recipients with `who`. Messages queue for absent names (post warns); posting starts no agents. Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.
 
 ## Read correctly
 
