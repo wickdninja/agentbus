@@ -14,7 +14,8 @@ agentbus 0.2.0 (~/.local/bin/agentbus)
   warn  copy       0.1.0 here, 0.2.0 installed. Run: agentbus upgrade ~/src/app
   ok    skill      ~/.claude/skills/agentbus/SKILL.md is current
   n/a   agents-md  no ~/.codex found
-  n/a   hooks      not installed by this version
+  ok    hooks      ~/.claude/settings.json has the current hooks
+  ok    hooks      the hooks run ~/.local/bin/agentbus (0.2.0)
 1 warning.
 ```
 
@@ -29,7 +30,7 @@ Run it from the folder you work in. Every line that is not `ok` ends with the co
 | `copy` | the bus folder's own copy of agentbus (`.agentbus/bin/agentbus`) against the one you installed: its version, and its contents (an empty or edited file with the right version number is flagged) | `agentbus upgrade DIR` |
 | `skill` | the Claude Code skill: missing, current, older, edited, not written by agentbus, or the old install-line link | `agentbus setup claude` |
 | `agents-md` | the agentbus block in Codex's `AGENTS.md`: missing, current, older, edited, or damaged markers | `agentbus setup codex` |
-| `hooks` | hook entries `agentbus setup` wrote. This version installs none, so it says so | none |
+| `hooks` | the hook entries `agentbus setup claude` wrote, and the agentbus they run (its path and version). With the Claude Code plugin installed, it says the plugin provides the hooks. Says so when there are none to check | `agentbus setup claude` |
 
 A status is `ok`, `warn`, `fail` or `n/a` (nothing to check on this machine). A warning is something to tidy; a `fail` is something that stops agents from working. The last line counts both. The exit status is 0 unless a check failed, then 1.
 

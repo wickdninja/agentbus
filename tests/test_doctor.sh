@@ -285,12 +285,19 @@ want="agentbus 0.2.0 (<TOOL>)
   warn  copy       0.1.0 here, 0.2.0 installed. Run: agentbus upgrade <WS>/app
   ok    skill      ~/.claude/skills/agentbus/SKILL.md is current
   n/a   agents-md  no ~/.codex found
-  n/a   hooks      not installed by this version
+  ok    hooks      ~/.claude/settings.json has the current hooks
+  ok    hooks      the hooks run <TOOL> (0.2.0)
 1 warning."
 got=$(norm)
 [ "$got" = "$want" ] || { printf 'wanted:\n%s\ngot:\n%s\n' "$want" "$got" >&2; fail "the documented block differs"; }
 [ -z "$ERR" ] || fail "a warning wrote to stderr: $ERR"
 ok "header, five rows in table order, the summary; exit 0"
+doc doctor --scope project
+[ "$RC" = 0 ] || fail "doctor --scope project: exit $RC, wanted 0 for a warning: $ERR"
+hasf "has no agentbus hooks. Run: agentbus setup claude --scope project"
+doc doctor --json
+case "$OUT" in *"has no agentbus hooks"*) fail "the default scope warned that a project never set up has no hooks: $OUT";; esac
+ok "a project that never ran setup is silent for hooks by default and named when --scope project asks"
 
 echo "TEST 5: tool: a copy run from a project says so, names the installed tool and does not compare itself; the installed tool prints the header only"
 world
@@ -598,6 +605,8 @@ import os, sys, h
 m = h.load()
 os.chdir(sys.argv[1])
 before = h.tree(os.environ["HOME"], os.path.dirname(sys.argv[1]))
+# The merged build ships the Claude hooks piece; take it out so this test starts from "no hook pieces".
+m.SETUP_TARGETS["claude"] = [p for p in m.SETUP_TARGETS["claude"] if not isinstance(p, m.JsonEntriesPiece)]
 # 1. No hook pieces and no registered checks: hooks is n/a with the documented text.
 rc, out, err = h.run(m, ["doctor"])
 assert "  n/a   hooks      not installed by this version" in out.splitlines(), out
@@ -635,15 +644,14 @@ assert h.tree(os.environ["HOME"], os.path.dirname(sys.argv[1])) == before, "doct
 PY
 ok "hook pieces map ok/missing/stale/problem; DOCTOR_HOOK_CHECKS and register_doctor_check add rows; a broken check is a fail row"
 
-echo "TEST 17: the hook extension point is not a stub forever: the placeholder and the extension list move together"
-"$PY" - <<'PY' || fail "placeholder"
+echo "TEST 17: the Claude hooks piece and the hook command exist, so doctor checks them (the n/a placeholder is only for a build with neither; test 16 covers that state)"
+"$PY" - <<'PY' || fail "hook piece"
 import h
 m = h.load()
-assert m.DOCTOR_HOOK_CHECKS == [] and not any(isinstance(p, m.JsonEntriesPiece) for t in m.SETUP_TARGETS.values() for p in t), \
-    "hook pieces exist now: replace the n/a placeholder in doctor_check_hooks and add the hook cases to tests/test_doctor.sh"
-assert "hook" not in m.EARLY_COMMANDS, "the hook command exists now (streams 03 and 04): add the hook cells to tests/test_version_policy.sh"
+assert any(isinstance(p, m.ClaudeHooksPiece) for p in m.SETUP_TARGETS["claude"]), "the Claude hooks piece is not in SETUP_TARGETS"
+assert "hook" in m.EARLY_COMMANDS, "the hook command is gone"
 PY
-ok "placeholder holds exactly while no hook piece or hook command exists"
+ok "the Claude hooks piece is registered and the hook command exists"
 
 echo "TEST 18: the release-cache check of the update story has its marked place, and doctor makes no network call"
 grep -q 'DOCTOR_UPDATE_CHECK_SLOT' "$MOD" || fail "the marked place for the release-cache check is gone"
@@ -682,5 +690,32 @@ doc doctor --json
 row skill warn "cannot be read (Not a directory)" "" user "Check the permissions of that path"
 doc doctor; hasf "~/.claude/skills/agentbus"
 ok "unreadable paths name the path, the scope and what to check (also as root)"
+
+echo "TEST 21: hooks: the plugin and setup both registering is a fail with the command that removes setup's entries; a hook running a missing executable is a fail with the setup command"
+world
+mkdir -p "$HOME/.claude/plugins"
+"$PY" - "$HOME/.claude/plugins/installed_plugins.json" "$TESTS_DIR/fixtures/claude_hooks/installed_plugins.json" <<'PY' || fail "plugin fixture"
+import json, sys
+d = json.load(open(sys.argv[2])); entry = next(iter(d["plugins"].values()))
+json.dump({"version": d.get("version", 2), "plugins": {"agentbus@agentbus": entry}}, open(sys.argv[1], "w"))
+PY
+doc doctor --json
+[ "$RC" = 1 ] || fail "a plugin and setup both registering hooks must exit 1 (got $RC)"
+row hooks fail "the agentbus plugin and setup both register hooks" "agentbus setup claude --uninstall" user
+ok "plugin plus setup: a fail whose fix is setup claude --uninstall"
+world
+"$PY" - "$HOME/.claude/settings.json" <<'PY' || fail "settings edit"
+import json, re, sys
+d = json.load(open(sys.argv[1]))
+for groups in d["hooks"].values():
+    for g in groups:
+        for hk in g["hooks"]:
+            hk["command"] = re.sub(r"^('[^']*' ?)+(?= hook)", "'/nonexistent/agentbus'", hk["command"])
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+doc doctor --json
+[ "$RC" = 1 ] || fail "a hook running a missing executable must exit 1 (got $RC)"
+row hooks fail "which is not an agentbus executable" "agentbus setup claude" user
+ok "a hook command that names a missing executable: a fail whose fix is setup claude"
 
 all_passed "All doctor tests passed"

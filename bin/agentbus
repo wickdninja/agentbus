@@ -9151,10 +9151,12 @@ def doctor_check_hooks(ctx):
                 continue
             for scope in ctx.scopes:
                 for _id, code, detail, fix in piece.check(scope):
-                    if code == "problem":   # setup refuses a file it cannot parse, so it is no fix
+                    if code == "missing" and ctx.scope == "all" and scope == "project":
+                        continue   # as for skill and agents-md: a project that never ran setup is not a problem
+                    if code == "problem" and _id == piece.id:   # setup refuses a file it cannot parse, so it is no fix
                         out.append(doctor_result("hooks", "fail", detail, scope=scope,
                                                  hint="Inspect " + piece.path_for(scope) + "; setup will not change a file it cannot parse."))
-                    else:
+                    else:   # a piece's other rows (the tool the hooks run, a plugin duplicate) carry their own fix
                         out.append(doctor_result("hooks", DOCTOR_PIECE_STATUS.get(code, "warn"), detail, fix, scope))
     for fn in DOCTOR_HOOK_CHECKS:
         out.extend(fn(ctx))
