@@ -7,21 +7,25 @@ set -euo pipefail
 T=$(mktemp -d); trap 'stop_servers; rm -rf "$T"' EXIT
 mkdir "$T/srv"; start_server "$T/srv"; rel_latest 0.3.0
 export CLAUDE_CONFIG_DIR="$T/cc"
-repo_spec="git+$REPO_URL@v0.3.0"
+repo_spec="git+$REPO_URL@v0.3.0"   # the source-build line, printed for a person when update cannot run an installer
+wheel_rel="downloads/agentbus-0.3.0-py3-none-any.whl"   # under the cache folder: where the verified release wheel is put
 ej() { tail -n 1 "$2" | jx "$1"; }   # a field of the JSON error on the last line of a stderr file (an installer may print before it)
 errof() { "$PY" -I -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1])["error"]["code"])'; }
 
-echo "TEST 1: every installer argv names the repository at a v tag and runs from HOME"
+echo "TEST 1: every installer is given the release wheel after its sha256 was checked, and runs from the cache folder"
 for m in uv pipx pip; do
   new_case "argv-$m" "$m"
   out=$(ab update --no-buses --no-setup) || fail "$m: update failed: $out"
-  grep -qF -- "ARGV:" "$STUB_LOG" && grep -qF -- "$repo_spec" "$STUB_LOG" || fail "$m: the argv lacks $repo_spec: $(cat "$STUB_LOG")"
-  grep -qxF "CWD: $(cd "$HOME" && pwd -P)" "$STUB_LOG" || fail "$m: the installer did not run from HOME: $(cat "$STUB_LOG")"
+  grep -qF -- "ARGV:" "$STUB_LOG" && grep -qF -- "$(cache_path)/$wheel_rel" "$STUB_LOG" || fail "$m: the argv lacks the release wheel: $(cat "$STUB_LOG")"
+  ! grep -qF -- "git+" "$STUB_LOG" || fail "$m: the installer was given a source tree to build: $(cat "$STUB_LOG")"
+  grep -qxF "WHEEL_SHA: $(shasum -a 256 "$SERVER/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" | cut -d' ' -f1)" "$STUB_LOG" || fail "$m: the installer did not get the verified wheel: $(cat "$STUB_LOG")"
+  grep -qxF "CWD: $(cache_path)" "$STUB_LOG" || fail "$m: the installer did not run from the cache folder: $(cat "$STUB_LOG")"
+  [ -z "$(ls -A "$(cache_path)/downloads" 2>/dev/null)" ] || fail "$m: the download was left behind: $(ls "$(cache_path)/downloads")"
   [ "$(installed_version)" = 0.3.0 ] || fail "$m: the stub did not move the install"
   grep -qF "agentbus 0.3.0 is installed." <<<"$out" && grep -qF "done: 0.2.0 -> 0.3.0. Restart Claude Code and Codex sessions, and any agentbus watch, to load it." <<<"$out" || fail "$m: output: $out"
 done
-grep -qF -- "ARGV: pip install --upgrade $repo_spec" "$STUB_LOG" || fail "pip: $(cat "$STUB_LOG")"
-ok "uv, pipx and pip: the repository at v0.3.0, cwd HOME"
+grep -qF -- "ARGV: pip install --upgrade $(cache_path)/$wheel_rel" "$STUB_LOG" || fail "pip: $(cat "$STUB_LOG")"
+ok "uv, pipx and pip: the verified release wheel, run from the cache folder, no source build, the download removed"
 
 echo "TEST 2: a pip/ planted in the working folder does not run under -I -m pip (the control without -I does)"
 new_case plant pip
@@ -53,11 +57,13 @@ ok "relative, in-repo and group-writable are skipped; the clean one (control) ru
 
 echo "TEST 4: a hostile latest (1!9.0.0, 0.1.0, 9.0.0+x) never reaches an argv"
 for tag in "1!9.0.0" "0.1.0" "9.0.0+x" "0.3.0;id" "0.3.0 --index-url=x"; do
-  new_case hostile uv; answer "{\"body\": \"{\\\"tag_name\\\": \\\"v$tag\\\"}\"}"
+  new_case hostile uv; reset_reqs
+  "$PY" -I -c 'import json,sys; v=sys.argv[1]; print(json.dumps({"body": json.dumps({"tag_name": "v"+v, "assets": [{"name": "agentbus-%s-py3-none-any.whl" % v}, {"name": "SHA256SUMS"}]})}))' "$tag" >"$SERVER/answer.json"
   ab update --no-buses --no-setup >"$C/out" 2>&1 || true
   [ ! -s "$STUB_LOG" ] || fail "tag '$tag' reached an installer: $(cat "$STUB_LOG")"
+  ! grep -q '/download/' "$SERVER/requests.log" || fail "tag '$tag' reached the download: $(cat "$SERVER/requests.log")"
 done
-ok "no installer ran for any of them"
+ok "nothing was downloaded and no installer ran for any of them"
 
 echo "TEST 5: --dry-run prints would run: with the exact argv and the planned rows, and changes nothing"
 new_case dry uv; rel_latest 0.3.0
@@ -66,7 +72,7 @@ mkdir -p "$C/root/x"; new_bus "$C/root/x"
 ab update "$C/root" --dry-run >/dev/null || fail "recording the root failed (dry-run records nothing, so this is the control for the next line)"
 before=$(tree_sum "$PREFIX" "$C/b1" "$C/b2" "$C/root" "$(state_path)" "$HOME/.claude" )
 out=$(ab update --dry-run --all-buses) || fail "dry run failed: $out"
-grep -qF "would run: $C/stubs/uv tool install --force $repo_spec" <<<"$out" || fail "no exact would run line: $out"
+grep -qF "would run: $C/stubs/uv tool install --force $(cache_path)/$wheel_rel" <<<"$out" || fail "no exact would run line: $out"
 grep -qF "$C/b1" <<<"$out" || fail "a planned bus row is missing: $out"
 grep -qF "dry run: nothing was changed." <<<"$out" || fail "dry run summary: $out"
 after=$(tree_sum "$PREFIX" "$C/b1" "$C/b2" "$C/root" "$(state_path)" "$HOME/.claude")
@@ -82,7 +88,7 @@ echo "TEST 6: installer exit 1, a hang killed by SIGTERM, an unchanged version: 
 new_case fail uv; new_bus "$C/b"; before=$(bus_version "$C/b")
 STUB_FAIL=1 ab update --json 2>"$C/err" >/dev/null && fail "a failing installer exited 0"
 [ "$(errof <"$C/err")" = installer_failed ] && [ "$(ej 'd["error"]["reason"]' "$C/err")" = exit ] && [ "$(ej 'd["error"]["exit_status"]' "$C/err")" = 1 ] || fail "exit 1: $(cat "$C/err")"
-grep -qF "$repo_spec" <<<"$(ej 'd["error"]["recovery"]' "$C/err")" || fail "no recovery command: $(cat "$C/err")"
+[ "$(ej 'd["error"]["recovery"]' "$C/err")" = "agentbus update" ] || fail "no recovery command: $(cat "$C/err")"
 [ "$(bus_version "$C/b")" = "$before" ] || fail "a bus step ran after a failed installer"
 : >"$STUB_LOG"
 STUB_HANG=1 AGENTBUS_TEST_INSTALLER_TIMEOUT=1 AGENTBUS_TEST_INSTALLER_GRACE=5 ab update --json 2>"$C/err" >/dev/null && fail "a hanging installer exited 0"
@@ -106,7 +112,7 @@ rc=0; wait "$pid" || rc=$?
 unset STUB_STARTED
 [ "$rc" = 130 ] || fail "Ctrl-C exited $rc, wanted 130: $(cat "$C/err")"
 [ "$(errof <"$C/err")" = interrupted ] && [ "$(ej 'd["error"]["rerun"]' "$C/err")" = "agentbus update" ] \
-  && grep -qF "$repo_spec" <<<"$(ej 'd["error"]["argv"]' "$C/err")" || fail "interrupted error: $(cat "$C/err")"
+  && grep -qF "agentbus-0.3.0-py3-none-any.whl" <<<"$(ej 'd["error"]["argv"]' "$C/err")" || fail "interrupted error: $(cat "$C/err")"
 grep -qx "TERM" "$STUB_LOG" || fail "the installer was left running: $(cat "$STUB_LOG")"
 ok "130, argv, rerun, installer stopped"
 
@@ -323,5 +329,151 @@ grep -qF "kept (edited). To replace it: agentbus setup claude" <<<"$out" && [ "$
 unset CLAUDE_CONFIG_DIR CODEX_HOME
 export CLAUDE_CONFIG_DIR="$T/cc"
 ok "exit 0, nothing added, an edit kept"
+
+echo "TEST 21: the release wheel is checked against SHA256SUMS: a good hash installs, a bad one is refused with nothing installed, a missing asset is manual_step"
+rel_latest 0.3.0
+new_case dl uv; reset_reqs
+ab update --no-buses --no-setup >/dev/null || fail "update with a good download failed"
+"$PY" -I - "$SERVER/requests.log" <<'PY2' || fail "the requests update made are not the asset list and the two files"
+import json, sys
+paths = sorted(json.loads(l)["path"] for l in open(sys.argv[1]))
+assert paths == ["/download/v0.3.0/SHA256SUMS", "/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl", "/releases/latest"], paths
+for l in open(sys.argv[1]):
+    h = {k.lower(): v for k, v in json.loads(l)["headers"].items()}
+    assert h["user-agent"] == "agentbus" and not {"authorization", "cookie"} & set(h), h
+PY2
+rel_latest 0.3.0 bad
+new_case dlbad uv
+ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "a wheel with the wrong sha256 was installed"
+[ "$(errof <"$C/err")" = download_failed ] && [ "$(ej 'd["error"]["reason"]' "$C/err")" = hash_mismatch ] || fail "bad hash: $(cat "$C/err")"
+[ ! -s "$STUB_LOG" ] && [ "$(installed_version)" = 0.2.0 ] && [ -z "$(ls -A "$(cache_path)/downloads" 2>/dev/null)" ] || fail "a refused download was installed or left behind: $(cat "$STUB_LOG")"
+for mode in nowheel nosums none; do
+  rel_latest 0.3.0 "$mode"; new_case "dlmiss-$mode" uv; reset_reqs
+  ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "$mode: update installed a release without a wheel or checksums"
+  [ "$(errof <"$C/err")" = manual_step ] && [ "$(ej 'd["error"]["commands"]' "$C/err")" = "['uv tool install --force git+$REPO_URL@v0.3.0']" ] || fail "$mode: manual_step with the exact command: $(cat "$C/err")"
+  ! grep -q '/download/' "$SERVER/requests.log" && [ ! -s "$STUB_LOG" ] || fail "$mode: update fetched or installed something: $(cat "$SERVER/requests.log")"
+done
+rel_latest 0.3.0; rm -f "$SERVER/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl"; new_case dl404 uv
+ab update --no-buses --no-setup >"$C/out" 2>"$C/err" && fail "a wheel the server does not have was installed"
+grep -qF "(HTTP 404)" "$C/err" && grep -qF "Nothing was installed" "$C/err" || fail "the 404 is not said in plain words: $(cat "$C/err")"
+rel_latest 0.3.0 big; new_case dlbig uv
+ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "an oversized wheel was installed"
+[ "$(ej 'd["error"]["reason"]' "$C/err")" = too_large ] || fail "oversized wheel: $(cat "$C/err")"
+rel_latest 0.3.0; new_case dlredir uv
+printf '{"status": 302, "location": "https://example.invalid/agentbus.whl"}' >"$SERVER/download-answer.json"
+ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "a redirect off GitHub was followed"
+[ "$(ej 'd["error"]["reason"]' "$C/err")" = redirect ] && [ ! -s "$STUB_LOG" ] || fail "redirect: $(cat "$C/err")"
+rm -f "$SERVER/download-answer.json"
+ok "good hash installs; bad hash, oversized wheel, a 404 and an off-GitHub redirect refuse; a missing wheel or SHA256SUMS is manual_step with the source-build line and no download"
+
+echo "TEST 22: setup --refresh in an update leaves a hook that already runs this install byte for byte, and repairs one that cannot run"
+rel_latest 0.3.0
+new_case hook uv; new_bus "$C/b"; export CLAUDE_CONFIG_DIR="$C/cc"
+(cd "$CWD" && "$ENTRY" setup claude >/dev/null) || fail "setup of the fake install failed"
+before=$(cat "$C/cc/settings.json")
+grep -qF "$PREFIX/bin/agentbus" <<<"$before" || fail "the premise failed: the hook does not run the install's entry script: $before"
+out=$(ab update --all-buses "$C/b") || fail "update with hooks failed: $out"
+[ "$(cat "$C/cc/settings.json")" = "$before" ] || fail "update rewrote a hook that already runs this install"
+tool_swap() {  # NEW-TOOL-TEXT: the hook command's tool part replaced
+  "$PY" -I - "$C/cc/settings.json" "$1" <<'PY2'
+import json, re, sys
+p, tool = sys.argv[1:]
+d = json.load(open(p))
+for gs in d["hooks"].values():
+    for g in gs:
+        for h in g["hooks"]:
+            h["command"] = re.sub(r"^.*?(?= hook claude)", lambda m: tool, h["command"], count=1)
+json.dump(d, open(p, "w"), indent=2)
+PY2
+}
+tool_swap "'$PREFIX/bin/python' '$SITE/agentbus.py'"; same=$(cat "$C/cc/settings.json")
+reset_module
+out=$(ab update --all-buses "$C/b") || fail "update with the python-and-module hook form failed: $out"
+[ "$(cat "$C/cc/settings.json")" = "$same" ] || fail "update rewrote a python-and-module hook whose module is there"
+tool_swap "'$PREFIX/bin/python' '$PREFIX/lib/python3.99/site-packages/agentbus.py'"
+reset_module
+out=$(ab update --all-buses "$C/b") || fail "update with a broken hook failed: $out"
+[ "$(cat "$C/cc/settings.json")" = "$before" ] || fail "update did not repair a hook that names a module that is gone: $(cat "$C/cc/settings.json")"
+unset CLAUDE_CONFIG_DIR; export CLAUDE_CONFIG_DIR="$T/cc"
+ok "kept as it is, or repaired to the entry script"
+
+echo "TEST 23: the bus list is checked again on read, and update never runs twice at once, whatever the state of its folders"
+rel_latest 0.3.0
+new_case lst uv; new_bus "$C/real"; new_bus "$C/gone/x"; rm -rf "$C/gone"; mkdir -p "$C/target"; ln -s "$C/target" "$C/link"; : >"$C/afile"
+"$PY" -I - "$(state_path)/buses.json" "$C/link" "$C/afile" "$C/gone/x" "$C/real" <<'PY2'
+import json, sys
+json.dump({"v": 1, "roots": [], "buses": sys.argv[2:]}, open(sys.argv[1], "w"))
+PY2
+j=$(ab update --all-buses --no-setup --json) || fail "update with a poisoned list failed: $j"
+dirs=$(jx 'sorted(r["directory"] for r in d["buses"])' <<<"$j")
+[ "$dirs" = "['$C/gone/x', '$C/real']" ] || fail "the list entries were not re-checked: $dirs"
+new_case ovl uv; mkdir -p "$(dirname "$(state_path)")"; rm -rf "$(state_path)"; : >"$(state_path)"
+mkdir -p "$(cache_path)"; chmod 700 "$(cache_path)"
+"$PY" -I - "$(cache_path)/update.lock" "$C/held" <<'PY2' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+time.sleep(30)
+PY2
+holder=$!
+wait_for "$C/held"
+ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "ran beside a lock held in the cache folder (the state folder was unusable)"
+kill "$holder" 2>/dev/null || true; wait "$holder" 2>/dev/null || true
+[ "$(errof <"$C/err")" = update_running ] && [ "$(ej 'd["error"]["lock"]' "$C/err")" = "$(cache_path)/update.lock" ] || fail "fallback lock: $(cat "$C/err")"
+new_case nolock uv; mkdir -p "$(dirname "$(state_path)")" "$(dirname "$(cache_path)")"; rm -rf "$(state_path)" "$(cache_path)"; : >"$(state_path)"; : >"$(cache_path)"
+ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "ran with no place to keep a lock"
+[ "$(errof <"$C/err")" = update_running ] && grep -qF "nowhere private to keep its lock" "$C/err" || fail "no lock anywhere: $(cat "$C/err")"
+[ ! -s "$STUB_LOG" ] || fail "an installer ran with no lock"
+new_case two uv; export STUB_STARTED="$C/started"
+( cd "$CWD" && STUB_HANG=1 exec "$PY" -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' \
+  "$ENTRY" update --json --no-buses --no-setup 2>"$C/err1" >/dev/null ) &
+first=$!
+wait_for "$C/started"; unset STUB_STARTED
+ab update --json --no-buses --no-setup 2>"$C/err2" >/dev/null && fail "two overlapping updates both ran"
+kill -INT "$first"; wait "$first" 2>/dev/null || true
+[ "$(errof <"$C/err2")" = update_running ] || fail "overlapping run: $(cat "$C/err2")"
+ok "a link, a file and a vanished folder in the list are dropped or reported; the lock falls back to the cache folder, else update refuses; two real overlapping runs: the second is update_running"
+
+echo "TEST 24: a name lookup that never answers is bounded"
+rel_latest 0.3.0
+new_case dns uv
+printf 'import zz_slowdns\n' >"$SITE/zz_slowdns.pth"
+cat >"$SITE/zz_slowdns.py" <<'PY2'
+import socket, time
+_real = socket.getaddrinfo
+def slow(*a, **k):
+    time.sleep(120)
+    return _real(*a, **k)
+socket.getaddrinfo = slow
+PY2
+unset AGENTBUS_TEST_RELEASES_URL AGENTBUS_TEST_DOWNLOAD_URL
+t0=$(now)
+AGENTBUS_TEST_CHECK_TIMEOUT=2 ab update --check --json 2>"$C/err" >/dev/null && fail "a lookup that never answers returned"
+took=$(( $(now) - t0 ))
+[ "$(errof <"$C/err")" = release_offline ] && [ "$(ej 'd["error"]["reason"]' "$C/err")" = timeout ] || fail "dns hang: $(cat "$C/err")"
+[ "$took" -lt 60 ] || fail "the lookup was not bounded: $took s"
+server_env
+ok "release_offline (timeout) long before the 120 s lookup ends"
+
+echo "TEST 25: failures say what happened in plain words and end with the command to run next"
+rel_latest 0.3.0
+new_case msg uv; answer '{"status": 500}'
+ab update --no-buses --no-setup >/dev/null 2>"$C/err" && fail "a 500 exited 0"
+grep -qF "GitHub answered with an error (HTTP 500). Nothing was changed. Try again later: agentbus update" "$C/err" || fail "the 500 message: $(cat "$C/err")"
+AGENTBUS_TEST_RELEASES_URL=https://127.0.0.1:1/releases ab update --no-buses --no-setup >/dev/null 2>"$C/err" && fail "offline exited 0"
+grep -qF "When you are online, run: agentbus update" "$C/err" || fail "the offline message: $(cat "$C/err")"
+rel_latest 0.3.0; new_case setupline uv; new_bus "$C/b"
+export CLAUDE_CONFIG_DIR="$C/cc" CODEX_HOME="$C/cx"
+out=$(ab update --all-buses "$C/b") || fail "update failed: $out"
+grep -qxF "setup: nothing to refresh." <<<"$out" || fail "no setup line when nothing was refreshed: $out"
+rel_latest 0.3.0; new_case setupline2 uv; new_bus "$C/b"; export CLAUDE_CONFIG_DIR="$C/cc" CODEX_HOME="$C/cx"
+out=$(ab update --all-buses --no-setup "$C/b") || fail "update --no-setup failed: $out"
+grep -qxF "setup: skipped (--no-setup)." <<<"$out" || fail "no setup line with --no-setup: $out"
+rel_latest 0.3.0; new_case setupline3 uv; new_bus "$C/b"
+out=$(ab update "$C/b") || fail "update in an agent session failed: $out"
+grep -qxF "setup: skipped (agent session). Run with --all-buses to include it." <<<"$out" || fail "no setup line in an agent session: $out"
+unset CLAUDE_CONFIG_DIR CODEX_HOME; export CLAUDE_CONFIG_DIR="$T/cc"
+ok "HTTP status, the next command, and a setup line every time"
 
 all_passed "All update tests passed"

@@ -7,15 +7,19 @@ agentbus update
 ```
 
 It reinstalls agentbus from the new release, upgrades every bus folder it knows, and refreshes the
-skill and the `AGENTS.md` block that are there and unedited. Nothing else is touched. Releases come
-from GitHub Releases only; agentbus is never installed by name from a package index (the name
-`agentbus` on PyPI belongs to an unrelated project).
+skill, the `AGENTS.md` block and the hooks that setup installed, when they are older and unedited. Nothing else
+is touched. Releases come from GitHub Releases only.
+
+**`pip install agentbus` and `uv tool install agentbus` install a different project.** The name `agentbus` on PyPI
+belongs to an unrelated package, and agentbus is never published there. Install and update only with the lines in
+the README and `agentbus update`.
 
 ```
 $ agentbus update
 agentbus 0.2.0, installed with uv from github.com/wickdninja/agentbus
 latest release: 0.3.0
-running: /Users/me/.local/bin/uv tool install --force git+REPOSITORY@v0.3.0
+downloading agentbus-0.3.0-py3-none-any.whl and SHA256SUMS from github.com/wickdninja/agentbus/releases (the wheel's sha256 is checked against SHA256SUMS before anything is installed)
+running: /Users/me/.local/bin/uv tool install --force ~/Library/Caches/agentbus/downloads/agentbus-0.3.0-py3-none-any.whl
 ...the installer's own output...
 agentbus 0.3.0 is installed.
 bus folders: upgraded 3, current 1, skipped 0, failed 0
@@ -32,20 +36,30 @@ done: 0.2.0 -> 0.3.0. Restart Claude Code and Codex sessions, and any agentbus w
 
 ### How the tool is reinstalled
 
-`update` asks which tool installed agentbus and runs that tool's own command at the new tag, where
-`REPOSITORY` is `https://github.com/wickdninja/agentbus`. These are also the commands to run yourself:
+`update` reads the release's asset list from the GitHub API answer it already fetched, then downloads the release
+**wheel** and `SHA256SUMS` from `https://github.com/wickdninja/agentbus/releases/download/vX.Y.Z/` into a 0700
+folder under your cache folder (at most 5 MiB and 4 KiB, 60 seconds each, TLS verified, redirects only to GitHub's
+own hosts). It checks the wheel's sha256 against `SHA256SUMS` and installs that local file with the tool that
+installed agentbus. Nothing is built from source and no package index is asked. The downloaded files are removed
+afterwards. A wheel that does not match is refused (`download_failed`, reason `hash_mismatch`) and nothing is
+installed.
 
-| Installed with | `update` runs |
+| Installed with | `update` runs (`WHEEL` is the verified download) |
 |---|---|
-| uv | `uv tool install --force git+REPOSITORY@vX.Y.Z` |
-| pipx | `pipx install --force git+REPOSITORY@vX.Y.Z` |
-| pip, in a virtual environment | `python -m pip install --upgrade git+REPOSITORY@vX.Y.Z` |
+| uv | `uv tool install --force WHEEL` |
+| pipx | `pipx install --force WHEEL` |
+| pip, in a virtual environment | `python -m pip install --upgrade WHEEL` |
 | a clone of the repository | prints `git -C DIR fetch --tags` and `git -C DIR checkout vX.Y.Z` |
-| anything else, a fork, or no safe installer on PATH | prints the install lines to run |
+| a fork, or anything else | prints the install lines to run (these build from source) |
+| no safe installer on `PATH` | prints the install line for your tool (this builds from source) |
 
-`uv tool upgrade` does not move a copy that was pinned to a tag, which is why the tag is named. If
-`update` cannot run an installer itself it exits 1 with `manual_step` and the commands. Coming from
-0.1.0, which has no `update`, run the install line from the README once at the new tag.
+If a release has no wheel or no `SHA256SUMS`, `update` exits 1 with `manual_step` and the one command that would
+build from source; it never falls back to that on its own. A source build (`git+...@vX.Y.Z`, which is also what the
+README's first-install line does) fetches the build backend and its dependencies from PyPI; the wheel route does not.
+The installer runs with your cache folder as its working folder.
+
+If `update` cannot run an installer itself it exits 1 with `manual_step` and the commands. Coming from 0.1.0,
+which has no `update`, run the install line from the README once at the new tag.
 
 An installer that fails, hangs (900 s, then it is stopped) or leaves the version unchanged is
 `installer_failed`, with the command to run yourself. Ctrl-C stops the installer and exits 130
@@ -54,10 +68,11 @@ command at the old tag, then restore the bus backups described below.
 
 ### Inside an agent session
 
-When `CLAUDECODE` or a Codex shell variable is set, or stdin, stdout or stderr is not a terminal,
+When `CLAUDECODE`, a Codex shell variable or `AGENTBUS_AGENT_SESSION` is set, or stdin, stdout or stderr is not a terminal,
 `update` upgrades only the current bus and skips setup, and says so (`agent session (CLAUDECODE is
 set): upgrading this bus only and skipping setup. Run with --all-buses for the rest.`). `--all-buses`
-widens it. Typing `--as` or setting `AGENTBUS_AGENT` does not make a session an agent's.
+widens it. Typing `--as` or setting `AGENTBUS_AGENT` does not make a session an agent's. A harness agentbus does not recognise
+should set `AGENTBUS_AGENT_SESSION=1`, which silences the release notice and narrows `update` the same way.
 
 ## The release notice
 

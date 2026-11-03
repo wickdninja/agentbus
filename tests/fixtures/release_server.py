@@ -14,6 +14,10 @@ every request appends one JSON line to DIR/requests.log: {"path", "headers"}. It
 wait_for holds the answer back until that file exists (at most 60 s): a test proves a command does not wait for
 the server without measuring time. body is sent as given; repeat sends string*count instead (a huge or deeply nested body). Anything not set
 defaults to status 200, type application/json, body "{}". Nothing here reaches a network beyond loopback.
+
+A path under /download/ is a release asset: the file DIR/download/<the rest of the path> (404 when there is none),
+type application/octet-stream, unless DIR/download-answer.json exists, which has the same keys as answer.json and
+replaces the answer for every /download/ request (a redirect, a 500, a held or oversized body).
 """
 import json
 import os
@@ -35,18 +39,29 @@ def main():
         def do_GET(self):
             with open(os.path.join(d, "requests.log"), "a") as f:
                 f.write(json.dumps({"path": self.path, "headers": {k: v for k, v in self.headers.items()}}) + "\n")
+            asset = self.path.startswith("/download/")
             try:
-                a = json.load(open(os.path.join(d, "answer.json")))
+                a = json.load(open(os.path.join(d, "download-answer.json" if asset and os.path.exists(os.path.join(d, "download-answer.json")) else "answer.json")))
             except (OSError, ValueError):
                 a = {}
+            if asset and not os.path.exists(os.path.join(d, "download-answer.json")):
+                rel = os.path.normpath(self.path[len("/download/"):].split("?")[0])
+                f = os.path.join(d, "download", rel)
+                if rel.startswith("..") or not os.path.isfile(f):
+                    a = {"status": 404, "type": "text/plain", "body": "not found"}
+                else:
+                    a = {"status": 200, "type": "application/octet-stream", "file": f}
             if a.get("delay"):
                 time.sleep(float(a["delay"]))
             if a.get("wait_for"):
                 end = time.time() + 60
                 while not os.path.exists(a["wait_for"]) and time.time() < end:
                     time.sleep(0.05)
-            body = a["repeat"][0] * int(a["repeat"][1]) if a.get("repeat") else a.get("body", "{}")
-            data = body.encode("utf-8")
+            if a.get("file"):
+                data = open(a["file"], "rb").read()
+            else:
+                body = a["repeat"][0] * int(a["repeat"][1]) if a.get("repeat") else a.get("body", "{}")
+                data = body.encode("utf-8")
             self.send_response(int(a.get("status", 200)))
             self.send_header("Content-Type", a.get("type", "application/json"))
             if a.get("location"):

@@ -834,7 +834,7 @@
     "replace": "return v if isinstance(v, str) else None",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "reached an installer"
+    "expect": "reached the download"
   },
   {
     "name": "update: the cache is written through a symlink in its way",
@@ -1041,7 +1041,7 @@
     "replace": "    if False:",
     "count": 1,
     "run": "tests/test_doctor.sh",
-    "expect": "row tool: status ok, detail with '0.2.0 at '"
+    "expect": "row tool: status ok, detail with 'the last release check is over a week old"
   },
   {
     "name": "doctor does not warn about a newer cached release",

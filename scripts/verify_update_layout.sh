@@ -53,6 +53,25 @@ assert d["tool"]["status"] == "manual" and d["tool"]["argv"] is None, d["tool"]
 want = {"uv": "uv tool install --force git+%s@v9.1.0", "pipx": "pipx install --force git+%s@v9.1.0"}[sys.argv[2]] % url
 assert d["tool"]["commands"] == [want], (d["tool"]["commands"], want)
 ' "$URL" "$tool" || { echo "FAIL: update --dry-run --json: $out" >&2; exit 1; }
+# The wheel route (what `update` itself installs): build the 9.0.0 wheel, install that local file with the real tool, and
+# require that `update` still recognises the install as this repository's (direct_url.json records the local wheel).
+git -C "$W/src" checkout -q v9.0.0
+(cd "$W/src" && uv build -q --wheel --out-dir "$W/wheel" >/dev/null)
+WHEEL=$(ls "$W"/wheel/agentbus-9.0.0-py3-none-any.whl)
+case "$tool" in
+  uv) uv tool install -q --force "$WHEEL" ;;
+  pipx) pipx install -q --force "$WHEEL" ;;
+esac
+rel_latest 9.1.0
+out=$(cd "$W" && agentbus update --dry-run --json) || { echo "FAIL: update --dry-run on a wheel install failed" >&2; exit 1; }
+printf '%s' "$out" | "$PY" -I -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d["from"] == "9.0.0" and d["install"] == {"method": sys.argv[1], "url": "https://github.com/wickdninja/agentbus"}, d["install"]
+assert d["tool"]["status"] in ("dry_run", "manual"), d["tool"]
+if d["tool"]["status"] == "dry_run":
+    assert d["tool"]["argv"][-1].endswith("agentbus-9.1.0-py3-none-any.whl") and not any("git+" in a for a in d["tool"]["argv"]), d["tool"]
+' "$tool" || { echo "FAIL: update did not recognise a release-wheel install: $out" >&2; exit 1; }
 if [ "$tool" = uv ]; then
   uv tool install -q --force "git+$URL@v9.1.0"
   [ "$(agentbus --version)" = "agentbus 9.1.0" ] || { echo "FAIL: install --force at the new tag did not move it" >&2; exit 1; }

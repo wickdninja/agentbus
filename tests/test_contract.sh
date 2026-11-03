@@ -93,6 +93,7 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
     "interrupted": (130, True, []),
     "items_failed": (1, False, ["failed"]),
     "installer_failed": (1, False, ["argv", "exit_status", "reason", "recovery"]),
+    "download_failed": (1, False, ["reason", "asset"]),
     "manual_step": (1, False, ["commands"]),
     "release_offline": (1, True, ["reason"]),
     "rate_limited": (1, True, ["retry_after"]),
@@ -349,7 +350,7 @@ ucodes = os.path.join(tmp, "update_codes"); os.makedirs(ucodes)
 p = subprocess.run(["bash", os.path.join(os.environ["TESTS_DIR"], "update_codes.sh"), ucodes], capture_output=True, text=True, timeout=300,
                    env=dict(BASE, **{k: v for k, v in os.environ.items() if k in ("PYTHON", "AGENTBUS_BIN", "TESTS_DIR")}))
 assert p.returncode == 0, ("update_codes.sh", p.returncode, p.stdout[-500:], p.stderr[-800:])
-for code in ("installer_failed", "manual_step", "release_offline", "rate_limited", "release_unknown", "update_running"):
+for code in ("installer_failed", "manual_step", "release_offline", "rate_limited", "release_unknown", "download_failed", "update_running"):
     err = json.loads(open(os.path.join(ucodes, code + ".json")).read())["error"]
     assert err["code"] == code and err["retryable"] is EXPECTED_ERRORS[code][1], (code, err)
     for f in EXPECTED_ERRORS[code][2]:

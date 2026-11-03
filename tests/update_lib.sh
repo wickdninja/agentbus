@@ -41,12 +41,37 @@ stop_servers() { local p; for p in ${SERVER_PIDS[@]+"${SERVER_PIDS[@]}"}; do kil
 answer() { printf '%s' "$1" >"$SERVER/answer.json.tmp" && mv "$SERVER/answer.json.tmp" "$SERVER/answer.json"; }
 reqs() { wc -l <"$SERVER/requests.log" | tr -d ' '; }
 reset_reqs() { : >"$SERVER/requests.log"; }
-# rel_latest 0.3.0: the answer to /releases/latest. rel_list 0.3.0rc2 0.2.0 ...: the answer to the list endpoint.
-rel_latest() { answer "{\"body\": \"{\\\"tag_name\\\": \\\"v$1\\\", \\\"draft\\\": false, \\\"prerelease\\\": false}\"}"; }
+# publish V [MODE]: the release's files on the fixture server (/download/vV/): a fake wheel and a correct SHA256SUMS
+# (MODE bad: SHA256SUMS names another hash; big: a wheel over the size limit; none: no files).
+publish() {
+  local v=$1 mode=${2:-full} d="$SERVER/download/v$1" name="agentbus-$1-py3-none-any.whl"
+  rm -rf "$d"; [ "$mode" = none ] && return 0
+  mkdir -p "$d"
+  if [ "$mode" = big ]; then head -c 5300000 /dev/zero >"$d/$name"; else printf 'fake wheel bytes for %s\n' "$v" >"$d/$name"; fi
+  local sum; sum=$(shasum -a 256 "$d/$name" | cut -d' ' -f1)
+  [ "$mode" != bad ] || sum=$(printf '%064d' 0)
+  printf '%s  %s\n' "$sum" "$name" >"$d/SHA256SUMS"
+}
+# assets_json V MODE: the assets list of the API answer (full: the wheel and SHA256SUMS; nowheel; nosums; none).
+assets_json() {
+  case "$2" in
+    full|bad|big) printf '[{"name": "agentbus-%s-py3-none-any.whl"}, {"name": "agentbus-%s.tar.gz"}, {"name": "SHA256SUMS"}]' "$1" "$1" ;;
+    nowheel) printf '[{"name": "agentbus-%s.tar.gz"}, {"name": "SHA256SUMS"}]' "$1" ;;
+    nosums) printf '[{"name": "agentbus-%s-py3-none-any.whl"}]' "$1" ;;
+    none) printf '[]' ;;
+  esac
+}
+# rel_latest V [MODE]: the answer to /releases/latest, and the release's files (publish). rel_list V...: the list endpoint's.
+rel_latest() {
+  local mode=${2:-full}
+  publish "$1" "$mode"
+  "$PY" -I -c 'import json,sys; v,assets=sys.argv[1:]; print(json.dumps({"body": json.dumps({"tag_name": "v"+v, "draft": False, "prerelease": False, "assets": json.loads(assets)})}))' \
+    "$1" "$(assets_json "$1" "$mode")" >"$SERVER/answer.json.tmp" && mv "$SERVER/answer.json.tmp" "$SERVER/answer.json"
+}
 rel_list() {
-  local items="" t
-  for t in "$@"; do items="$items${items:+,}{\\\"tag_name\\\": \\\"v$t\\\", \\\"draft\\\": false}"; done
-  answer "{\"body\": \"[$items]\"}"
+  local t items=""
+  for t in "$@"; do publish "$t"; items="$items${items:+, }{\"tag_name\": \"v$t\", \"draft\": false, \"assets\": $(assets_json "$t" full)}"; done
+  "$PY" -I -c 'import json,sys; print(json.dumps({"body": sys.argv[1]}))' "[$items]" >"$SERVER/answer.json.tmp" && mv "$SERVER/answer.json.tmp" "$SERVER/answer.json"
 }
 
 cache_path() {
@@ -101,6 +126,7 @@ make_stubs() {
     cat >"$1/$name" <<'EOF'
 #!/bin/bash
 echo "ARGV: $0 $*" >>"$STUB_LOG"; echo "CWD: $PWD" >>"$STUB_LOG"
+last="${@: -1}"; if [ -f "$last" ]; then echo "WHEEL_SHA: $(shasum -a 256 "$last" | cut -d' ' -f1)" >>"$STUB_LOG"; else echo "WHEEL_MISSING: $last" >>"$STUB_LOG"; fi
 [ -z "${STUB_STARTED:-}" ] || : >"$STUB_STARTED"
 if [ -n "${STUB_HANG:-}" ]; then
   if [ -n "${STUB_IGNORE_TERM:-}" ]; then trap 'echo "TERM ignored" >>"$STUB_LOG"' TERM; else trap 'echo "TERM" >>"$STUB_LOG"; exit 143' TERM; fi
@@ -109,7 +135,7 @@ fi
 [ -z "${STUB_FAIL:-}" ] || { echo "stub installer failing" >&2; exit 1; }
 echo "stub installer output"
 if [ -z "${STUB_NOBUMP:-}" ]; then
-  v="${@: -1}"; v="${v##*@v}"
+  v="${@: -1}"; v="${v##*/agentbus-}"; v="${v%%-py3-none-any.whl}"
   sed "s/^__version__ = .*/__version__ = \"$v\"/" "${STUB_FAKE:-$STUB_MODULE}" >"$STUB_MODULE.new" && mv "$STUB_MODULE.new" "$STUB_MODULE"
   rm -rf "$(dirname "$STUB_MODULE")/__pycache__"   # a same-size rewrite in the same second would be served from the old bytecode
 fi
@@ -124,10 +150,15 @@ make_pip_stub() {
 import os, re, sys
 log = os.environ["STUB_LOG"]
 open(log, "a").write("ARGV: pip %s\nCWD: %s\n" % (" ".join(sys.argv[1:]), os.getcwd()))
+import hashlib
+if os.path.isfile(sys.argv[-1]):
+    open(log, "a").write("WHEEL_SHA: %s\n" % hashlib.sha256(open(sys.argv[-1], "rb").read()).hexdigest())
+else:
+    open(log, "a").write("WHEEL_MISSING: %s\n" % sys.argv[-1])
 if os.environ.get("STUB_FAIL"):
     sys.exit(1)
 if not os.environ.get("STUB_NOBUMP"):
-    v = sys.argv[-1].rsplit("@v", 1)[1]
+    v = os.path.basename(sys.argv[-1])[len("agentbus-"):-len("-py3-none-any.whl")]
     p = os.environ["STUB_MODULE"]
     s = open(os.environ.get("STUB_FAKE") or p).read()
     open(p, "w").write(re.sub(r'(?m)^__version__ = .*$', '__version__ = "%s"' % v, s))
@@ -162,7 +193,7 @@ new_case() {
 PY=$(command -v "$PY")   # absolute: PATH is narrowed per case
 server_env() {
   if [ -n "${SERVER:-}" ]; then
-    export AGENTBUS_TEST_RELEASES_URL="https://127.0.0.1:$PORT/releases" AGENTBUS_TEST_CA_FILE="$SERVER/cert.pem"
+    export AGENTBUS_TEST_RELEASES_URL="https://127.0.0.1:$PORT/releases" AGENTBUS_TEST_DOWNLOAD_URL="https://127.0.0.1:$PORT/download" AGENTBUS_TEST_CA_FILE="$SERVER/cert.pem"
     export NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
     unset HTTPS_PROXY https_proxy ALL_PROXY all_proxy
   fi

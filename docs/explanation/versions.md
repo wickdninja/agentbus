@@ -4,7 +4,7 @@ Five things carry a version, and five different commands update them.
 
 | Piece | What it is | Where the version lives | Updated by |
 | --- | --- | --- | --- |
-| Tool | the agentbus you installed (`agentbus --version`) | the package | `uv tool upgrade agentbus` |
+| Tool | the agentbus you installed (`agentbus --version`) | the package | `agentbus update` |
 | Copy | the agentbus inside a bus folder (`.agentbus/bin/agentbus`) | `.agentbus/VERSION` | `agentbus upgrade`, `agentbus init` |
 | Schema | the shape of the bus database | `PRAGMA user_version` in `bus.db` | the first write by a newer tool, or `agentbus upgrade` |
 | Skill | what Claude Code reads | `~/.claude/skills/agentbus/SKILL.md` | `agentbus setup claude` |

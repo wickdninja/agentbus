@@ -273,7 +273,7 @@ pinned = 0
 # may tell anyone to install the bare name.
 BARE = re.compile(r'(?:uv tool install|uv pip install|pipx install|pip3? install)(?:\s+--?[\w-]+)*\s+agentbus(?=[\s`\'"<>~=]|$)')
 for name in ['README.md', 'SECURITY.md', 'RELEASING.md', *sorted(str(p.relative_to(root)) for p in (root/'docs').rglob('*.md'))]:
-    assert not BARE.search((root/name).read_text()), (name, 'installs agentbus by its bare name, which is not this project on PyPI')
+    assert not any(BARE.search(ln) for ln in (root/name).read_text().splitlines() if 'different project' not in ln and 'unrelated' not in ln), (name, 'installs agentbus by its bare name, which is not this project on PyPI')
 assert BARE.search('run: pipx install agentbus') and BARE.search('uv tool install --force agentbus') and not BARE.search('pipx install git+https://github.com/wickdninja/agentbus@v0.1.0'), 'the bare-name check is vacuous or too wide'
 for name in ['README.md', *sorted(str(p.relative_to(root)) for p in (root/'docs').rglob('*.md'))]:
     for m in re.finditer(r'git\+https://github\.com/wickdninja/agentbus(@[^\s`"\')]*)?', (root/name).read_text()):
@@ -293,6 +293,17 @@ assert pin[1:] in released, (f'tests/released_commands.txt has no line for {pin[
 for m in re.finditer(r'\bagentbus[ ]+(?:--[a-z-]+[ ]+(?:[A-Za-z0-9_.-]+[ ]+)?)*([a-z][a-z-]*)', readme):
     word = m.group(1)
     assert word not in commands or word in released[pin[1:]], (f'README tells users to run `agentbus {word}`, which {pin[1:]} does not have', m.group(0))
+# The README's Update section (U1): staged in RELEASING.md until the pinned release has `update`, then required in the README.
+rel = (root/'RELEASING.md').read_text()
+m = re.search(r'<!-- readme-update:begin -->\n(.*?)<!-- readme-update:end -->', rel, re.S)
+assert m, 'RELEASING.md lost the staged README Update section'
+staged = m.group(1).strip()
+for must in ('agentbus update', 'AGENTBUS_NO_UPDATE_CHECK=1', 'different project', 'pip install agentbus'):
+    assert must in staged, ('the staged README Update section lacks', must)
+if 'update' in released[pin[1:]]:
+    assert staged in readme, 'the pinned release has `agentbus update`, so the README must carry the staged Update section from RELEASING.md'
+else:
+    assert 'agentbus update' not in readme, 'the README names agentbus update, which the release it pins lacks'
 assert pinned >= 2, 'README must show both pinned install lines'
 assert 'examples/two-agent-handoff.sh' in readme, 'README must link the executable demo'
 # Inline command names and forms in the README's table and prose.

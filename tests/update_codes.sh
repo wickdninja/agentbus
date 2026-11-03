@@ -20,6 +20,8 @@ answer '{"status": 429, "headers": {"Retry-After": "120"}}'
 rm -rf "$(cache_path)"; ab update --check --json 2>"$T/err" >/dev/null || true; last "$T/err" >"$OUT/rate_limited.json"
 answer '{"status": 500}'
 rm -rf "$(cache_path)"; ab update --check --json 2>"$T/err" >/dev/null || true; last "$T/err" >"$OUT/release_unknown.json"
+rel_latest 0.3.0 bad
+rm -rf "$(cache_path)"; ab update --json --no-buses --no-setup 2>"$T/err" >/dev/null || true; last "$T/err" >"$OUT/download_failed.json"
 rel_latest 0.3.0
 mkdir -p "$(state_path)"; chmod 700 "$(state_path)"
 "$PY" -I - "$(state_path)/update.lock" "$T/held" <<'PY' &

@@ -21,12 +21,12 @@ want() {  # NAME METHOD-AND-REST
   [ "$got" = "$2" ] || fail "$1: got '$got', wanted '$2'"
 }
 
-echo "TEST 1: one fake install per method gives its row, and its installer (argv names the repository at a v tag)"
+echo "TEST 1: one fake install per method gives its row, and its installer (argv names the release wheel)"
 new_case uv uv; want "uv" "uv|$REPO_URL|uv|-"
 new_case pipx pipx; want "pipx" "pipx|$REPO_URL|pipx|-"
 new_case pip pip; want "pip" "pip|$REPO_URL|python|-"
 out=$(ab update --check --json | "$PY" -I -c 'import json,sys; print(" ".join(json.load(sys.stdin)["argv"]))')
-grep -qF -- "-I -m pip install --upgrade git+$REPO_URL@v0.3.0" <<<"$out" || fail "pip argv: $out"
+grep -qF -- "-I -m pip install --upgrade $(cache_path)/downloads/agentbus-0.3.0-py3-none-any.whl" <<<"$out" || fail "pip argv: $out"
 ok "uv, pipx and pip each run their own installer"
 
 echo "TEST 2: the .git suffix is stripped before the URL is compared; a fork gets a printed line and no argv"
@@ -43,6 +43,15 @@ new_case managed pip; : >"$PREFIX/EXTERNALLY-MANAGED"
 want "externally managed" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
 ok "unknown installs never get an argv"
 
+echo "TEST 3b: an install from a release wheel (what update itself installs) is recognised; a wheel from anywhere else is not"
+new_case wheel uv; printf '{"url": "file://%s/dl/agentbus-0.2.0-py3-none-any.whl", "archive_info": {"hash": "sha256=00"}}\n' "$HOME" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+want "release wheel" "uv|$REPO_URL|uv|-"
+printf '{"url": "file://%s/dl/other-0.2.0-py3-none-any.whl", "archive_info": {}}\n' "$HOME" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+want "another wheel" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
+printf '{"url": "https://example.invalid/agentbus-0.2.0-py3-none-any.whl", "archive_info": {}}\n' >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+want "a wheel from a web address" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
+ok "only a local agentbus release wheel counts"
+
 echo "TEST 4: a dist-info whose RECORD does not list this file gives unknown; the matching one (control) gives uv"
 new_case record uv
 sed -i.bak 's/^agentbus.py,,$/other.py,,/' "$SITE/agentbus-0.2.0.dist-info/RECORD"; rm -f "$SITE/agentbus-0.2.0.dist-info/RECORD.bak"
@@ -53,9 +62,14 @@ ok "only a RECORD that lists the running file counts"
 
 echo "TEST 5: a clone (the script beside pyproject.toml and .git) and an editable install are clones: git commands, no argv"
 new_case clone uv
-mkdir -p "$C/clone/bin" "$C/clone/.git"; sed 's/^__version__ = .*/__version__ = "0.2.0"/' "$UPDATE_SRC" >"$C/clone/bin/agentbus"; : >"$C/clone/pyproject.toml"
-got=$(cd "$CWD" && "$PREFIX/bin/python" "$C/clone/bin/agentbus" update --check --json | "$PY" -I -c 'import json,sys; d=json.load(sys.stdin); print(d["install"]["method"], d["argv"], d["commands"])')
-[ "$got" = "clone None ['git -C $(cd "$C/clone" && pwd -P) fetch --tags', 'git -C $(cd "$C/clone" && pwd -P) checkout v0.3.0']" ] || fail "clone: $got"
+CL="$C/clone dir with 'quote"   # a folder name with a space and a quote: the printed commands must quote it
+mkdir -p "$CL/bin" "$CL/.git"; sed 's/^__version__ = .*/__version__ = "0.2.0"/' "$UPDATE_SRC" >"$CL/bin/agentbus"; : >"$CL/pyproject.toml"
+REAL=$(cd "$CL" && pwd -P)
+got=$(cd "$CWD" && "$PREFIX/bin/python" "$CL/bin/agentbus" update --check --json | "$PY" -I -c 'import json,sys; d=json.load(sys.stdin); print(d["install"]["method"], d["argv"], d["commands"])')
+want=$("$PY" -I -c 'import shlex,sys; d=sys.argv[1]; print("clone None", [f"git -C {shlex.quote(d)} fetch --tags", f"git -C {shlex.quote(d)} checkout v0.3.0"])' "$REAL")
+[ "$got" = "$want" ] || fail "clone commands are not quoted: $got"
+human=$(cd "$CWD" && "$PREFIX/bin/python" "$CL/bin/agentbus" update --dry-run --no-buses --no-setup)
+grep -qF "  git -C $("$PY" -I -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$REAL") fetch --tags" <<<"$human" || fail "the human clone line is not quoted: $human"
 new_case editable uv; printf '{"url": "file:///src/agentbus", "dir_info": {"editable": true}}\n' >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
 got=$(probe | cut -d'|' -f1); [ "$got" = clone ] || fail "editable: $got"
 ok "a clone and an editable install print git commands"
@@ -64,7 +78,7 @@ echo "TEST 6: a project copy is refused with the exact line, for update and upda
 new_case project uv; new_bus "$C/proj"
 for flags in "" "--check"; do
   err=$(cd "$C/proj" && "$PREFIX/bin/python" "$C/proj/.agentbus/bin/agentbus" update $flags 2>&1 >/dev/null) && fail "project copy ran update $flags"
-  grep -qF "update runs from the installed agentbus, not a project copy. Run: agentbus update" <<<"$err" || fail "project copy message: $err"
+  grep -qF "update runs from the installed agentbus, not a project copy. Install it with the install line in the README (https://github.com/wickdninja/agentbus#quick-start), then run: agentbus update" <<<"$err" || fail "project copy message: $err"
 done
 ok "refused"
 

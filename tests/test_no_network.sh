@@ -58,6 +58,7 @@ quiet "CI=1" "CI=1" buses
 quiet "BUILD_NUMBER=1" "BUILD_NUMBER=1" buses
 quiet "RUN_ID=1" "RUN_ID=1" buses
 quiet "CLAUDECODE=1" "CLAUDECODE=1" buses
+quiet "AGENTBUS_AGENT_SESSION=1" "AGENTBUS_AGENT_SESSION=1" buses
 for v in $CODEX_MARKER_VARS; do quiet "$v=1" "$v=1" buses; done
 quiet "AGENTBUS_NO_UPDATE_CHECK=1" "AGENTBUS_NO_UPDATE_CHECK=1" buses
 quiet "DO_NOT_TRACK=1" "DO_NOT_TRACK=1" buses

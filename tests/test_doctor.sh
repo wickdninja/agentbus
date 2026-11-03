@@ -370,7 +370,7 @@ ok "older: warn, names agentbus upgrade DIR, migrates nothing"
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=7"); c.commit()' "$W/app/.agentbus/bus.db"
 doc doctor --json
 [ "$RC" = 1 ] || fail "a newer bus must exit 1, got $RC"
-row bus fail "(schema 7) is newer than this agentbus (it knows 1)" "uv tool upgrade agentbus"
+row bus fail "(schema 7) is newer than this agentbus (it knows 1)" "agentbus update"
 ok "newer: fail, names the upgrade of the tool"
 # corrupt: a version no agentbus writes
 "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=99999"); c.commit()' "$W/app/.agentbus/bus.db"
@@ -423,7 +423,7 @@ echo "TEST 8: copy: one case per state, and the copy's bytes are compared with t
 world
 CP="$W/app/.agentbus/bin/agentbus"; cp "$CP" "$T/good-copy"
 printf '9.9.9\n' > "$W/app/.agentbus/VERSION"; doc doctor --json
-row copy warn "9.9.9 here is newer than the installed 0.2.0" "uv tool upgrade agentbus"
+row copy warn "9.9.9 here is newer than the installed 0.2.0" "agentbus update"
 rm "$W/app/.agentbus/VERSION"; doc doctor --json
 row copy warn "has no VERSION, so its copy's version is unknown" "agentbus upgrade $W/app"
 printf '0123456789abcdef0123456789abcdef01234567 2026-11-01T10:00:00Z\n' > "$W/app/.agentbus/VERSION"; doc doctor --json
@@ -745,6 +745,10 @@ PY2
 }
 doc doctor --json
 case "$OUT" in *"latest "*) fail "doctor named a latest release with no cache";; esac
+row tool ok "no release check has run yet (run: agentbus update --check)" ""
+seed_cache 100 false ""
+doc doctor --json
+row tool ok "the last release check failed (unknown; run: agentbus update --check)" ""
 seed_cache 259200 true 0.2.0
 doc doctor --json
 row tool ok "; latest 0.2.0, checked " ""
@@ -756,7 +760,7 @@ doc doctor
 hasf "  warn  tool       0.2.0 at $T/tool/agentbus; a newer release is available: latest 0.3.0, checked "
 seed_cache 864000 true 0.3.0
 doc doctor --json
-row tool ok "0.2.0 at " ""
+row tool ok "the last release check is over a week old (run: agentbus update --check)" ""
 case "$OUT" in *"latest "*) fail "doctor showed a cached answer more than a week old";; esac
 seed_cache 100 true 0.3.0
 before=$(find "$UC" -type f | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$f" "$(cksum <"$f")"; done | cksum)

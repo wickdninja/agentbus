@@ -18,6 +18,15 @@ Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release c
      - the new tag's line in `tests/released_commands.txt` (the commands that release has; the README may only name those for the tag it pins);
      - the pinned install lines in `README.md` and `docs/` (`@vX.Y.Z`);
      - the plugin version and marketplace `ref` (the tag), the CHANGELOG heading, and `python3 scripts/embed_skill.py --release`.
+
+**The README's Update section** lands in the release-prep commit of the first release that has `agentbus update` (the README may only name commands of the release it pins, so it cannot be on `main` earlier). Put this text after the install lines in `README.md`; `tests/test_docs.sh` then requires it:
+
+<!-- readme-update:begin -->
+## Update
+
+`agentbus update` installs the latest release, upgrades your bus folders and refreshes the skill. Once a day, a command you run at a terminal may tell you a release is out (on stderr; never in CI, with `--json` or in an agent session); `AGENTBUS_NO_UPDATE_CHECK=1` turns that off. Do not run `pip install agentbus` or `uv tool install agentbus`: that name on PyPI is a different project.
+<!-- readme-update:end -->
+
 2. **Check.** `git fetch origin main && python3 scripts/release_check.py --tag vX.Y.Z` prints `release check passed: X.Y.Z`. It checks the tag shape, that `__version__` equals the tag, that the tagged commit is an ancestor of `origin/main`, the CHANGELOG heading, the pins, the plugin manifests, the skill hashes and a clean `git status`. The README pin equals the new version only at this point; on every other commit it keeps naming the last tag. For a release candidate the pin is the **last final release** (the newest tag in `tests/released_commands.txt`), because main's public README must never point at a tag that does not exist. For the final tag, the pin bump and the tag land together: one commit that bumps the version, the pins, `tests/released_commands.txt`, the CHANGELOG heading and the plugin manifests; merge it; tag that commit.
 3. **Gates.** `bash tests/run_all.sh` prints `ALL TESTS PASSED (N files)` on the oldest and newest Python (`PYTHON=/usr/bin/python3`, `PYTHON=python3.15`), with `AGENTBUS_EMBED_CHECK=1 python3 scripts/embed_skill.py --check` printing `embedded skill is current`. CI's `test` and all `package` jobs are green.
 4. **Tag.** `git tag vX.Y.Z && git push origin vX.Y.Z`. A release candidate is `vX.Y.ZrcN`: it creates a prerelease and skips the published-install check.

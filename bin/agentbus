@@ -560,7 +560,11 @@ CONTRACT = {
         "installer_failed": {"exit": 1, "retryable": False, "fields": ["argv", "exit_status", "reason", "recovery"],
                              "meaning": "The installer update ran did not finish, or finished without moving agentbus to the new release "
                                         "(reason: exit, signal, timeout, version_unchanged).",
-                             "action": "Run the recovery command yourself, then agentbus update again."},
+                             "action": "Run agentbus update again (recovery); the installer's own output is above the error."},
+        "download_failed": {"exit": 1, "retryable": False, "fields": ["reason", "asset"],
+                            "meaning": "The release's wheel or SHA256SUMS could not be downloaded or did not check out "
+                                       "(reason: http, redirect, tls, malformed, too_large, hash_mismatch). Nothing was installed.",
+                            "action": "Try again later: agentbus update."},
         "manual_step": {"exit": 1, "retryable": False, "fields": ["commands"],
                         "meaning": "This copy of agentbus is not one update may replace (a clone, a fork, an install of unknown origin, "
                                    "or no safe installer on PATH); the commands to run are listed.",
@@ -604,6 +608,9 @@ CONTRACT = {
         "AGENTBUS_ASCII": {"meaning": "Draws watch's own marks in ASCII, with emoji off (also under TERM=linux).",
                            "default": "unset"},
         "COLUMNS": {"meaning": "Width human output is wrapped to.", "default": "the terminal width, else 80"},
+        "AGENTBUS_AGENT_SESSION": {"meaning": "Set to anything but 0 to mark a run as an agent's: no release notice, and update covers only the "
+                                              "current bus. Use it from an agent harness that agentbus does not recognise.", "default": "unset"},
+        "AGENTBUS_NO_UPDATE_NOTICE": {"meaning": "Set to anything but 0 to silence the release notice and the stale-copy notice.", "default": "unset"},
         "AGENTBUS_NO_UPDATE_CHECK": {"meaning": "Set to anything but 0 to turn off the once-a-day release check (DO_NOT_TRACK and "
                                                 "NO_UPDATE_NOTIFIER do the same).", "default": "unset"},
     },
@@ -691,7 +698,9 @@ CONTRACT = {
                                       "install": _o({"method": _STR, "url": _NSTR}),
                                       "tool": _o({"status": {"type": "string", "enum": ["updated", "current", "dry_run", "manual"]},
                                                   "argv": {"anyOf": [{"type": "null"}, _list(_STR)]}, "exit_status": _NINT,
-                                                  "commands": {"anyOf": [{"type": "null"}, _list(_STR)]}}),
+                                                  "commands": {"anyOf": [{"type": "null"}, _list(_STR)]},
+                                                  "download": {"anyOf": [{"type": "null"}, _o({"wheel": _STR, "sha256sums": _STR})]}},
+                                                 optional=("download",)),
                                       "buses": _list(_ref("UpgradeRow")), "setup": _list(_ref("SetupResult")),
                                       "plugin": {"anyOf": [{"type": "null"}, _o({"fix": _STR})]}, "restart": _BOOL,
                                       "scope": _o({"narrowed": _BOOL, "why": _NSTR})}),
@@ -699,10 +708,11 @@ CONTRACT = {
                                       "install": _o({"method": _STR, "url": _NSTR}),
                                       "argv": {"anyOf": [{"type": "null"}, _list(_STR)]},
                                       "commands": {"anyOf": [{"type": "null"}, _list(_STR)]}, "notes": _NSTR})]},
-                       ["installer_failed", "manual_step", "release_offline", "rate_limited", "release_unknown", "update_running",
-                        "items_failed"], retry=_REPEAT, base=_PLAIN_ERRORS,
+                       ["installer_failed", "manual_step", "release_offline", "rate_limited", "release_unknown", "download_failed",
+                        "update_running", "items_failed"], retry=_REPEAT, base=_PLAIN_ERRORS,
                        text='{"from": string, "to": string, "latest": string or null, "install": {"method": string, "url": string or null}, '
-                            '"tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null}, '
+                            '"tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null, '
+                            '"download": {"wheel": string, "sha256sums": string} or null (only when update downloads the release wheel)}, '
                             '"buses": [UpgradeRow], "setup": [SetupResult], "plugin": {"fix": string} or null, "restart": boolean, '
                             '"scope": {"narrowed": boolean, "why": string or null}}, or with --check '
                             '{"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, '
@@ -7748,6 +7758,9 @@ def cmd_setup(a):
     global _RERUN
     _RERUN = f"agentbus setup {target}" + (" --scope project" if scope == "project" else "") + (" --uninstall" if uninstall else "") + (" --refresh" if a.refresh else "")
     pieces = list(SETUP_TARGETS[target]) + (_test_json_piece() if target == "claude" else [])
+    for piece in pieces:
+        if hasattr(piece, "refreshing"):
+            piece.refreshing = bool(a.refresh)
     planned = [piece.plan(scope, uninstall) for piece in pieces]
     if a.refresh:
         planned = [refresh_changes(chs, target, scope) for chs in planned]
@@ -7843,6 +7856,9 @@ CHECK_INTERVAL_S = 24 * 3600  # one release lookup a day
 CHECK_TIMEOUT_S = 10  # the whole lookup, DNS included (a socket timeout does not bound a lookup of the name)
 CHECK_SOCKET_S = 3
 CHECK_MAX_BYTES = 1 << 20
+WHEEL_MAX_BYTES = 5 << 20  # the release wheel is one small module; anything bigger is refused
+SUMS_MAX_BYTES = 4096
+DOWNLOAD_TIMEOUT_S = 60  # each download, name lookup included
 CACHE_READ_LIMIT = 4096
 CHECK_FRESH_S = 3600  # --check answers from a good cache entry this young
 INSTALLER_TIMEOUT_S = 900
@@ -7992,7 +8008,13 @@ def newest_release(entry, prerelease):
 # ---- 2. is this an agent's run, or a person at a terminal ----
 def agent_session():
     """The signal that makes this run an agent's, or None for a person at a terminal. `--as` and
-    AGENTBUS_AGENT are not signals: people type both."""
+    AGENTBUS_AGENT are not signals: people type both. AGENTBUS_AGENT_SESSION is: a harness agentbus does not
+    recognise sets it. The markers are the two checked here: CLAUDECODE (observed set in the shells Claude Code starts)
+    and the Codex variables in CODEX_MARKER_VARS (strings of codex-cli 0.166.0). No other harness's variable is guessed
+    at without an official source; its harness sets AGENTBUS_AGENT_SESSION=1 instead."""
+    v = os.environ.get("AGENTBUS_AGENT_SESSION", "")
+    if v not in ("", "0"):
+        return "AGENTBUS_AGENT_SESSION"
     if os.environ.get("CLAUDECODE"):
         return "CLAUDECODE"
     for name in CODEX_MARKER_VARS:
@@ -8054,6 +8076,17 @@ def externally_managed(prefix):
     return os.path.lexists(os.path.join(prefix, "EXTERNALLY-MANAGED"))
 
 
+def release_wheel_install(direct):
+    """True when direct_url.json (PEP 610) records an install from a local release wheel,
+    file://.../agentbus-X.Y.Z-py3-none-any.whl (what `agentbus update` installs, after it checked the file)."""
+    info = direct.get("archive_info") if isinstance(direct, dict) else None
+    url = direct.get("url") if isinstance(direct, dict) else None
+    if not isinstance(info, dict) or not isinstance(url, str) or not url.startswith("file:///"):
+        return False
+    m = re.fullmatch(r"agentbus-(.{1,40})-py3-none-any\.whl", url.rsplit("/", 1)[-1])
+    return bool(m and guarded(m.group(1)))
+
+
 def detect_install():
     """{"method": project|clone|uv|pipx|pip|unknown, "url": the recorded repository or None, "fork": bool,
     "prefix": the install's folder, "dir": a clone's folder or None}. Tests the real paths of this file and
@@ -8071,6 +8104,8 @@ def detect_install():
         return dict(base, method="clone", dir=top if os.path.isfile(os.path.join(top, "pyproject.toml")) else None)
     vcs = direct.get("vcs_info") if isinstance(direct, dict) else None
     url = _safe_url(direct.get("url")) if isinstance(vcs, dict) and vcs.get("vcs") == "git" else None
+    if not url and release_wheel_install(direct):
+        url = REPO_URL  # what `update` installs: the release wheel it downloaded from this repository's releases
     if not url:
         return base
     stripped = url[:-4] if url.endswith(".git") else url
@@ -8115,41 +8150,49 @@ def find_tool(name):
     return None
 
 
-def installer_plan(inst, version):
-    """What `update` does about the tool for release `version`: {"argv": list or None, "commands": [text]}.
-    argv is set only where update may run it (a canonical install with a safe installer); otherwise the
-    commands are printed for the person to run."""
+def installer_plan(inst, version, wheel=None):
+    """What `update` does about the tool for release `version`: {"argv": list or None, "commands": [text], "download": ...}.
+    argv is set only where update may run it (a canonical install with a safe installer): the installer is given the
+    release wheel (`wheel`, or where the download will be put), never a source tree to build; otherwise the commands
+    are printed for the person to run. download names the two assets update fetches and checks first."""
     if inst["method"] in ("uv", "pipx", "pip") and inst["url"]:
-        spec = f"git+{inst['url']}@v{version}"
         if not inst["fork"]:
+            path = wheel or os.path.join(cache_dir(), "downloads", wheel_name(version))
             if inst["method"] == "uv":
                 tool = find_tool("uv")
-                argv = [tool, "tool", "install", "--force", spec] if tool else None
+                argv = [tool, "tool", "install", "--force", path] if tool else None
             elif inst["method"] == "pipx":
                 tool = find_tool("pipx")
-                argv = [tool, "install", "--force", spec] if tool else None
+                argv = [tool, "install", "--force", path] if tool else None
             else:
                 py = os.path.join(inst["prefix"], "bin", "python")
-                argv = [py, "-I", "-m", "pip", "install", "--upgrade", spec] if os.access(py, os.X_OK) else None
+                argv = [py, "-I", "-m", "pip", "install", "--upgrade", path] if os.access(py, os.X_OK) else None
             if argv:
-                return {"argv": argv, "commands": None}
+                return {"argv": argv, "commands": None,
+                        "download": {"wheel": asset_url(version, wheel_name(version))[0], "sha256sums": asset_url(version, "SHA256SUMS")[0]}}
+        spec = f"git+{inst['url']}@v{version}"
         word = {"uv": "uv tool install --force", "pipx": "pipx install --force", "pip": "python3 -m pip install --upgrade"}
-        return {"argv": None, "commands": [f"{word[inst['method']]} {spec}"]}
+        return {"argv": None, "commands": [f"{word[inst['method']]} {spec}"], "download": None}
     if inst["method"] == "clone":
         d = inst["dir"]
-        return {"argv": None, "commands": [f"git -C {d} fetch --tags", f"git -C {d} checkout v{version}"] if d
-                else ["git fetch --tags", f"git checkout v{version}"]}
+        q = shlex.quote
+        return {"argv": None, "commands": [f"git -C {q(d)} fetch --tags", f"git -C {q(d)} checkout v{version}"] if d
+                else ["git fetch --tags", f"git checkout v{version}"], "download": None}
     spec = f"git+{REPO_URL}@v{version}"
-    return {"argv": None, "commands": [f"uv tool install {spec}", f"pipx install {spec}"]}
+    return {"argv": None, "commands": [f"uv tool install {spec}", f"pipx install {spec}"], "download": None}
 
 
 # ---- 4. asking GitHub ----
-class _CheckTimeout(Exception):
-    pass
+def check_timeout():
+    """CHECK_TIMEOUT_S. Test hook: AGENTBUS_TEST_CHECK_TIMEOUT=<seconds> can only shorten it."""
+    try:
+        v = float(os.environ.get("AGENTBUS_TEST_CHECK_TIMEOUT", ""))
+    except ValueError:
+        return CHECK_TIMEOUT_S
+    return min(max(v, 0.2), CHECK_TIMEOUT_S) if math.isfinite(v) else CHECK_TIMEOUT_S
 
 
-def _alarm(signum, frame):
-    raise _CheckTimeout()
+_LOOPBACK = r"https://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?"
 
 
 def releases_endpoint(prerelease):
@@ -8158,18 +8201,31 @@ def releases_endpoint(prerelease):
     with it."""
     base, ca = RELEASES_URL, None
     t = os.environ.get("AGENTBUS_TEST_RELEASES_URL", "")
-    if re.fullmatch(r"https://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?", t):
+    if re.fullmatch(_LOOPBACK, t):
         base = t.rstrip("/")
         ca = os.environ.get("AGENTBUS_TEST_CA_FILE") or None
     return base + ("?per_page=20" if prerelease else "/latest"), ca
 
 
-def _failed(reason, retry_after=None):
-    return {"ok": False, "reason": reason, "retry_after": retry_after, "stable": None, "pre": None}
+def asset_url(version, name):
+    """(the URL of a release asset, the CA file or None): GitHub's download URL for the tag; the test-only
+    AGENTBUS_TEST_DOWNLOAD_URL (a fixture server, loopback https only) replaces its prefix."""
+    t = os.environ.get("AGENTBUS_TEST_DOWNLOAD_URL", "")
+    if re.fullmatch(_LOOPBACK, t):
+        return f"{t.rstrip('/')}/v{version}/{name}", os.environ.get("AGENTBUS_TEST_CA_FILE") or None
+    return f"{REPO_URL}/releases/download/v{version}/{name}", None
 
 
-def _found(stable=None, pre=None):
-    return {"ok": True, "reason": None, "retry_after": None, "stable": stable, "pre": pre}
+def wheel_name(version):
+    return f"agentbus-{version}-py3-none-any.whl"
+
+
+def _failed(reason, retry_after=None, status=None):
+    return {"ok": False, "reason": reason, "retry_after": retry_after, "stable": None, "pre": None, "assets": {}, "status": status}
+
+
+def _found(stable=None, pre=None, assets=None):
+    return {"ok": True, "reason": None, "retry_after": None, "stable": stable, "pre": pre, "assets": assets or {}}
 
 
 def _rate_limit_wait(headers):
@@ -8183,9 +8239,15 @@ def _rate_limit_wait(headers):
     return max(0, min(v, 86400))
 
 
+def _asset_names(item):
+    assets = item.get("assets") if isinstance(item, dict) else None
+    return [a["name"] for a in (assets if isinstance(assets, list) else [])[:50] if isinstance(a, dict) and isinstance(a.get("name"), str)]
+
+
 def parse_release_body(body, prerelease):
     """The outcome for a 200 answer's JSON text. `latest` returns one release; the list endpoint (for release
-    candidates) returns many: drafts are skipped and the highest guarded final and candidate are kept."""
+    candidates) returns many: drafts are skipped and the highest guarded final and candidate are kept. Each
+    release's asset names are kept by version (update installs the wheel it names)."""
     try:
         obj = json.loads(body.decode("utf-8"))
     except Exception:  # includes RecursionError
@@ -8195,77 +8257,210 @@ def parse_release_body(body, prerelease):
         v = guarded(tag[1:]) if isinstance(tag, str) and tag.startswith("v") else None
         if v is None:
             return _failed("malformed")
-        return _found(pre=v) if "rc" in v else _found(stable=v)
+        assets = {v: _asset_names(obj)}
+        return _found(pre=v, assets=assets) if "rc" in v else _found(stable=v, assets=assets)
     if not isinstance(obj, list):
         return _failed("malformed")
-    finals, rcs = [], []
+    finals, rcs, assets = [], [], {}
     for item in obj[:100]:
         tag = item.get("tag_name") if isinstance(item, dict) and not item.get("draft") else None
         v = guarded(tag[1:]) if isinstance(tag, str) and tag.startswith("v") else None
         if v:
             (rcs if "rc" in v else finals).append(v)
-    return _found(max(finals, key=release_key) if finals else None, max(rcs, key=release_key) if rcs else None)
+            assets[v] = _asset_names(item)
+    return _found(max(finals, key=release_key) if finals else None, max(rcs, key=release_key) if rcs else None, assets)
 
 
-def fetch_release_outcome(prerelease):
-    """One GET to the repository's releases, mapped to {"ok", "reason", "retry_after", "stable", "pre"}.
-    Never raises. Headers: Accept and User-Agent only (no cookie, no Authorization, whatever GH_TOKEN
-    says). No redirect is followed, the type must be application/json, the body is capped, and the whole
-    call, name lookup included, ends in CHECK_TIMEOUT_S."""
+class _Fail(Exception):
+    def __init__(self, reason, retry_after=None, status=None):
+        super().__init__(reason)
+        self.reason, self.retry_after, self.status = reason, retry_after, status
+
+
+def _host_ok(host, first):
+    """May a download be redirected to host? GitHub's own hosts (release assets are served from a CDN of
+    githubusercontent.com), or the host the request started at (the test fixture)."""
+    host = (host or "").lower()
+    return host == first or host == "github.com" or host.endswith(".github.com") or host.endswith(".githubusercontent.com")
+
+
+def _http_get(url, ca, accept, limit, redirects=False):
+    """(content type, body) of a 200 answer, or raises _Fail(reason, retry_after, status). TLS is verified;
+    headers are Accept and User-Agent only (no cookie, no Authorization, whatever GH_TOKEN says); the body is
+    capped at `limit`. A redirect is refused unless `redirects` is true, and then only up to 3 hops, over https,
+    to GitHub's own hosts. Never raises anything else."""
     import socket
     import ssl
     import urllib.error
+    import urllib.parse
     import urllib.request
-    url, ca = releases_endpoint(prerelease)
-    old = signal.signal(signal.SIGALRM, _alarm)
-    signal.alarm(CHECK_TIMEOUT_S)
+    first = (urllib.parse.urlparse(url).hostname or "").lower()
     try:
         ctx = ssl.create_default_context()
         if ca:
             ctx.load_verify_locations(cafile=ca)
 
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, *args, **kwargs):
-                return None
+        class Redirect(urllib.request.HTTPRedirectHandler):
+            max_redirections = 3
 
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), NoRedirect())
-        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "agentbus"})
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                u = urllib.parse.urlparse(newurl)
+                if not redirects or u.scheme != "https" or not _host_ok(u.hostname, first):
+                    return None
+                return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), Redirect())
+        req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "agentbus"})
         try:
             with opener.open(req, timeout=CHECK_SOCKET_S) as r:
                 kind = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-                body = r.read(CHECK_MAX_BYTES + 1)
+                body = r.read(limit + 1)
                 status = r.status
         except urllib.error.HTTPError as e:
-            if e.code == 404:
-                return _found()
             if e.code == 429 or (e.code == 403 and e.headers.get("X-RateLimit-Remaining") == "0"):
-                return _failed("rate_limited", _rate_limit_wait(e.headers))
-            return _failed("redirect" if 300 <= e.code < 400 else "http")
+                raise _Fail("rate_limited", _rate_limit_wait(e.headers), e.code)
+            raise _Fail("redirect" if 300 <= e.code < 400 else "http", status=e.code)
         if status != 200:
-            return _failed("http")
-        if len(body) > CHECK_MAX_BYTES:
-            return _failed("too_large")
+            raise _Fail("http", status=status)
+        if len(body) > limit:
+            raise _Fail("too_large")
+        return kind, body
+    except _Fail:
+        raise
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ssl.SSLError):  # a certificate error is one (SSLCertVerificationError)
+            raise _Fail("tls")
+        raise _Fail("timeout" if isinstance(e.reason, socket.timeout) else "offline")
+    except ssl.SSLError:
+        raise _Fail("tls")
+    except socket.timeout:
+        raise _Fail("timeout")
+    except OSError:
+        raise _Fail("offline")
+    except Exception:  # anything else, a RecursionError included, is an answer we cannot use
+        raise _Fail("malformed")
+
+
+def _bounded(fn, seconds, timeout_result):
+    """fn() in a daemon thread, abandoned after `seconds`: a name lookup is a C call no signal or socket
+    timeout interrupts, so the whole request is what is bounded. fn must not raise."""
+    box = []
+
+    def run():
+        try:
+            box.append(fn())
+        except BaseException as e:  # never lose the answer to an exception in the thread
+            box.append(e)
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(seconds)
+    if not box:
+        if isinstance(timeout_result, BaseException):
+            raise timeout_result
+        return timeout_result
+    if isinstance(box[0], BaseException):
+        raise box[0]
+    return box[0]
+
+
+def fetch_release_outcome(prerelease):
+    """One GET to the repository's releases, mapped to {"ok", "reason", "retry_after", "stable", "pre", "assets"}.
+    Never raises. No redirect is followed, the type must be application/json, the body is capped, and the whole
+    call, name lookup included, ends in check_timeout() seconds."""
+    url, ca = releases_endpoint(prerelease)
+
+    def go():
+        try:
+            kind, body = _http_get(url, ca, "application/vnd.github+json", CHECK_MAX_BYTES)
+        except _Fail as e:
+            if e.status == 404:
+                return _found()
+            return _failed(e.reason, e.retry_after, e.status)
         if kind != "application/json":
             return _failed("malformed")
         return parse_release_body(body, prerelease)
-    except _CheckTimeout:
-        return _failed("timeout")
-    except urllib.error.URLError as e:
-        r = e.reason
-        if isinstance(r, ssl.SSLError):  # a certificate error is one (SSLCertVerificationError)
-            return _failed("tls")
-        return _failed("timeout" if isinstance(r, socket.timeout) else "offline")
-    except ssl.SSLError:
-        return _failed("tls")
-    except socket.timeout:
-        return _failed("timeout")
-    except OSError:
-        return _failed("offline")
-    except Exception:  # anything else, a RecursionError included, is an answer we cannot use
+    try:
+        return _bounded(go, check_timeout(), _failed("timeout"))
+    except BaseException:
         return _failed("malformed")
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old)
+
+
+def parse_sums(text, name):
+    """The sha256 that SHA256SUMS (`<64 hex>  <name>` per line, as sha256sum prints it) gives for `name`: exactly one
+    line must name it, or None."""
+    found = [m.group(1).lower() for m in (re.fullmatch(r"([0-9a-fA-F]{64}) [ *]([^ ]{1,200})", ln) for ln in text.splitlines())
+             if m and m.group(2) == name]
+    return found[0] if len(found) == 1 else None
+
+
+def download_dir():
+    """The 0700 folder downloads go to (inside the cache folder), or None."""
+    return private_dir(os.path.join(cache_dir(), "downloads"))
+
+
+def remove_downloads():
+    folder = os.path.join(cache_dir(), "downloads")
+    try:
+        for n in os.listdir(folder):
+            if n == "SHA256SUMS" or n.endswith(".whl") or n.startswith(("SHA256SUMS.", "agentbus-")):
+                try:
+                    os.unlink(os.path.join(folder, n))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def download_release(version):
+    """Download the release's wheel and SHA256SUMS from GitHub Releases into the 0700 downloads folder, verify the
+    wheel's sha256 against SHA256SUMS, and return the wheel's path. Size- and time-limited, TLS verified. Dies with
+    release_offline, download_failed (reason: http, redirect, tls, malformed, too_large, hash_mismatch) or manual_step."""
+    import tempfile
+    folder = download_dir()
+    name = wheel_name(version)
+    if not folder:
+        die(f"agentbus has nowhere private to put the download ({cache_dir()}). Download {asset_url(version, name)[0]} and "
+            f"{asset_url(version, 'SHA256SUMS')[0]}, check the wheel's sha256 against SHA256SUMS, then install it with the tool that installed agentbus",
+            "manual_step", commands=[f"curl -fsSLO {asset_url(version, name)[0]}", f"curl -fsSLO {asset_url(version, 'SHA256SUMS')[0]}"])
+    remove_downloads()
+
+    def get(asset, limit):
+        url, ca = asset_url(version, asset)
+        try:
+            return _bounded(lambda: _http_get(url, ca, "application/octet-stream", limit, redirects=True), DOWNLOAD_TIMEOUT_S, _Fail("timeout"))[1]
+        except _Fail as e:
+            if e.reason in ("offline", "timeout"):
+                die(f"could not download {asset} from GitHub ({'no answer in time' if e.reason == 'timeout' else 'offline'}). "
+                    "When you are online, run: agentbus update", "release_offline", reason=e.reason)
+            if e.reason == "rate_limited":
+                release_error({"reason": "rate_limited", "retry_after": e.retry_after})
+            why = f"HTTP {e.status}" if e.status else e.reason
+            die(f"could not download {asset} from GitHub ({why}). Nothing was installed. Try again later, or see {REPO_URL}/releases/tag/v{version}",
+                "download_failed", reason=e.reason, asset=asset)
+    sums = get("SHA256SUMS", SUMS_MAX_BYTES)
+    want = parse_sums(sums.decode("utf-8", "replace"), name)
+    if not want:
+        die(f"SHA256SUMS of release {version} does not list {name} exactly once. Nothing was installed. See {REPO_URL}/releases/tag/v{version}",
+            "download_failed", reason="malformed", asset="SHA256SUMS")
+    data = get(name, WHEEL_MAX_BYTES)
+    got = sha256_hex(data)
+    if got != want:
+        die(f"the downloaded {name} does not match its sha256 in SHA256SUMS (got {got[:12]}..., wanted {want[:12]}...). "
+            "Nothing was installed. Try again later; if it keeps happening, report it at " + REPO_URL + "/issues", "download_failed",
+            reason="hash_mismatch", asset=name)
+    path = os.path.join(folder, name)
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=name + ".")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die(f"could not save the download ({e.strerror or e}). Nothing was installed.", "download_failed", reason="malformed", asset=name)
+    return path
 
 
 def release_store(outcome):
@@ -8301,7 +8496,8 @@ class _FileLock:
         except OSError:
             return
         try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or not _owned(st) or st.st_nlink != 1:
                 raise OSError
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.fd = fd
@@ -8419,15 +8615,28 @@ def _release_end(cache):
 
 
 # ---- 5. the known bus folders: what `update` upgrades without being told where ----
+def listed_folder_ok(path):
+    """May a folder from the list be handed to upgrade? It is checked again every time the list is read: a folder that
+    is gone is kept (update reports it), but a link, a file, a folder owned by someone else, or a path whose parents
+    have since become links is dropped."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and _owned(st) and os.path.realpath(path) == path
+
+
 def read_bus_list():
-    """{"roots": [...], "buses": [...]} from the state folder, absolute paths only; empty when absent."""
+    """{"roots": [...], "buses": [...]} from the state folder: absolute paths that pass listed_folder_ok; empty when absent."""
     folder = private_dir(state_dir(), create=False)
     o = read_private_json(folder, "buses.json", limit=1 << 20) if folder else None
     out = {"roots": [], "buses": []}
     if isinstance(o, dict) and o.get("v") == 1:
         for k in out:
             if isinstance(o.get(k), list):
-                out[k] = list(dict.fromkeys(p for p in o[k] if isinstance(p, str) and os.path.isabs(p)))[:LIST_LIMIT]
+                out[k] = list(dict.fromkeys(p for p in o[k] if isinstance(p, str) and os.path.isabs(p) and listed_folder_ok(p)))[:LIST_LIMIT]
     return out
 
 
@@ -8497,23 +8706,45 @@ def method_label(inst):
     return {"uv": "uv", "pipx": "pipx", "pip": "pip", "clone": "a clone", "unknown": "another tool"}.get(inst["method"], inst["method"])
 
 
+def update_lock():
+    """The lock that keeps two updates from installing into one environment at once: update.lock in the state folder,
+    else in the cache folder, else update refuses to run (it could not tell whether another is running)."""
+    for folder in (private_dir(state_dir()), private_dir(cache_dir())):
+        if not folder:
+            continue
+        lock = _FileLock(folder, "update.lock")
+        if not lock:
+            die("another agentbus update is running. When it has finished, run: agentbus update", "update_running",
+                lock=os.path.join(folder, "update.lock"))
+        return lock
+    die(f"agentbus update has nowhere private to keep its lock ({tilde(state_dir())} and {tilde(cache_dir())} cannot be used), "
+        "so it cannot tell whether another update is running. Make one of them a folder you own, then run: agentbus update",
+        "update_running", lock=os.path.join(state_dir(), "update.lock"))
+
+
 def shlex_join(argv):
-    import shlex
     return " ".join(shlex.quote(x) for x in argv)
 
 
 def release_error(outcome):
-    """The die() for a lookup that found nothing usable (a failure row of the runbook's outcome table)."""
+    """The die() for a lookup that found nothing usable (a failure row of the runbook's outcome table); each message
+    says what happened in plain words and ends with the command to run next."""
     r = outcome["reason"]
-    if r in ("offline", "timeout"):
-        die("could not reach GitHub to look for a release (" + ("no answer in time" if r == "timeout" else "offline")
-            + "). Try again when you are online.", "release_offline", reason=r)
+    if r == "offline":
+        die("could not reach GitHub to look for a release (offline). When you are online, run: agentbus update", "release_offline", reason=r)
+    if r == "timeout":
+        die("GitHub did not answer in time. When it does, run: agentbus update", "release_offline", reason=r)
     if r == "rate_limited":
         wait = int(outcome["retry_after"] or 0)
-        die(f"GitHub is limiting requests from this network. Try again in {max(1, (wait + 59) // 60)} minutes: agentbus update",
+        die(f"GitHub is limiting requests from this network. In {max(1, (wait + 59) // 60)} minutes, run: agentbus update",
             "rate_limited", retry_after=wait)
-    die(f"GitHub's answer about releases could not be used ({r}). Try again later, or see {REPO_URL}/releases",
-        "release_unknown", reason=r)
+    status = outcome.get("status")
+    what = {"http": f"GitHub answered with an error{f' (HTTP {status})' if status else ''}",
+            "redirect": "GitHub sent the request somewhere else (the repository may have moved; see " + REPO_URL + ")",
+            "tls": "the secure connection to GitHub could not be verified (check your network and clock)",
+            "too_large": "GitHub's answer was far bigger than a release list",
+            "malformed": "GitHub's answer was not a release list agentbus can read"}.get(r, f"GitHub's answer could not be used ({r})")
+    die(f"{what}. Nothing was changed. Try again later: agentbus update", "release_unknown", reason=r)
 
 
 def release_lookup(cached_ok):
@@ -8524,7 +8755,7 @@ def release_lookup(cached_ok):
     if cached_ok and cur is not None:
         age = now - cur["checked_at"]
         if cur["ok"] is True and 0 <= age < CHECK_FRESH_S:
-            return _found(cur["stable"], cur["pre"])
+            return _found(cur["stable"], cur["pre"])  # no asset list: --check does not claim the wheel is there
         if cur["ok"] is False and cur["reason"] == "rate_limited" and cur["retry_after"] is not None \
                 and 0 <= now < cur["checked_at"] + cur["retry_after"]:
             return _failed("rate_limited", int(cur["checked_at"] + cur["retry_after"] - now))
@@ -8684,7 +8915,9 @@ def run_installer(argv, to_stderr):
         grace = min(float(os.environ.get("AGENTBUS_TEST_INSTALLER_GRACE", INSTALLER_GRACE_S)), INSTALLER_GRACE_S)
     except ValueError:
         timeout, grace = INSTALLER_TIMEOUT_S, INSTALLER_GRACE_S
-    p = subprocess.Popen(argv, cwd=os.path.expanduser("~"), stdout=sys.stderr.fileno() if to_stderr else None)
+    # from the 0700 cache folder: nothing in it was put there by anyone else, which a working folder cannot promise
+    p = subprocess.Popen(argv, cwd=private_dir(cache_dir()) or os.path.expanduser("~"),
+                         stdout=sys.stderr.fileno() if to_stderr else None)
 
     def stop():
         p.terminate()
@@ -8751,7 +8984,8 @@ def update_check(a, inst, install, latest, newer, no_release, plan):
 
 def cmd_update(a):
     if is_repo_local_copy():
-        die("update runs from the installed agentbus, not a project copy. Run: agentbus update", "bad_input")
+        die("update runs from the installed agentbus, not a project copy. Install it with the install line in the README "
+            "(" + REPO_URL + "#quick-start), then run: agentbus update", "bad_input")
     inst = detect_install()
     scope = update_scope(a)
     targets, new_buses, new_roots = update_targets(a, scope)  # a bad DIR is refused before anything is asked of GitHub
@@ -8762,7 +8996,13 @@ def cmd_update(a):
     latest = newest_release(out, pre)
     newer = latest if latest and release_newer(latest) else None
     no_release = out["stable"] is None and out["pre"] is None
-    plan = installer_plan(inst, newer) if newer else {"argv": None, "commands": None}
+    plan = installer_plan(inst, newer) if newer else {"argv": None, "commands": None, "download": None}
+    assets = out["assets"].get(newer) if newer else None
+    if newer and plan["argv"] and assets is not None and not (wheel_name(newer) in assets and "SHA256SUMS" in assets):
+        # the release has no wheel or no checksums: say so, and never fall back to building from source on the person's behalf
+        word = {"uv": "uv tool install --force", "pipx": "pipx install --force", "pip": "python3 -m pip install --upgrade"}[inst["method"]]
+        plan = {"argv": None, "download": None, "missing_assets": True,
+                "commands": [f"{word} git+{inst['url']}@v{newer}"]}
     install = {"method": inst["method"], "url": inst["url"]}
     if a.check:
         update_check(a, inst, install, latest, newer, no_release, plan)
@@ -8780,22 +9020,29 @@ def cmd_update(a):
         if scope["narrowed"]:
             why = scope["why"] if scope["why"] == "no terminal" else scope["why"] + " is set"
             tell(f"agent session ({why}): upgrading this bus only and skipping setup. Run with --all-buses for the rest.")
-    tool = {"status": "current", "argv": None, "exit_status": None, "commands": None}
+    tool = {"status": "current", "argv": None, "exit_status": None, "commands": None, "download": None}
     if newer:
         if plan["argv"]:
-            tool.update({"status": "dry_run" if a.dry_run else "current", "argv": plan["argv"]})
+            tool.update({"status": "dry_run" if a.dry_run else "current", "argv": plan["argv"], "download": plan["download"]})
             if human:
+                tell(("would download " if a.dry_run else "downloading ") + f"{wheel_name(newer)} and SHA256SUMS from "
+                     f"github.com/{REPO}/releases (the wheel's sha256 is checked against SHA256SUMS before anything is installed)")
                 tell(("would run: " if a.dry_run else "running: ") + shlex_join(plan["argv"]))
         else:
             tool.update({"status": "manual", "commands": plan["commands"]})
+            if plan.get("missing_assets"):
+                why = (f"release {newer} has no {wheel_name(newer)} or SHA256SUMS to install, and agentbus does not build from source "
+                       "for you (that fetches a build backend from PyPI). If you want that, run")
+            elif inst["method"] not in ("uv", "pipx", "pip") or inst["fork"]:
+                why = "this copy is not one agentbus update may replace itself. Run"
+            else:
+                why = "no safe installer was found. Run"
             if human:
-                tell("This copy is not one agentbus update may replace itself. Run:" if inst["method"] not in ("uv", "pipx", "pip")
-                    or inst["fork"] else "No safe installer was found. Run:")
+                tell(why[0].upper() + why[1:] + ":")
                 for c in plan["commands"]:
                     tell("  " + c)
             if not a.dry_run:
-                die("agentbus cannot update this copy itself. Run: " + "; ".join(plan["commands"]), "manual_step",
-                    commands=plan["commands"])
+                die(why + ": " + "; ".join(plan["commands"]), "manual_step", commands=plan["commands"])
     result = {"from": __version__, "to": newer or __version__, "latest": None if no_release else latest, "install": install,
               "tool": tool, "buses": [], "setup": [], "plugin": None, "restart": False,
               "scope": {"narrowed": scope["narrowed"], "why": scope["why"]}}
@@ -8809,18 +9056,14 @@ def cmd_update(a):
             if not a.no_buses:
                 report_update_rows(result["buses"], dry=True)
             if not a.no_setup and not scope["narrowed"]:
-                tell("setup: the skill and AGENTS.md block that are there and unedited would be refreshed")
+                tell("setup: the skill, the AGENTS.md block and the hooks setup installed would be refreshed if they are older and unedited")
             if fix:
                 tell("plugin: " + fix)
             tell("dry run: nothing was changed.")
         else:
             print_json(result)
         return
-    folder = private_dir(state_dir())
-    lock = _FileLock(folder, "update.lock") if folder else None
-    if folder and not lock:
-        die("another agentbus update is running. Wait for it to finish, then run: agentbus update", "update_running",
-            lock=os.path.join(folder, "update.lock"))
+    lock = update_lock()
     try:
         update_real(a, inst, scope, result, newer, plan, targets, new_buses, new_roots, human)
     finally:
@@ -8834,17 +9077,24 @@ def update_real(a, inst, scope, result, newer, plan, targets, new_buses, new_roo
         argv = plan["argv"]
         recovery = shlex_join(argv)
         try:
-            how, val = run_installer(argv, a.json)
+            wheel = download_release(newer)  # verified against SHA256SUMS, or it dies and nothing is installed
+            argv = installer_plan(inst, newer, wheel)["argv"] or argv
+            recovery = "agentbus update"  # the downloaded file is removed afterwards, so the installer line alone would not run again
+            try:
+                how, val = run_installer(argv, a.json)
+            finally:
+                remove_downloads()
         except KeyboardInterrupt:
+            remove_downloads()
             die("interrupted while the installer was running. Run: agentbus update to finish", "interrupted",
                 argv=argv, rerun="agentbus update")
         if how != "exit" or val != 0:
             what = "timed out" if how == "timeout" else f"killed by signal {val}" if how == "signal" else f"exit {val}"
-            die(f"the installer did not finish ({what}). Run it yourself: {recovery}", "installer_failed", argv=argv,
+            die(f"the installer did not finish ({what}). Try again with: {recovery}", "installer_failed", argv=argv,
                 exit_status=val if how == "exit" else None, reason="exit" if how == "exit" else how, recovery=recovery)
         got = installed_version(inst)
         if not got or release_key(got) <= release_key(before):
-            die(f"the installer finished, but agentbus is still {got or 'not answering'}. Run it yourself: {recovery}",
+            die(f"the installer finished, but agentbus is still {got or 'not answering'}. Try again with: {recovery}",
                 "installer_failed", argv=argv, exit_status=0, reason="version_unchanged", recovery=recovery)
         file_changed(inst["prefix"])
         tool.update({"status": "updated", "argv": argv, "exit_status": 0})
@@ -8869,13 +9119,20 @@ def update_real(a, inst, scope, result, newer, plan, targets, new_buses, new_roo
     if not a.no_setup and not scope["narrowed"]:
         result["setup"] = setup_rows(inst, [r["directory"] for r in rows if r.get("status") in ("upgraded", "current")])
         if human:
+            shown = 0
             for s in result["setup"]:
                 if s["error"]:
                     tell(f"  ! setup {s['target']} ({s['scope']}): {s['error']['message']}")
+                    shown += 1
                 for c in s["changes"]:
                     if c["action"] != "unchanged":
                         mark = "~" if c["action"] in ("installed", "updated", "replaced_link", "removed") else "!" if c["action"] == "refused" else "="
                         tell(f"  {mark} {tilde(c['path'])}   {c['detail']}")
+                        shown += 1
+            if not shown:
+                tell("setup: nothing to refresh.")
+    elif human:
+        tell("setup: skipped (--no-setup)." if a.no_setup else "setup: skipped (agent session). Run with --all-buses to include it.")
     fix = plugin_fix()
     result["plugin"] = {"fix": fix} if fix else None
     if human and fix:
@@ -9950,20 +10207,61 @@ def claude_hook_tool():
         parts = first[2:].decode("utf-8", "replace").split() if first.startswith(b"#!") else []
         if parts and os.path.isabs(parts[0]) and os.path.basename(parts[0]) != "env":
             return word(argv0)
+    entry = install_entry_script()
+    if entry:
+        return word(entry)
     if sys.executable:
         return word(sys.executable) + " " + word(self_path())
     return word(argv0 or self_path())
 
 
+def install_entry_script():
+    """The command of the install this process runs from, <prefix>/bin/agentbus, or None. pip, uv and pipx all put it
+    there (in the install's virtual environment), with a first line naming the environment's interpreter. A hook
+    that runs it survives a reinstall on another Python, which a path inside lib/pythonX.Y/site-packages does not."""
+    if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
+        return None
+    entry = os.path.join(sys.prefix, "bin", "agentbus")
+    if not (os.path.isfile(entry) and os.access(entry, os.X_OK)):
+        return None
+    first = (setup_read(entry, follow=True) or b"").split(b"\n", 1)[0]
+    parts = first[2:].decode("utf-8", "replace").split() if first.startswith(b"#!") else []
+    return entry if parts and os.path.isabs(parts[0]) and os.path.basename(parts[0]) != "env" else None
+
+
+def hook_tool_runs_this_install(tool):
+    """True when the recorded hook tool (the words before `hook`) runs a file inside THIS install's environment that is
+    still there: its entry script, or its python with a module inside it. Such a hook is current whatever form it is
+    in; setup --refresh leaves its bytes alone."""
+    if sys.prefix == getattr(sys, "base_prefix", sys.prefix) or not tool:
+        return False
+    prefix = os.path.abspath(sys.prefix) + os.sep
+    first = os.path.abspath(tool[0])
+    if not first.startswith(prefix + "bin" + os.sep) or not os.access(first, os.X_OK):
+        return False
+    if len(tool) == 1:
+        return True
+    return len(tool) == 2 and os.path.abspath(tool[1]).startswith(prefix) and os.path.isfile(tool[1])
+
+
 class ClaudeHooksPiece(JsonEntriesPiece):
     def __init__(self):
         super().__init__("claude_hooks", lambda scope: os.path.join(setup_config_dir("claude", scope), "settings.json"),
-                         self.entries)
+                         lambda scope: self.entries(scope))
         self.ask = True  # False while check() runs: nothing is started
 
-    @staticmethod
-    def entries(scope):
+    refreshing = False  # setup --refresh: a hook that already runs this install is kept as it is
+
+    def entries(self, scope):
         tool = claude_hook_tool()
+        if self.refreshing:
+            text = self.recorded_tool(scope)
+            try:
+                words = shlex.split(text) if text else None
+            except ValueError:
+                words = None
+            if words and hook_tool_runs_this_install(words):
+                tool = text  # byte for byte what is recorded
         return [(event, matcher, {"type": "command", "timeout": CLAUDE_HOOK_TIMEOUT.get(event, 5),
                                   "command": f"{tool} hook claude {event} 2>/dev/null || true {MANAGED_TAG}"})
                 for event, matcher in CLAUDE_HOOK_EVENTS]
@@ -9979,6 +10277,13 @@ class ClaudeHooksPiece(JsonEntriesPiece):
             if c.action in ("installed", "updated"):
                 c.line, c.would = c.line.replace(count, names, 1), c.would.replace(count, names, 1)
         return changes
+
+    def recorded_tool(self, scope):
+        """The text before ` hook ` in the first tagged hook command of the settings file, or None."""
+        for command in self.recorded_commands(scope):
+            if " hook " in command:
+                return command.split(" hook ", 1)[0]
+        return None
 
     def recorded_commands(self, scope):
         """The tagged hook commands in the settings file, [] when it is missing or unreadable."""
@@ -10109,18 +10414,23 @@ class DoctorContext:
 # ---- the tool ----
 
 def doctor_release_note(ctx):
-    """(note, newer) from the release cache the update story keeps: a note such as `latest 0.3.0, checked 2026-11-02
-    (3 days ago)` when the cache holds a good answer under a week old, and the newer version when it is above ctx.version.
+    """(note, newer) from the release cache the update story keeps: `latest 0.3.0, checked 2026-11-02 (3 days ago)`
+    when the cache holds a good answer under a week old, and the newer version when it is above ctx.version. When
+    there is no usable answer the note says why (nothing cached, a check that failed, one still running, one too old).
     Reads read_release_cache() and nothing else; it never refreshes the cache and makes no network call."""
     cache = read_release_cache()
-    if not cache or cache["ok"] is not True:
-        return "", None
+    if not cache:
+        return "no release check has run yet (run: agentbus update --check)", None
+    if cache["ok"] is None:
+        return "a release check is still running", None
+    if cache["ok"] is False:
+        return f"the last release check failed ({cache['reason'] or 'unknown'}; run: agentbus update --check)", None
     age = time.time() - cache["checked_at"]
     if not 0 <= age < 7 * 86400:
-        return "", None
+        return "the last release check is over a week old (run: agentbus update --check)", None
     latest = newest_release(cache, running_prerelease())
     if not latest:
-        return "", None
+        return "no release is published yet", None
     days = int(age // 86400)
     when = datetime.fromtimestamp(cache["checked_at"], timezone.utc).strftime("%Y-%m-%d")
     ago = "today" if days == 0 else "1 day ago" if days == 1 else f"{days} days ago"
@@ -10201,7 +10511,7 @@ def doctor_check_bus(ctx):
         if code == "schema_newer":
             ctx.bus_state = "newer"
             return [doctor_result("bus", "fail", f"{where} (schema {fields.get('bus_schema')}) is newer than this agentbus "
-                                  f"(it knows {SCHEMA_VERSION}); commands from this copy refuse it", "uv tool upgrade agentbus")]
+                                  f"(it knows {SCHEMA_VERSION}); commands from this copy refuse it", "agentbus update")]
         if code == "schema_corrupt":
             ctx.bus_state = "refused"
             return [doctor_result("bus", "fail", f"{where} records schema version {fields.get('bus_schema')}, which no agentbus writes", hint=restore)]
@@ -10251,7 +10561,7 @@ def doctor_check_copy(ctx):
     if copy is not None and release_key(copy) < mine:
         return [doctor_result("copy", "warn", f"{copy} here, {ctx.version} installed", upgrade)]
     if copy is not None and release_key(copy) > mine:
-        return [doctor_result("copy", "warn", f"{copy} here is newer than the installed {ctx.version}", "uv tool upgrade agentbus")]
+        return [doctor_result("copy", "warn", f"{copy} here is newer than the installed {ctx.version}", "agentbus update")]
     if copy is None and label in ("none", "unreadable"):
         why = "has no VERSION, so its copy's version is unknown" if label == "none" else "VERSION cannot be read"
         return [doctor_result("copy", "warn", f"{folder} {why}", upgrade)]
