@@ -6,7 +6,7 @@ set -euo pipefail
 # blocks the tool call on 2), runs a bus copy found in the project, waits on a busy bus, writes to a bus it only
 # reads, prints text a peer wrote, or acts under a name that belongs to another live session.
 . "$(dirname "$0")/lib.sh"
-T=$(mktemp -d); trap 'if [ -n "${HOLD:-}" ]; then kill "$HOLD" 2>/dev/null || true; fi; rm -rf "$T"' EXIT
+T=$(mktemp -d); trap 'if [ -n "${HOLD:-}" ]; then kill "$HOLD" 2>/dev/null || true; fi; if [ -n "${DMGMNT:-}" ]; then hdiutil detach -quiet -force "$DMGMNT" 2>/dev/null || true; fi; rm -rf "$T"' EXIT
 # The hooks write bus files and per-session memory: never under the checkout under test, nor under AGENTBUS_TEST_FORBIDDEN_ROOT.
 TREAL=$(cd "$T" && pwd -P); CHECKOUT=$(cd "$TESTS_DIR/.." && pwd -P)
 case "$TREAL/" in "$CHECKOUT"/*) fail "the test folder $T is inside the checkout; set TMPDIR elsewhere" ;; esac
@@ -866,20 +866,93 @@ finally:
     os.read = real
 assert len(data) == 9 << 20 and len(calls) <= 2, (len(data), calls)
 PY
-# the shortcut for a plain index must not say "nothing here" for a name that only folds to .agentbus
+# the scan of a plain index keeps long-s names as candidates, and says none when there is no bus-looking path
 mkdir -p "$T/quick/.git"; mkgenindex "$T/quick/.git/index" 3 "$(printf '.agentbu\xc5\xbf/bus.db')"
-"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index shortcut said nothing was there for a long-s bus folder name"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index scan lost a long-s bus folder name"
 import runpy, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_quick")
-assert m["hook_index_quick"]({"gitdir": sys.argv[2] + "/.git"}) is None
+cands, shared = m["hook_index_scan"]({"gitdir": sys.argv[2] + "/.git", "common": sys.argv[2] + "/.git"})
+assert cands == [b".agentbu\xc5\xbf"] and shared is None, cands
 PY
-mkgenindex "$T/quick/.git/index" 3
-"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index shortcut did not clear an index with no bus folder name in it"
+mkgenindex "$T/quick/.git/index" 3 "src/linker.c" "src/sdir/link.h"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "paths called link or sdir were taken for index extensions, or a plain index gave candidates"
 import runpy, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_quick")
-assert m["hook_index_quick"]({"gitdir": sys.argv[2] + "/.git"}) is False
+cands, shared = m["hook_index_scan"]({"gitdir": sys.argv[2] + "/.git", "common": sys.argv[2] + "/.git"})
+assert cands == [] and shared is None, cands
+data = open(sys.argv[2] + "/.git/index", "rb").read()
+names, link, sparse = m["hook_index_walk"](data, 20)
+assert link is None and sparse is False and b"src/linker.c" in names, (link, sparse)
 PY
-ok "folded spellings are candidates; look-alikes are not; a foreign spelling of the folder is refused; the shortcut keeps long-s names"
+# every character HFS+ ignores (git's list) is dropped by the fold, in any position; its neighbours are not
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" <<'PY' || fail "the fold does not drop every character HFS+ ignores"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_fold")
+fold = m["hook_fold"]
+ignorable = [c for r in ((0x200c, 0x200f), (0x202a, 0x202e), (0x206a, 0x206f), (0xfeff, 0xfeff)) for c in map(chr, range(r[0], r[1] + 1))]
+assert len(ignorable) == 4 + 5 + 6 + 1 and set(ignorable) == m["HOOK_IGNORABLE"], len(ignorable)
+for c in ignorable:
+    for name in (".agent%sbus" % c, "%s.agentbus" % c, ".agentbus%s" % c, ".a%sg%se%sn%st%sb%su%ss" % ((c,) * 7)):
+        assert fold(name.encode()) == ".agentbus", (hex(ord(c)), name)
+for c in ("\u200b", "\u2060", "\u00ad", "\u200a", "\u2029", "\ufeff"[:0] + "x"):
+    assert fold((".agent%sbus" % c).encode()) != ".agentbus", hex(ord(c))   # neighbours of the set are not ignorable
+assert m["HOOK_IGNORABLE_RE"].search("\u200c".encode()) and not m["HOOK_IGNORABLE_RE"].search("\u200b".encode())
+for c in ignorable:
+    assert m["HOOK_IGNORABLE_RE"].search(c.encode()), hex(ord(c))
+PY
+# the raw-byte search: a run of ignorable characters counts between two letters of the name, in front of its dot, or after its
+# last s, however long the run; with other neighbours (as in hashes and times) it does not
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" <<'PY' || fail "the raw-byte search of an index misjudged a run of ignorable characters"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_raw")
+doubt = m["hook_raw_doubt"]
+Z = "\u200c".encode()
+filler = b"\x01\x02\x03 \x00 " * 8
+assert doubt(filler + b"src/.agent" + Z + b"bus/x" + filler)             # between two letters
+assert doubt(filler + b"src/" + Z + b".agentbus/x" + filler)             # in front of the dot
+assert doubt(filler + b"src/.agentbus" + Z + b"/x" + filler)             # after the last s, before the slash
+assert doubt(filler + b".agentbus" + Z + b"\x00\x00" + filler)            # after the last s, at the end of the path
+assert doubt(filler + b".a" + Z * 1000 + b"gentbus" + filler)           # a long run
+assert doubt(filler + b".agentbu" + b"\xc5\xbf/x" + filler)             # long s
+assert doubt(filler + b".AgEnTbUs/x" + filler)                           # ASCII, any case
+assert doubt(filler + b".agent" + "\ufeff".encode() + b"bus" + filler) and doubt(filler + b"t" + "\u206f".encode() + b"b" + filler)
+assert not doubt(filler + b"q" + Z + b"r" + filler)                      # neighbours are not letters of the name
+assert not doubt(filler + bytes([0x5a, 0x11]) + Z + bytes([0x77]) + filler)
+assert not doubt(filler + b"src/linker.c" + b"docs/agent.md" + filler)
+PY
+mkgenindex "$T/quick/.git/index" 3 "src/linker.c" "src/sdir/link.h"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "paths called link or sdir were taken for extensions, or a plain index was hashed more than once"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_ext")
+data = open(sys.argv[2] + "/.git/index", "rb").read()
+assert m["hook_real_extension"](data, 20) is False and m["hook_raw_doubt"](data) is False
+calls = []
+real1, real2 = m["hashlib"].sha1, m["hashlib"].sha256
+m["hashlib"].sha1 = lambda *a, **k: (calls.append(1), real1(*a, **k))[1]
+m["hashlib"].sha256 = lambda *a, **k: (calls.append(2), real2(*a, **k))[1]
+cands, shared = m["hook_index_scan"]({"gitdir": sys.argv[2] + "/.git", "common": sys.argv[2] + "/.git"})
+assert cands == [] and len(calls) == 1, (cands, calls)
+PY
+# real git indexes (version 2 and version 4) holding a disguised name, and the same name in a plain list
+for ver in 2 4; do
+  rm -rf "$T/disg$ver"; mkdir -p "$T/disg$ver"; git -C "$T/disg$ver" init -q
+  [ "$ver" = 2 ] || git -C "$T/disg$ver" config index.version 4
+  printf x >"$T/disg-blob"; BL=$(git -C "$T/disg$ver" hash-object -w "$T/disg-blob")
+  for nm in "$(printf '.agent\xe2\x80\x8cbus/bus.db')" "$(printf 'pkg/\xef\xbb\xbf.agentbus/VERSION')" "$(printf 'src/%.0s' 1 2 3)main.c" "src/linker.c"; do
+    gitq "$T/disg$ver" update-index --add --cacheinfo "100644,$BL,$nm"
+  done
+  [ "$ver" = 2 ] || gitq "$T/disg$ver" update-index --index-version 4
+  "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/disg$ver" "$ver" <<'PY' || fail "a disguised bus folder name (version $ver index) was not picked as a candidate"
+import runpy, struct, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_disguise")
+g = sys.argv[2] + "/.git"
+assert struct.unpack(">I", open(g + "/index", "rb").read(8)[4:8])[0] == int(sys.argv[3])
+cands, shared = m["hook_index_scan"]({"gitdir": g, "common": g})
+want = [".agent\u200cbus".encode(), "pkg/\ufeff.agentbus".encode()]
+assert sorted(cands) == sorted(want), cands
+PY
+done
+ok "folded and HFS+-disguised spellings are candidates (v2 and v4); look-alikes are not; link and sdir only count as extensions; a foreign spelling is refused"
 
 echo
 echo "TEST 37: a bus tracked under another spelling of its name (case- and normalization-insensitive file systems) is refused"
@@ -937,6 +1010,59 @@ unset HCWD; rm -f "$PB38/.agentbus/bus.db"          # A's own link count is back
 P="$PA38"; [ "$(sha "$PA38/.agentbus/bus.db")" = "$before" ] || fail "SessionEnd wrote through a hard link into a tracked project"
 [[ " $(roster) " == *" $N "* ]] || fail "SessionEnd left through a hard link (the inode matched, nothing else stopped it)"
 ok "a hard-linked bus.db is refused by the link count even though its inode matches"
+
+echo
+echo "TEST 40: a tracked symlinked .agentbus is refused, and it is the link that is looked at, not what it points to"
+newbus p40src; mv "$P/.agentbus" "$P/real"; ln -s real "$P/.agentbus"; gitq "$P" add -f real .agentbus; gitq "$P" commit -qm s
+git clone -q "$P" "$T/p40c"; P="$T/p40c"
+[ -L "$P/.agentbus" ] || fail "the clone has no .agentbus link"
+before=$(sha "$P/real/bus.db"); SS; quiet || fail "a tracked symlinked .agentbus was used: rc $RC out $OUT"
+[ "$(sha "$P/real/bus.db")" = "$before" ] || fail "a hook wrote through a tracked symlinked .agentbus"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$P" <<'PY' || fail "hook_untracked took a symlinked .agentbus for the user's"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_link")
+assert m["hook_untracked"](sys.argv[2]) is False
+PY
+ok "a link is never the user's bus"
+
+echo
+echo "TEST 41: with no creation time (Linux) the SessionEnd shortcut holds only while the remembered answer for the unchanged index is empty"
+newbus p41; N=$(dname "$SID1"); mkgenindex "$P/.git/index" 50; SS
+[[ " $(roster) " == *" $N "* ]] || fail "setup: SessionStart did not join $N"
+STATE41="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; BUSF="$STATE41/$(printf '%s' "$SID1" | tr -c 'A-Za-z0-9_-' '_').bus"
+nobirth() { "$PY" -I - "$BUSF" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d[2] = None
+json.dump(d, open(sys.argv[1], "w"))
+PY
+}
+nobirth
+printf garbage >"$P/.git/index"; END other                    # the index changed since the answer was remembered
+[[ " $(roster) " == *" $N "* ]] || fail "SessionEnd trusted dev and inode alone although the index had changed (no creation time)"
+newbus p41b; mkgenindex "$P/.git/index" 50; SS; nobirth
+END other                                                    # nothing changed, nothing bus-looking in the index
+[ -z "$(roster)" ] || fail "SessionEnd with no creation time and an unchanged empty-answer index did not leave: $(roster)"
+ok "dev and inode alone are trusted only against an unchanged index that holds no bus-looking path"
+
+echo
+echo "TEST 42: HFS+ ignores some characters in names, so a tracked .agent<ZWNJ>bus is the bus on disk (macOS disk image)"
+if command -v hdiutil >/dev/null 2>&1 && hdiutil create -quiet -size 64m -fs HFS+ -volname hfsx "$T/hfs.dmg" 2>/dev/null; then
+  DMGMNT="$T/hfsmnt"; mkdir -p "$DMGMNT"; hdiutil attach -quiet -nobrowse -mountpoint "$DMGMNT" "$T/hfs.dmg" || fail "could not attach the HFS+ image"
+  M="$DMGMNT"; ZN=$(printf '.agent\xe2\x80\x8cbus')
+  mkdir "$M/evil"; git -C "$M/evil" init -q; (cd "$M/evil" && "${AB[@]}" init . >/dev/null && "${AB[@]}" who >/dev/null && "${AB[@]}" --as mallory join --tool t >/dev/null)
+  git init -q "$M/up"; gitq "$M/up" commit -q --allow-empty -m base; git clone -q "$M/up" "$M/user"
+  (cd "$M/user" && "${AB[@]}" init . >/dev/null && "${AB[@]}" who >/dev/null && "${AB[@]}" --as nate join --tool t >/dev/null)
+  mkdir -p "$M/up/$ZN"; cp "$M/evil/.agentbus/bus.db" "$M/up/$ZN/bus.db"; gitq "$M/up" add -f "$ZN/bus.db"; gitq "$M/up" commit -qm add
+  (cd "$M/user" && git fetch -q 2>/dev/null; git reset -q --hard origin/HEAD 2>/dev/null || git reset -q --hard origin/main 2>/dev/null || git reset -q --hard origin/master) || true
+  P="$M/user"
+  git -C "$P" -c core.quotepath=off ls-files | grep -q "$(printf '\xe2\x80\x8c')" || fail "the HFS+ test did not put the disguised name in the index"
+  before=$(sha "$P/.agentbus/bus.db"); SS; quiet || fail "a bus tracked as .agent<ZWNJ>bus (HFS+) was used: rc $RC out $OUT"
+  [ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a bus tracked as .agent<ZWNJ>bus"
+  cd "$T"; hdiutil detach -quiet -force "$DMGMNT" || true; DMGMNT=""
+  ok "the disguised name is folded to .agentbus and the bus refused"
+else
+  skip_part "platform: not-macos (no hdiutil, or no HFS+ images: the HFS+ disguise test did not run)"
+fi
 
 echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"

@@ -371,7 +371,7 @@
   {
     "name": "a hook treats every .agentbus as untracked",
     "file": "bin/agentbus",
-    "find": "return not hook_index_tracks\\(repo, prefix\\)",
+    "find": "return not hook_index_tracks\\(repo, folder\\)",
     "replace": "return True",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -461,8 +461,8 @@
   {
     "name": "SessionEnd re-reads the index before it leaves",
     "file": "bin/agentbus",
-    "find": "joined_id = tuple\\(joined_id\\) if isinstance\\(joined_id, list\\)",
-    "replace": "joined_id = None if True or isinstance(joined_id, list)",
+    "find": "joined_id = tuple\\(joined_id\\) if \\(isinstance",
+    "replace": "joined_id = None if (True or isinstance",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd with a 1M-entry index did not leave"
@@ -524,8 +524,8 @@
   {
     "name": "SessionEnd trusts any bus once its session has joined one",
     "file": "bin/agentbus",
-    "find": "same = joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
-    "replace": "same = joined_id is not None",
+    "find": "same = \\(joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\[:2\\]\\)",
+    "replace": "same = (joined_id is not None and True",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd wrote to a tracked bus in another project"
@@ -569,7 +569,7 @@
   {
     "name": "SessionEnd trusts a bus.db of the same device whatever its inode",
     "file": "bin/agentbus",
-    "find": "\\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
+    "find": "\\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\[:2\\]\\)",
     "replace": "st.st_dev == joined_id[0]",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -592,15 +592,6 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "stopped or broke the hook"
-  },
-  {
-    "name": "the index shortcut says untracked whatever the file holds",
-    "file": "bin/agentbus",
-    "find": " or want\\[:-1\\] in low:",
-    "replace": ":",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "a tracked bus with a v2 index was used"
   },
   {
     "name": "a hook accepts a bus folder under any spelling of its name",
@@ -632,11 +623,11 @@
   {
     "name": "the index shortcut misses a bus folder spelled with a long s",
     "file": "bin/agentbus",
-    "find": "b\"\\.agentbu\" in low",
-    "replace": "b\".agentbus\" in low",
+    "find": "if b\"agentbu\" in low:\\n        return True",
+    "replace": "if False:\n        return True",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "the index shortcut said nothing was there"
+    "expect": "the raw-byte search of an index misjudged"
   },
   {
     "name": "SessionEnd ignores a creation time that differs from the recorded one",
@@ -664,5 +655,77 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "a big file was read in many small reads"
+  },
+  {
+    "name": "the fold keeps the characters HFS+ ignores",
+    "file": "bin/agentbus",
+    "find": "if not HOOK_IGNORABLE\\.isdisjoint\\(text\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the fold does not drop every character HFS+ ignores"
+  },
+  {
+    "name": "the raw search misses an ignorable run in front of the dot",
+    "file": "bin/agentbus",
+    "find": "or after\\[:1\\] == b\"\\.\" or",
+    "replace": "or False or",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the raw-byte search of an index misjudged"
+  },
+  {
+    "name": "the raw search misses an ignorable run after the last s",
+    "file": "bin/agentbus",
+    "find": "\\(last and after\\[:1\\] in \\(b\"/\", b\"\\\\x00\"\\)\\)",
+    "replace": "False",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the raw-byte search of an index misjudged"
+  },
+  {
+    "name": "the raw search misses an ignorable run between two letters",
+    "file": "bin/agentbus",
+    "find": "if \\(x and y\\) or",
+    "replace": "if False or",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the raw-byte search of an index misjudged"
+  },
+  {
+    "name": "a path called linker.c is taken for an index extension",
+    "file": "bin/agentbus",
+    "find": "            if q == end:\\n                return True",
+    "replace": "            return True",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "paths called link or sdir were taken for extensions"
+  },
+  {
+    "name": "the index is hashed once for each possible size",
+    "file": "bin/agentbus",
+    "find": "            found\\.append\\(size\\)\\n            break[^\\n]*\\n",
+    "replace": "            found.append(size)\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "was hashed more than once"
+  },
+  {
+    "name": "a symlinked .agentbus counts as the user's bus",
+    "file": "bin/agentbus",
+    "find": "            return False      # a link is never the user\\'s bus, tracked or not",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "hook_untracked took a symlinked .agentbus"
+  },
+  {
+    "name": "SessionEnd trusts dev and inode alone when no creation time is recorded",
+    "file": "bin/agentbus",
+    "find": "                same = hook_cached_empty\\(directory\\)",
+    "replace": "                pass",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd trusted dev and inode alone"
   }
 ]
