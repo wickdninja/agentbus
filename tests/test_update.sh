@@ -83,7 +83,7 @@ after=$(tree_sum "$PREFIX" "$C/b1" "$C/b2" "$C/root" "$(state_path)" "$HOME/.cla
 [ ! -s "$STUB_LOG" ] || fail "--dry-run ran the installer"
 j=$(ab update --dry-run --all-buses --json) || fail "dry run json failed"
 [ "$(jx 'd["tool"]["argv"]' <<<"$j")" = None ] && [ "$(jx 'd["tool"]["download"]["install_with"][-1]' <<<"$j")" = --force ] \
-  && [ "$(jx 'd["tool"]["download"]["wheel"]' <<<"$j")" = "$REPO_URL/releases/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" ] || fail "dry-run json shows an installer argv for a file that does not exist: $j"
+  && [ "$(jx 'd["tool"]["download"]["wheel"]' <<<"$j")" = "https://127.0.0.1:$PORT/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" ] || fail "dry-run json shows an installer argv for a file that does not exist: $j"
 [ "$(jx 'd["tool"]["status"]' <<<"$j")" = dry_run ] && [ "$(jx 'd["restart"]' <<<"$j")" = False ] || fail "dry-run json: $j"
 [ "$(jx 'sorted(r["directory"] for r in d["buses"] if r["status"] == "skipped")' <<<"$j")" = "['$C/gone/b3']" ] || fail "the vanished folder is not reported: $j"
 ok "exact argv, vanished folder reported and still listed, nothing changed"
@@ -228,7 +228,7 @@ ab update --check >/dev/null; ab update --check >/dev/null
 [ "$(reqs)" = 1 ] || fail "two --check runs made $(reqs) requests"
 [ ! -s "$STUB_LOG" ] && [ "$(installed_version)" = 0.2.0 ] || fail "--check changed something"
 j=$(ab update --check --json)
-[ "$(jx 'd["argv"]' <<<"$j")" = None ] && [ "$(jx 'd["download"]["wheel"]' <<<"$j")" = "$REPO_URL/releases/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" ] || fail "check json shows an installer argv for a file that does not exist: $j"
+[ "$(jx 'd["argv"]' <<<"$j")" = None ] && [ "$(jx 'd["download"]["wheel"]' <<<"$j")" = "https://127.0.0.1:$PORT/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" ] || fail "check json shows an installer argv for a file that does not exist: $j"
 [ "$(jx 'd["update_available"]' <<<"$j")" = True ] && [ "$(jx 'd["latest"]' <<<"$j")" = 0.3.0 ] && [ "$(jx 'd["notes"]' <<<"$j")" = "$REPO_URL/releases/tag/v0.3.0" ] || fail "check json: $j"
 ok "one request, nothing changed"
 
