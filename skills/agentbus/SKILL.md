@@ -19,7 +19,7 @@ Discovery finds the nearest ancestor bus; linked worktrees map to their main che
 
 Start with `join`, then `brief` (goal, holders, open questions, your handoffs and alerts, changed facts, next command). It marks nothing read. Any agent can set the goal (a lead sets it with `goal "TEXT"`), so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. `ctx get` fetches truncated facts. Use `read --topic ruling` if this project uses that topic.
 
-Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.
+Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim and never replace reading inbox.
 
 ## Before shared work
 
@@ -41,7 +41,7 @@ Check recipients with `who`. Messages queue for absent names (post warns); posti
 
 Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. Duplicate delivery is possible; check message IDs before repeating actions.
 
-A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id TOKEN`; post and join replay.
+A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; post and join replay.
 
 ## Finish the session
 
