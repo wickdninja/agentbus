@@ -10759,19 +10759,21 @@ def hook_index_candidates(data):
     """The hash sizes (20 for SHA-1, 32 for SHA-256) this file can be an index of: the digest of everything before the
     trailer equals it, or the trailer is all zero (index.skipHash writes no checksum)."""
     found = []
+    view = memoryview(data)    # hashing the bytes before the trailer without copying them
     for size, algo in ((20, hashlib.sha1), (32, hashlib.sha256)):
-        if len(data) >= 12 + size and (data[-size:] == bytes(size) or algo(data[:-size]).digest() == data[-size:]):
+        if len(data) >= 12 + size and (data[-size:] == bytes(size) or algo(view[:-size]).digest() == data[-size:]):
             found.append(size)
+            break          # one file cannot match both sizes
     if not found:
         raise ValueError("index checksum")
     return found
 
 
-def hook_index_names(data):
+def hook_index_names(data, sizes=None):
     """([(path bytes, mode)], hex of the shared index a split index links to or None) for an index file's bytes:
     versions 2, 3 and 4 (path prefix compression), the link extension of a split index. ValueError when it is
-    not an index git wrote."""
-    for size in hook_index_candidates(data):
+    not an index git wrote. `sizes` is the result of hook_index_candidates when the caller already hashed the file."""
+    for size in (hook_index_candidates(data) if sizes is None else sizes):
         try:
             return hook_index_parse(data, size)
         except ValueError:
@@ -10837,29 +10839,74 @@ def hook_index_stamp(path):
     return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
 
 
-def hook_index_quick(repo, want):
-    """False when a plain index (version 2 or 3, not split, not sparse) cannot hold `want` at all: its paths are stored
-    whole, so the folder's name appearing nowhere in the lower-cased file proves nothing under it is tracked, without parsing
-    a million entries. None when this shortcut does not apply (it appears, or the index is version 4, split or sparse) and
-    the entries must be read. A file that is not an index at all raises, like the full read."""
-    data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
-    size = hook_index_candidates(data)[0]
-    version = struct.unpack(">I", data[4:8])[0] if data[:4] == b"DIRC" else 0
-    if version not in (2, 3):
-        if version == 4 and data[:4] == b"DIRC":
-            return None
-        raise ValueError("signature or version")
-    low = data[:-size].lower()
-    if b"link" in low or b"sdir" in low or want[:-1] in low:
-        return None
-    return False
+HOOK_IGNORABLE = frozenset("\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u206a\u206b\u206c\u206d\u206e\u206f\ufeff")
+# The UTF-8 of those characters. They are the characters HFS+ ignores in a name, so `.agent<ZWNJ>bus` is `.agentbus` there.
+# git skips exactly this set when it looks for a `.git` spelled in disguise (utf8.c next_hfs_char, path.c is_hfs_dotgit).
+HOOK_IGNORABLE_RE = re.compile(rb"\xe2\x80[\x8c-\x8f\xaa-\xae]|\xe2\x81[\xaa-\xaf]|\xef\xbb\xbf")
 
 
-def hook_index_entries(repo):
+def hook_index_walk(data, size):
+    """(the stored paths in index order, hex of the shared index a split index links to or None, whether the index is
+    sparse) for an index file whose checksum was already verified. It reads each entry's name length and nothing else,
+    then the extension headers from where the entries end, so "link" and "sdir" are looked for only where an extension
+    name can be (a path called linker.c does not matter). Versions 2, 3 and 4. ValueError for anything else."""
+    end = len(data) - size
+    try:
+        if data[:4] != b"DIRC":
+            raise ValueError("signature")
+        version, count = struct.unpack(">II", data[4:12])
+        if version not in (2, 3, 4) or count > end // 62:
+            raise ValueError("version")
+        pos, prev, find, names = 12, b"", data.index, []
+        append = names.append
+        hd, ex = 40 + size, 42 + size
+        v3, v4 = version == 3, version == 4
+        for _ in range(count):
+            flags = data[pos + hd] << 8 | data[pos + hd + 1]
+            start = pos + ex + (2 if v3 and flags & 0x4000 else 0)
+            if v4:
+                c = data[start]
+                start += 1
+                strip = c & 127
+                while c & 128:
+                    c = data[start]
+                    start += 1
+                    strip = ((strip + 1) << 7) + (c & 127)
+                nul = find(b"\0", start)
+                prev = prev[:len(prev) - strip] + data[start:nul]
+                append(prev)
+                pos = nul + 1
+            else:
+                length = flags & 0xFFF
+                nul = start + length if length < 0xFFF else find(b"\0", start)
+                append(data[start:nul])
+                pos += (nul - pos + 8) & ~7
+        if pos > end:
+            raise ValueError("entry past the end")
+        link, sparse = None, False
+        while pos < end:
+            sig, length = struct.unpack(">4sI", data[pos:pos + 8])
+            if pos + 8 + length > end:
+                raise ValueError("extension past the end")
+            if sig == b"link":
+                link = data[pos + 8:pos + 8 + size].hex()
+            elif sig == b"sdir":
+                sparse = True
+            pos += 8 + length
+        if pos != end:
+            raise ValueError("trailing bytes")
+    except (IndexError, struct.error) as e:
+        raise ValueError("index") from e
+    return names, link, sparse
+
+
+def hook_index_entries(repo, data=None, sizes=None):
     """([(path bytes, mode)], stamp of the shared index or None) for the repository's index, a split index joined with
-    its shared index. FileNotFoundError when there is no index; ValueError or OSError for anything unreadable."""
-    data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
-    names, link = hook_index_names(data)
+    its shared index. FileNotFoundError when there is no index; ValueError or OSError for anything unreadable. `data`
+    and `sizes` are the bytes and the checksum sizes when the caller has already read and hashed the file."""
+    if data is None:
+        data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
+    names, link = hook_index_names(data, sizes)
     shared_stamp = None
     if link is not None:
         for folder in (repo["gitdir"], repo["common"]):
@@ -10879,46 +10926,219 @@ def hook_index_entries(repo):
     return names, shared_stamp
 
 
-def hook_index_tracks(repo, prefix):
-    """True when the repository's index lists anything under `prefix` (bytes, ending in /), a file or link named like
-    the folder, or a collapsed folder (sparse index) holding it. A split index is read with its shared index.
-    The index file being absent means nothing is tracked yet; any other trouble raises. The answer is remembered
-    (hook_index_cached) while the index file is unchanged, so a big index is not read again by every event."""
+def hook_fold(name):
+    """A path component as a case-insensitive, normalization-insensitive file system sees it, HFS+ included: the characters
+    HFS+ ignores are dropped first (HOOK_IGNORABLE), then Unicode NFC and case folding."""
+    text = os.fsdecode(name)
+    if not HOOK_IGNORABLE.isdisjoint(text):
+        text = "".join(c for c in text if c not in HOOK_IGNORABLE)
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+HOOK_CANDIDATES_MAX = 2000  # more bus-looking index entries than this and the answer is "tracked"
+
+
+def hook_doubtful(name):
+    """True when a stored path could hold a component that a file system folds to .agentbus: ASCII ".agentbu" (every such
+    component has it, long s being the only non-ASCII letter that folds into the name), or a character HFS+ ignores."""
+    return b"agentbu" in name.lower() or HOOK_IGNORABLE_RE.search(name) is not None
+
+
+def hook_candidate_of(name):
+    """The stored path up to the first component of `name` that folds to .agentbus, or None."""
+    parts = name.split(b"/")
+    for i, part in enumerate(parts):
+        if hook_fold(part) == ".agentbus":
+            return b"/".join(parts[:i + 1])
+    return None
+
+
+def hook_index_candidate_paths(names):
+    """The stored paths an index could hold a bus folder under, picked loosely (by folded name, not exact bytes): for each
+    entry the path up to its first component that folds to .agentbus, and every collapsed folder of a sparse index. The
+    file system decides afterwards which of them is the bus folder (hook_index_tracks). `names` is [(path, mode)]."""
+    found = set()
+    for name, mode in names:
+        if mode == 0o040000:
+            found.add(name.rstrip(b"/"))
+        elif hook_doubtful(name):
+            cand = hook_candidate_of(name)
+            if cand is not None:
+                found.add(cand)
+        if len(found) > HOOK_CANDIDATES_MAX:
+            break
+    return sorted(found)
+
+
+def hook_walk_candidates(names):
+    """The candidates of a plain index (no sparse folders) from hook_index_walk's list of paths. The common answer, none,
+    comes from two searches of the paths joined into one string (the hashes and times between the paths are not in it, so
+    they cannot match by chance); only paths that matched are folded, found by their offset in the string."""
+    blob = b"\0".join(names)
+    hits = [m.start() for m in re.finditer(rb"agentbu", blob.lower())]
+    hits += [m.start() for m in HOOK_IGNORABLE_RE.finditer(blob)]
+    if not hits:
+        return []
+    import bisect
+    import itertools
+    ends = list(itertools.accumulate(len(n) + 1 for n in names))
+    found = set()
+    for h in sorted(set(bisect.bisect_right(ends, hit) for hit in hits)):
+        cand = hook_candidate_of(names[h]) if h < len(names) else None
+        if cand is not None:
+            found.add(cand)
+        if len(found) > HOOK_CANDIDATES_MAX:
+            break
+    return sorted(found)
+
+
+HOOK_LETTERS = b".agentbus"
+HOOK_IGN_MARKS = (b"\xe2\x80", b"\xe2\x81", b"\xef\xbb")   # how every character of HOOK_IGNORABLE starts in UTF-8
+
+
+def hook_ignorable_run(low, p):
+    """(start, end) of the run of HFS+-ignorable characters around offset p of `low`."""
+    start = p
+    while start >= 3 and HOOK_IGNORABLE_RE.fullmatch(low, start - 3, start):
+        start -= 3
+    end = p
+    while True:
+        m = HOOK_IGNORABLE_RE.match(low, end)
+        if not m:
+            return start, end
+        end = m.end()
+
+
+def hook_raw_doubt(data):
+    """True when the raw bytes of a version 2 or 3 index could hold a path that a file system folds to .agentbus, False
+    when they cannot. No path is read. A component that folds to .agentbus either holds ASCII ".agentbu" unbroken (long s
+    and characters HFS+ ignores in front of the dot or after the last s leave it whole), or has a run of characters
+    HFS+ ignores between two of the letters ". a g e n t b u", however long. So: ".agentbu" anywhere in the lower-cased
+    bytes, or such a run with a letter of the name on each side. The hashes and times between the paths hold the bytes
+    of such a character by chance, so a run counts only with those neighbours (one chance in about 10^9)."""
+    low = data.lower()
+    if b"agentbu" in low:
+        return True
+    done = 0
+    for mark in HOOK_IGN_MARKS:
+        p = low.find(mark)
+        while p != -1:
+            if p >= done and HOOK_IGNORABLE_RE.match(low, p):
+                start, end = hook_ignorable_run(low, p)
+                done = end
+                if low[max(start - 1, 0):start] in HOOK_LETTERS_SET and low[end:end + 1] in HOOK_LETTERS_SET:
+                    return True
+            p = low.find(mark, p + 1)
+    return False
+
+
+HOOK_LETTERS_SET = frozenset(bytes([c]) for c in HOOK_LETTERS)
+
+
+def hook_real_extension(data, size):
+    """True when the index has a split-index (link) or sparse (sdir) extension: a signature whose extension headers go on,
+    each by its own length, to exactly the checksum. A path called linker.c does not do that."""
+    end = len(data) - size
+    floor = 12 + 64 * struct.unpack(">I", data[8:12])[0]      # no entry is shorter than 64 bytes: extensions come after
+    for sig in (b"link", b"sdir"):
+        p = data.find(sig, floor)
+        while p != -1:
+            q = p
+            while q + 8 <= end:
+                q += 8 + struct.unpack(">I", data[q + 4:q + 8])[0]
+            if q == end:
+                return True
+            p = data.find(sig, p + 1)
+    return False
+
+
+def hook_index_scan(repo):
+    """(candidate paths, stamp of the shared index or None) for the repository's index: one read, one hash. FileNotFoundError
+    when there is no index; ValueError or OSError for anything unreadable. A plain version 2 or 3 index with nothing
+    bus-looking in it is cleared by searching its raw bytes (hook_raw_doubt, hook_real_extension), without reading its paths;
+    any doubt, and version 4 (paths stored as changes to the previous path), reads them."""
+    data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
+    sizes = hook_index_candidates(data)
+    if data[:4] != b"DIRC":
+        raise ValueError("signature")
+    version = struct.unpack(">I", data[4:8])[0]
+    if version in (2, 3) and not hook_raw_doubt(data) and not hook_real_extension(data, sizes[0]):
+        return [], None
+    walked = None
+    for size in sizes:
+        try:
+            walked = hook_index_walk(data, size)
+            break
+        except ValueError:
+            continue
+    if walked is None:
+        raise ValueError("index")
+    names, link, sparse = walked
+    if link is None and not sparse:
+        return hook_walk_candidates(names), None
+    pairs, shared_stamp = hook_index_entries(repo, data, sizes)     # split or sparse: with the modes, and the shared index
+    return hook_index_candidate_paths(pairs), shared_stamp
+
+
+def hook_index_cached(repo):
+    """The remembered candidate list for the repository's index while the index file (and its shared index) is unchanged,
+    else None."""
+    cache = "idx-" + hashlib.sha256(os.fsencode(repo["gitdir"])).hexdigest()[:20] + ".json"
+    cached = hook_state_get(cache)
+    try:
+        stamp = hook_index_stamp(os.path.join(repo["gitdir"], "index"))
+        saved = json.loads(cached) if cached else None
+        if (isinstance(saved, dict) and saved.get("stamp") == stamp and isinstance(saved.get("cands"), list)
+                and (saved.get("shared") is None or (isinstance(saved["shared"], list) and len(saved["shared"]) == 5
+                                                     and hook_index_stamp(saved["shared"][0]) == saved["shared"][1:]))):
+            return [bytes.fromhex(x) for x in saved["cands"]]
+    except (ValueError, OSError, TypeError):
+        pass
+    return None
+
+
+def hook_index_tracks(repo, folder):
+    """True when the repository's index lists the bus folder `folder` (its realpath) or anything in or above it that the
+    index collapses (sparse index): decided by what the file system says each stored path is, not by how the name is
+    spelled, because case- and normalization-insensitive file systems (APFS, NTFS) resolve other spellings to the same
+    folder. A split index is read with its shared index. The index file being absent means nothing is tracked yet; any
+    other trouble raises. The candidate list is remembered while the index file is unchanged, so a big index is not read
+    again by every event; the file system questions are asked afresh."""
     index = os.path.join(repo["gitdir"], "index")
     try:
         stamp = hook_index_stamp(index)
     except FileNotFoundError:
         return False
-    cache = "idx-" + hashlib.sha256(b"\0".join((os.fsencode(repo["gitdir"]), prefix))).hexdigest()[:20] + ".json"
-    cached = hook_state_get(cache)
-    try:
-        saved = json.loads(cached) if cached else None
-        if (isinstance(saved, dict) and saved.get("stamp") == stamp and isinstance(saved.get("tracked"), bool)
-                and (saved.get("shared") is None or (isinstance(saved["shared"], list) and len(saved["shared"]) == 5
-                                                     and hook_index_stamp(saved["shared"][0]) == saved["shared"][1:]))):
-            return saved["tracked"]
-    except (ValueError, OSError, TypeError):
-        pass
-    want = prefix.lower()
-    shared_stamp = None
-    quick = hook_index_quick(repo, want)
-    if quick is not None:
-        names = []
-        tracked = quick
-    else:
-        names, shared_stamp = hook_index_entries(repo)
-        tracked = False
-    for name, mode in names:
-        n = name.lower()
-        if n.startswith(want) or n == want[:-1] or (mode == 0o040000 and n.endswith(b"/") and want.startswith(n)):
-            tracked = True
+    cache = "idx-" + hashlib.sha256(os.fsencode(repo["gitdir"])).hexdigest()[:20] + ".json"
+    cands = hook_index_cached(repo)
+    if cands is None:
+        cands, shared_stamp = hook_index_scan(repo)
+        if hook_index_stamp(index) == stamp:  # unchanged while we read it
+            try:
+                hook_state_put(cache, json.dumps({"stamp": stamp, "shared": shared_stamp, "cands": [c.hex() for c in cands]}))
+            except (OSError, SystemExit):
+                pass
+    if len(cands) > HOOK_CANDIDATES_MAX:
+        return True
+    st = os.lstat(folder)
+    if stat.S_ISLNK(st.st_mode):
+        return True      # a link is never the user's bus
+    ids, here, top = {(st.st_dev, st.st_ino)}, os.path.dirname(folder), repo["top"]
+    while True:
+        st = os.lstat(here)
+        ids.add((st.st_dev, st.st_ino))
+        if here == top or os.path.dirname(here) == here:
             break
-    if hook_index_stamp(index) == stamp:  # unchanged while we read it
+        here = os.path.dirname(here)
+    base = os.fsencode(top)
+    for cand in cands:
         try:
-            hook_state_put(cache, json.dumps({"stamp": stamp, "shared": shared_stamp, "tracked": tracked}))
-        except (OSError, SystemExit):
-            pass
-    return tracked
+            st = os.lstat(os.path.join(base, cand))
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) in ids:
+            return True
+    return False
 
 
 def hook_read_file_exact(path):
@@ -10929,12 +11149,16 @@ def hook_read_file_exact(path):
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_size > HOOK_INDEX_MAX:
             raise ValueError("not a plain file of a size we read")
-        data = b""
-        while len(data) < st.st_size:
-            chunk = os.read(fd, 1 << 20)
+        # One read for the whole file where the system gives it (no copying: appending 1 MiB chunks to one bytes object
+        # copied the file once per chunk, 0.8 s for 87 MB), else the pieces joined once.
+        chunks, got = [], 0
+        while got < st.st_size:
+            chunk = os.read(fd, st.st_size - got)
             if not chunk:
                 break
-            data += chunk
+            chunks.append(chunk)
+            got += len(chunk)
+        data = chunks[0] if len(chunks) == 1 else b"".join(chunks)
     finally:
         os.close(fd)
     if len(data) != st.st_size:
@@ -10944,19 +11168,49 @@ def hook_read_file_exact(path):
 
 def hook_untracked(directory):
     """True when the .agentbus under `directory` is not something git tracks. A clone can commit a whole bus, so a
-    tracked one is not the user's. The index decides (an exclude rule proves nothing: every command writes it);
-    when the index cannot be read the answer is no. Nothing here runs git."""
+    tracked one is not the user's. The index decides, by file identity (an exclude rule proves nothing: every command
+    writes it); when the index cannot be read the answer is no. A bus folder whose name on disk is not exactly .agentbus
+    (the file system found it under another spelling) is foreign: `agentbus init` always makes that exact name.
+    Nothing here runs git."""
+    folder = os.path.join(os.path.realpath(directory), ".agentbus")    # the parent resolved, the folder itself not
+    try:
+        if b".agentbus" not in os.listdir(os.fsencode(os.path.dirname(folder))):
+            return False
+    except OSError:
+        return False
+    try:
+        if stat.S_ISLNK(os.lstat(folder).st_mode):
+            return False      # a link is never the user's bus, tracked or not
+    except OSError:
+        return False
     repo = hook_git_layout(directory)
     if repo is None:
         return True  # not in a repository: nothing can be tracked
     if repo is False:
         return False
-    rel = os.path.relpath(os.path.realpath(directory), repo["top"])
-    prefix = os.fsencode(("" if rel == "." else rel.replace(os.sep, "/") + "/") + ".agentbus/")
     try:
-        return not hook_index_tracks(repo, prefix)
+        return not hook_index_tracks(repo, folder)
     except (OSError, ValueError, MemoryError):
         return False
+
+
+def hook_cached_empty(directory):
+    """True when `directory` is outside any repository, or the remembered answer for its repository's unchanged index
+    holds no bus-looking path at all."""
+    repo = hook_git_layout(directory)
+    if repo is None:
+        return True
+    if repo is False:
+        return False
+    cands = hook_index_cached(repo)
+    return cands is not None and not cands
+
+
+def hook_birth(st):
+    """When the file was created, in ns, where the system records it (macOS, the BSDs), else None: with the inode it tells a
+    file from a later one that reused its number."""
+    born = getattr(st, "st_birthtime", None)
+    return None if born is None else int(born * 1e9)
 
 
 def hook_find_bus(payload, joined_id=None):
@@ -10980,7 +11234,13 @@ def hook_find_bus(payload, joined_id=None):
         # session whose working directory moved to another project, a bus.db recreated or a link planted gets the full check.
         try:
             st = os.lstat(path)
-            same = joined_id is not None and (st.st_dev, st.st_ino) == tuple(joined_id)
+            same = (joined_id is not None and (st.st_dev, st.st_ino) == tuple(joined_id[:2])
+                    and (joined_id[2] is None or joined_id[2] == hook_birth(st)))
+            if same and joined_id[2] is None:
+                # No creation time on this system (Linux): device and inode alone cannot tell a file from a later one that
+                # reused the number, so the shortcut holds only while the remembered answer for the unchanged index says
+                # nothing in this repository could be a bus folder; anything else gets the full check.
+                same = hook_cached_empty(directory)
         except OSError:
             same = False
         if not (same or hook_untracked(directory)):
@@ -11119,7 +11379,7 @@ def hook_session_start(payload):
         hook_state_prune()
         hook_state_put(hook_state_key(sid, ".name"), name)
         st = os.lstat(db)
-        hook_state_put(hook_state_key(sid, ".bus"), json.dumps([st.st_dev, st.st_ino]))
+        hook_state_put(hook_state_key(sid, ".bus"), json.dumps([st.st_dev, st.st_ino, hook_birth(st)]))
         pid = hook_process_id()
         if pid and (payload.get("source") not in ("clear", "fork", "compact") or hook_state_get(f"proc-{pid}.name") is None):
             hook_state_put(f"proc-{pid}.name", name)
@@ -11321,7 +11581,8 @@ def hook_session_end(payload):
         return None  # /clear starts a new session in this process, which keeps the name, its claims and its mail
     try:
         joined_id = json.loads(hook_state_get(hook_state_key(sid, ".bus")) or "null")
-        joined_id = tuple(joined_id) if isinstance(joined_id, list) and len(joined_id) == 2 and all(isinstance(x, int) for x in joined_id) else None
+        joined_id = tuple(joined_id) if (isinstance(joined_id, list) and len(joined_id) == 3 and all(isinstance(x, int) for x in joined_id[:2])
+                                         and (joined_id[2] is None or isinstance(joined_id[2], int))) else None
     except ValueError:
         joined_id = None
     found = hook_find_bus(payload, joined_id=joined_id)
