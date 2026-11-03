@@ -177,6 +177,7 @@ OBSERVED = {
     "buses": observe((), ("buses",), EVERYTHING),
     "schema": observe((), ("schema",), EVERYTHING),
     "skill": observe((), ("skill",), EVERYTHING),
+    "hooks": observe((), ("hooks", "codex"), EVERYTHING),
     "help": observe((), ("help", "ctx", "set"), EVERYTHING),
     "completion": observe((), ("completion", "zsh"), EVERYTHING),
     "doctor": observe((), ("doctor",), EVERYTHING),

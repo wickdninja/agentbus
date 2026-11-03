@@ -298,6 +298,7 @@ import json, os, sys, h
 m = h.load()
 os.chdir(sys.argv[1])
 path = sys.argv[2]
+m.SETUP_TARGETS["codex"] = [p for p in m.SETUP_TARGETS["codex"] if not isinstance(p, m.JsonEntriesPiece)]   # this row is about the Claude hooks; the Codex hooks piece has its own checks in test_setup.sh
 m.SETUP_TARGETS["claude"] = [p for p in m.SETUP_TARGETS["claude"] if not isinstance(p, m.JsonEntriesPiece)]   # the shipped Claude hooks piece is row 8's second half below
 m.SETUP_TARGETS["claude"].append(m.JsonEntriesPiece("claude_hooks", lambda scope: path,
     lambda scope: [("SessionStart", None, {"type": "command", "command": "/new/agentbus hook start 2>/dev/null || true " + m.MANAGED_TAG})]))
@@ -411,11 +412,11 @@ PY
 }
 
 row_13() {
-  "$PY" - <<'PY' || fail "row 13: a Codex hook piece or a DOCTOR_HOOK_CHECKS check exists now (stream 04): add its cells to rows 2, 4, 8 and 10 (hook output, bytes equal, duplicate flagged), its templates to row 12, and move this tripwire on"
+  "$PY" - <<'PY' || fail "row 13: the Claude or Codex hooks are gone, or a DOCTOR_HOOK_CHECKS check exists now: add its cells to rows 2, 4, 8 and 10 and its templates to row 12, and move this tripwire on"
 import h
 m = h.load()
 assert "hook" in m.EARLY_COMMANDS and any(isinstance(p, m.ClaudeHooksPiece) for p in m.SETUP_TARGETS["claude"]), "the Claude hooks are gone"
-assert not any(isinstance(p, m.JsonEntriesPiece) for p in m.SETUP_TARGETS["codex"])
+assert any(isinstance(p, m.CodexHooksPiece) for p in m.SETUP_TARGETS["codex"]), "the Codex hooks are gone"
 assert m.DOCTOR_HOOK_CHECKS == []
 PY
 }
