@@ -59,9 +59,9 @@ claim = dict(resource=str, agent=str, purpose=(str, null), claimed_at=str, expir
 for name in ('a', 'b'):
     joined = shape(j('--as', name, 'join', '--tool', 't'), joined=str, bus=str, goal=(dict, null), agentbus=str, contract=int)
     assert joined['contract'] == 1
-shape(j('--as', 'a', 'post', 'hello'), id=int)
-qid = shape(j('--as', 'a', 'post', 'q', '--to', 'b', '--kind', 'question'), id=int)['id']
-shape(j('--as', 'b', 'post', 'ans', '--to', 'a', '--reply-to', str(qid), '--kind', 'answer'), id=int)
+shape(j('--as', 'a', 'post', 'hello'), id=int, warnings=list)
+qid = shape(j('--as', 'a', 'post', 'q', '--to', 'b', '--kind', 'question'), id=int, warnings=list)['id']
+shape(j('--as', 'b', 'post', 'ans', '--to', 'a', '--reply-to', str(qid), '--kind', 'answer'), id=int, warnings=list)
 listing(j('--as', 'b', 'inbox'), **message)
 assert j('--as', 'b', 'inbox')['items'] == []
 listing(j('who'), **agent)
@@ -94,13 +94,13 @@ entry = shape(j('--as', 'a', 'log', 'add', 'note', 'detail'), id=int, logged=boo
 assert entry['logged'] is True and entry['id'] > 0
 logs = listing(j('log', 'show'), id=int, ts=str, agent=str, action=str, detail=(str, null))
 assert [(r['agent'], r['action'], r['detail']) for r in logs if r['id'] == entry['id']] == [('a', 'note', 'detail')]
-shape(j('--as', 'a', 'leave'), left=str, released=list, released_count=int)
+shape(j('--as', 'a', 'leave'), left=str, was_joined=bool, released=list, released_count=int)
 repo = pathlib.Path(tmp)/'install'; repo.mkdir()
 shape(j('init', str(repo)), directory=str, copy=str, old=str, new=str, exclude_added=bool, gitignore_rule=bool, outer=null)
 shape(j('upgrade', str(repo)), directory=str, old=str, new=str, schema_old=(int, type(None)), schema_new=(int, type(None)), backup=(str, type(None)))
-schema = shape(j('schema'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, exit_codes=dict, env=dict)
+schema = shape(j('schema'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 assert schema['contract'] == 1 and 'post' in schema['commands']
-shape(j('schema', 'post'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, exit_codes=dict, env=dict)
+shape(j('schema', 'post'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 listing(j('buses'), level=int, directory=str, exists=bool, copy_version=(str, null), stale=bool)
 assert shape(j('skill'), text=str)['text'].startswith('---\nname: agentbus\n')
 assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbus\n')

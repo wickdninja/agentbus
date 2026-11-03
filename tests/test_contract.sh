@@ -76,8 +76,8 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
     "no_message": (1, False, ["id"]),
     "no_context_key": (1, False, ["key"]),
     "not_on_roster": (1, False, ["agent"]),
-    "name_active": (1, False, ["agent", "last_seen_min"]),
-    "request_id_reused": (1, False, ["request_id", "agent"]),
+    "name_active": (1, False, ["agent", "last_seen_min", "suggested_name"]),
+    "request_id_reused": (1, False, ["request_id", "agent", "original_id"]),
     "bad_input": (2, False, []),
     "no_bus": (3, False, []),
     "busy": (3, True, ["bus"]),
@@ -138,7 +138,7 @@ print("PASS: schema COMMAND prints one command's entry, with arguments read from
 # ---- the human table: one line per command ----
 p = run("schema")
 assert p.returncode == 0 and p.stdout, p
-assert re.search(r"^  post +\{id\} +retry: only with --request-id$", p.stdout, re.M), p.stdout
+assert re.search(r"^  post +\{id, warnings\} +retry: only with --request-id$", p.stdout, re.M), p.stdout
 assert len(p.stdout.splitlines()) <= 30, "one screen"
 for name in commands:
     assert re.search(r"^  " + re.escape(name) + r"  ", p.stdout, re.M), (name, p.stdout)
@@ -151,7 +151,7 @@ for name, c in commands.items():
     last = [l for l in h.stdout.splitlines() if l.strip()][-1]
     assert last == c["help"], (name, last, c["help"])
     assert re.fullmatch(r"JSON result: .+\. Retry: .+\.", c["help"]), c["help"]
-assert commands["post"]["help"] == 'JSON result: {"id": integer}. Retry: only with --request-id.'
+assert commands["post"]["help"] == 'JSON result: {"id": integer, "warnings": [Warning]}. Retry: only with --request-id.'
 print("PASS: help text for each subcommand ends with its JSON result line")
 
 # ---- every die() carries a code (static check over the source) ----
@@ -214,9 +214,10 @@ expect("no_message", "--as", "a", "post", "hi", "--reply-to", "99", db=db)
 expect("no_context_key", "ctx", "get", "nope", db=db)
 expect("not_on_roster", "--as", "ghost", "claim", "x", db=db)
 e = expect("name_active", "--as", "a", "join", db=db)
-assert e["agent"] == "a" and isinstance(e["last_seen_min"], int), e
-ok("--as", "a", "post", "one", "--request-id", "tok", db=db)
-expect("request_id_reused", "--as", "a", "post", "two", "--request-id", "tok", db=db)
+assert e["agent"] == "a" and isinstance(e["last_seen_min"], int) and e["suggested_name"] == "a-2", e
+first = ok("--as", "a", "post", "one", "--request-id", "tok", db=db)
+e = expect("request_id_reused", "--as", "a", "post", "two", "--request-id", "tok", db=db)
+assert e["original_id"] == first["id"] and "Original: #%d" % first["id"] in e["message"], e
 expect("bad_input", "--as", "a", "post", "hi", "--kind", "fyi", db=db)
 expect("no_bus", "who")
 expect("internal", "who", db=db, env={"AGENTBUS_TEST_FAIL": "internal"})
@@ -425,7 +426,7 @@ assert covered == set(commands), ("commands the workflow never ran", sorted(set(
 # a wrong result must fail validation: the validator is not vacuous
 assert validate({"id": "1"}, commands["post"]["result"], objects), "a string id passed"
 assert validate({}, commands["post"]["result"], objects), "a missing id passed"
-assert RESULTS["post"][3] == {"id": RESULTS["post"][2]["id"], "duplicate": True}, RESULTS["post"]
+assert RESULTS["post"][3] == {"id": RESULTS["post"][2]["id"], "duplicate": True, "warnings": []}, RESULTS["post"]
 print("PASS: every --json result of a scripted workflow of all commands validates against its schema")
 # ---- the tables of docs/reference.md are generated from the registry, and --check notices when they are not ----
 root = os.path.dirname(os.path.dirname(os.path.abspath(bin_)))

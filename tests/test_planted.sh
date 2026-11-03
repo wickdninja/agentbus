@@ -299,6 +299,7 @@ D5="$T/b5.db"; AGENTBUS_DB="$D5" agentbus --as honest join --tool t >/dev/null
 t0=$(secs)
 AGENTBUS_TEST_SLOW=60 AGENTBUS_DB="$D5" "${AB[@]}" --as honest who >"$T/o5" 2>"$T/e5" & S=$!
 sleep 0.5
+AGENTBUS_DB="$D5" agentbus --as other join >/dev/null
 AGENTBUS_DB="$D5" "${AB[@]}" --as other post "while who stalled" >/dev/null 2>"$T/pe" || fail "the post failed while who stalled: $(cat "$T/pe")"
 rc=0; wait $S || rc=$?
 took=$(since "$t0")

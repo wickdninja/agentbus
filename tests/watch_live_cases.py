@@ -654,8 +654,9 @@ def bigbodies():
     db = os.path.join(os.path.dirname(ROOT), "big", ".agentbus", "bus.db")
     os.makedirs(os.path.dirname(db), exist_ok=True)
     e = env(AGENTBUS_DB=db)
-    r = subprocess.run(agentbus_argv() + ["--as", "seed", "post", "seed"], env=e, capture_output=True, text=True, timeout=DEADLINE)
-    assert r.returncode == 0, r.stderr
+    for words in (["join"], ["post", "seed"]):
+        r = subprocess.run(agentbus_argv() + ["--as", "seed", *words], env=e, capture_output=True, text=True, timeout=DEADLINE)
+        assert r.returncode == 0, r.stderr
     c = sqlite3.connect(db)
     c.execute("INSERT INTO messages(ts, sender, recipient, kind, body) "
               "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200) "

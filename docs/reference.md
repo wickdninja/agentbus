@@ -32,6 +32,8 @@ Claims and messages are per bus; nothing merges across buses.
 
 Follow the [skill](../skills/agentbus/SKILL.md): join, check inbox between steps, claim before editing, release when done, and leave.
 
+Every write (`post`, `claim`, `ctx set`, `goal`, `log add`) needs a name on the roster: under a name that has not joined, or has left, it fails with `not_on_roster` and writes nothing. Names are `[A-Za-z0-9._-]{1,40}` (`join` refuses others; a name already on a bus keeps working). `post --to` takes one name; a name not on the roster still gets the message, with a `recipient_not_on_roster` warning that lists close matches. `goal` is the shared goal's reserved fact key: set it with `goal TEXT`, not `ctx set`.
+
 Path claims are relative to the bus's directory. Paths normalise `./`, repeated slashes and `..`; absolute and escaping paths are refused. A path includes its descendants, with or without a trailing slash. Resources compare as given after normalisation, case included. Scheme names such as `issue:17` compare exactly. Claims are advisory, at most 1024 characters, and expire after 120 minutes by default (`--ttl-min`: 1 to 10080). Claim again to renew; omitted `--purpose` preserves the current purpose, and the original `claimed_at` stays unchanged. `release RESOURCE --if-held` succeeds when you do not hold it, for cleanup scripts.
 
 New identities receive older direct messages, but broadcasts only from their first join onward. `read` shows history. Inbox marks returned messages read after stdout writes successfully. This does not confirm that a downstream consumer read or processed them. Do not truncate a consuming inbox with `head`; use `inbox --limit N`. Use `inbox --peek` when inspecting without consuming. Delivery is at least once: a crash or concurrent calls can repeat a message. `--reply-to` links a message without choosing its recipient.
@@ -115,9 +117,9 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | Command | `--json` result |
 | --- | --- |
 | `join` | `{"joined": string, "bus": string, "goal": null or Goal, "agentbus": string, "contract": integer}` |
-| `leave` | `{"left": string, "released": [string], "released_count": integer}` |
+| `leave` | `{"left": string, "was_joined": boolean, "released": [string], "released_count": integer}` |
 | `who` | `{"v": integer, "items": [Agent], "has_more": boolean, "next": string or null}` |
-| `post` | `{"id": integer}` |
+| `post` | `{"id": integer, "warnings": [Warning]}` |
 | `inbox` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}` |
 | `read` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}` |
 | `ctx set` | `Fact` |
@@ -134,7 +136,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `buses` | `{"v": integer, "items": [BusLevel], "has_more": boolean, "next": string or null}` |
 | `init` | `{"directory": string, "copy": string, "old": string, "new": string, "exclude_added": boolean, "gitignore_rule": boolean, "outer": string or null}` |
 | `upgrade` | `{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}` |
-| `schema` | `{"contract": integer, "agentbus": string, "commands": object, "objects": object, "error_fields": object, "errors": object, "exit_codes": object, "env": object}` |
+| `schema` | `{"contract": integer, "agentbus": string, "commands": object, "objects": object, "error_fields": object, "errors": object, "warnings": object, "exit_codes": object, "env": object}` |
 | `skill` | `{"text": string}` |
 | `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved)}]}` |
 | `doctor` | `{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" \| "warn" \| "fail" \| "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0` |
@@ -155,6 +157,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `BusLevel` | `level`, `directory`, `exists`, `copy_version`, `stale` |
 | `UpgradeRow` | `directory`, `status`, `old`, `new`, `schema_old`, `schema_new`, `backup`, `error` |
 | `DoctorCheck` | `id`, `status`, `detail`, `fix`, `hint`, `scope` (optional) |
+| `Warning` | `code`, `name`, `did_you_mean` |
 <!-- /generated:objects -->
 
 `watch --json` returns once, with or without `--once`; its row projections differ from `status`. Data written directly through SQLite can have other types; JSON renders BLOBs and non-finite numbers as strings.
@@ -195,8 +198,8 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `no_message` | 1 | no | `id` | There is no message with that id. Check the id with read. |
 | `no_context_key` | 1 | no | `key` | There is no fact with that key. List keys with ctx get. |
 | `not_on_roster` | 1 | no | `agent` | That name has not joined. Join first. |
-| `name_active` | 1 | no | `agent`, `last_seen_min` | The name was active recently and may be another live session. Pick another name, or join --takeover if it is you. |
-| `request_id_reused` | 1 | no | `request_id`, `agent` | That request id was used with a different message. Use a new token for a different message. |
+| `name_active` | 1 | no | `agent`, `last_seen_min`, `suggested_name` | The name was active recently and may be another live session. suggested_name is a free name, or null. Join under suggested_name, or join --takeover if it is you. To retry your own join, pass the same --request-id. |
+| `request_id_reused` | 1 | no | `request_id`, `agent`, `original_id` | That request id was used with a different message or join. original_id is the message id, or the log id of the join, that first used it. Repeat the original request exactly, or use a new token for a different one. |
 | `bad_input` | 2 | no | `field` (optional) | The arguments are not valid (a usage error). Fix the arguments. |
 | `no_bus` | 3 | no | none | There is no bus here or above. Run agentbus init DIR, or set AGENTBUS_DB. |
 | `busy` | 3 | yes | `bus` | Another process held the bus for 15 seconds. Retry after a few seconds. |
@@ -213,6 +216,16 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `items_failed` | 1 | no | `failed` | Some of the items the command works on failed or were refused (buses of upgrade --all, files of setup, checks of doctor); stdout holds the whole result, and failed lists those items. Read each failed item's error, fix it, then run the command again. |
 | `internal` | 4 | no | none | A bug in agentbus. Report it. |
 <!-- /generated:errors -->
+
+### Warnings
+
+A warning is not an error: the command succeeded and its `--json` result carries `warnings: [Warning]` (always an array, empty when there is nothing to say). In human output each warning is one line on stderr.
+
+<!-- generated:warnings -->
+| Code | Extra fields | Commands | Meaning and what to do |
+| --- | --- | --- | --- |
+| `recipient_not_on_roster` | `name`, `did_you_mean` | `post` | The message was delivered to --to NAME, but no agent with that name has joined. did_you_mean lists the closest roster names (at most 3, possibly none). If the name is a typo, post again to a name in did_you_mean. The first message waits for the typo. |
+<!-- /generated:warnings -->
 
 ### Exit codes
 
@@ -236,8 +249,8 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 <!-- generated:retry -->
 | Command | Class | How to retry safely |
 | --- | --- | --- |
-| `join` | idempotent with flag | join --takeover for your own name |
-| `leave` | idempotent | a second run reports released_count 0 and writes no log row |
+| `join` | idempotent with flag | join --request-id TOKEN: the same token and flags return the first result with duplicate true instead of name_active; or join --takeover for your own name |
+| `leave` | idempotent | a second run reports was_joined false and released_count 0 and writes no log row |
 | `who` | safe | repeat freely |
 | `post` | needs request id | pass --request-id TOKEN; the same token and payload returns the original id with duplicate true |
 | `inbox` | at least once | repeat; a crash or ack_failed redelivers, so check message ids before acting; with `--peek`: safe (repeat freely) |
@@ -262,7 +275,11 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `doctor` | safe | repeat freely |
 <!-- /generated:retry -->
 
-`post --request-id TOKEN` makes a retry by the same sender return the original message ID with `duplicate: true`. Body, recipient, kind, topic and reply target must match; a different payload gives `request_id_reused`. Tokens belong to their sender and remain on the message row. Without a token each post creates a message.
+One rule for every write: repeating a command with the same `--request-id` never repeats its effect. `post` and `join` replay the first result (`duplicate: true`); `leave`, `claim`, `release`, `ctx set` and `goal` accept the flag and are already safe to repeat, so it changes nothing. `log add` has no token yet: check `log show --limit 1` before retrying it.
+
+`post --request-id TOKEN` makes a retry by the same sender return the original message ID with `duplicate: true`. Body, recipient, kind, topic and reply target must match; a different payload gives `request_id_reused`, naming the original (`original_id`). Tokens belong to their sender and remain on the message row. Without a token each post creates a message.
+
+`join --request-id TOKEN` makes a retry of your own join (same name, same flags) return the first result with `duplicate: true` instead of `name_active`. Different flags under the same token give `request_id_reused`; `original_id` is the log id of the first join.
 
 ### Environment
 
