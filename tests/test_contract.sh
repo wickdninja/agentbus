@@ -96,7 +96,8 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
 }
 assert set(doc["errors"]) == set(EXPECTED_ERRORS), sorted(set(doc["errors"]) ^ set(EXPECTED_ERRORS))
 # fields every error of the code may carry, when they apply (a refused bus file names itself)
-EXPECTED_OPTIONAL = {"bus_unavailable": ["file"],
+# outcome_unknown: the hold watchdog stopped the command during a COMMIT, so the write may or may not have been saved
+EXPECTED_OPTIONAL = {"bus_unavailable": ["file", "outcome_unknown"],
                      # an identifier with a control character: the argument that held it
                      "bad_input": ["field"],
                      # upgrade stopped once a migration committed: what was migrated, its backup, how to finish
