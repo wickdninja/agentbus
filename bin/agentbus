@@ -365,6 +365,11 @@ _WROTE = False
 # True once the command's own database rows were committed. Only that makes repeating it unsafe (without a
 # --request-id): a command that changed only files (init, upgrade's copy, setup) is safe to repeat and stays retryable.
 _WROTE_ROWS = False
+# While a COMMIT of pending rows runs: "own" for the command's own write, "setup" for any other (the last-seen
+# refresh, an open's schema work). A process stopped then (the hold watchdog) cannot know whether SQLite had
+# already written the commit record, so the write may be saved: the stop says so (outcome_unknown) and counts an
+# "own" write as committed. None the rest of the time.
+_IN_COMMIT = None
 # The command that finishes an interrupted init or setup (set by each), named in its interrupted error.
 _RERUN = None
 # The files the command itself has changed so far (init's and upgrade's copy and VERSION, init's exclude rule, setup's
@@ -402,7 +407,7 @@ class Diag:
         if _JSON_ERRORS:
             return json.dumps({"error": {"code": self.code, "message": clean(self.msg), "retryable": self.retryable,
                                          "committed": _WROTE, **jsonable(self.fields)}}, default=repr, allow_nan=False)
-        saved = _WROTE and self.code not in ("output_failed", "ack_failed")
+        saved = _WROTE and self.code not in ("output_failed", "ack_failed") and not self.fields.get("outcome_unknown")
         text = self.msg.rstrip()
         if saved:
             text += ("" if text[-1:] in ".!?" else ".") + " The command's change was saved before this."
@@ -533,9 +538,12 @@ CONTRACT = {
         "copy_newer": {"exit": 1, "retryable": False, "fields": ["directory", "copy_version", "tool_version"],
                        "meaning": "The folder's copy of agentbus is newer than this one; it is never downgraded.",
                        "action": "Run upgrade or init with a newer agentbus."},
-        "bus_unavailable": {"exit": 3, "retryable": False, "fields": [], "optional_fields": ["file"],
-                            "meaning": "The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time.",
-                            "action": "Read the message, fix the folder, then run the command again."},
+        "bus_unavailable": {"exit": 3, "retryable": False, "fields": [], "optional_fields": ["file", "outcome_unknown"],
+                            "meaning": "The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. "
+                                       "outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; "
+                                       "committed is then true when that write was the command's own.",
+                            "action": "Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus "
+                                      "before repeating a write, or repeat it only with its request id."},
         "ack_failed": {"exit": 3, "retryable": True, "fields": ["delivered"],
                        "meaning": "inbox printed its messages but could not mark them read.",
                        "action": "The output was complete: use it, expect the same messages again, and dedupe by id."},
@@ -810,12 +818,12 @@ def _write_fd(fd, data):
         pass
 
 
-def exit_now(msg, code, grace=None):
+def exit_now(msg, code, grace=None, **fields):
     """Write the diagnostic and end the process at once with the status of `code`, without closing SQLite
     connections, within `grace` seconds even when stderr is a full pipe nobody reads (the write
     runs in a helper thread; the exit does not wait for it past grace). Exiting releases every
     lock the process holds."""
-    d = Diag(msg, code)
+    d = Diag(msg, code, **fields)
     t = threading.Thread(target=_write_fd, args=(2, (str(d) + "\n").encode("utf-8", "replace")), daemon=True)
     t.start()
     t.join(EXIT_GRACE_S if grace is None else grace)
@@ -878,11 +886,13 @@ class Watchdog:
         self.cond = threading.Condition()
         self.deadline = None
         self.why = None
+        self.why_committing = None
         self.thread = None
 
-    def arm(self, seconds, why):
+    def arm(self, seconds, why, why_committing=None):
+        """why_committing: what to say instead when the process is stopped during a COMMIT (_IN_COMMIT)."""
         with self.cond:
-            self.deadline, self.why = time.monotonic() + seconds, why
+            self.deadline, self.why, self.why_committing = time.monotonic() + seconds, why, why_committing
             if self.thread is None:
                 self.thread = threading.Thread(target=self._run, name="agentbus-watchdog", daemon=True)
                 self.thread.start()
@@ -905,9 +915,10 @@ class Watchdog:
             yield
         finally:
             if left is not None:
-                self.arm(max(left, 0.0), self.why)
+                self.arm(max(left, 0.0), self.why, self.why_committing)
 
     def _run(self):
+        global _WROTE, _WROTE_ROWS
         # The kernel may deliver a process signal (Ctrl-C) to any thread that does not block it (POSIX
         # allows it; macOS and BSD do it). Python runs the handler only when the main thread next runs
         # bytecode, which for watch, asleep in select() for up to its interval, is too late. Blocked
@@ -924,8 +935,13 @@ class Watchdog:
                 if left > 0:
                     self.cond.wait(left)
                     continue
-                why = self.why
+                why, why_committing = self.why, self.why_committing
                 break
+        # Stopped inside a COMMIT: what SQLite had written by now is not knowable from here (a process stuck in
+        # fsync cannot say), so the write may be saved. Read once, before the cleanups run.
+        committing = _IN_COMMIT
+        if committing and why_committing:
+            why = why_committing
         for undo in list(_KILL_CLEANUP):  # put back what a stopped migration had changed
             try:
                 said = undo()
@@ -933,7 +949,12 @@ class Watchdog:
                     why = said  # what really happened (a migration that committed first)
             except Exception:
                 pass
-        exit_now(why, "bus_unavailable")
+        fields = {}
+        if committing:
+            fields["outcome_unknown"] = True
+            if committing == "own":
+                _WROTE = _WROTE_ROWS = True  # possibly saved counts as saved: no repeat without a --request-id
+        exit_now(why, "bus_unavailable", **fields)
 
 
 WATCHDOG = Watchdog()
@@ -990,6 +1011,14 @@ def _test_fail(point):
     if point in ("ack", "touch"):
         raise sqlite3.OperationalError("injected " + point + " failure")
     raise RuntimeError("injected internal failure")
+
+
+def _test_stall_commit():
+    """Test hook: AGENTBUS_TEST_STALL_COMMIT=<seconds> sleeps just before the COMMIT of pending rows, with the clock
+    running, as a COMMIT stuck in fsync on a stalled disk would. It only sleeps."""
+    v = os.environ.get("AGENTBUS_TEST_STALL_COMMIT")
+    if v:
+        time.sleep(float(v))
 
 
 def _test_slow():
@@ -2037,9 +2066,15 @@ def hold_budget():
     return query_budget() + HOLD_GRACE_S
 
 
-def held_too_long_message(path, hold=None):
-    return (f"{path}: this command held the bus for {hold_budget() if hold is None else hold:g} s, the most agentbus allows (other agents "
-            f"wait {BUSY_WAIT_S:g} s for it), and was stopped; a write still in progress was not saved. Something "
+def held_too_long_message(path, hold=None, committing=False):
+    """The hold watchdog's message. committing: it fired during a COMMIT, whose outcome is not known."""
+    held = f"{path}: this command held the bus for {hold_budget() if hold is None else hold:g} s, the most agentbus allows (other agents " \
+           f"wait {BUSY_WAIT_S:g} s for it), and was stopped"
+    if committing:
+        return (held + " while saving a write, so that write may or may not have been saved. Check the bus before "
+                "repeating the command, or repeat it only with its --request-id. Something slow made the save last "
+                "(a stalled disk, or rows a lane wrote)")
+    return (held + "; a write still in progress was not saved. Something "
             "in the bus makes this command slow (a lane can write any rows); check the bus")
 
 
@@ -2342,7 +2377,8 @@ def open_bus(path, strict_dir=False, migrate=True, read_only=False, busy_wait=BU
         time.sleep(random.uniform(0.002, 0.03))
     con.shown = path
     con.guarded = True
-    WATCHDOG.arm(max(con.deadline + (hold - query_s) - time.monotonic(), 0.0), held_too_long_message(path, hold))
+    WATCHDOG.arm(max(con.deadline + (hold - query_s) - time.monotonic(), 0.0), held_too_long_message(path, hold),
+                 held_too_long_message(path, hold, committing=True))
     try:
         con.execute(f"PRAGMA busy_timeout={int(busy_wait * 1000)}")
         con.execute("PRAGMA foreign_keys=ON")
@@ -2831,7 +2867,7 @@ def migrate_bus(con, path, info, old_copy=None):
     con.migrated = {"from": have, "to": SCHEMA_VERSION, "backup": backup}
     # Back to an ordinary command's budgets for whatever the command does next.
     con.deadline = time.monotonic() + query_budget()
-    WATCHDOG.arm(hold_budget(), held_too_long_message(path))
+    WATCHDOG.arm(hold_budget(), held_too_long_message(path), held_too_long_message(path, committing=True))
 
 
 def create_schema(con, indexes=True):
@@ -3042,12 +3078,28 @@ def _sigint_deferred():
         signal.pthread_sigmask(signal.SIG_SETMASK, old)
 
 
+def _commit(con, pending, record):
+    """COMMIT. While rows are pending, _IN_COMMIT says so ("own" when record: the command's own write), so the hold
+    watchdog can tell a stop during the commit, whose outcome is unknown, from one before it, where the write was
+    rolled back. Every write transaction commits here, and the commit is noted (_WROTE) before the flag is
+    cleared, so a stop in between still reads as possibly saved."""
+    global _IN_COMMIT, _WROTE, _WROTE_ROWS
+    _IN_COMMIT = ("own" if record else "setup") if pending else None
+    try:
+        if pending:
+            _test_stall_commit()
+        con.execute("COMMIT")
+        if record and pending:
+            _WROTE = _WROTE_ROWS = True
+    finally:
+        _IN_COMMIT = None
+
+
 @contextmanager
 def immediate(con, record=True, guard=None):
     """One write transaction, taken up front so a check and the write it guards cannot interleave
     with another agent's, and verified first: the path must still name the file this connection
     holds. record: a commit that changed rows is noted (_WROTE, _WROTE_ROWS) for the error contract."""
-    global _WROTE, _WROTE_ROWS
     con.execute("BEGIN IMMEDIATE")
     changes = con.total_changes
     try:
@@ -3067,14 +3119,13 @@ def immediate(con, record=True, guard=None):
     # A command's own commit and the note that it happened are one step: a Ctrl-C that arrives meanwhile is
     # held until both are done and raised then, so an interrupted error never says committed false for a saved write.
     # With a guard (a migration), the watchdog's lock is held too and guard.committed is set in the same step.
+    pending = con.total_changes != changes  # rows to save: the only commit whose outcome a stop can leave unknown
     if guard is not None:
         with _sigint_deferred(), guard.lock:
             if record:
                 _test_pause("commit")
-            con.execute("COMMIT")
+            _commit(con, pending, record)
             guard.committed = True
-            if record and con.total_changes != changes:
-                _WROTE = _WROTE_ROWS = True
         return
     # A command's own commit and the note that it happened are one step: a Ctrl-C that arrives meanwhile is
     # held until both are done and raised then, so an interrupted error never says committed false for a saved write.
@@ -3087,9 +3138,7 @@ def immediate(con, record=True, guard=None):
     try:
         if record:
             _test_pause("commit")
-        con.execute("COMMIT")
-        if record and con.total_changes != changes:
-            _WROTE = _WROTE_ROWS = True
+        _commit(con, pending, record)
     finally:
         if old is not None:
             signal.signal(signal.SIGINT, old)

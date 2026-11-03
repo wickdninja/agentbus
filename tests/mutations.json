@@ -243,6 +243,42 @@
     "expect": "the early exit was not named"
   },
   {
+    "name": "the commit is not marked while rows are pending",
+    "file": "bin/agentbus",
+    "find": "_IN_COMMIT = \\(\"own\" if record else \"setup\"\\) if pending else None",
+    "replace": "_IN_COMMIT = None",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "committed is not true"
+  },
+  {
+    "name": "a stop during a commit still says the change was saved before it",
+    "file": "bin/agentbus",
+    "find": " and not self\\.fields\\.get\\(\"outcome_unknown\"\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "human message says the change was saved"
+  },
+  {
+    "name": "a stop during a commit keeps the not-saved message",
+    "file": "bin/agentbus",
+    "find": "        if committing and why_committing:\\n            why = why_committing\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "message does not say the write may have been saved"
+  },
+  {
+    "name": "a stop during setup commit counts the command's change as committed",
+    "file": "bin/agentbus",
+    "find": "if committing == \"own\":",
+    "replace": "if committing:",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "committed is not false for a refresh of last_seen"
+  },
+  {
     "name": "TEST 2 waits on its output command with no deadline",
     "file": "tests/test_lock_hold.sh",
     "find": "wait_exit \"\\$P1\" \"\\$E\" \"\\$cmd after its output was read\"",
