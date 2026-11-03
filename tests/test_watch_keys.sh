@@ -299,16 +299,23 @@ def thread_limits():
 
 @case
 def wrap_linear():
-    wl = g["wrap_lines"]
-    def cost(n):
-        best = 9.0
-        for _ in range(7):  # best of 7: a timing check must not trip on a busy machine
-            t0 = time.perf_counter()
+    # Counted, not timed: every cell the wrapper measures (cell_width, direct or through text_width) for one
+    # unbroken word at 1x and 2x. Linear is about 2x the cells; quadratic wrapping would be about 4x.
+    wl, real, seen = g["wrap_lines"], g["cell_width"], [0]
+    def counted(c):
+        seen[0] += 1
+        return real(c)
+    def work(n):
+        seen[0] = 0
+        g["cell_width"] = counted
+        try:
             wl.__wrapped__("w" * n, 57)
-            best = min(best, time.perf_counter() - t0)
-        return best
-    ratio = cost(32000) / max(cost(16000), 1e-6)
-    assert ratio < 3.0, f"wrapping is not linear: 2x text took {ratio:.1f}x"
+        finally:
+            g["cell_width"] = real
+        return seen[0]
+    one, two = work(16000), work(32000)
+    assert one <= 4 * 16000, f"wrapping measured {one} cells for 16000 characters"
+    assert two <= 2.1 * one, f"wrapping is not linear: 2x text measured {two / one:.2f}x the cells"
     assert wl("a b", 5) is wl("a b", 5), "wrapping is cached by text and width"
 
 BUSY = {"code": "busy", "retry_s": 1, "last_good_s": 27, "message": "the bus stayed locked for 250 ms"}

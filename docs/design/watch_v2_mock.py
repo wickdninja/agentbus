@@ -1722,15 +1722,27 @@ def case_thread_limits():
 
 
 def case_wrap_linear():
-    def cost(n):
-        best = 9.0
-        for _ in range(3):
-            t0 = time.perf_counter()
+    # Deterministic: count the cells the wrapper measures (every cell_width call, direct or through
+    # text_width) for one unbroken word at 1x and 2x. Linear wrapping visits each cell a bounded number of
+    # times, so twice the text is about twice the work; quadratic wrapping would be about four times.
+    g = tw.__globals__  # bin/agentbus's own module, whose cell_width text_width calls
+    real, seen = g["cell_width"], [0]
+
+    def counted(c):
+        seen[0] += 1
+        return real(c)
+
+    def work(n):
+        seen[0] = 0
+        g["cell_width"] = counted
+        try:
             wrap_lines.__wrapped__("w" * n, 57)
-            best = min(best, time.perf_counter() - t0)
-        return best
-    ratio = cost(32000) / max(cost(16000), 1e-6)
-    assert ratio < 3.0, f"wrapping is not linear: 2x text took {ratio:.1f}x"
+        finally:
+            g["cell_width"] = real
+        return seen[0]
+    one, two = work(16000), work(32000)
+    assert one <= 4 * 16000, f"wrapping measured {one} cells for 16000 characters"
+    assert two <= 2.1 * one, f"wrapping is not linear: 2x text measured {two / one:.2f}x the cells"
     assert wrap_lines("a b", 5) is wrap_lines("a b", 5), "wrapping is cached by text and width"
 
 
@@ -1807,7 +1819,8 @@ MOCK_CASES = [
     ("thread-limits", "astra 4; brain 5", case_thread_limits,
      "A message with 25 ancestors and 25 replies: 20 of each, labelled, with the route to the rest."),
     ("wrap-linear", "astra 6; brain 9", case_wrap_linear,
-     "Wrapping twice the text costs under 3 times as much (one unbroken word), and is cached by text and width."),
+     "Wrapping twice the text (one unbroken word) measures at most 2.1 times the cells (counted, not timed), and is "
+     "cached by text and width."),
     ("busy-keeps-frame", "opus 4; brain 6", case_busy_keeps_frame,
      "Busy: every row but the header equals the frame before, the header says waiting · 27s old; also in a detail."),
     ("claim-holder-idle", "opus 5; astra 5", case_claim_holder,

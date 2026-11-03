@@ -241,5 +241,14 @@
     "count": 1,
     "run": "tests/test_watch_keys.sh",
     "expect": "FAIL: state machine"
+  },
+  {
+    "name": "watch: wrapping a long word is quadratic",
+    "file": "bin/agentbus",
+    "find": "^                cw = cell_width\\(c\\)\\n                if lw \\+ cw > width:$",
+    "replace": "                cw = cell_width(c) + 0 * text_width(word)\n                if lw + cw > width:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: behaviour cases"
   }
 ]

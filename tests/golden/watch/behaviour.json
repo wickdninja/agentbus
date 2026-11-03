@@ -47,7 +47,7 @@
    "name": "wrap-linear",
    "from": "astra 6; brain 9",
    "runs": "mock",
-   "checks": "Wrapping twice the text costs under 3 times as much (one unbroken word), and is cached by text and width."
+   "checks": "Wrapping twice the text (one unbroken word) measures at most 2.1 times the cells (counted, not timed), and is cached by text and width."
   },
   {
    "name": "busy-keeps-frame",
