@@ -5942,29 +5942,39 @@ def hook_discovery_start(cwd):
     return here
 
 
-def hook_index_candidates(data):
-    """The hash sizes (20 for SHA-1, 32 for SHA-256) this file can be an index of: the digest of everything before the
-    trailer equals it, or the trailer is all zero (index.skipHash writes no checksum)."""
-    found = []
-    view = memoryview(data)    # hashing the bytes before the trailer without copying them
-    for size, algo in ((20, hashlib.sha1), (32, hashlib.sha256)):
-        if len(data) >= 12 + size and (data[-size:] == bytes(size) or algo(view[:-size]).digest() == data[-size:]):
-            found.append(size)
-            break          # one file cannot match both sizes
-    if not found:
-        raise ValueError("index checksum")
-    return found
+def hook_hash_order(repo):
+    """The checksum sizes to try, most likely first: 32 for a repository whose config says extensions.objectFormat is
+    sha256, else 20. Only an ordering: the size that counts is the one whose checksum matches AND whose layout parses
+    exactly (hook_index_read). The config is read as text (no git is run: a repository's config can name a program)."""
+    for folder in (repo["common"], repo["gitdir"]):
+        text = hook_read_file(os.path.join(folder, "config"), 1 << 20)
+        if text is not None and re.search(rb"(?im)^\s*objectformat\s*=\s*sha256\b", text):
+            return (32, 20)
+    return (20, 32)
 
 
-def hook_index_names(data, sizes=None):
-    """([(path bytes, mode)], hex of the shared index a split index links to or None) for an index file's bytes:
-    versions 2, 3 and 4 (path prefix compression), the link extension of a split index. ValueError when it is
-    not an index git wrote. `sizes` is the result of hook_index_candidates when the caller already hashed the file."""
-    for size in (hook_index_candidates(data) if sizes is None else sizes):
+def hook_checksum_ok(data, size):
+    """The digest of everything before the trailer equals the trailer, or the trailer is all zero (index.skipHash writes
+    no checksum)."""
+    if len(data) < 12 + size:
+        return False
+    if data[-size:] == bytes(size):
+        return True
+    return (hashlib.sha1 if size == 20 else hashlib.sha256)(memoryview(data)[:-size]).digest() == data[-size:]
+
+
+def hook_index_read(data, order=(20, 32)):
+    """(paths in index order, link id or None, sparse, checksum size) for an index file's bytes. The size is the first of
+    `order` whose checksum is right and whose layout (entry fields, extension headers) parses exactly to the end of the file:
+    a zero trailer fits either size, so a checksum alone never decides it. ValueError when no size does."""
+    for size in order:
+        if not hook_checksum_ok(data, size):
+            continue
         try:
-            return hook_index_parse(data, size)
+            names, link, sparse = hook_index_walk(data, size)
         except ValueError:
             continue
+        return names, link, sparse, size
     raise ValueError("index")
 
 
@@ -6087,13 +6097,11 @@ def hook_index_walk(data, size):
     return names, link, sparse
 
 
-def hook_index_entries(repo, data=None, sizes=None):
-    """([(path bytes, mode)], stamp of the shared index or None) for the repository's index, a split index joined with
-    its shared index. FileNotFoundError when there is no index; ValueError or OSError for anything unreadable. `data`
-    and `sizes` are the bytes and the checksum sizes when the caller has already read and hashed the file."""
-    if data is None:
-        data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
-    names, link = hook_index_names(data, sizes)
+def hook_index_entries(repo, data, size):
+    """([(path bytes, mode)], stamp of the shared index or None) for an index already read and sized by hook_index_read, a
+    split index joined with its shared index (which has the same checksum size). ValueError or OSError for anything
+    unreadable."""
+    names, link = hook_index_parse(data, size)
     shared_stamp = None
     if link is not None:
         for folder in (repo["gitdir"], repo["common"]):
@@ -6106,8 +6114,10 @@ def hook_index_entries(repo, data=None, sizes=None):
                 continue
         else:
             raise ValueError("shared index missing")
-        more, again = hook_index_names(shared)
-        if again is not None or (shared[-len(link) // 2:] != bytes(len(link) // 2) and shared[-len(link) // 2:].hex() != link):
+        if not hook_checksum_ok(shared, size):
+            raise ValueError("shared index checksum")
+        more, again = hook_index_parse(shared, size)
+        if again is not None or (shared[-size:] != bytes(size) and shared[-size:].hex() != link):
             raise ValueError("shared index")
         names += more
     return names, shared_stamp
@@ -6179,103 +6189,35 @@ def hook_walk_candidates(names):
     return sorted(found)
 
 
-HOOK_LETTERS = b".agentbus"
-HOOK_IGN_MARKS = (b"\xe2\x80", b"\xe2\x81", b"\xef\xbb")   # how every character of HOOK_IGNORABLE starts in UTF-8
-
-
-def hook_ignorable_run(low, p):
-    """(start, end) of the run of HFS+-ignorable characters around offset p of `low`."""
-    start = p
-    while start >= 3 and HOOK_IGNORABLE_RE.fullmatch(low, start - 3, start):
-        start -= 3
-    end = p
-    while True:
-        m = HOOK_IGNORABLE_RE.match(low, end)
-        if not m:
-            return start, end
-        end = m.end()
-
-
-def hook_raw_doubt(data):
-    """True when the raw bytes of a version 2 or 3 index could hold a path that a file system folds to .agentbus, False
-    when they cannot. No path is read. A component that folds to .agentbus either holds ASCII ".agentbu" unbroken (long s
-    and characters HFS+ ignores in front of the dot or after the last s leave it whole), or has a run of characters
-    HFS+ ignores between two of the letters ". a g e n t b u", however long. So: ".agentbu" anywhere in the lower-cased
-    bytes, or such a run with a letter of the name on each side. The hashes and times between the paths hold the bytes
-    of such a character by chance, so a run counts only with those neighbours (one chance in about 10^9)."""
-    low = data.lower()
-    if b"agentbu" in low:
-        return True
-    done = 0
-    for mark in HOOK_IGN_MARKS:
-        p = low.find(mark)
-        while p != -1:
-            if p >= done and HOOK_IGNORABLE_RE.match(low, p):
-                start, end = hook_ignorable_run(low, p)
-                done = end
-                if low[max(start - 1, 0):start] in HOOK_LETTERS_SET and low[end:end + 1] in HOOK_LETTERS_SET:
-                    return True
-            p = low.find(mark, p + 1)
-    return False
-
-
-HOOK_LETTERS_SET = frozenset(bytes([c]) for c in HOOK_LETTERS)
-
-
-def hook_real_extension(data, size):
-    """True when the index has a split-index (link) or sparse (sdir) extension: a signature whose extension headers go on,
-    each by its own length, to exactly the checksum. A path called linker.c does not do that."""
-    end = len(data) - size
-    floor = 12 + 64 * struct.unpack(">I", data[8:12])[0]      # no entry is shorter than 64 bytes: extensions come after
-    for sig in (b"link", b"sdir"):
-        p = data.find(sig, floor)
-        while p != -1:
-            q = p
-            while q + 8 <= end:
-                q += 8 + struct.unpack(">I", data[q + 4:q + 8])[0]
-            if q == end:
-                return True
-            p = data.find(sig, p + 1)
-    return False
-
-
 def hook_index_scan(repo):
-    """(candidate paths, stamp of the shared index or None) for the repository's index: one read, one hash. FileNotFoundError
-    when there is no index; ValueError or OSError for anything unreadable. A plain version 2 or 3 index with nothing
-    bus-looking in it is cleared by searching its raw bytes (hook_raw_doubt, hook_real_extension), without reading its paths;
-    any doubt, and version 4 (paths stored as changes to the previous path), reads them."""
+    """(candidate paths, stamp of the shared index or None) for the repository's index: one read, one hash, one walk of the
+    paths. FileNotFoundError when there is no index; ValueError or OSError for anything unreadable."""
     data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
-    sizes = hook_index_candidates(data)
-    if data[:4] != b"DIRC":
-        raise ValueError("signature")
-    version = struct.unpack(">I", data[4:8])[0]
-    if version in (2, 3) and not hook_raw_doubt(data) and not hook_real_extension(data, sizes[0]):
-        return [], None
-    walked = None
-    for size in sizes:
-        try:
-            walked = hook_index_walk(data, size)
-            break
-        except ValueError:
-            continue
-    if walked is None:
-        raise ValueError("index")
-    names, link, sparse = walked
+    names, link, sparse, size = hook_index_read(data, hook_hash_order(repo))
     if link is None and not sparse:
         return hook_walk_candidates(names), None
-    pairs, shared_stamp = hook_index_entries(repo, data, sizes)     # split or sparse: with the modes, and the shared index
+    pairs, shared_stamp = hook_index_entries(repo, data, size)     # split or sparse: with the modes, and the shared index
     return hook_index_candidate_paths(pairs), shared_stamp
+
+
+HOOK_SCAN_VERSION = 9      # change it whenever the rules that turn an index into candidates change: an answer remembered
+                           # under another version is not trusted
+
+
+def hook_index_cache_name(repo):
+    return "idx-" + hashlib.sha256(os.fsencode(repo["gitdir"]) + b"\0%d" % HOOK_SCAN_VERSION).hexdigest()[:20] + ".json"
 
 
 def hook_index_cached(repo):
     """The remembered candidate list for the repository's index while the index file (and its shared index) is unchanged,
     else None."""
-    cache = "idx-" + hashlib.sha256(os.fsencode(repo["gitdir"])).hexdigest()[:20] + ".json"
+    cache = hook_index_cache_name(repo)
     cached = hook_state_get(cache)
     try:
         stamp = hook_index_stamp(os.path.join(repo["gitdir"], "index"))
         saved = json.loads(cached) if cached else None
-        if (isinstance(saved, dict) and saved.get("stamp") == stamp and isinstance(saved.get("cands"), list)
+        if (isinstance(saved, dict) and saved.get("v") == HOOK_SCAN_VERSION
+                and saved.get("stamp") == stamp and isinstance(saved.get("cands"), list)
                 and (saved.get("shared") is None or (isinstance(saved["shared"], list) and len(saved["shared"]) == 5
                                                      and hook_index_stamp(saved["shared"][0]) == saved["shared"][1:]))):
             return [bytes.fromhex(x) for x in saved["cands"]]
@@ -6296,13 +6238,13 @@ def hook_index_tracks(repo, folder):
         stamp = hook_index_stamp(index)
     except FileNotFoundError:
         return False
-    cache = "idx-" + hashlib.sha256(os.fsencode(repo["gitdir"])).hexdigest()[:20] + ".json"
+    cache = hook_index_cache_name(repo)
     cands = hook_index_cached(repo)
     if cands is None:
         cands, shared_stamp = hook_index_scan(repo)
         if hook_index_stamp(index) == stamp:  # unchanged while we read it
             try:
-                hook_state_put(cache, json.dumps({"stamp": stamp, "shared": shared_stamp, "cands": [c.hex() for c in cands]}))
+                hook_state_put(cache, json.dumps({"v": HOOK_SCAN_VERSION, "stamp": stamp, "shared": shared_stamp, "cands": [c.hex() for c in cands]}))
             except (OSError, SystemExit):
                 pass
     if len(cands) > HOOK_CANDIDATES_MAX:

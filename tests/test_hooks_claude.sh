@@ -900,31 +900,14 @@ assert m["HOOK_IGNORABLE_RE"].search("\u200c".encode()) and not m["HOOK_IGNORABL
 for c in ignorable:
     assert m["HOOK_IGNORABLE_RE"].search(c.encode()), hex(ord(c))
 PY
-# the raw-byte search: a run of ignorable characters counts between two letters of the name, however long; with other
-# neighbours (as in hashes and times) it does not
-"$PY" -I - "${AGENTBUS_BIN:-$BIN}" <<'PY' || fail "the raw-byte search of an index misjudged a run of ignorable characters"
-import runpy, sys
-m = runpy.run_path(sys.argv[1], run_name="agentbus_raw")
-doubt = m["hook_raw_doubt"]
-Z = "\u200c".encode()
-filler = b"\x01\x02\x03 \x00 " * 8
-assert doubt(filler + b"src/.agent" + Z + b"bus/x" + filler)             # between two letters
-assert doubt(filler + b"src/.a" + Z * 1000 + b"gentbus/x" + filler)     # a long run
-assert doubt(filler + b"src/." + "\ufeff".encode() + b"agentbus/x" + filler) and doubt(filler + b"t" + "\u206f".encode() + b"b" + filler)
-assert doubt(filler + b"src/" + Z + b".agentbus/x" + filler)             # in front of the dot: the name is whole in ASCII
-assert doubt(filler + b".agentbus" + Z + b"/x" + filler)                 # after the last s: whole too
-assert doubt(filler + b".agentbu" + b"\xc5\xbf/x" + filler)             # long s
-assert doubt(filler + b".AgEnTbUs/x" + filler)                           # ASCII, any case
-assert not doubt(filler + b"q" + Z + b"r" + filler)                      # neighbours are not letters of the name
-assert not doubt(filler + bytes([0x5a, 0x11]) + Z + bytes([0x77]) + filler)
-assert not doubt(filler + b"src/linker.c" + b"docs/agent.md" + filler)
-PY
+# paths called link or sdir are paths, not extensions; a plain index is read once and hashed once
 mkgenindex "$T/quick/.git/index" 3 "src/linker.c" "src/sdir/link.h"
 "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "paths called link or sdir were taken for extensions, or a plain index was hashed more than once"
 import runpy, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_ext")
 data = open(sys.argv[2] + "/.git/index", "rb").read()
-assert m["hook_real_extension"](data, 20) is False and m["hook_raw_doubt"](data) is False
+names, link, sparse, size = m["hook_index_read"](data)
+assert link is None and sparse is False and size == 20 and b"src/linker.c" in names, (link, sparse, size)
 calls = []
 real1, real2 = m["hashlib"].sha1, m["hashlib"].sha256
 m["hashlib"].sha1 = lambda *a, **k: (calls.append(1), real1(*a, **k))[1]
@@ -1069,6 +1052,92 @@ if command -v hdiutil >/dev/null 2>&1 && hdiutil create -quiet -size 64m -fs HFS
 else
   skip_part "platform: not-macos (no hdiutil, or no HFS+ images: the HFS+ disguise test did not run)"
 fi
+
+echo
+echo "TEST 43: chance bytes in the hashes and times of an index do not hide a disguised name (all three ignorable prefixes, in any order)"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/disg-chance" <<'PY' || fail "a disguised .agentbus entry was hidden by byte pairs in an earlier entry's hash and times"
+import hashlib, os, runpy, struct, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_chance")
+d = sys.argv[2]; os.makedirs(d + "/.git", exist_ok=True)
+names = sorted([b"src/a.c", b"src/b.c", b".agen\xe2\x81\xaatbus/bus.db", b"z/.agent\xef\xbb\xbfbus/VERSION", b"y/.a\xe2\x80\x8cgentbus/bin/agentbus", b"w.c"])
+out = [b"DIRC", struct.pack(">II", 2, len(names))]
+junk = [b"\xe2\x80\x8c", b"\xe2\x80\xaa", b"\xef\xbb\xbf", b"\xe2\x81\xaf", b"\xe2\x80\x8f"]
+for i, b in enumerate(names):
+    stat = junk[i % 5] + os.urandom(21) + junk[(i + 2) % 5]               # in the stat fields, before the names
+    head = stat[:24] + struct.pack(">I", 0o100644) + os.urandom(12) + junk[(i + 1) % 5] + os.urandom(17) + struct.pack(">H", len(b))
+    assert len(head) == 62, len(head)
+    e = head + b
+    out.append(e + bytes(8 - len(e) % 8))
+body = b"".join(out)
+open(d + "/.git/index", "wb").write(body + hashlib.sha1(body).digest())
+cands, shared = m["hook_index_scan"]({"gitdir": d + "/.git", "common": d + "/.git"})
+want = [b".agen\xe2\x81\xaatbus", b"z/.agent\xef\xbb\xbfbus", b"y/.a\xe2\x80\x8cgentbus"]
+assert sorted(cands) == sorted(want), cands
+PY
+ok "disguised names are found whatever bytes come before them"
+
+echo
+echo "TEST 44: SHA-256 repositories: with or without a checksum (index.skipHash), the size is the one whose layout parses"
+if git init -q --object-format=sha256 "$T/sha256probe" 2>/dev/null; then
+  for skip in false true; do
+    newbus "p44$skip"; rm -rf "$P/.git"; git init -q --object-format=sha256 "$P"; printf x >"$P/f.txt"; git -C "$P" config index.skipHash "$skip"
+    gitq "$P" add f.txt; gitq "$P" commit -qm base
+    if [ "$skip" = true ]; then "$PY" -c 'import sys; b=open(sys.argv[1],"rb").read(); sys.exit(0 if b[-32:]==bytes(32) else 1)' "$P/.git/index" || fail "the skipHash SHA-256 test wrote a checksum"; fi
+    (cd "$P" && "${AB[@]}" init . >/dev/null && "${AB[@]}" who >/dev/null)
+    SS; [ -n "$OUT" ] || fail "an untracked bus in a SHA-256 repository (skipHash $skip) was refused: rc $RC err $ERR"
+    gitq "$P" add -f .agentbus; before=$(sha "$P/.agentbus/bus.db")
+    SS2=$(printf '{"session_id":"%s","cwd":"%s","source":"startup"}' "$SID2" "$P"); hook SessionStart "$SS2"
+    quiet || fail "a tracked bus in a SHA-256 repository (skipHash $skip) was used: rc $RC out $OUT"
+    [ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a tracked bus in a SHA-256 repository (skipHash $skip)"
+  done
+  ok "SHA-256 with and without a checksum: untracked works, tracked refused"
+else
+  echo "this git cannot make SHA-256 repositories; the size rule is shown by the unit checks above"
+fi
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" <<'PY' || fail "the checksum size was chosen by the first checksum that matched"
+import hashlib, runpy, struct, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_size")
+def index(size, zero, names):
+    out = [b"DIRC", struct.pack(">II", 2, len(names))]
+    for b in names:
+        e = bytes(40) + bytes(size) + struct.pack(">H", len(b)) + b
+        out.append(e + bytes(8 - len(e) % 8))
+    body = b"".join(out)
+    return body + (bytes(size) if zero else (hashlib.sha1 if size == 20 else hashlib.sha256)(body).digest())
+for size in (20, 32):
+    for zero in (False, True):
+        data = index(size, zero, [b".agentbus/bus.db", b"a.c"])
+        names, link, sparse, got = m["hook_index_read"](data, (20, 32))
+        assert got == size and names == [b".agentbus/bus.db", b"a.c"], (size, zero, got)
+        assert m["hook_index_read"](data, (32, 20))[3] == size
+try:
+    m["hook_index_read"](index(20, False, [b"a"])[:-1] + b"\x01")
+    raise SystemExit("a wrong checksum was accepted")
+except ValueError:
+    pass
+PY
+ok "a zero trailer fits either size; only the size whose layout parses is taken"
+
+echo
+echo "TEST 45: an answer remembered by an older scan is not trusted"
+newbus p45; mkgenindex "$P/.git/index" 50 ".agentbus/bus.db"; before=$(sha "$P/.agentbus/bus.db")
+STATE45="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; rm -f "$STATE45"/idx-*.json
+SS; quiet || fail "setup: a tracked bus (generated index) was used: out $OUT"
+"$PY" -I - "$P/.git/index" "$STATE45" "${AGENTBUS_BIN:-$BIN}" <<'PY' || fail "could not write the older scan's answer"
+import json, os, runpy, sys
+st = os.lstat(sys.argv[1]); stamp = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
+m = runpy.run_path(sys.argv[3], run_name="agentbus_cache")
+repo = {"gitdir": os.path.dirname(sys.argv[1]), "common": os.path.dirname(sys.argv[1])}
+# what the previous scan stored for this very index: no version, no candidates
+old = os.path.join(sys.argv[2], "idx-" + __import__("hashlib").sha256(os.fsencode(repo["gitdir"])).hexdigest()[:20] + ".json")
+json.dump({"stamp": stamp, "shared": None, "cands": []}, open(old, "w"))
+# and under the current name, an entry of another version
+cur = os.path.join(sys.argv[2], m["hook_index_cache_name"](repo))
+json.dump({"v": m["HOOK_SCAN_VERSION"] - 1, "stamp": stamp, "shared": None, "cands": []}, open(cur, "w"))
+PY
+SS; quiet || fail "an answer stored by an older scan was trusted: a tracked bus was used: out $OUT"
+[ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a tracked bus after reading an older scan's answer"
+ok "no version, or another version: a miss"
 
 echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"
