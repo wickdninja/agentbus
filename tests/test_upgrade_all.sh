@@ -41,14 +41,31 @@ grep -qF "~/src/alpha" <<<"$o" && grep -qF "would upgrade" <<<"$o" || fail "--dr
 ok "--dry-run changes nothing"
 
 echo "TEST 2: a tree of buses (two at 0.1.0 with data, one nested, one current, one with a symlinked bin/agentbus, one held busy) reports each, upgrades the rest and exits 1"
-"$PY" -c "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None); c.execute('BEGIN EXCLUSIVE'); open(sys.argv[2],'w').close(); time.sleep(60)" \
+"$PY" -c "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None); c.execute('BEGIN EXCLUSIVE'); open(sys.argv[2],'w').close(); time.sleep(600)" \
   "$W/locked/.agentbus/bus.db" "$T/held" & HOLDER=$!
 while [ ! -e "$T/held" ]; do sleep 0.05; done
-start=$SECONDS
-rc=0; agentbus upgrade --all "$W" >"$T/out" 2>"$T/err" || rc=$?
-took=$((SECONDS-start))
+# No wall-clock bound (a loaded machine stretches any real second): the holder lives until upgrade --all has exited,
+# with a 60 s deadline, so the run only ends if upgrade gave up on the held bus by itself.
+rc=0; "$PY" - "${AB[*]}" "$W" "$T/out" "$T/err" "$HOLDER" <<'PY' || rc=$?
+import os, signal, subprocess, sys
+ab, w, out, err, holder = sys.argv[1].split(), sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+with open(out, "w") as o, open(err, "w") as e:
+    try:
+        r = subprocess.run(ab + ["upgrade", "--all", w], stdout=o, stderr=e, stdin=subprocess.DEVNULL, timeout=60)
+    except subprocess.TimeoutExpired:
+        sys.exit(98)
+try:
+    os.kill(holder, 0)
+except OSError:
+    sys.exit(99)   # the holder is gone: upgrade did not finish while the bus was still held
+sys.exit(r.returncode)
+PY
 kill $HOLDER 2>/dev/null || true; wait $HOLDER 2>/dev/null || true
-[ "$took" -lt 12 ] || fail "upgrade --all waited ${took}s on a busy bus (each bus gets 5 s)"
+[ "$rc" != 98 ] || fail "upgrade --all was still running after 60 s on a held bus"
+[ "$rc" != 99 ] || fail "the holder let go before upgrade --all returned: it did not give up on the held bus"
+UBW=$(sed -n 's/^UPGRADE_BUSY_WAIT_S = \([0-9.]*\)$/\1/p' "${AGENTBUS_BIN:-$BIN}")
+[ -n "$UBW" ] && "$PY" -c "import sys; sys.exit(0 if 0 < float(sys.argv[1]) <= 5.0 else 1)" "$UBW" || fail "upgrade's wait per bus is '$UBW' s in the source (each bus gets 5 s at most)"
+[ "$(grep -c 'busy_wait=UPGRADE_BUSY_WAIT_S' "${AGENTBUS_BIN:-$BIN}")" = 2 ] || fail "upgrade opens a bus (to read it, to migrate it) without its own budget"
 [ "$rc" = 1 ] || fail "upgrade --all exited $rc with a failed bus: $(cat "$T/out" "$T/err")"
 o=$(cat "$T/out")
 line() { grep -E "^$(printf '%s' "$1" | sed 's/[.[\*^$/]/\\&/g') +" <<<"$o" || fail "no line for $1: $o"; }

@@ -1411,5 +1411,14 @@
     "count": 1,
     "run": "tests/test_watch_keys.sh",
     "expect": "FAIL: ascii"
+  },
+  {
+    "name": "upgrade --all waits fifteen seconds per busy bus",
+    "file": "bin/agentbus",
+    "find": "^UPGRADE_BUSY_WAIT_S = 5\\.0",
+    "replace": "UPGRADE_BUSY_WAIT_S = 15.0",
+    "count": 1,
+    "run": "tests/test_upgrade_all.sh",
+    "expect": "each bus gets 5 s at most"
   }
 ]
