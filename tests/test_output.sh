@@ -413,7 +413,7 @@ if "global_args" not in whole or [g["name"] for g in whole["global_args"]] != ["
 one = js(db, "schema", "post")
 if list(one["commands"]) != ["post"] or "Agent" in one["objects"] or "claim_conflict" in one["errors"] or "no_message" not in one["errors"]:
     fail("schema post is not trimmed to post: %r" % {k: list(v) for k, v in one.items() if isinstance(v, dict)})
-if len(json.dumps(one, separators=(",", ":"))) > 8000 or len(json.dumps(whole, separators=(",", ":"))) < 30000:
+if len(json.dumps(one, separators=(",", ":"))) > 10000 or len(json.dumps(whole, separators=(",", ":"))) < 30000:   # post carries the request id, the warning and the roster error since dx-id: 8.5 KB of a 54 KB schema
     fail("schema post should be a fraction of the full schema: %d vs %d" % (len(json.dumps(one)), len(json.dumps(whole))))
 many = js(db, "schema", "ctx")
 if set(many["commands"]) != {"ctx set", "ctx get", "ctx history"} or "Fact" not in many["objects"] or "FactVersion" not in many["objects"]:
