@@ -76,6 +76,16 @@ def restore():
         dst.write(src.read())
 
 
+def resident_kb(pid):
+    """A process's resident size in KB, without external tools on Linux (/proc) and with ps on macOS."""
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            return next(int(l.split()[1]) for l in f if l.startswith("VmRSS:"))
+    except FileNotFoundError:
+        r = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
+        return int(r.stdout.split()[0])
+
+
 def post(*args):
     r = subprocess.run(agentbus_argv() + list(args), env=env(), capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
@@ -631,7 +641,7 @@ def bigbodies():
                               (ids.append(sel_row(f)) or True), 5, f"the redraw for key {i}")
             worst = max(worst, time.monotonic() - t0)
         assert len(set(ids)) == 2, ("j and k did not move between two rows", ids[:4])
-        rss = int(subprocess.run(["ps", "-o", "rss=", "-p", str(s.p.pid)], capture_output=True, text=True).stdout.split()[0])
+        rss = resident_kb(s.p.pid)
         s.send(b"q")
         assert s.wait(10) == 0
         assert worst < 0.1, f"a key took {worst * 1000:.0f} ms to redraw with 200 bodies of 1 MB"

@@ -57,7 +57,7 @@ plain = lambda b: re.sub(rb"\x1b\[[0-9;]*m", b"", b)  # the text without colour:
 _sys.path.insert(0, _os.environ["TESTS_DIR"])
 from agentbus_cmd import agentbus_argv
 db = sys.argv[1]
-env = dict(os.environ, AGENTBUS_DB=db)
+env = dict(os.environ, AGENTBUS_DB=db, TERM="xterm-256color")  # a real terminal type: unset or dumb prints one frame
 env.pop("COLUMNS", None)
 env.pop("LINES", None)
 
@@ -311,7 +311,7 @@ plain = lambda b: re.sub(rb"\x1b\[[0-9;]*m", b"", b)  # the text without colour
 def frame_of(db, want):
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 100, 0, 0))
-    env = dict(os.environ, AGENTBUS_DB=db)
+    env = dict(os.environ, AGENTBUS_DB=db, TERM="xterm-256color")
     env.pop("COLUMNS", None)
     p = subprocess.Popen([*agentbus_argv(), "watch", "--interval", "0.5"], stdin=slave, stdout=slave, stderr=slave,
                          env=env, preexec_fn=os.setsid)
