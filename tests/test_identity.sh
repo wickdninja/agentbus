@@ -224,7 +224,7 @@ ok "who --limit -2 is a usage error; -1 still means all"
 echo "TEST 14: schema registers the changes"
 j=$(json_ok agentbus --json schema)
 pyj '
-assert d["warnings"]["recipient_not_on_roster"]["fields"] == ["name", "did_you_mean"], d["warnings"]
+assert d["warnings"]["recipient_not_on_roster"]["fields"] == ["name", "did_you_mean", "roster", "roster_total"], d["warnings"]
 assert "original_id" in d["errors"]["request_id_reused"]["fields"] and "suggested_name" in d["errors"]["name_active"]["fields"]
 c = d["commands"]
 for k in ("join", "leave", "claim", "release", "ctx set", "goal", "post"):
