@@ -241,5 +241,14 @@
     "count": 1,
     "run": "tests/test_lock_hold_stall.sh",
     "expect": "the early exit was not named"
+  },
+  {
+    "name": "TEST 2 waits on its output command with no deadline",
+    "file": "tests/test_lock_hold.sh",
+    "find": "wait_exit \"\\$P1\" \"\\$E\" \"\\$cmd after its output was read\"",
+    "replace": "wait \"$P1\" || WAIT_RC=$?; WAIT_RC=${WAIT_RC:-0}",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "hung to the cap with a command that never finishes its output"
   }
 ]

@@ -5,7 +5,7 @@ set -euo pipefail
 # and stdout written with the lock held, so one slow pipe made every other agent fail "busy".
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); export HOME="$T/home"; mkdir -p "$HOME"
-trap 'exec 3>&- 4<&- 2>/dev/null || true; touch "$T/release" 2>/dev/null || true; rm -rf "$T"' EXIT
+trap 'exec 3>&- 2>/dev/null || true; [ -z "${CONS:-}" ] || kill_tree "$CONS"; touch "$T/release" 2>/dev/null || true; rm -rf "$T"' EXIT
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as a join --tool t >/dev/null
 agentbus --as b join --tool t >/dev/null
@@ -13,7 +13,10 @@ agentbus --as b join --tool t >/dev/null
 # Every wait below ends at a deadline (HOLD_TEST_WAIT_S, default 120 s, well past the bus's own 15 s busy limit and its
 # 8 s hold limit) and a failure names the step, so a stall fails in seconds rather than at run_all's 600 s cap (issue #17).
 W=${HOLD_TEST_WAIT_S:-120}
-
+# HOLD_TEST_END_S: the same for a command that must finish once it is released (default W). tests/test_lock_hold_stall.sh
+# shortens it to prove a command that never finishes fails here in seconds.
+E=${HOLD_TEST_END_S:-$W}
+CONS=""   # the pid of TEST 2's output consumer, so the exit trap can end it
 # other_post_while ALIVE_PID WHAT: a second agent's post must land while ALIVE_PID is still blocked. If the blocked
 # command held the bus the post would fail busy after 15 s, which is the failure this reports.
 other_post_while() {
@@ -37,7 +40,7 @@ for cmd in "post -" "ctx set k -" "log add note -"; do
   wait_marker "$P/before-stdin-read.reached" "$P1" "$W" "$cmd reaching its stdin read" "$T/e1"
   other_post_while $P1 "$cmd from a stalled stdin"
   printf 'late input for %s\n' "$cmd" >&3; exec 3>&-
-  wait_exit "$P1" "$W" "$cmd after its input arrived"
+  wait_exit "$P1" "$E" "$cmd after its input arrived"
   [ "$WAIT_RC" = 0 ] || fail "$cmd failed after its input arrived: $(cat "$T/e1")"
 done
 [ "$(outof agentbus --json read | python3 -c 'import json,sys; print(sum(r["body"]=="late input for post -" for r in json.load(sys.stdin)["items"]))')" = 1 ] || fail "stdin body not posted"
@@ -50,12 +53,16 @@ for cmd in read "--json read" status; do
   rm -f "$T/outp"; mkfifo "$T/outp"
   n=$((n+1)); P="$T/pause2-$n"; mkdir -p "$P"; touch "$P/before-stdout-write.go"
   AGENTBUS_TEST_PAUSE="before-stdout-write=$P" agentbus $cmd >"$T/outp" 2>"$T/e1" & P1=$!
-  exec 4<"$T/outp"        # a consumer that is not reading yet
+  # A consumer that holds the pipe open and is not reading yet. It is a background job so that neither side's blocking
+  # open can hang this script: it reads only once $T/drain-$n exists, and gives up after W seconds.
+  ( exec 4<"$T/outp"; w=0; while [ ! -e "$T/drain-$n" ] && [ $w -lt $((W * 20)) ]; do sleep 0.05; w=$((w+1)); done; cat <&4 >/dev/null ) & CONS=$!
   # Proof the command is at its stdout write (which blocks: the output exceeds a pipe buffer).
-  wait_for "$P/before-stdout-write.reached"
+  wait_marker "$P/before-stdout-write.reached" "$P1" "$W" "$cmd reaching its stdout write" "$T/e1"
   other_post_while $P1 "$cmd into a full pipe"
-  cat <&4 >/dev/null; exec 4<&-
-  wait $P1 || fail "$cmd failed: $(cat "$T/e1")"
+  : > "$T/drain-$n"
+  wait_exit "$P1" "$E" "$cmd after its output was read"
+  [ "$WAIT_RC" = 0 ] || fail "$cmd failed: $(cat "$T/e1")"
+  wait_exit "$CONS" "$E" "the reader of $cmd's output"; CONS=""
 done
 ok "output is printed after the bus is closed"
 
