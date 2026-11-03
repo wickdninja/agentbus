@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """python3 scripts/release_check.py [--tag vX.Y.Z]
+python3 scripts/release_check.py --lines vX.Y.Z [--wheel]      print the two install lines the README shows for the tag
 
 Every check a release needs, in one place; RELEASING.md is the checklist around it. Prints one line per
 problem and exits 1, or prints `release check passed: X.Y.Z`. Checks:
@@ -19,6 +20,9 @@ problem and exits 1, or prints `release check passed: X.Y.Z`. Checks:
   - DIST_NAME in bin/agentbus equals the name in pyproject.toml (the update check names no other project);
   - a final tag is not below the highest final tag that already exists (git tag --list 'v*', rc tags
     ignored), so GitHub's "latest release" (the most recent by date) is also the highest final version;
+  - the README's install lines are the ones --lines prints for the pinned release: the release wheel's URL once the
+    release is listed in tests/released_wheels.txt (releases that publish a wheel and SHA256SUMS), the git+ lines
+    before; every wheel URL in README.md and docs/ names the pinned tag in its path and its file name;
   - git status is clean.
 """
 import argparse
@@ -31,6 +35,24 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_URL = r"git\+https://github\.com/wickdninja/agentbus(@[^\s`\"')]*)?"
+WHEEL_URL = r"https://github\.com/wickdninja/agentbus/releases/download/(v[^/\s`\"')]+)/agentbus-([^/\s`\"')]+?)-py3-none-any\.whl"
+
+
+def wheel_tags():
+    """The tags in tests/released_wheels.txt: releases that publish a wheel and SHA256SUMS (one `vX.Y.Z` per line)."""
+    try:
+        return {ln.split()[0] for ln in read("tests", "released_wheels.txt").splitlines() if ln.strip() and not ln.startswith("#")}
+    except OSError:
+        return set()
+
+
+def install_lines(tag, wheel):
+    """(the uv line, the pipx line) of the README for the tag. The wheel form installs the release's wheel by URL (no
+    build, no package index; the file `agentbus update` installs); the git form builds from source."""
+    if wheel:
+        url = f"https://github.com/wickdninja/agentbus/releases/download/{tag}/agentbus-{tag[1:]}-py3-none-any.whl"
+        return f"uv tool install {url}", f"pipx install {url}"
+    return f"uv tool install git+https://github.com/wickdninja/agentbus@{tag}", f"pipx install git+https://github.com/wickdninja/agentbus@{tag}"
 
 
 def read(*parts):
@@ -41,7 +63,14 @@ def read(*parts):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--tag", help="the tag being released, for example v0.2.0 or v0.2.0rc1")
+    ap.add_argument("--lines", metavar="TAG", help="print the README install lines for TAG (wheel URL if TAG is in tests/released_wheels.txt or with --wheel)")
+    ap.add_argument("--wheel", action="store_true", help="with --lines: the wheel-URL form even before the tag is listed")
     a = ap.parse_args()
+    if a.lines:
+        if not re.fullmatch(r"v\d+\.\d+\.\d+", a.lines):
+            sys.exit(f"release_lines: {a.lines} is not a final release tag like v0.2.0")
+        print("\n".join(install_lines(a.lines, a.wheel or a.lines in wheel_tags())))
+        return
     problems = []
     src = read("bin", "agentbus")
     m = re.search(r'^__version__ = "([^"]+)"$', src, re.M)
@@ -121,8 +150,20 @@ def main():
             if pin.group(1) != f"@v{pin_to}":
                 why = "" if pin_to == final else " (the last final release; the final tag moves it)"
                 problems.append(f"{name}: the install line {pin.group(0)} must pin @v{pin_to}{why}")
+        for pin in re.finditer(WHEEL_URL, read(name)):
+            pinned += 1
+            if pin.group(1) != f"v{pin_to}" or pin.group(2) != pin_to:
+                problems.append(f"{name}: the wheel URL {pin.group(0)} must name v{pin_to} in its path and {pin_to} in its file name")
     if pinned == 0:
-        problems.append("README.md has no pinned install line (git+https://github.com/wickdninja/agentbus@v" + pin_to + ")")
+        problems.append("README.md has no pinned install line (" + install_lines("v" + pin_to, f"v{pin_to}" in wheel_tags())[0] + ")")
+    # The README's first-install lines are exactly the generated ones, in the form the pinned release supports.
+    wheel = f"v{pin_to}" in wheel_tags()
+    readme = read("README.md")
+    for line in install_lines(f"v{pin_to}", wheel):
+        if line not in readme:
+            problems.append(f"README.md must carry the install line: {line} (python3 scripts/release_check.py {'--wheel ' if wheel else ''}--lines v{pin_to})")
+    if wheel and re.search(REPO_URL, readme):
+        problems.append(f"README.md still has a git+ install line, but v{pin_to} publishes a wheel (tests/released_wheels.txt): use the wheel URL")
 
     plugin = os.path.join(ROOT, ".claude-plugin", "plugin.json")
     market = os.path.join(ROOT, ".claude-plugin", "marketplace.json")

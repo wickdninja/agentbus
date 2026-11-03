@@ -21,8 +21,10 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "FAIL: '$TAG' is not a release tag like v0.2.0" >&2; exit 2;; esac
 case "$TAG" in *rc*) echo "FAIL: '$TAG' is a release candidate; the README pins the final version, so it is not checked here" >&2; exit 2;; esac
-UV_LINE="uv tool install git+https://github.com/wickdninja/agentbus@$TAG"
-PIPX_LINE="pipx install git+https://github.com/wickdninja/agentbus@$TAG"
+# The lines the README shows for this tag: the release wheel's URL once tests/released_wheels.txt lists the tag, else git+.
+LINES=$(python3 "$ROOT/scripts/release_check.py" --lines "$TAG") || { echo "FAIL: cannot work out the install lines for $TAG" >&2; exit 2; }
+UV_LINE=$(sed -n 1p <<<"$LINES")
+PIPX_LINE=$(sed -n 2p <<<"$LINES")
 for line in "$UV_LINE" "$PIPX_LINE"; do
   grep -qF -- "$line" "$ROOT/README.md" || { echo "FAIL: README.md does not contain the line: $line" >&2; exit 1; }
 done

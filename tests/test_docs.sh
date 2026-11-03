@@ -304,11 +304,34 @@ if 'update' in released[pin[1:]]:
     assert staged in readme, 'the pinned release has `agentbus update`, so the README must carry the staged Update section from RELEASING.md'
 else:
     assert 'agentbus update' not in readme, 'the README names agentbus update, which the release it pins lacks'
-assert pinned >= 2, 'README must show both pinned install lines'
+# The README's first-install lines (the decision): the release wheel's URL once the pinned release publishes a wheel
+# (tests/released_wheels.txt), the git+ lines before. scripts/release_check.py --lines is the generator; RELEASING.md
+# shows the wheel form for the release-prep commit and must agree with it; the git+ form is documented once, in upgrade.md,
+# as the from-source route.
+wheels = {ln.split()[0] for ln in (root/'tests/released_wheels.txt').read_text().splitlines() if ln.strip() and not ln.startswith('#')}
+def lines_for(tag, *flags):
+    return subprocess.check_output([sys.executable, str(root/'scripts/release_check.py'), *flags, '--lines', tag], text=True).splitlines()
+gen = lines_for('v9.9.9', '--wheel')
+shown = re.search(r'<!-- readme-install:begin -->\n```bash\n(.*?)```\n<!-- readme-install:end -->', rel, re.S)
+assert shown and shown.group(1).strip().splitlines() == [x.replace('9.9.9', 'X.Y.Z') for x in gen], 'RELEASING.md shows install lines that scripts/release_check.py --lines does not print'
+assert len(lines_for('v9.9.9')) == 2 and all('git+' in x for x in lines_for('v9.9.9')), 'the git+ form of --lines changed'
+expected = lines_for(pin[1:])
+if pin[1:] in wheels:
+    assert all(x in readme for x in expected) and 'git+' not in readme, ('the pinned release publishes a wheel, so the README installs its wheel URL', expected)
+else:
+    assert all(x in readme for x in expected), ('the README must carry the git+ install lines until the pinned release publishes a wheel', expected)
+    assert 'releases/download/' not in readme, 'the README names a wheel URL, but the pinned release is not listed in tests/released_wheels.txt'
+upgrade = (root/'docs/how-to/upgrade.md').read_text()
+assert upgrade.count('git+https://github.com/wickdninja/agentbus@v') == 1, 'upgrade.md documents the from-source route exactly once'
+security = (root/'SECURITY.md').read_text()
+assert 'first-install lines' in security and 'Installing from source' in security and 'hatchling' in security, 'SECURITY.md describes the first install and the from-source route'
+readme_pinned = len(re.findall(r'git\+https://github\.com/wickdninja/agentbus@|releases/download/v', readme))
+assert readme_pinned >= 2, 'README must show both pinned install lines'
 assert 'examples/two-agent-handoff.sh' in readme, 'README must link the executable demo'
 # Inline command names and forms in the README's table and prose.
 inline = re.sub(r'```.*?```', '', readme, flags=re.S)
 non_commands = {
+    *[l for l in lines_for(pin[1:]) if l.startswith('pipx')],
     'pipx install git+https://github.com/wickdninja/agentbus@v0.1.0',
     'examples/two-agent-handoff.sh',
     'mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus',

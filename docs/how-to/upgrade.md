@@ -53,9 +53,18 @@ installed.
 | a fork, or anything else | prints the install lines to run (these build from source) |
 | no safe installer on `PATH` | prints the install line for your tool (this builds from source) |
 
+**Installing from source** is for a fork, or for `main` between releases. It builds the package on your machine and
+fetches the build backend (`hatchling`) from PyPI:
+
+```
+uv tool install git+https://github.com/wickdninja/agentbus@v0.1.0
+```
+
+(or `pipx install` with the same address; use your fork's address, or `@main`, instead of the tag). `update` does not
+install from source on its own.
+
 If a release has no wheel or no `SHA256SUMS`, `update` exits 1 with `manual_step` and the one command that would
-build from source; it never falls back to that on its own. A source build (`git+...@vX.Y.Z`, which is also what the
-README's first-install line does) fetches the build backend and its dependencies from PyPI; the wheel route does not.
+build from source; it never falls back to that on its own. A source build (`git+...@vX.Y.Z`) fetches the build backend and its dependencies from PyPI; the wheel route does not.
 The installer runs with your cache folder as its working folder.
 
 If `update` cannot run an installer itself it exits 1 with `manual_step` and the commands. Coming from 0.1.0,

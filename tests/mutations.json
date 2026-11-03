@@ -1195,5 +1195,23 @@
     "count": 1,
     "run": "tests/test_update.sh",
     "expect": "the 500 message"
+  },
+  {
+    "name": "release check: a README without the generated install lines passes",
+    "file": "scripts/release_check.py",
+    "find": "        if line not in readme:",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "git+ lines for a wheel release"
+  },
+  {
+    "name": "release check: a wheel URL naming another tag passes",
+    "file": "scripts/release_check.py",
+    "find": "            if pin\\.group\\(1\\) != f\"v\\{pin_to\\}\" or pin\\.group\\(2\\) != pin_to:",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "a wheel URL naming another tag"
   }
 ]

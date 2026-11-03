@@ -16,8 +16,19 @@ Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release c
    - **Final tag `vX.Y.Z`:** one commit that moves all of these together, merged before the tag is made on it:
      - `__version__` becomes `X.Y.Z`;
      - the new tag's line in `tests/released_commands.txt` (the commands that release has; the README may only name those for the tag it pins);
-     - the pinned install lines in `README.md` and `docs/` (`@vX.Y.Z`);
+     - the pinned install lines in `README.md` and `docs/` (`@vX.Y.Z`), except that the README's first-install lines are the release wheel's URL from the first release that publishes a wheel (below): `python3 scripts/release_check.py --wheel --lines vX.Y.Z` prints them, and `vX.Y.Z` is added to `tests/released_wheels.txt` in the same commit;
      - the plugin version and marketplace `ref` (the tag), the CHANGELOG heading, and `python3 scripts/embed_skill.py --release`.
+
+**The README's install lines** are, from the first release that publishes a wheel and `SHA256SUMS`, the wheel's URL: no build, no package index, and the same file `agentbus update` installs. `python3 scripts/release_check.py --wheel --lines vX.Y.Z` prints the exact two lines for a tag (without `--wheel` it prints the `git+` lines, the form of any tag not yet in `tests/released_wheels.txt`); `release_check.py` requires them in the README, `verify_published.sh` runs them, and `tests/test_docs.sh` pins the README to them once the pinned release is listed. They replace the `git+` lines in the release-prep commit (the pinned README cannot name a wheel that does not exist yet). The form, with the tag filled in:
+
+<!-- readme-install:begin -->
+```bash
+uv tool install https://github.com/wickdninja/agentbus/releases/download/vX.Y.Z/agentbus-X.Y.Z-py3-none-any.whl
+pipx install https://github.com/wickdninja/agentbus/releases/download/vX.Y.Z/agentbus-X.Y.Z-py3-none-any.whl
+```
+<!-- readme-install:end -->
+
+The `git+https://github.com/wickdninja/agentbus@vX.Y.Z` form stays documented once, in `docs/how-to/upgrade.md`, as the from-source route (a fork, or `main`).
 
 **The README's Update section** lands in the release-prep commit of the first release that has `agentbus update` (the README may only name commands of the release it pins, so it cannot be on `main` earlier). Put this text after the install lines in `README.md`; `tests/test_docs.sh` then requires it:
 

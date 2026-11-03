@@ -168,6 +168,28 @@ RC=0; OUT=$(bash "$D/scripts/check_sums.sh" "$T/dist" "$T/expected" 2>&1) || RC=
 ok "check_sums.sh: exact file set, exact bytes, exact SHA256SUMS"
 
 echo
+echo "TEST: the README's install lines are the generated ones: the release wheel's URL once the release is listed in tests/released_wheels.txt, git+ before"
+WURL=https://github.com/wickdninja/agentbus/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl
+fresh lines; RC=0; OUT=$(cd "$D" && "$PY" scripts/release_check.py --lines v0.2.0 2>&1) || RC=$?
+[ "$RC" = 0 ] && [ "$OUT" = $'uv tool install git+https://github.com/wickdninja/agentbus@v0.2.0\npipx install git+https://github.com/wickdninja/agentbus@v0.2.0' ] || fail "--lines before the release is listed: exit $RC: $OUT"
+OUT=$(cd "$D" && "$PY" scripts/release_check.py --wheel --lines v0.2.0 2>&1)
+[ "$OUT" = $'uv tool install '"$WURL"$'\npipx install '"$WURL" ] || fail "--wheel --lines: $OUT"
+RC=0; OUT=$(cd "$D" && "$PY" scripts/release_check.py --lines main 2>&1) || RC=$?
+[ "$RC" != 0 ] && grep -qF "not a final release tag" <<<"$OUT" || fail "--lines main: exit $RC: $OUT"
+wheelfix() { fresh "$1"; printf '# tags that publish a wheel\nv0.2.0\n' >"$D/tests/released_wheels.txt"
+  printf '# agentbus\n\n```bash\nuv tool install %s\n```\n\nor `pipx install %s`.\n' "$WURL" "$WURL" >"$D/README.md"; }
+wheelfix wheelok; commit; check
+[ "$RC" = 0 ] || fail "a README with the wheel lines for a wheel release: exit $RC: $OUT"
+wheelfix wheelgit; printf '# agentbus\n\n```bash\nuv tool install git+https://github.com/wickdninja/agentbus@v0.2.0\n```\n\nor `pipx install git+https://github.com/wickdninja/agentbus@v0.2.0`.\n' >"$D/README.md"; commit; check
+expect_fail_with "git+ lines for a wheel release" "README.md must carry the install line: uv tool install $WURL"
+grep -qF "still has a git+ install line, but v0.2.0 publishes a wheel" <<<"$OUT" || fail "the git+ line was not named: $OUT"
+wheelfix wheelbad; edit "$D/README.md" "download/v0.2.0/agentbus-0.2.0" "download/v0.1.0/agentbus-0.2.0"; commit; check
+expect_fail_with "a wheel URL naming another tag" "must name v0.2.0 in its path and 0.2.0 in its file name"
+fresh gitok; printf '# tags that publish a wheel\nv0.1.0\n' >"$D/tests/released_wheels.txt"; commit; check
+[ "$RC" = 0 ] || fail "a wheel list that names another release leaves the git+ README valid: exit $RC: $OUT"
+ok "generated lines (--lines, --wheel); a wheel release needs the wheel URLs and no git+ line; any other needs git+"
+
+echo
 echo "TEST: verify_published.sh runs only the README's literal pinned lines, and refuses anything else"
 fresh vp; cp "$ROOT/scripts/verify_published.sh" "$D/scripts/"
 RC=0; OUT=$(bash "$D/scripts/verify_published.sh" v0.2.0 --dry-run 2>&1) || RC=$?
@@ -181,7 +203,11 @@ RC=0; OUT=$(bash "$D/scripts/verify_published.sh" v0.2.0rc1 --dry-run 2>&1) || R
 [ "$RC" = 2 ] && grep -qF "release candidate" <<<"$OUT" || fail "an rc tag: exit $RC: $OUT"
 RC=0; OUT=$(bash "$D/scripts/verify_published.sh" v0.2.0 --bogus 2>&1) || RC=$?
 [ "$RC" = 2 ] || fail "an unknown option: exit $RC: $OUT"
-ok "verify_published.sh: literal lines from the README, a tag shape, nothing else"
+fresh vpw; printf 'v0.2.0\n' >"$D/tests/released_wheels.txt"; cp "$ROOT/scripts/verify_published.sh" "$D/scripts/"
+printf '# agentbus\n\n```bash\nuv tool install %s\n```\n\nor `pipx install %s`.\n' "$WURL" "$WURL" >"$D/README.md"
+RC=0; OUT=$(bash "$D/scripts/verify_published.sh" v0.2.0 --dry-run 2>&1) || RC=$?
+[ "$RC" = 0 ] && [ "$OUT" = $'uv tool install '"$WURL"$'\npipx install '"$WURL" ] || fail "dry run for a wheel release: exit $RC: $OUT"
+ok "verify_published.sh: literal lines from the README (the wheel URL for a wheel release), a tag shape, nothing else"
 
 echo
 echo "TEST: the real tree passes the checks that do not depend on a release commit"
