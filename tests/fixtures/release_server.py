@@ -4,7 +4,9 @@
   python3 release_server.py DIR
 
 DIR holds cert.pem and key.pem (the test mints them with openssl: one self-signed leaf, IP SAN 127.0.0.1,
-CA:TRUE). The server listens on 127.0.0.1 over HTTPS on a free port, writes the port to DIR/port, and for
+CA:TRUE) and the named pipe DIR/ready, which the test holds open. The server listens on 127.0.0.1 over HTTPS on a
+free port, writes the port and a newline to DIR/ready once it is listening (the test blocks on that read; there is no
+polling), and for
 every request appends one JSON line to DIR/requests.log: {"path", "headers"}. It answers from DIR/answer.json
 (re-read on every request, so a test swaps the answer between runs):
 
@@ -24,7 +26,17 @@ import os
 import ssl
 import sys
 import time
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class Server(ThreadingHTTPServer):
+    def server_bind(self):
+        # http.server's own server_bind asks socket.getfqdn() for the host's name, a reverse DNS lookup that can take
+        # many seconds on a CI runner with no resolver for it: the fixture binds without ever asking.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name, self.server_port = host, port
 
 
 def main():
@@ -78,12 +90,11 @@ def main():
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(os.path.join(d, "cert.pem"), os.path.join(d, "key.pem"))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = Server(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     server.socket = ctx.wrap_socket(server.socket, server_side=True)
-    with open(os.path.join(d, "port.tmp"), "w") as f:
-        f.write(str(server.server_address[1]))
-    os.replace(os.path.join(d, "port.tmp"), os.path.join(d, "port"))
+    with open(os.path.join(d, "ready"), "w") as f:  # the test opened the pipe's other end already: this never blocks
+        f.write(str(server.server_address[1]) + "\n")
     server.serve_forever()
 
 
