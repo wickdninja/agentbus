@@ -34,7 +34,7 @@ def usage_error(db, *args):
     return e
 
 def shape(r, items=None):
-    assert set(r) == {"v", "items", "has_more", "next"} and r["v"] == 1, r
+    assert set(r) == {"contract", "items", "has_more", "next"} and r["contract"] == 1, r
     assert isinstance(r["items"], list) and isinstance(r["has_more"], bool) and (r["next"] is None or isinstance(r["next"], str)), r
     return r
 

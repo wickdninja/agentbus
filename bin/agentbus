@@ -408,9 +408,11 @@ class Diag:
     the lock). It also knows the exit status of its code: the one mapping, independent of --json
     (CONTRACT["errors"]); contract_main() applies it."""
 
-    def __init__(self, msg, code="internal", **fields):
+    def __init__(self, msg, code="internal", next=None, **fields):
         self.msg = msg
         self.code = code
+        # next: the exact command the message tells the reader to run (it is also in the message), or None
+        self.next = next
         self.fields = fields
 
     @property
@@ -429,7 +431,8 @@ class Diag:
         # must not repeat it blindly (every JSON error carries it; human text says so unless it already does)
         if _JSON_ERRORS:
             return json.dumps({"error": {"code": self.code, "message": clean(self.msg), "retryable": self.retryable,
-                                         "committed": _WROTE, **jsonable(self.fields)}}, default=repr, allow_nan=False)
+                                         "committed": _WROTE, "next": None if self.next is None else clean(self.next),
+                                         **jsonable(self.fields)}}, default=repr, allow_nan=False)
         saved = _WROTE and self.code not in ("output_failed", "ack_failed") and not self.fields.get("outcome_unknown")
         text = self.msg.rstrip()
         if saved:
@@ -445,10 +448,11 @@ def file_changed(path):
     _CHANGED.append(path)
 
 
-def die(msg, code="internal", **fields):
+def die(msg, code="internal", next=None, **fields):
     """Exit non-zero with an error on stderr. msg may echo bus-controlled text, so it is cleaned,
-    later (Diag). Every call names its code (tests/test_contract.sh checks the source)."""
-    raise SystemExit(Diag(msg, code, **fields))
+    later (Diag). Every call names its code (tests/test_contract.sh checks the source). next is the one
+    command the message tells the reader to run, spelled the same in both (the JSON error's `next`)."""
+    raise SystemExit(Diag(msg, code, next, **fields))
 
 
 def reason(e):
@@ -480,8 +484,30 @@ def _list(item):
 
 
 def _env(item):
-    """A listing: items, whether rows were left out, and a cursor (null except the four id walks)."""
-    return _o({"v": _INT, "items": _list(item), "has_more": _BOOL, "next": _NSTR})
+    """A listing: items, whether rows were left out, and a cursor (null except the four id walks). Its
+    `contract` is added with every command's result, below."""
+    return _o({"items": _list(item), "has_more": _BOOL, "next": _NSTR})
+
+
+def _with_contract(schema):
+    """A result schema as the command prints it: print_json puts `contract` (the JSON contract version) in every
+    --json result, so every result schema requires it. An object gets the key; each branch of an anyOf gets
+    it; a $ref (a result that is one shared object) is the object and the key together (allOf)."""
+    if "anyOf" in schema:
+        return {**schema, "anyOf": [_with_contract(x) for x in schema["anyOf"]]}
+    if "$ref" in schema:
+        return {"allOf": [schema, _o({"contract": _INT})]}
+    if schema.get("type") == "object" and "required" in schema:
+        if "contract" in schema["properties"]:
+            return schema
+        return {**schema, "required": ["contract"] + schema["required"], "properties": {"contract": _INT, **schema["properties"]}}
+    raise ValueError("a --json result must be an object: %r" % (schema,))
+
+
+def _stamp_contract_results():
+    """Called once every command has registered (the end of this file)."""
+    for entry in CONTRACT["commands"].values():
+        entry["result"] = _with_contract(entry["result"])
 
 
 _NGOAL = {"anyOf": [{"type": "null"}, _ref("Goal")]}
@@ -527,15 +553,16 @@ CONTRACT = {
         "DoctorCheck": _o({"id": _STR, "status": {"type": "string", "enum": ["ok", "warn", "fail", "n/a"]}, "detail": _STR,
                            "fix": _NSTR, "hint": _NSTR, "scope": {"type": "string", "enum": ["user", "project"]}},
                            optional=("scope",)),
-        "Warning": _o({"code": _STR, "name": _STR, "did_you_mean": _list(_STR)}),
+        "Warning": _o({"code": _STR, "name": _STR, "did_you_mean": _list(_STR), "roster": _list(_STR), "roster_total": _INT}),
         "Envelope": _env({}),
     },
     # A warning is not an error: the command succeeded, and its result carries "warnings": [Warning].
     "warnings": {
-        "recipient_not_on_roster": {"fields": ["name", "did_you_mean"], "commands": ["post"],
+        "recipient_not_on_roster": {"fields": ["name", "did_you_mean", "roster", "roster_total"], "commands": ["post"],
                                     "meaning": "The message was delivered to --to NAME, but no agent with that name has joined. "
-                                               "did_you_mean lists the closest roster names (at most 3, possibly none).",
-                                    "action": "If the name is a typo, post again to a name in did_you_mean. The first message waits for the typo."},
+                                               "did_you_mean lists the closest roster names (at most 3, possibly none). roster lists "
+                                               "the agents that have joined, by name (the 10 most recently seen at most); roster_total is how many there are.",
+                                    "action": "If the name is a typo, post again to a name in did_you_mean or roster. The first message waits for the typo."},
     },
     "errors": {
         "claim_conflict": {"exit": 1, "retryable": False, "fields": ["resource", "holder", "expires_at", "purpose"],
@@ -546,8 +573,10 @@ CONTRACT = {
                        "meaning": "There is no message with that id.", "action": "Check the id with read."},
         "no_context_key": {"exit": 1, "retryable": False, "fields": ["key"],
                            "meaning": "There is no fact with that key.", "action": "List facts with ctx get."},
-        "not_on_roster": {"exit": 1, "retryable": False, "fields": ["agent"],
-                          "meaning": "That name has not joined.", "action": "Join first."},
+        "not_on_roster": {"exit": 1, "retryable": False, "fields": ["agent", "did_you_mean", "roster"],
+                          "meaning": "That name has not joined. did_you_mean lists the roster names closest to it (at most 3, possibly none); "
+                                     "roster lists the agents that have joined, by name (the 10 most recently seen at most).",
+                          "action": "If the name is a typo, repeat the command with a name in did_you_mean. Otherwise join first."},
         "name_active": {"exit": 1, "retryable": False, "fields": ["agent", "last_seen_min", "suggested_name"],
                         "meaning": "The name was active recently and may be another live session. suggested_name is a free name, or null.",
                         "action": "Join under suggested_name, or join --takeover if it is you. To retry your own join, pass the same --request-id."},
@@ -637,6 +666,7 @@ CONTRACT = {
         "message": {"type": "string", "meaning": "What happened and what to do, for a person."},
         "retryable": {"type": "boolean", "meaning": "Whether running the same command again can succeed. False once the command saved database rows, unless it had a --request-id; a command that changed only files (init, upgrade's copy, setup) stays retryable."},
         "committed": {"type": "boolean", "meaning": "True when the command's own change had been saved before the failure, so a write must not be repeated without its --request-id unless retryable is true."},
+        "next": {"type": ["string", "null"], "meaning": "The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A write's request id is not repeated here: reuse the one you sent."},
     },
     "env": {
         "AGENTBUS_DB": {"meaning": "Path of the bus database; overrides discovery and --up.",
@@ -687,18 +717,20 @@ CONTRACT = {
                        "with": {"--peek": {"class": "safe", "how": "repeat freely"}}}),
         "read": _cmd("Recent messages, anyone's; with --id N one message, whole",
                      {"anyOf": [_env(_ref("Message")), _ref("Message")]}, ["no_message"],
-                     text='{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message'),
+                     text='{"items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message'),
         "ctx set": _cmd("Set a shared fact and record its history", _ref("Fact"), ["not_on_roster"],
                         retry={"class": "idempotent", "short": "safe to repeat",
                                "how": "an unchanged value writes no history row and returns unchanged true"}),
         "ctx get": _cmd("Get one fact, or list all facts", {"anyOf": [_ref("Fact"), _env(_ref("Fact"))]}, ["no_context_key"],
-                        text='a Fact, or {"v": integer, "items": [Fact], "has_more": boolean, "next": string or null}'),
+                        text='a Fact, or {"items": [Fact], "has_more": boolean, "next": string or null}'),
         "ctx history": _cmd("Show the history of a fact", _env(_ref("FactVersion"))),
         "claim": _cmd("Claim a resource",
                       _o({"resource": _STR, "agent": _STR, "purpose": _NSTR, "claimed_at": _STR, "expires_at": _STR,
-                          "auto_released": _list(_o({"resource": _STR, "agent": _STR})), "auto_released_count": _INT}),
+                          "auto_released": _list(_o({"resource": _STR, "agent": _STR})), "auto_released_count": _INT,
+                          "renewed": _BOOL, "previous_purpose": _NSTR}, optional=("previous_purpose",)),
                       ["claim_conflict", "not_on_roster"],
-                      {"class": "idempotent", "how": "renews the claim and keeps its purpose and claimed_at", "short": "safe to repeat"}),
+                      {"class": "idempotent", "how": "renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, "
+                                                     "and previous_purpose is set when --purpose changed it", "short": "safe to repeat"}),
         "release": _cmd("Release one claim, or all of yours", _o({"released": _list(_STR), "released_count": _INT}), ["not_held"],
                         {"class": "idempotent_with_flag", "short": "with --if-held",
                          "how": "release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent"}),
@@ -711,7 +743,9 @@ CONTRACT = {
         "status": _cmd("Agents, facts, claims and recent messages",
                        _o({"bus": _STR, "goal": _NGOAL, "agents": _list(_ref("Agent")), "context": _list(_ref("Fact")),
                            "claims": _list(_ref("Claim")), "messages": _list(_ref("Message")), "omitted": _OMITTED})),
-        "goal": _cmd("Show or set the shared goal", _NGOAL, ["not_on_roster"], text="null or a Goal",
+        "goal": _cmd("Show or set the shared goal",
+                     _o({"goal": _NSTR, "set_by": _NSTR, "set_at": _NSTR, "unchanged": _BOOL}, optional=("unchanged",)),
+                     ["not_on_roster"], text='a Goal, or {"goal": null, "set_by": null, "set_at": null} when none is set',
                      retry={"class": "idempotent", "short": "safe to repeat",
                             "how": "showing is free; an unchanged goal writes no history row and returns unchanged true"}),
         "watch": _cmd("A live view of the bus; with --json one snapshot",
@@ -770,13 +804,16 @@ CONTRACT = {
                        {"anyOf": [_o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"},
                                       "global_args": _list({"type": "object"}), "objects": {"type": "object"},
                                       "error_fields": {"type": "object"}, "errors": {"type": "object"}, "warnings": {"type": "object"},
-                                      "exit_codes": {"type": "object"}, "env": {"type": "object"}}),
+                                      "exit_codes": {"type": "object"}, "env": {"type": "object"},
+                                      "common_errors": _list(_STR), "more": _STR},
+                                     optional=("global_args", "exit_codes", "env", "common_errors", "more")),
                                   # --index: every command's argument names and its own error codes, small enough to read whole
                                   _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"},
                                       "global_args": _list(_STR), "common_errors": _list(_STR)})]},
                        text='the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, '
                             '"errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command\'s '
-                            'commands, objects and errors; with --index {"contract": integer, "agentbus": string, '
+                            'commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env '
+                            'and every error it can raise); with --index {"contract": integer, "agentbus": string, '
                             '"commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}',
                        base=_PLAIN_ERRORS),
         "skill": _cmd("Print the bundled skill, or with --agents-md the AGENTS.md block", _o({"text": _STR}), base=_PLAIN_ERRORS),
@@ -813,6 +850,8 @@ def result_text(schema, brief=False):
         return schema["$ref"].rsplit("/", 1)[-1]
     if "anyOf" in schema:
         return " or ".join(result_text(s, brief) for s in schema["anyOf"])
+    if "allOf" in schema:  # an object and the keys every result adds: it reads as the object
+        return result_text(schema["allOf"][0], brief)
     t = schema.get("type")
     if isinstance(t, list):
         return " or ".join(t)
@@ -821,8 +860,9 @@ def result_text(schema, brief=False):
     if t == "object" and "required" in schema:
         keys = schema["required"]
         if brief:
-            keys = [k for k in keys if k != "v"]
+            keys = [k for k in keys if k != "contract"]
             return "{" + ", ".join(keys if len(keys) <= 4 else keys[:3] + ["..."]) + "}"
+        keys = [k for k in keys if k != "contract"]   # every result carries it (stated once, in --json's help)
         return "{" + ", ".join('"%s": %s' % (k, result_text(schema["properties"][k], brief)) for k in keys) + "}"
     return t or "any"
 
@@ -917,7 +957,7 @@ def contract_main():
         if _CHANGED:
             again = f". Run: {_RERUN} to finish" if _RERUN else ""
             failure = Diag("interrupted before the command finished, after it had changed "
-                           + ", ".join(dict.fromkeys(_CHANGED)) + again, "interrupted",
+                           + ", ".join(dict.fromkeys(_CHANGED)) + again, "interrupted", _RERUN,
                            changed=list(dict.fromkeys(_CHANGED)), **({"rerun": _RERUN} if _RERUN else {}))
         else:
             failure = Diag("interrupted before the command finished", "interrupted")
@@ -943,12 +983,12 @@ def _write_fd(fd, data):
         pass
 
 
-def exit_now(msg, code, grace=None, **fields):
+def exit_now(msg, code, grace=None, next=None, **fields):
     """Write the diagnostic and end the process at once with the status of `code`, without closing SQLite
     connections, within `grace` seconds even when stderr is a full pipe nobody reads (the write
     runs in a helper thread; the exit does not wait for it past grace). Exiting releases every
     lock the process holds."""
-    d = Diag(msg, code, **fields)
+    d = Diag(msg, code, next, **fields)
     t = threading.Thread(target=_write_fd, args=(2, (str(d) + "\n").encode("utf-8", "replace")), daemon=True)
     t.start()
     t.join(EXIT_GRACE_S if grace is None else grace)
@@ -1618,12 +1658,12 @@ def make_target(root):
     if os.path.isdir(root):
         return []
     if os.path.lexists(root):
-        die(f"not a directory: {root}. Pick a folder: agentbus init DIR", "bad_input")
+        die(f"not a directory: {root}. Pick a folder: agentbus init DIR", "bad_input", next="agentbus init DIR")
     near = os.path.dirname(root)
     while not os.path.lexists(near) and near != os.path.dirname(near):
         near = os.path.dirname(near)
     if not os.path.isdir(near):
-        die(f"cannot create {root}: {near} is not a directory. Pick another path: agentbus init DIR", "bad_input")
+        die(f"cannot create {root}: {near} is not a directory. Pick another path: agentbus init DIR", "bad_input", next="agentbus init DIR")
     if not os.access(near, os.W_OK | os.X_OK):
         die(f"cannot create {root}: {near} is not writable. Create the folder yourself, or pick a path you can write to", "bad_input")
     missing = []
@@ -1657,14 +1697,14 @@ def setup_detected():
 
 def cmd_init(a):
     if is_repo_local_copy():
-        die("init runs from the installed agentbus or a clone of its repo, not a project copy. Run: agentbus init DIR", "bad_input")
+        die("init runs from the installed agentbus or a clone of its repo, not a project copy. Run: agentbus init DIR", "bad_input", next="agentbus init DIR")
     root = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo or os.getcwd())))
     made = make_target(root)
     info = repo_info(root)
     if info and os.path.realpath(info[0]) != root:
         top = git(["rev-parse", "--show-toplevel"], cwd=root)
         if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root:
-            die(f"{root} is a linked worktree; its commands use the main checkout's bus. Run: agentbus init {info[0]}", "bad_input")
+            die(f"{root} is a linked worktree; its commands use the main checkout's bus. Run: agentbus init {info[0]}", "bad_input", next=f"agentbus init {info[0]}")
     # Only a checkout's top level gets an exclude rule; an arbitrary directory is a workspace.
     top = git(["rev-parse", "--show-toplevel"], cwd=root) if info else None
     exclude = info[1] if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root else None
@@ -1737,7 +1777,7 @@ def cmd_upgrade(a):
         if copies:
             said.append(("Then" if done else "interrupted after") + " the copy of agentbus was replaced in "
                         + ", ".join(copies) + ". ")
-        die("".join(said) + f"Run: {again} to finish", "interrupted", directory=last,
+        die("".join(said) + f"Run: {again} to finish", "interrupted", next=again, directory=last,
             backup=done[-1].backup if done else None,
             migrations=[{"directory": d, "schema_old": u.schema[0], "schema_new": u.schema[1], "backup": u.backup}
                         for d, u in zip(where, done)], rerun=again, changed=list(dict.fromkeys(_CHANGED)))
@@ -1745,15 +1785,15 @@ def cmd_upgrade(a):
 
 def _cmd_upgrade(a):
     if is_repo_local_copy():
-        die("upgrade runs from the installed agentbus or a clone of its repo; this is a project copy. Run: agentbus upgrade DIR", "bad_input")
+        die("upgrade runs from the installed agentbus or a clone of its repo; this is a project copy. Run: agentbus upgrade DIR", "bad_input", next="agentbus upgrade DIR")
     if a.depth < 0:
-        die("--depth must be 0 or more. For example: agentbus upgrade --all DIR --depth 3", "bad_input")
+        die("--depth must be 0 or more. For example: agentbus upgrade --all DIR --depth 3", "bad_input", next="agentbus upgrade --all DIR --depth 3")
     if a.all:
         if not a.repo:
-            die("upgrade --all needs a directory: agentbus upgrade --all DIR", "bad_input")
+            die("upgrade --all needs a directory: agentbus upgrade --all DIR", "bad_input", next="agentbus upgrade --all DIR")
         top = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo)))
         if not os.path.isdir(top):
-            die(f"not a directory: {top}. Pass a folder: agentbus upgrade --all DIR", "bad_input")
+            die(f"not a directory: {top}. Pass a folder: agentbus upgrade --all DIR", "bad_input", next="agentbus upgrade --all DIR")
         rows = [upgrade_one(d, a.dry_run, top) for d in find_bus_dirs(top, a.depth)]
         if not a.dry_run:
             record_buses(buses=[r["directory"] for r in rows if r["status"] in ("upgraded", "current")])
@@ -1770,7 +1810,7 @@ def _cmd_upgrade(a):
         root = selected_bus(getattr(a, "up", 0))
     if not (check_node(os.path.join(root, ".agentbus"), "dir") and check_node(os.path.join(root, ".agentbus", "bin"), "dir")
             and check_node(os.path.join(root, ".agentbus", "bin", "agentbus"), "file")):
-        die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}", "no_bus")
+        die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}", "no_bus", next=f"agentbus init {root}")
     if a.dry_run:
         report_upgrades(a, [upgrade_one(root, True)])
         return
@@ -1919,7 +1959,7 @@ def upgrade_one(root, dry_run=False, top=None):
             check_still_under(top, root)
         if not (check_node(folder, "dir") and check_node(os.path.join(folder, "bin"), "dir")
                 and check_node(os.path.join(folder, "bin", "agentbus"), "file")):
-            die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}", "no_bus")
+            die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}", "no_bus", next=f"agentbus init {root}")
         vfile = os.path.join(folder, "VERSION")
         old = read_small(vfile).strip() if check_node(vfile, "file") else "none"
         row["old"] = shown_version(old)
@@ -2110,8 +2150,8 @@ def selected_bus(up):
         if level == up:
             return directory
     if up:
-        die(f"no bus at --up {up}; no such outer bus. See: agentbus buses", "no_bus")
-    die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus")
+        die(f"no bus at --up {up}; no such outer bus. See: agentbus buses", "no_bus", next="agentbus buses")
+    die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus", next="agentbus init <dir>")
 
 
 def find_bus_path(up):
@@ -2149,9 +2189,9 @@ def cmd_buses(a):
     else:
         paths = [(d, os.path.join(d, ".agentbus", "bus.db")) for d in walk_buses(discovery_start())]
         if not paths:
-            die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus")
+            die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus", next="agentbus init <dir>")
         if a.up >= len(paths):
-            die(f"no bus at --up {a.up}; no such outer bus. See: agentbus buses", "no_bus")
+            die(f"no bus at --up {a.up}; no such outer bus. See: agentbus buses", "no_bus", next="agentbus buses")
     rows = []
     for level, (directory, db) in enumerate(paths):
         exists = bool(check_node(db, "file"))
@@ -2343,7 +2383,7 @@ def _open_once(path, read_only=False, budgets=None):
     except FileNotFoundError:
         if read_only:
             die(f"no bus at {path} yet (nothing has written it). Run any agentbus command there, or: agentbus init DIR",
-                "no_bus", bus=path)
+                "no_bus", next="agentbus init DIR", bus=path)
         die(f"refusing {path}: No such file or directory", "bus_unavailable", file=path)
     except OSError as e:
         die(f"refusing {path}: {e.strerror}", "bus_unavailable", file=path)
@@ -2446,13 +2486,13 @@ def bus_directory(path):
 def schema_older(path, have):
     die(f"this bus is older than this agentbus (schema {have}, needs {SCHEMA_VERSION}). Any agentbus command "
         f"that is not watch upgrades it after taking a backup, or run: agentbus upgrade {bus_directory(path)}",
-        "schema_older", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
+        "schema_older", next=f"agentbus upgrade {bus_directory(path)}", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
 
 
 def schema_newer(path, have):
     die(f"this bus is newer than this copy of agentbus (schema {have}, this copy knows {SCHEMA_VERSION}). "
         f"Use a newer agentbus: agentbus upgrade {bus_directory(path)} from an up-to-date install",
-        "schema_newer", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
+        "schema_newer", next=f"agentbus upgrade {bus_directory(path)}", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
 
 
 def user_version(con):
@@ -2549,7 +2589,7 @@ def open_bus(path, strict_dir=False, migrate=True, read_only=False, busy_wait=BU
     folder = os.path.dirname(path)
     if not os.path.lexists(folder):
         if read_only:
-            die(f"no bus at {path}: {folder} does not exist. Run: agentbus init DIR", "no_bus", bus=path)
+            die(f"no bus at {path}: {folder} does not exist. Run: agentbus init DIR", "no_bus", next="agentbus init DIR", bus=path)
         os.makedirs(os.path.dirname(folder), exist_ok=True)
         make_dir(folder)
     deadline = time.time() + busy_wait
@@ -2631,7 +2671,7 @@ def _setup_read_only(con, path):
             schema_older(path, info[0])
         if state == "new":
             die(f"no bus at {path} yet (nothing has written it). Run any agentbus command there, or: agentbus init DIR",
-                "no_bus", bus=path)
+                "no_bus", next="agentbus init DIR", bus=path)
     finally:
         if con.in_transaction:
             con.execute("COMMIT")
@@ -3404,7 +3444,8 @@ def norm_resource(resource, strict=True):
         return resource
     def bad(why):
         if strict:
-            die(f"cannot claim '{resource}': {why}. For example: agentbus --as NAME claim src/app/ --purpose WHY", "bad_input")
+            die(f"cannot claim '{resource}': {why}. For example: agentbus --as NAME claim src/app/ --purpose WHY", "bad_input",
+                next="agentbus --as NAME claim src/app/ --purpose WHY")
         return resource
     if resource.startswith("/"):
         return bad("use a bus-relative path, not an absolute one")
@@ -3548,37 +3589,73 @@ def ident(args):
 def me(args):
     name = ident(args)
     if not name:
-        die("say who you are with --as NAME or AGENTBUS_AGENT=NAME. For example: " + identity_example(args), "bad_input")
+        die("say who you are with --as NAME or AGENTBUS_AGENT=NAME. For example: " + identity_example(args), "bad_input",
+            next=identity_example(args))
     return name
+
+
+ROSTER_SHOWN = 10   # names of the roster an error or a warning lists; the rest are counted
+
+
+def or_list(names):
+    """alpha, alpha or beta, alpha, beta or gamma."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+
+
+def roster_view(con, name):
+    """(the roster names closest to `name`, the roster as errors show it, how many agents are on it).
+    Bounded, because a lane can plant any number of agents with any name under the bus lock: only short text names
+    are compared (a name join accepts is at most 40 characters), at most 1000 of them; the roster shown is the
+    ROSTER_SHOWN most recently seen, by name."""
+    close = []
+    if len(name) <= 64:
+        names = [r[0] for r in con.execute("SELECT name FROM agents WHERE typeof(name)='text' AND length(name)<=64 "
+                                            "ORDER BY name LIMIT 1000")]
+        close = difflib.get_close_matches(name, names, n=3, cutoff=0.6)
+    shown = sorted(r[0] for r in con.execute("SELECT name FROM agents WHERE typeof(name)='text' AND length(name)<=64 "
+                                             "ORDER BY last_seen DESC, name LIMIT ?", (ROSTER_SHOWN,)))
+    total = con.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
+    return close, shown, total
+
+
+def roster_text(shown, total):
+    """On the roster: alpha, gamma. With more agents than are named: ... (+4 more: agentbus who)."""
+    if not shown:
+        return "Nobody has joined yet."
+    more = f" (+{total - len(shown)} more: agentbus who)" if total > len(shown) else ""
+    return "On the roster: " + ", ".join(shown) + more + "."
 
 
 def require_joined(con, name):
     """Every write is made by a name on the roster: inside the caller's transaction, refuse one that
-    has not joined (or left), with the error claim has always given."""
-    if not con.execute("SELECT 1 FROM agents WHERE name=?", (name,)).fetchone():
-        die(f"{name} is not on the roster. Run: agentbus --as {name} join", "not_on_roster", agent=name)
+    has not joined (or left). A name close to one that has is probably a typo: the error says so, lists
+    the roster, and still names the join command."""
+    if con.execute("SELECT 1 FROM agents WHERE name=?", (name,)).fetchone():
+        return
+    close, shown, total = roster_view(con, name)
+    join = f"agentbus --as {shlex.quote(name)} join"
+    if close:
+        die(f"{name} is not on the roster. Did you mean {or_list(close)}? {roster_text(shown, total)} To join as {name}: {join}",
+            "not_on_roster", next=join, agent=name, did_you_mean=close, roster=shown)
+    die(f"{name} is not on the roster. Run: {join}", "not_on_roster", next=join, agent=name, did_you_mean=[], roster=shown)
 
 
 def roster_warnings(con, to):
     """The warnings for a message addressed to `to`: [] for a broadcast or a name on the roster, else one
-    recipient_not_on_roster with the closest roster names. The message is still delivered (it waits
-    for that name); this only says the name may be a typo."""
+    recipient_not_on_roster with the closest roster names and the roster. The message is still delivered
+    (it waits for that name); this only says the name may be a typo."""
     if to == "*" or con.execute("SELECT 1 FROM agents WHERE name=?", (to,)).fetchone():
         return []
-    # Bounded, because a lane can plant any number of agents with any name under the bus lock: only short
-    # text names are compared (a name join accepts is at most 40 characters), at most 1000 of them.
-    names = ([r[0] for r in con.execute("SELECT name FROM agents WHERE typeof(name)='text' AND length(name)<=64 "
-                                         "ORDER BY name LIMIT 1000")] if len(to) <= 64 else [])
-    return [{"code": "recipient_not_on_roster", "name": to,
-             "did_you_mean": difflib.get_close_matches(to, names, n=3, cutoff=0.6)}]
+    close, shown, total = roster_view(con, to)
+    return [{"code": "recipient_not_on_roster", "name": to, "did_you_mean": close, "roster": shown, "roster_total": total}]
 
 
 def warn_text(w):
     """A warning as one stderr line."""
     text = f"{w['name']} is not on the roster; the message waits for that name."
     if w["did_you_mean"]:
-        text += " Did you mean: " + ", ".join(w["did_you_mean"]) + "?"
-    return text
+        text += f" Did you mean {or_list(w['did_you_mean'])}?"
+    return text + " " + roster_text(w["roster"], w["roster_total"])
 
 
 def request_reused(token, name, original_id, original, what, same):
@@ -3636,8 +3713,16 @@ def json_style():
     return {"indent": 2} if stdout_is_tty() else {"separators": (",", ":")}
 
 
+def with_contract(obj):
+    """A --json result with `contract` (the JSON contract version) as its first key. One rule for every result:
+    the same name in every command, and in `schema`, so a reader can tell which contract a copy follows."""
+    assert isinstance(obj, dict), "a --json result is an object"
+    return {"contract": CONTRACT["contract"], **{k: v for k, v in obj.items() if k != "contract"}}
+
+
 def print_json(obj):
     """One JSON value, encoded after the bus is closed (obj holds plain values by then)."""
+    obj = with_contract(obj)
     later(lambda: print(json.dumps(jsonable(obj), **json_style(), default=repr, allow_nan=False)))
 
 
@@ -3678,9 +3763,9 @@ def capped(con, sql, params, limit):
 
 
 def envelope(items, more=0, cursor=None):
-    """The JSON of a listing: the contract version, the rows, whether rows were left out, and a
-    cursor (null except for the four id walks, see make_cursor)."""
-    return {"v": CONTRACT["contract"], "items": items, "has_more": bool(more), "next": cursor}
+    """The JSON of a listing: the rows, whether rows were left out, and a cursor (null except for the four
+    id walks, see make_cursor). print_json adds the contract version."""
+    return {"items": items, "has_more": bool(more), "next": cursor}
 
 
 CURSOR_PREFIX = "v1."
@@ -3728,7 +3813,7 @@ def read_cursor(a, text, flag):
         first = {"read": "agentbus --json read", "inbox": "agentbus --as NAME --json inbox --peek",
                  "ctx history": "agentbus --json ctx history KEY", "log show": "agentbus --json log show"}.get(cursor_command(a), "agentbus --json")
         die(f"{flag} needs the next value from a previous page of this same command and filters ({why}). "
-            f"Get one with: {first}, and pass the next it prints", "bad_input")
+            f"Get one with: {first}, and pass the next it prints", "bad_input", next=first)
     m = CURSOR_RE.fullmatch(text)
     if not m or int(m.group(3)) > MAX_ID or str(int(m.group(3))) != m.group(3):  # only a cursor this tool made, byte for byte
         refuse("not a cursor")
@@ -3739,11 +3824,11 @@ def read_cursor(a, text, flag):
     return int(m.group(3))
 
 
-def next_command(a, *words):
+def next_command(a, *words, as_=True):
     """The command line that continues a cut listing, to paste as it is: `agentbus [--as NAME] [--up N]` and
-    words (a word that needs it is shell-quoted)."""
+    words (a word that needs it is shell-quoted). as_=False leaves --as out, for a command that needs no name."""
     parts = ["agentbus"]
-    if getattr(a, "as_", None):
+    if as_ and getattr(a, "as_", None):
         parts += ["--as", a.as_]
     if getattr(a, "up", 0):
         parts += ["--up", str(a.up)]
@@ -3877,10 +3962,10 @@ def cmd_join(con, a):
             if 0 <= mins < LIVE_WINDOW_MIN:
                 age = "less than a minute" if mins < 1 else f"{int(mins)} min"
                 free = free_name(con, name)
-                try_name = f"Pick your own name (try {free}), or pass" if free else "Pick your own name, or pass"
+                try_name = f"Pick your own name (run: agentbus --as {shlex.quote(free)} join), or pass" if free else "Pick your own name, or pass"
                 die(f"{name} was active {age} ago and may be another live session. "
                     f"{try_name} --takeover only if that session is you.", "name_active",
-                    agent=name, last_seen_min=int(mins), suggested_name=free)
+                    next=f"agentbus --as {shlex.quote(free)} join" if free else None, agent=name, last_seen_min=int(mins), suggested_name=free)
         # --takeover is the same session coming back: what it does not say again (tool, model, role) stays.
         keep = (lambda c: f"COALESCE(excluded.{c}, agents.{c})") if a.takeover else (lambda c: f"excluded.{c}")
         con.execute(
@@ -4018,20 +4103,22 @@ def read_inputs(a):
     if getattr(a, "before", None) is not None:
         if a.cmd == "read" and a.since is not None:
             die("--before and --since cannot be combined: --since pages forward from an id, --before pages back. "
-                "Use one: agentbus read --since ID, or agentbus read --before NEXT", "bad_input")
+                "Use one: agentbus read --since ID, or agentbus read --before NEXT", "bad_input",
+                next="agentbus read --since ID")
         a._before_id = read_cursor(a, a.before, "--before")
     if getattr(a, "after", None) is not None:
         if not a.peek:
             die("--after needs --peek: a consuming inbox continues by running inbox again. "
-                "To page without reading: agentbus --as NAME inbox --peek --after NEXT", "bad_input")
+                "To page without reading: agentbus --as NAME inbox --peek --after NEXT", "bad_input",
+                next="agentbus --as NAME inbox --peek --after NEXT")
         a._after_id = read_cursor(a, a.after, "--after")
     if a.cmd == "ctx" and a.key == "":
-        die("KEY must not be empty. List facts with: agentbus ctx get", "bad_input")
+        die("KEY must not be empty. List facts with: agentbus ctx get", "bad_input", next="agentbus ctx get")
     if a.cmd == "ctx" and a.action == "set" and a.key == GOAL_KEY:
-        die(f"{GOAL_KEY} is reserved; use: agentbus goal TEXT", "bad_input", field="key")
+        die(f"{GOAL_KEY} is reserved; use: agentbus goal TEXT", "bad_input", next="agentbus goal TEXT", field="key")
     if a.cmd == "join" and not HOOK_NAME_RE.fullmatch(me(a)):
         die(f"'{me(a)}' is not a valid name. Use 1 to 40 letters, digits, dots, underscores or hyphens ([A-Za-z0-9._-]). Then run: agentbus --as NAME join",
-            "bad_input", field="name")
+            "bad_input", next="agentbus --as NAME join", field="name")
     if a.cmd == "post":
         me(a)
         if a.kind not in KINDS:
@@ -4068,7 +4155,7 @@ def cmd_post(con, a):
                      "posted #{} to {} [{}] (already posted)", old['id'], "everyone" if a.to == "*" else a.to, a.kind)
                 return
         if a.reply_to is not None and not con.execute("SELECT 1 FROM messages WHERE id=?", (a.reply_to,)).fetchone():
-            die(f"no message #{a.reply_to} to reply to. See recent ids with: agentbus read", "no_message", id=a.reply_to)
+            die(f"no message #{a.reply_to} to reply to. See recent ids with: agentbus read", "no_message", next="agentbus read", id=a.reply_to)
         cur = con.execute(
             "INSERT INTO messages(ts,sender,recipient,kind,topic,body,reply_to,request_id) VALUES(?,?,?,?,?,?,?,?)",
             (now(), name, a.to, a.kind, a.topic, body, a.reply_to, a.request_id))
@@ -4155,7 +4242,7 @@ def cmd_read(con, a):
             die("--id shows one message; it cannot be combined with --since, --before or --topic", "bad_input")
         r = con.execute(f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id=?", (a.id,)).fetchone()
         if not r:
-            die(f"no message #{a.id}. See recent ids with: agentbus read", "no_message", id=a.id)
+            die(f"no message #{a.id}. See recent ids with: agentbus read", "no_message", next="agentbus read", id=a.id)
         if a.json:
             print_json(dict(r))
         else:
@@ -4218,7 +4305,7 @@ def cmd_ctx(con, a):
         if a.key is not None:
             r = con.execute("SELECT * FROM context WHERE key=?", (a.key,)).fetchone()
             if not r:
-                die(f"no fact named {a.key}. List facts with: agentbus ctx get", "no_context_key", key=a.key)
+                die(f"no fact named {a.key}. List facts with: agentbus ctx get", "no_context_key", next="agentbus ctx get", key=a.key)
             if a.json:
                 print_json(dict(r))
             else:
@@ -4266,7 +4353,7 @@ def cmd_goal(con, a):
         return
     g = current_goal(con)
     if a.json:
-        print_json(g)
+        print_json(g or {"goal": None, "set_by": None, "set_at": None})
     elif g:
         show("goal: {}", g["goal"])
         show("set by {} at {}", g["set_by"], human_time(g["set_at"]), row=True)
@@ -4277,13 +4364,13 @@ def cmd_goal(con, a):
 def cmd_claim(con, a):
     name = me(a)
     if a.ttl_min < 1 or a.ttl_min > MAX_TTL_MIN:
-        die(f"--ttl-min must be at least 1 and at most {MAX_TTL_MIN} (a week). For example: agentbus --as NAME claim PATH --ttl-min 120", "bad_input")
+        die(f"--ttl-min must be at least 1 and at most {MAX_TTL_MIN} (a week). For example: agentbus --as NAME claim PATH --ttl-min 120", "bad_input",
+            next="agentbus --as NAME claim PATH --ttl-min 120")
     res = norm_resource(a.resource)
     exp = datetime.fromtimestamp(time.time() + a.ttl_min * 60, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     released, n_released = [], 0
     with immediate(con):
-        if not con.execute("SELECT 1 FROM agents WHERE name=?", (name,)).fetchone():
-            die(f"{name} is not on the roster. Run: agentbus --as {name} join", "not_on_roster", agent=name)
+        require_joined(con, name)
         t = now()
         live = "typeof(resource)='text' AND agent<>? AND expires_at>?"
         on_roster = "EXISTS (SELECT 1 FROM agents WHERE agents.name=claims.agent)"
@@ -4294,21 +4381,22 @@ def cmd_claim(con, a):
                             f"WHERE ({where}) AND {live} AND {on_roster} LIMIT 1", [res] + params + [name, t]).fetchone()
             if r:
                 why = f'purpose: "{r["purpose"]}"' if r["purpose"] else "no purpose given"
-                next_step = (f" Do not edit it yet. Ask {r['agent']} with post --to {r['agent']} "
-                             "--kind question, or choose another resource.")
+                ask = f"agentbus --as {shlex.quote(name)} post QUESTION --to {shlex.quote(r['agent'])} --kind question"
+                next_step = f" Do not edit it yet. Ask {r['agent']}: {ask}, or choose another resource."
                 if not r["same"]:
                     die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {human_time(r['expires_at'])} ({why})." + next_step,
-                        "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
+                        "claim_conflict", next=ask, resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
                 die(f"{res} is claimed by {r['agent']} until {human_time(r['expires_at'])} ({why})." + next_step,
-                    "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
+                    "claim_conflict", next=ask, resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
         odd = undecoded_overlaps(con, res, name, t)
         for raw, r in odd:
             if con.execute("SELECT 1 FROM agents WHERE name=(SELECT agent FROM claims WHERE resource=CAST(? AS TEXT))",
                            (raw,)).fetchone():
+                ask = f"agentbus --as {shlex.quote(name)} post QUESTION --to {shlex.quote(r['agent'])} --kind question"
                 die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {human_time(r['expires_at'])} "
                     f"({'purpose: ' + chr(34) + r['purpose'] + chr(34) if r['purpose'] else 'no purpose given'}). Do not edit it yet. "
-                    f"Ask {r['agent']} with post --to {r['agent']} --kind question, or choose another resource.",
-                    "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
+                    f"Ask {r['agent']}: {ask}, or choose another resource.",
+                    "claim_conflict", next=ask, resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
         for raw, r in odd:
             if len(released) < AUTO_RELEASE_SHOWN:
                 released.append({"resource": r["resource"], "agent": r["agent"]})
@@ -4330,10 +4418,14 @@ def cmd_claim(con, a):
             log(con, name, "claim", f"and {n_released - len(released)} more overlapping {res} auto-released (not on roster)")
         forms = same_path_forms(res)
         own = con.execute(
-            f"SELECT purpose, claimed_at FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))}) "
+            f"SELECT purpose, claimed_at, expires_at FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))}) "
             "ORDER BY claimed_at LIMIT 1", [name] + forms).fetchone()
         purpose = own["purpose"] if own and a.purpose is None else a.purpose
         claimed_at = own["claimed_at"] if own else t
+        # Renewed: this agent still held it (an expired claim is taken again, not renewed). The purpose may change with it.
+        renewed = bool(own) and isinstance(own["expires_at"], str) and own["expires_at"] > t
+        purpose_changed = renewed and a.purpose is not None and own["purpose"] != a.purpose
+        own_purpose = own["purpose"] if own else None
         con.execute(f"DELETE FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)
         con.execute(
             "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?) "
@@ -4342,9 +4434,18 @@ def cmd_claim(con, a):
             (res, name, purpose, claimed_at, exp))
         if not own or own["purpose"] != purpose:  # a renewal that changes nothing is not news
             log(con, name, "claim", f"{res} until {exp}" + (f": {purpose}" if purpose else ""))
-    emit(a, {"resource": res, "agent": name, "purpose": purpose, "claimed_at": claimed_at,
-             "expires_at": exp, "auto_released": released,
-             "auto_released_count": n_released}, "claimed {} {}", res, until_phrase(a.ttl_min * 60, exp))
+    result = {"resource": res, "agent": name, "purpose": purpose, "claimed_at": claimed_at,
+              "expires_at": exp, "auto_released": released, "auto_released_count": n_released, "renewed": renewed}
+    if purpose_changed:
+        result["previous_purpose"] = own_purpose
+    if a.json or not purpose_changed:
+        if renewed:
+            emit(a, result, "renewed {} {}", res, until_phrase(a.ttl_min * 60, exp))
+        else:
+            emit(a, result, "claimed {} {}", res, until_phrase(a.ttl_min * 60, exp))
+    else:
+        was = f'was "{own_purpose}", now "{purpose}"' if own_purpose else f'now "{purpose}"'
+        show("renewed {} {}; purpose {}", res, until_phrase(a.ttl_min * 60, exp), was)
 
 
 def cmd_release(con, a):
@@ -4366,7 +4467,7 @@ def cmd_release(con, a):
             emit(a, {"released": [], "released_count": 0}, "released {}", plural(0, "claim"))
             return
         if not paths:
-            die(f"you do not hold {a.resource}. See your claims with: agentbus claims", "not_held", resource=a.resource)
+            die(f"you do not hold {a.resource}. See your claims with: agentbus claims", "not_held", next="agentbus claims", resource=a.resource)
         con.execute(f"DELETE FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)
         log(con, name, "release", ", ".join(map(str, paths)))
     emit(a, {"released": paths, "released_count": len(paths)}, "released {}", ", ".join(map(str, paths)))
@@ -4520,7 +4621,7 @@ def cmd_schema(a):
     if want:
         commands = {k: v for k, v in commands.items() if k == want or k.startswith(want + " ")}
         if not commands:
-            die(f"unknown command '{want}'. List them with: agentbus schema --index", "bad_input")
+            die(f"unknown command '{want}'. List them with: agentbus schema --index", "bad_input", next="agentbus schema --index")
     if a.index:
         index = schema_index(commands, parser)
         if a.json:
@@ -4534,18 +4635,27 @@ def cmd_schema(a):
         show("details: agentbus schema COMMAND --json")
         return
     if a.json:
-        doc = {"contract": CONTRACT["contract"], "agentbus": __version__, "commands": commands,
-               "global_args": global_args(parser)}
-        objects, errors = CONTRACT["objects"], CONTRACT["errors"]
-        if want:  # only the objects and error codes this command uses
+        doc = {"contract": CONTRACT["contract"], "agentbus": __version__, "commands": commands}
+        objects, errors, warnings = CONTRACT["objects"], CONTRACT["errors"], CONTRACT["warnings"]
+        full = a.full or not want
+        if want:  # only what this command uses: its result objects, the error codes of its own and the warnings it can give
             names = set()
             for v in commands.values():
                 _refs(v["result"], names)
             codes = set(e for v in commands.values() for e in v["errors"])
+            own = {e for e in codes if e not in _BUS_ERRORS}
             objects = {k: v for k, v in objects.items() if k in names}
-            errors = {k: v for k, v in errors.items() if k in codes}
-        doc.update(objects=objects, error_fields=CONTRACT["error_fields"], errors=errors,
-                   warnings=CONTRACT["warnings"], exit_codes=CONTRACT["exit_codes"], env=CONTRACT["env"])
+            errors = {k: v for k, v in errors.items() if k in (codes if full else own)}
+            warnings = {k: v for k, v in warnings.items() if set(v["commands"]) & {c.split()[0] for c in commands}}
+            if not full:
+                doc["common_errors"] = sorted(codes - own, key=list(CONTRACT["errors"]).index)
+        if full:
+            doc["global_args"] = global_args(parser)
+        doc.update(objects=objects, error_fields=CONTRACT["error_fields"], errors=errors, warnings=warnings)
+        if full:
+            doc.update(exit_codes=CONTRACT["exit_codes"], env=CONTRACT["env"])
+        if want and not full:
+            doc["more"] = f"agentbus --json schema {want} --full: the global arguments, environment, exit codes and the common errors' definitions"
         print_json(doc)
         return
     rows = [(k, result_text(CONTRACT["commands"][k]["result"], brief=True), CONTRACT["commands"][k]["retry"]["short"]) for k in commands]
@@ -4594,10 +4704,10 @@ def interval(text):
 # every one parsed by tests/test_help.sh) and KIND_MEANINGS (what each message kind is for).
 
 COMMAND_GROUPS = (
-    ("Work together", ("join", "leave", "who", "post", "inbox", "read", "claim", "release", "claims", "status", "goal", "ctx", "log")),
+    ("Work together", ("join", "brief", "leave", "who", "post", "inbox", "read", "claim", "release", "claims", "status", "goal", "ctx", "log")),
     ("For people", ("watch",)),
     ("Set up", ("init", "upgrade", "setup", "doctor", "skill", "buses")),
-    ("Learn", ("help", "completion", "schema")),
+    ("Learn", ("demo", "help", "completion", "schema")),
 )
 COMMAND_SUMMARY = {
     "join": "Join the roster and see the shared goal",
@@ -4609,7 +4719,9 @@ COMMAND_SUMMARY = {
     "claim": "Claim a file or resource before you edit it",
     "release": "Release a claim",
     "claims": "List claims",
-    "status": "The goal, agents, facts, claims and recent messages",
+    "brief": "Your first call: the goal, who holds what, open questions",
+    "status": "The overview for people; agents start with brief",
+    "demo": "A 30-second tour of two agents on a throwaway bus",
     "goal": "Show or set the shared goal",
     "ctx": "Shared facts (key/value)",
     "log": "Activity log",
@@ -4656,6 +4768,10 @@ HELP_EXAMPLES = {
                 ("Release everything you hold", "agentbus --as alice release --all")],
     "claims": [("Who holds what", "agentbus claims"),
                ("Claims held by agents that are gone", "agentbus claims --stale")],
+    "brief": [("Catch up after you join", "agentbus --as alice brief"),
+              ("Show more rows in each section", "agentbus --as alice brief --limit 10")],
+    "demo": [("Watch two scripted agents hand off work", "agentbus demo"),
+             ("Without pauses, for a quick check", "agentbus demo --no-pause")],
     "status": [("The whole picture", "agentbus status"),
                ("Keep each section short", "agentbus status --limit 5")],
     "goal": [("Set the shared goal", 'agentbus --as alice goal "ship the importer"'),
@@ -4842,8 +4958,26 @@ class Parser(argparse.ArgumentParser):
             leaf = self.leaf_for(ns)
             if getattr(ns, "cmd", None) in words and extras[0] in words[:words.index(ns.cmd)]:
                 leaf = self  # a flag typed before the command belongs to agentbus, not to the command
-            leaf.error("unrecognized arguments: " + " ".join(extras))
+            leaf.error(leaf.unrecognized(extras))
         return ns
+
+    def unrecognized(self, extras):
+        """The message for arguments nothing took. A flag that is one typo away from one this command (or agentbus
+        itself) takes says which: `Did you mean --kind?`."""
+        flags = own_flag_names(self) + ([] if not self.cmd_path else ["--as", "--json", "--up"]) + ["--help"]
+        guesses = []
+        for word in extras:
+            if word.startswith("--"):
+                flag = word.split("=", 1)[0]
+                close = difflib.get_close_matches(flag, flags, n=1, cutoff=0.6)
+                if close and close[0] != flag:
+                    guesses.append((flag, close[0]))
+        text = "unrecognized arguments: " + " ".join(extras)
+        if len(guesses) == 1:
+            text += f". Did you mean {guesses[0][1]}?"
+        elif guesses:
+            text += ". Did you mean " + ", ".join(f"{good} (for {bad})" for bad, good in guesses) + "?"
+        return text
 
     def leaf_for(self, ns):
         """The parser of the command ns names (post, ctx set); the group when only the group is named; else self."""
@@ -4863,7 +4997,7 @@ class Parser(argparse.ArgumentParser):
         text = (f"{lead} Usage: {usage_text(self)}. " + (f"Flags: {', '.join(flags)}. " if flags else "")
                 + f"See: {see or ' '.join(cmd_words(self)) + ' --help'}")
         if _JSON_ERRORS:
-            die(text, "bad_input")
+            die(text, "bad_input", next=see or " ".join(cmd_words(self)) + " --help")
         note(text)
         raise SystemExit(2)
 
@@ -4929,9 +5063,9 @@ class Parser(argparse.ArgumentParser):
 
 def unknown_command(word, choices, path=()):
     matches = difflib.get_close_matches(word, choices, n=1)
-    hint = f" (did you mean {matches[0]}?)" if matches else ""
-    see = "agentbus help" + (" " + " ".join(path) if path else "")
-    die(f"unknown command '{word}'{hint}. See: " + ("agentbus --help" if not path else see), "bad_input")
+    hint = f" Did you mean {matches[0]}?" if matches else ""
+    see = "agentbus --help" if not path else "agentbus help " + " ".join(path)
+    die(f"unknown command '{word}'.{hint} {'Commands' if not path else 'Actions'}: {', '.join(choices)}. See: {see}", "bad_input", next=see)
 
 
 _HELP_TEXT = []
@@ -5076,7 +5210,9 @@ def register_log(sub):
 
 
 def register_status(sub):
-    st = sub("status", help="Agents, facts, claims, recent messages")
+    st = sub("status", help="The overview for people: agents, facts, claims, recent messages",
+             description="The overview for people: the goal, agents, facts, claims and recent messages, a section each. "
+                         "An agent starts with brief instead, which is shorter and shows open questions and what waits for it.")
     st.add_argument("--limit", type=integer, default=INBOX_LIMIT, metavar="N",
                     help=f"At most this many rows in each section (agents, facts, claims, the latest messages); default {INBOX_LIMIT}. Use -1 for all.")
 
@@ -5118,6 +5254,8 @@ def register_schema(sub):
     sc = sub("schema", help="Result shapes, errors, exit codes and retry rules of every command")
     sc.add_argument("command", nargs="*", metavar="COMMAND", help="One command (for example post, or ctx get); omit for all.")
     sc.add_argument("--index", action="store_true", help="Only each command's argument names and its own error codes (under 3 KB).")
+    sc.add_argument("--full", action="store_true", help="With COMMAND and --json, also the global arguments, environment, exit codes and "
+                                                        "the definitions of the errors every command can raise (left out by default).")
 
 
 def register_help(sub):
@@ -5167,7 +5305,7 @@ def build_parser():
                                  "Successful commands run with --as refresh that agent's last-seen, except watch. "
                                  "Omit --as to look without counting as present.")
         parser.add_argument("--json", action="store_true", default=default,
-                            help="Print successful command results as JSON. Check exit status; errors use stderr.")
+                            help="Print successful command results as JSON. Check exit status; errors use stderr. Every result starts with \"contract\": %d." % CONTRACT["contract"])
         parser.add_argument("--up", metavar="N", type=bus_level, default=0 if parser is p else default,
                             help="Select the Nth outer bus (default 0). AGENTBUS_DB takes precedence.")
     p.add_argument("--version", action="version", version=f"agentbus {__version__}", help="Show program version and exit.")
@@ -8792,8 +8930,8 @@ def setup_line(glyph, text):
 
 def setup_report(a, target, scope, changes, dry_run, uninstall, failure=None):
     if a.json:
-        write_out(json.dumps({"target": target, "scope": scope, "dry_run": dry_run,
-                              "changes": [c.as_json() for c in changes]}, **json_style(), ensure_ascii=False) + "\n")
+        write_out(json.dumps(with_contract({"target": target, "scope": scope, "dry_run": dry_run,
+                                            "changes": [c.as_json() for c in changes]}), **json_style(), ensure_ascii=False) + "\n")
         return
     show("agentbus setup {}{} ({})", target, " --uninstall" if uninstall else "", scope)
     for c in changes:
@@ -8831,7 +8969,7 @@ def refresh_changes(changes, target, scope):
 def cmd_setup(a):
     if is_repo_local_copy():
         die("setup runs from the installed agentbus, not a project copy. "
-            f"Run: agentbus setup {a.target}", "bad_input")
+            f"Run: agentbus setup {a.target}", "bad_input", next=f"agentbus setup {a.target}")
     target, scope, uninstall, dry_run = a.target, a.scope, a.uninstall, a.dry_run
     if a.refresh and uninstall:
         die("--refresh and --uninstall do not go together", "bad_input")
@@ -8891,7 +9029,7 @@ def cmd_setup(a):
                              failure=f"{problem}; stopped. Written before this: {wrote}. Fix that and run again: agentbus setup {target}")
             emit_pending(a)
             die(f"setup {target} stopped: {problem}. Fix that and run again: agentbus setup {target}", "items_failed",
-                failed=[failed.as_json()])
+                next=f"agentbus setup {target}", failed=[failed.as_json()])
     setup_report(a, target, scope, done, False, uninstall)
     if a.json:
         return
@@ -9516,10 +9654,10 @@ def download_release(version):
         except _Fail as e:
             if e.reason == "offline":
                 die(f"could not download {asset} from GitHub (offline). Nothing was installed. When you are online, run: agentbus update",
-                    "release_offline", reason=e.reason)
+                    "release_offline", next="agentbus update", reason=e.reason)
             if e.reason == "timeout":
                 die(f"could not download {asset} from GitHub (no answer in time). Nothing was installed. Try again: agentbus update",
-                    "release_offline", reason=e.reason)
+                    "release_offline", next="agentbus update", reason=e.reason)
             if e.reason == "rate_limited":
                 release_error({"reason": "rate_limited", "retry_after": e.retry_after})
             why = {"redirect": "GitHub's download pointed somewhere that is not GitHub, which agentbus refused",
@@ -9528,18 +9666,18 @@ def download_release(version):
                    "http": f"GitHub answered with an error (HTTP {e.status})" if e.status else "GitHub answered with an error",
                    }.get(e.reason, "GitHub's answer could not be used")
             die(f"could not download {asset}: {why}. Nothing was installed. See {REPO_URL}/releases/tag/v{version}, then try again: agentbus update",
-                "download_failed", reason=e.reason, asset=asset)
+                "download_failed", next="agentbus update", reason=e.reason, asset=asset)
     sums = get("SHA256SUMS", SUMS_MAX_BYTES)
     want = parse_sums(sums.decode("utf-8", "replace"), name)
     if not want:
         die(f"SHA256SUMS of release {version} does not list {name} exactly once. Nothing was installed. See {REPO_URL}/releases/tag/v{version}, then try again: agentbus update",
-            "download_failed", reason="malformed", asset="SHA256SUMS")
+            "download_failed", next="agentbus update", reason="malformed", asset="SHA256SUMS")
     data = get(name, WHEEL_MAX_BYTES)
     got = sha256_hex(data)
     if got != want:
         die(f"the downloaded {name} does not match its sha256 in SHA256SUMS (got {got[:12]}..., wanted {want[:12]}...). "
             "Nothing was installed. If it keeps happening, report it at " + REPO_URL + "/issues. Try again: agentbus update", "download_failed",
-            reason="hash_mismatch", asset=name)
+            next="agentbus update", reason="hash_mismatch", asset=name)
     path = os.path.join(folder, name)
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=name + ".")
     try:
@@ -9551,7 +9689,7 @@ def download_release(version):
             os.unlink(tmp)
         except OSError:
             pass
-        die(f"could not save the download ({e.strerror or e}). Nothing was installed. Try again: agentbus update", "download_failed", reason="malformed", asset=name)
+        die(f"could not save the download ({e.strerror or e}). Nothing was installed. Try again: agentbus update", "download_failed", next="agentbus update", reason="malformed", asset=name)
     return path
 
 
@@ -9807,11 +9945,11 @@ def update_lock():
         lock = _FileLock(folder, "update.lock")
         if not lock:
             die("another agentbus update is running. When it has finished, run: agentbus update", "update_running",
-                lock=os.path.join(folder, "update.lock"))
+                next="agentbus update", lock=os.path.join(folder, "update.lock"))
         return lock
     die(f"agentbus update has nowhere private to keep its lock ({tilde(state_dir())} and {tilde(cache_dir())} cannot be used), "
         "so it cannot tell whether another update is running. Make one of them a folder you own, then run: agentbus update",
-        "update_running", lock=os.path.join(state_dir(), "update.lock"))
+        "update_running", next="agentbus update", lock=os.path.join(state_dir(), "update.lock"))
 
 
 def shlex_join(argv):
@@ -9823,20 +9961,20 @@ def release_error(outcome):
     says what happened in plain words and ends with the command to run next."""
     r = outcome["reason"]
     if r == "offline":
-        die("could not reach GitHub to look for a release (offline). When you are online, run: agentbus update", "release_offline", reason=r)
+        die("could not reach GitHub to look for a release (offline). When you are online, run: agentbus update", "release_offline", next="agentbus update", reason=r)
     if r == "timeout":
-        die("GitHub did not answer in time. When it does, run: agentbus update", "release_offline", reason=r)
+        die("GitHub did not answer in time. When it does, run: agentbus update", "release_offline", next="agentbus update", reason=r)
     if r == "rate_limited":
         wait = int(outcome["retry_after"] or 0)
         die(f"GitHub is limiting requests from this network. In {max(1, (wait + 59) // 60)} minutes, run: agentbus update",
-            "rate_limited", retry_after=wait)
+            "rate_limited", next="agentbus update", retry_after=wait)
     status = outcome.get("status")
     what = {"http": f"GitHub answered with an error{f' (HTTP {status})' if status else ''}",
             "redirect": "GitHub sent the request somewhere else (the repository may have moved; see " + REPO_URL + ")",
             "tls": "the secure connection to GitHub could not be verified (check your network and clock)",
             "too_large": "GitHub's answer was far bigger than a release list",
             "malformed": "GitHub's answer was not a release list agentbus can read"}.get(r, f"GitHub's answer could not be used ({r})")
-    die(f"{what}. Nothing was changed. Try again later: agentbus update", "release_unknown", reason=r)
+    die(f"{what}. Nothing was changed. Try again later: agentbus update", "release_unknown", next="agentbus update", reason=r)
 
 
 def release_lookup(cached_ok):
@@ -10086,7 +10224,7 @@ def update_check(a, inst, install, latest, newer, no_release, plan):
 def cmd_update(a):
     if is_repo_local_copy():
         die("update runs from the installed agentbus, not a project copy. Install it with the install line in the README "
-            "(" + REPO_URL + "#quick-start), then run: agentbus update", "bad_input")
+            "(" + REPO_URL + "#quick-start), then run: agentbus update", "bad_input", next="agentbus update")
     inst = detect_install()
     scope = update_scope(a)
     targets, new_buses, new_roots = update_targets(a, scope)  # a bad DIR is refused before anything is asked of GitHub
@@ -10197,22 +10335,22 @@ def update_real(a, inst, scope, result, newer, plan, targets, new_buses, new_roo
             remove_downloads()
             if phase == "download":
                 die("interrupted while downloading the release. Nothing was installed. Run: agentbus update", "interrupted",
-                    rerun="agentbus update")
+                    next="agentbus update", rerun="agentbus update")
             die("interrupted while the installer was running. Run: agentbus update to finish", "interrupted",
-                argv=argv, rerun="agentbus update")
+                next="agentbus update", argv=argv, rerun="agentbus update")
         if how != "exit" or val != 0:
             what = "timed out" if how == "timeout" else f"killed by signal {val}" if how == "signal" else f"exit {val}"
-            die(f"the installer did not finish ({what}). Try again with: {recovery}", "installer_failed", argv=argv,
+            die(f"the installer did not finish ({what}). Try again with: {recovery}", "installer_failed", next=recovery, argv=argv,
                 exit_status=val if how == "exit" else None, reason="exit" if how == "exit" else how, recovery=recovery)
         got = installed_version(inst)
         if not got or release_key(got) <= release_key(before):
             die(f"the installer finished, but agentbus is still {got or 'not answering'}. Try again with: {recovery}",
-                "installer_failed", argv=argv, exit_status=0, reason="version_unchanged", recovery=recovery)
+                "installer_failed", next=recovery, argv=argv, exit_status=0, reason="version_unchanged", recovery=recovery)
         if got != newer:
             # something other than the release that was downloaded and checked is installed now
             file_changed(inst["prefix"])
             die(f"the installer finished, but agentbus is {got}, not the release {newer} that was downloaded. "
-                f"Try again with: {recovery}", "installer_failed", argv=argv, exit_status=0, reason="version_mismatch", recovery=recovery)
+                f"Try again with: {recovery}", "installer_failed", next=recovery, argv=argv, exit_status=0, reason="version_mismatch", recovery=recovery)
         file_changed(inst["prefix"])
         tool.update({"status": "updated", "argv": argv, "exit_status": 0})
         result["to"], result["restart"] = got, True
@@ -12023,6 +12161,24 @@ def _brief_open_questions(con, me_name, limit):
     return _brief_rows(rows), more
 
 
+def _brief_pending_others(con, me_name, limit):
+    """What is waiting between OTHER agents, oldest first: a question to one named agent that nothing answers, and a
+    handoff or alert to one named agent that agent has not yet read. A late joiner would otherwise see "open
+    questions: none" while two others wait on each other. Not messages to everyone (open questions has those), not
+    to or from the caller (questions and unread have those). The same answer rule as open questions."""
+    def other(p):
+        return f"({p}recipient<>'*' AND {p}recipient<>? AND {p}sender<>?)" if me_name else f"({p}recipient<>'*')"
+    op = [me_name, me_name] if me_name else []
+    sql = (f"WITH RECURSIVE thread(root, id) AS (SELECT id, id FROM messages WHERE kind='question' AND {other('')} "
+           f"UNION SELECT t.root, m.id FROM messages m JOIN thread t ON m.reply_to = t.id) "
+           f"SELECT {_brief_msg_columns('q.')} FROM messages q WHERE {other('q.')} AND ("
+           f"(q.kind='question' AND NOT EXISTS (SELECT 1 FROM thread t JOIN messages a ON a.id = t.id WHERE t.root = q.id AND a.kind = 'answer')) "
+           f"OR (q.kind IN ({','.join('?' * len(BRIEF_KINDS))}) "
+           f"AND q.id > COALESCE((SELECT last_read_id FROM cursors WHERE agent = q.recipient), 0))) ORDER BY q.id")
+    rows, more = capped(con, sql, op + op + list(BRIEF_KINDS), limit)
+    return _brief_rows(rows), more
+
+
 def _brief_next(me_name, joined, unread_total, questions):
     if not me_name:
         return "agentbus --as NAME join"
@@ -12058,6 +12214,7 @@ def cmd_brief(con, a):
     joined = bool(me_name) and con.execute("SELECT 1 FROM agents WHERE name=?", (me_name,)).fetchone() is not None
 
     questions, questions_more = _brief_open_questions(con, me_name, limit)
+    others, others_more = _brief_pending_others(con, me_name, limit)
 
     # unread: the inbox's own rule (after the cursor, to me or broadcast since I first joined, not from me)
     unread_total, unread, unread_more, last_read = 0, [], 0, 0
@@ -12094,8 +12251,11 @@ def cmd_brief(con, a):
 
     result = {"bus": a._db, "me": {"name": me_name, "joined": joined} if me_name else None, "goal": goal,
               "agents": {"items": agents}, "questions": {"items": questions},
-              "unread": {"total": unread_total, "items": unread}, "facts": {"since": since, "items": _brief_rows(fact_rows)},
-              "omitted": {"agents": agents_more, "questions": questions_more, "unread": unread_more, "facts": facts_more},
+              "unread": {"total": unread_total, "items": unread},
+              "pending_others": {"items": others, "next": next_command(a, "read", "--id", others[0]["id"], as_=False) if others else None},
+              "facts": {"since": since, "items": _brief_rows(fact_rows)},
+              "omitted": {"agents": agents_more, "questions": questions_more, "unread": unread_more, "pending_others": others_more,
+                          "facts": facts_more},
               "next": _brief_next(me_name, joined, unread_total, questions)}
     if a.json:
         print_json(result)
@@ -12165,6 +12325,18 @@ def _brief_show(r, limit):
     else:
         show("unread: none")
 
+    po = r["pending_others"]
+    if po["items"]:
+        show("pending between others ({}):", len(po["items"]) + omitted["pending_others"])
+        for m in po["items"]:
+            tag = "" if m["kind"] == "question" else f" [{m['kind']}]"
+            show("#{} {} -> {}{}: {}", m["id"], _brief_line(m["sender"], 40), _brief_line(m["recipient"], 40), tag,
+                 _brief_line(m["body"], BRIEF_BODY_TEXT), row=True)
+        more(omitted["pending_others"])
+        show("next: {}", po["next"], row=True)
+    else:
+        show("pending between others: none")
+
     f = r["facts"]
     if f["items"]:
         if f["since"]:
@@ -12182,12 +12354,12 @@ def _brief_show(r, limit):
 
 
 def register_brief(sub):
-    b = sub("brief", help="What is going on, in one short read: the goal, who holds what, open questions, unread handoffs, changed facts",
-            description="What is going on, in one short read, for an agent that has just joined or come back: the goal; who is here and what "
-                        "each holds and why; open questions; your unread handoffs and alerts; facts changed since your last read; and one "
-                        "next: line with the command to run. It only reads: it never marks anything read, so run inbox afterwards to "
+    b = sub("brief", help="The agent's first call: the goal, who holds what, open questions, unread handoffs, changed facts",
+            description="The agent's first call, after join and whenever it comes back: what is going on, in one short read. It shows the goal; who is here and what "
+                        "each holds and why; open questions; what is pending between other agents; your unread handoffs and alerts; "
+                        "facts changed since your last read; and one next: line with the command to run. It only reads: it never marks anything read, so run inbox afterwards to "
                         "consume your messages. An open question has the kind question, is addressed to you or to everyone, and has no "
-                        "answer: no message of kind answer replies to it, directly or through a chain of replies. Changed facts are those "
+                        "answer: no message of kind answer replies to it, directly or through a chain of replies. Pending between others are the same unanswered questions, and handoffs and alerts that the agent they name has not yet read, when they are addressed to another agent by name; next: shows how to read one. Changed facts are those "
                         "updated since the last message you read with inbox (every fact before a first read), except your own and the goal. "
                         "Without --as it shows the bus as a bystander: no unread, and only questions to everyone.")
     limit_arg(b, default=BRIEF_LIMIT, what="rows in each section")
@@ -12212,8 +12384,9 @@ CONTRACT["commands"]["brief"] = _cmd(
         "agents": _o({"items": _list(_ref("BriefAgent"))}),
         "questions": _o({"items": _list(_ref("BriefMessage"))}),
         "unread": _o({"total": _INT, "items": _list(_ref("BriefMessage"))}),
+        "pending_others": _o({"items": _list(_ref("BriefMessage")), "next": _NSTR}),
         "facts": _o({"since": _NSTR, "items": _list(_ref("BriefFact"))}),
-        "omitted": _o({"agents": _INT, "questions": _INT, "unread": _INT, "facts": _INT}),
+        "omitted": _o({"agents": _INT, "questions": _INT, "unread": _INT, "pending_others": _INT, "facts": _INT}),
         "next": _STR}))
 
 
@@ -12501,6 +12674,9 @@ def emit_pending(a):
         render_pending()
     _test_pause("before-stdout-write")
     write_out(buf.getvalue() if a.json else wrap_output(buf.getvalue()))
+
+
+_stamp_contract_results()
 
 
 def cli():

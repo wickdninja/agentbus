@@ -243,7 +243,7 @@ row_5() {
   run "$W/r5" "$PY" .agentbus/bin/agentbus --json --as o2 join
   json_is "row 5: join --json from the 0.1.0 copy has no contract and no agentbus" '"contract" not in r and "agentbus" not in r' "$OUT"
   run "$W/r5" "${NEW[@]}" --json who
-  json_is "row 5: the same listing from the new tool is the envelope" 'isinstance(r, dict) and r["v"] == 1 and {a["name"] for a in r["items"]} == {"old", "o2"}' "$OUT"
+  json_is "row 5: the same listing from the new tool is the envelope" 'isinstance(r, dict) and r["contract"] == 1 and {a["name"] for a in r["items"]} == {"old", "o2"}' "$OUT"
   # the shipped skill: byte-equal to the file in the repo, and it carries the sentences an agent needs here
   "${NEW[@]}" skill > "$T/skill.out"
   cmp -s "$T/skill.out" "$ROOT/skills/agentbus/SKILL.md" || fail "row 5: agentbus skill differs from skills/agentbus/SKILL.md"

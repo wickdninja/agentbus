@@ -26,7 +26,9 @@ def run(db, *args, env=None):
 def ok(db, *args, **k):
     p = run(db, "--json", *args, **k)
     assert p.returncode == 0, (args, p.returncode, p.stderr)
-    return json.loads(p.stdout)
+    r = json.loads(p.stdout)
+    assert isinstance(r, dict) and r.pop("contract") == 1, r   # every result starts with the one version field; the exact shapes below leave it out
+    return r
 
 def rows(db, sql, *params):
     con = sqlite3.connect(db)

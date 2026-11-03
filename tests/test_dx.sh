@@ -11,8 +11,8 @@ agentbus join --as codex >/dev/null
 [ ! -s "$T/err" ] || fail "on-roster notice"
 [ "$(agentbus post broadcast --as claude --kind answer)" = 'posted #2 to everyone [answer]' ] || fail "broadcast confirmation"
 [ "$(agentbus --as claude post queued --to absent 2>"$T/err")" = 'posted #3 to absent [note]' ] || fail "off-roster confirmation"
-[ "$(cat "$T/err")" = 'agentbus: absent is not on the roster; the message waits for that name.' ] || fail "off-roster notice"
-[ "$(json_ok agentbus --as claude post json --to codex --json | "$PY" -c 'import json,sys; assert json.load(sys.stdin)=={"id":4,"warnings":[]}; print("ok")')" = ok ] || fail "post JSON changed"
+[ "$(cat "$T/err")" = 'agentbus: absent is not on the roster; the message waits for that name. On the roster: claude, codex.' ] || fail "off-roster notice: $(cat "$T/err")"
+[ "$(json_ok agentbus --as claude post json --to codex --json | "$PY" -c 'import json,sys; assert json.load(sys.stdin)=={"contract":1,"id":4,"warnings":[]}; print("ok")')" = ok ] || fail "post JSON changed"
 ok "post names recipients and kinds; absent names get a stderr notice; JSON retains id"
 
 before=$(agentbus --as codex --json inbox --peek)
@@ -52,8 +52,8 @@ import json, sys, time
 from datetime import datetime, timezone
 t = datetime.strptime(json.load(sys.stdin)["items"][0]["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
 print(t.strftime("%H:%M") if t.date() == datetime.now().date() else t.strftime("%b ") + str(t.day) + t.strftime(" %H:%M"))')
-expect_fail "src/api/ is claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
-expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
+expect_fail "src/api/ is claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude: agentbus --as codex post QUESTION --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
+expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude: agentbus --as codex post QUESTION --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"
 
 "$PY" - <<'PY'
@@ -93,7 +93,8 @@ for args, usage in [(('ctx','set'),'KEY VALUE'), (('ctx','get'),'[KEY]'), (('ctx
 PY
 ok "help describes routing, limits, identity, installation, and action-specific usage"
 
-[ "$(agentbus lgo 2>&1 >/dev/null || true)" = "agentbus: unknown command 'lgo' (did you mean log?). See: agentbus --help" ] || fail "unknown command hint"
+out=$(agentbus lgo 2>&1 >/dev/null || true)
+case "$out" in "agentbus: unknown command 'lgo'. Did you mean log? Commands: join, leave, who, "*", brief, demo. See: agentbus --help") ;; *) fail "unknown command hint: $out" ;; esac
 expect_fail "unknown kind 'fyi'; use one of: note, question, answer, handoff, decision, alert, done" agentbus --as claude post hi --kind fyi
 expect_fail "claude was active less than a minute ago" agentbus --as claude join
 ok "typos get concise suggestions, invalid kinds echo their value, and a recent join reads naturally"

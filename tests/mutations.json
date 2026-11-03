@@ -2230,5 +2230,176 @@
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "does not show ~ when HOME is a link"
+  },
+  {
+    "name": "dx2: brief hides what waits between other agents",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ others,\\ others_more\\ =\\ _brief_pending_others\\(con,\\ me_name,\\ limit\\)",
+    "replace": "    others, others_more = [], 0",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "pending between others missing"
+  },
+  {
+    "name": "dx2: brief shows pending between others without its next",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ show\\(\"next:\\ \\{\\}\",\\ po\\[\"next\"\\],\\ row=True\\)",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "pending between others missing its next"
+  },
+  {
+    "name": "dx2: an unknown flag gets no did-you-mean",
+    "file": "bin/agentbus",
+    "find": "guesses\\.append\\(\\(flag,\\ close\\[0\\]\\)\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "unknown flag has no did-you-mean"
+  },
+  {
+    "name": "dx2: an unknown command lists no commands",
+    "file": "bin/agentbus",
+    "find": "\\{'Commands'\\ if\\ not\\ path\\ else\\ 'Actions'\\}:\\ \\{',\\ '\\.join\\(choices\\)\\}\\.\\ ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "unknown command lacks the command list"
+  },
+  {
+    "name": "dx2: --as a typo gets no did-you-mean",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ close:\\\n\\ \\ \\ \\ \\ \\ \\ \\ die\\(f\"\\{name\\}\\ is\\ not\\ on\\ the\\ roster\\.\\ Did\\ you\\ mean",
+    "replace": "    if False:\n        die(f\"{name} is not on the roster. Did you mean",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "--as typo has no did-you-mean"
+  },
+  {
+    "name": "dx2: the --to warning drops the roster from its text",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ text\\ \\+\\ \"\\ \"\\ \\+\\ roster_text\\(w\\[\"roster\"\\],\\ w\\[\"roster_total\"\\]\\)",
+    "replace": "    return text",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "--to warning lacks the roster"
+  },
+  {
+    "name": "dx2: the JSON warning drops roster_total",
+    "file": "bin/agentbus",
+    "find": "\"roster\":\\ shown,\\ \"roster_total\":\\ total\\}\\]",
+    "replace": "\"roster\": shown, \"roster_total\": 0}]",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "the JSON warning lacks the roster"
+  },
+  {
+    "name": "dx2: the roster is not capped",
+    "file": "bin/agentbus",
+    "find": "ROSTER_SHOWN\\ =\\ 10\\ ",
+    "replace": "ROSTER_SHOWN = 1000 ",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "len(w[\"roster\"]) == 10"
+  },
+  {
+    "name": "dx2: a JSON error drops next",
+    "file": "bin/agentbus",
+    "find": "\"next\":\\ None\\ if\\ self\\.next\\ is\\ None\\ else\\ clean\\(self\\.next\\),",
+    "replace": "\"next\": None,",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "d[\"error\"][\"next\"] == \"agentbus post --help\""
+  },
+  {
+    "name": "dx2: not_held names another command as next",
+    "file": "bin/agentbus",
+    "find": "next=\"agentbus\\ claims\",\\ resource=a\\.resource",
+    "replace": "next=\"agentbus who\", resource=a.resource",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "not held: next does not match the message"
+  },
+  {
+    "name": "dx2: a result is printed without contract",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ \\{\"contract\":\\ CONTRACT\\[\"contract\"\\],\\ \\*\\*\\{k:\\ v\\ for\\ k,\\ v\\ in\\ obj\\.items\\(\\)\\ if\\ k\\ !=\\ \"contract\"\\}\\}",
+    "replace": "    return obj",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "a result lacks contract"
+  },
+  {
+    "name": "dx2: the registry does not require contract",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ entry\\[\"result\"\\]\\ =\\ _with_contract\\(entry\\[\"result\"\\]\\)",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "the registry does not require contract"
+  },
+  {
+    "name": "dx2: schema CMD always carries the shared parts",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ full\\ =\\ a\\.full\\ or\\ not\\ want",
+    "replace": "        full = True",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "schema post carries more than its own"
+  },
+  {
+    "name": "dx2: schema CMD --full is ignored",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ full\\ =\\ a\\.full\\ or\\ not\\ want",
+    "replace": "        full = not want",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "schema post --full lacks the shared parts"
+  },
+  {
+    "name": "dx2: claim never says it renewed",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ renewed\\ =\\ bool\\(own\\)\\ and\\ isinstance\\(own\\[\"expires_at\"\\],\\ str\\)\\ and\\ own\\[\"expires_at\"\\]\\ >\\ t",
+    "replace": "        renewed = False",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "a repeat claim must say renewed"
+  },
+  {
+    "name": "dx2: claim hides a purpose change",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ purpose_changed\\ =\\ renewed\\ and\\ a\\.purpose\\ is\\ not\\ None\\ and\\ own\\[\"purpose\"\\]\\ !=\\ a\\.purpose",
+    "replace": "        purpose_changed = False",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "renewed must show the new purpose"
+  },
+  {
+    "name": "dx2: an expired claim counts as renewed",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ renewed\\ =\\ bool\\(own\\)\\ and\\ isinstance\\(own\\[\"expires_at\"\\],\\ str\\)\\ and\\ own\\[\"expires_at\"\\]\\ >\\ t",
+    "replace": "        renewed = bool(own)",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "d[\"renewed\"] is False"
+  },
+  {
+    "name": "dx2: help does not tag status for people",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \"status\":\\ \"The\\ overview\\ for\\ people;\\ agents\\ start\\ with\\ brief\",",
+    "replace": "    \"status\": \"The goal, agents, facts, claims and recent messages\",",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "agentbus --help does not tag status as the overview for people"
+  },
+  {
+    "name": "dx2: help does not tag brief as the first call",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \"brief\":\\ \"Your\\ first\\ call:\\ the\\ goal,\\ who\\ holds\\ what,\\ open\\ questions\",",
+    "replace": "    \"brief\": \"What is going on\",",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "agentbus --help does not tag brief as the first call"
   }
 ]
