@@ -290,7 +290,7 @@
   {
     "name": "a hook trusts a .agentbus that git tracks",
     "file": "bin/agentbus",
-    "find": "if directory is None or not hook_untracked\\(directory\\):",
+    "find": "if directory is None or not \\(joined or hook_untracked\\(directory\\)\\):",
     "replace": "if directory is None:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -389,8 +389,8 @@
   {
     "name": "setup starts a claude that lives inside the project",
     "file": "bin/agentbus",
-    "find": "if root not in \\(home, os\\.sep\\) and",
-    "replace": "if False and",
+    "find": "if any\\(under\\(real, root\\) for root in roots if root != os\\.sep\\) or ",
+    "replace": "if False or ",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "setup started a claude that lives inside the working directory's repo"
@@ -439,5 +439,50 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "the memory file outlived the session"
+  },
+  {
+    "name": "the index answer is never remembered",
+    "file": "bin/agentbus",
+    "find": "if \\(isinstance\\(saved, dict\\) and saved\\.get\\(\"stamp\"\\) == stamp",
+    "replace": "if False and (isinstance(saved, dict) and saved.get(\"stamp\") == stamp",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "re-read an unchanged 1M-entry index"
+  },
+  {
+    "name": "an index without a checksum is refused",
+    "file": "bin/agentbus",
+    "find": "data\\[-size:\\] == bytes\\(size\\) or ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "an untracked bus with a skipHash index was refused"
+  },
+  {
+    "name": "SessionEnd re-reads the index before it leaves",
+    "file": "bin/agentbus",
+    "find": "joined=hook_state_get\\(hook_state_key\\(sid, \"\\.name\"\\)\\) is not None",
+    "replace": "joined=False",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd with a 1M-entry index"
+  },
+  {
+    "name": "setup trusts a claude under an ancestor project root",
+    "file": "bin/agentbus",
+    "find": "while here != home and here != os\\.path\\.dirname\\(here\\):",
+    "replace": "while False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude under an ancestor project root"
+  },
+  {
+    "name": "setup trusts a claude inside a git work tree",
+    "file": "bin/agentbus",
+    "find": "if hook_git_layout\\(os\\.path\\.dirname\\(real\\)\\) is not None:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude inside a home folder that is a git repository"
   }
 ]

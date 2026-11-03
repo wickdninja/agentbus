@@ -5719,7 +5719,7 @@ REGISTER_COMMANDS.append(register_setup)
 HOOK_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,40}")  # a name the hook may print (matched with fullmatch)
 HOOK_BUSY_S = 0.3  # how long a hook waits for a busy bus
 HOOK_HOLD_S = 1.0  # how long a hook may hold one
-HOOK_LIMIT_S = 3.0  # the whole hook, whatever it is waiting on (git, stdin, the disk)
+HOOK_LIMIT_S = 4.0  # the whole hook, whatever it is waiting on (git, stdin, the disk)
 HOOK_END_LIMIT_S = 1.2  # SessionEnd shares a 1.5 s budget in Claude Code
 HOOK_STDIN_MAX = 1 << 20
 HOOK_SEEN_MAX = 200  # paths remembered per session for the once-per-path nudge
@@ -5935,31 +5935,46 @@ def hook_discovery_start(cwd):
     return here
 
 
-def hook_index_hash_size(data):
-    """20 (SHA-1) or 32 (SHA-256): the size of the hash whose digest of everything before it ends the file."""
+def hook_index_candidates(data):
+    """The hash sizes (20 for SHA-1, 32 for SHA-256) this file can be an index of: the digest of everything before the
+    trailer equals it, or the trailer is all zero (index.skipHash writes no checksum)."""
+    found = []
     for size, algo in ((20, hashlib.sha1), (32, hashlib.sha256)):
-        if len(data) > 12 + size and algo(data[:-size]).digest() == data[-size:]:
-            return size
-    raise ValueError("index checksum")
+        if len(data) > 12 + size and (data[-size:] == bytes(size) or algo(data[:-size]).digest() == data[-size:]):
+            found.append(size)
+    if not found:
+        raise ValueError("index checksum")
+    return found
 
 
 def hook_index_names(data):
     """([(path bytes, mode)], hex of the shared index a split index links to or None) for an index file's bytes:
     versions 2, 3 and 4 (path prefix compression), the link extension of a split index. ValueError when it is
     not an index git wrote."""
-    size = hook_index_hash_size(data)
+    for size in hook_index_candidates(data):
+        try:
+            return hook_index_parse(data, size)
+        except ValueError:
+            continue
+    raise ValueError("index")
+
+
+def hook_index_parse(data, size):
     end = len(data) - size
     try:
         if data[:4] != b"DIRC":
             raise ValueError("signature")
         version, count = struct.unpack(">II", data[4:12])
-        if version not in (2, 3, 4):
+        if version not in (2, 3, 4) or count > end // 62:
             raise ValueError("version")
         pos, names, prev = 12, [], b""
+        unpack_mode, unpack_flags, find = struct.Struct(">I").unpack_from, struct.Struct(">H").unpack_from, data.index
+        head, extra = 40 + size, 42 + size
+        append = names.append
         for _ in range(count):
-            mode = struct.unpack(">I", data[pos + 24:pos + 28])[0]
-            flags = struct.unpack(">H", data[pos + 40 + size:pos + 42 + size])[0]
-            start = pos + 42 + size + (2 if version > 2 and flags & 0x4000 else 0)
+            mode = unpack_mode(data, pos + 24)[0]
+            flags = unpack_flags(data, pos + head)[0]
+            start = pos + extra + (2 if version > 2 and flags & 0x4000 else 0)
             if version == 4:
                 c = data[start]
                 start += 1
@@ -5968,17 +5983,18 @@ def hook_index_names(data):
                     c = data[start]
                     start += 1
                     strip = ((strip + 1) << 7) + (c & 127)
-                nul = data.index(b"\0", start)
+                nul = find(b"\0", start)
                 name = prev[:len(prev) - strip] + data[start:nul]
                 pos = nul + 1
             else:
-                nul = data.index(b"\0", start)
+                length = flags & 0xFFF
+                nul = start + length if length < 0xFFF else find(b"\0", start)
                 name = data[start:nul]
-                pos += (start - pos + len(name) + 8) & ~7
-            if pos > end:
-                raise ValueError("entry past the end")
-            names.append((name, mode))
+                pos += (nul - pos + 8) & ~7
+            append((name, mode))
             prev = name
+        if pos > end:
+            raise ValueError("entry past the end")
         link = None
         while pos < end:
             sig, length = struct.unpack(">4sI", data[pos:pos + 8])
@@ -5995,34 +6011,63 @@ def hook_index_names(data):
     return names, link
 
 
+def hook_index_stamp(path):
+    """(dev, ino, size, mtime_ns) of a file, the key an unchanged index is recognised by."""
+    st = os.lstat(path)
+    return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
+
+
 def hook_index_tracks(repo, prefix):
     """True when the repository's index lists anything under `prefix` (bytes, ending in /), a file or link named like
     the folder, or a collapsed folder (sparse index) holding it. A split index is read with its shared index.
-    The index file being absent means nothing is tracked yet; any other trouble raises."""
+    The index file being absent means nothing is tracked yet; any other trouble raises. The answer is remembered
+    (hook_index_cached) while the index file is unchanged, so a big index is not read again by every event."""
+    index = os.path.join(repo["gitdir"], "index")
     try:
-        data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
+        stamp = hook_index_stamp(index)
     except FileNotFoundError:
         return False
+    cache = "idx-" + hashlib.sha256(b"\0".join((os.fsencode(repo["gitdir"]), prefix))).hexdigest()[:20] + ".json"
+    cached = hook_state_get(cache)
+    try:
+        saved = json.loads(cached) if cached else None
+        if (isinstance(saved, dict) and saved.get("stamp") == stamp and isinstance(saved.get("tracked"), bool)
+                and (saved.get("shared") is None or (isinstance(saved["shared"], list) and len(saved["shared"]) == 5
+                                                     and hook_index_stamp(saved["shared"][0]) == saved["shared"][1:]))):
+            return saved["tracked"]
+    except (ValueError, OSError, TypeError):
+        pass
+    data = hook_read_file_exact(index)
     names, link = hook_index_names(data)
+    shared_stamp = None
     if link is not None:
         for folder in (repo["gitdir"], repo["common"]):
+            path = os.path.join(folder, "sharedindex." + link)
             try:
-                shared = hook_read_file_exact(os.path.join(folder, "sharedindex." + link))
+                shared = hook_read_file_exact(path)
+                shared_stamp = [path] + hook_index_stamp(path)
                 break
             except FileNotFoundError:
                 continue
         else:
             raise ValueError("shared index missing")
         more, again = hook_index_names(shared)
-        if again is not None or shared[-len(link) // 2:].hex() != link:
+        if again is not None or (shared[-len(link) // 2:] != bytes(len(link) // 2) and shared[-len(link) // 2:].hex() != link):
             raise ValueError("shared index")
         names += more
     want = prefix.lower()
+    tracked = False
     for name, mode in names:
         n = name.lower()
         if n.startswith(want) or n == want[:-1] or (mode == 0o040000 and n.endswith(b"/") and want.startswith(n)):
-            return True
-    return False
+            tracked = True
+            break
+    if hook_index_stamp(index) == stamp:  # unchanged while we read it
+        try:
+            hook_state_put(cache, json.dumps({"stamp": stamp, "shared": shared_stamp, "tracked": tracked}))
+        except (OSError, SystemExit):
+            pass
+    return tracked
 
 
 def hook_read_file_exact(path):
@@ -6063,7 +6108,7 @@ def hook_untracked(directory):
         return False
 
 
-def hook_find_bus(payload):
+def hook_find_bus(payload, joined=False):
     """(database path, strict folder check) from AGENTBUS_DB or discovery from the payload's cwd, or None.
     Unlike the commands, this never runs git, never writes outside the bus (no exclude rule), never runs a copy,
     and skips a .agentbus that git tracks (an AGENTBUS_DB is a dispatcher's own choice and is not second-guessed)."""
@@ -6075,7 +6120,9 @@ def hook_find_bus(payload):
         strict = False
     else:
         directory = next(walk_buses(hook_discovery_start(os.getcwd())), None)
-        if directory is None or not hook_untracked(directory):
+        # joined: this session's own SessionStart already joined here after the check; leaving only undoes that join,
+        # and must not depend on re-reading a huge index inside SessionEnd's 1.5 s.
+        if directory is None or not (joined or hook_untracked(directory)):
             return None
         path, strict = os.path.join(directory, ".agentbus", "bus.db"), True
     folder = os.path.dirname(path)
@@ -6364,7 +6411,7 @@ def hook_session_end(payload):
     process_name = (hook_state_get(f"proc-{pid}.name") or "").strip() if pid else ""
     if payload.get("reason") == "clear" and process_name == name:
         return None  # /clear starts a new session in this process, which keeps the name, its claims and its mail
-    found = hook_find_bus(payload)
+    found = hook_find_bus(payload, joined=hook_state_get(hook_state_key(sid, ".name")) is not None)
     if not found:
         return None
     con = hook_open(found[0], found[1], read_only=False)
@@ -6474,11 +6521,12 @@ CLAUDE_PLUGIN_NOTE = "hooks   provided by the agentbus plugin; not added"
 
 def claude_trusted_binary():
     """The claude executable setup may start, or None. Found on an absolute PATH entry (or named by
-    AGENTBUS_CLAUDE_BIN), and used only when nothing the project controls could be it: not inside the working
-    directory's repository (or the working directory itself outside one; a home folder is never a project), not
-    inside any bus folder, and neither the file nor the folders holding it (the PATH entry's and the real one's)
-    writable by group or others, all owned by this user or root. Anything else: None, and setup reads the plugin
-    files instead."""
+    AGENTBUS_CLAUDE_BIN), and used only when nothing the project controls could be it. Refused: a real path under
+    the working directory or under any ancestor of it below the home folder (a project root that is not a git
+    repository, such as an unpacked archive), inside any git work
+    tree (the home folder included when it is one) or bus folder, or whose file or folders (the PATH entry's, the real
+    one's) are writable by group or others or owned by someone but the user and root. Anything else: None, and
+    setup reads the plugin files instead."""
     exe = os.environ.get("AGENTBUS_CLAUDE_BIN")
     if not exe:
         for folder in os.environ.get("PATH", "").split(os.pathsep):
@@ -6490,16 +6538,19 @@ def claude_trusted_binary():
             return None
         real, home = os.path.realpath(exe), os.path.realpath(os.path.expanduser("~"))
         cwd = os.path.realpath(os.getcwd())
-        layout = hook_git_layout(cwd)
-        if layout is False:
-            return None
-        roots = [layout["top"] if layout else cwd]
+
+        def under(path, root):
+            return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+        roots, here = ([] if cwd == home else [cwd]), cwd   # run from the home folder itself, that folder is not a project
+        if under(cwd, home) and cwd != home:
+            while here != home and here != os.path.dirname(here):
+                roots.append(here)
+                here = os.path.dirname(here)
         roots += list(walk_buses(cwd))
-        for root in roots:
-            if root not in (home, os.sep) and (real == root or real.startswith(root.rstrip(os.sep) + os.sep)):
-                return None
-        if ".agentbus" in real.split(os.sep):
+        if any(under(real, root) for root in roots if root != os.sep) or ".agentbus" in real.split(os.sep):
             return None
+        if hook_git_layout(os.path.dirname(real)) is not None:
+            return None  # inside a git work tree (or one whose layout cannot be read)
         uid = os.getuid()
         for path in {exe, real, os.path.dirname(exe), os.path.dirname(real)}:
             st = os.stat(path)

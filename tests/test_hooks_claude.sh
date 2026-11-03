@@ -648,11 +648,79 @@ printf 'claude-deadbeef\n' >"$T/evil.name"; ln -s "$T/evil.name" "$STATE/$SIDG.n
 UPS "$SIDG"; grep -qF "1 unread message" <<<"$(text_of)" || fail "a linked name file was followed: out $OUT"
 SS "$SIDH"
 for i in $(seq 1 40); do payload pre_tool_use_write session_id="\"$SIDH\"" tool_input.file_path="\"$P/par$i.txt\"" >"$T/par$i.json"; done
-for i in $(seq 1 40); do ( cd "$P" && "${AB[@]}" hook claude PreToolUse <"$T/par$i.json" >/dev/null 2>&1 ) & done; wait
-[ "$(grep -c . "$STATE/$SIDH.seen")" = 40 ] || fail "parallel hooks lost memory updates: $(grep -c . "$STATE/$SIDH.seen") of 40 paths kept"
+for i in $(seq 1 40); do ( cd "$P" && "${AB[@]}" hook claude PreToolUse <"$T/par$i.json" >"$T/par$i.out" 2>/dev/null ) & done; wait
+# A hook that hit the 0.3 s busy limit is silent by design and recorded nothing. Every hook that answered (the nudge for
+# a new path) must have its update kept; with the lock off, answered hooks overwrite each other and the count falls short.
+answered=$(for i in $(seq 1 40); do [ -s "$T/par$i.out" ] && echo "$i"; done | wc -l | tr -d ' ')
+kept=$(grep -c . "$STATE/$SIDH.seen")
+[ "$answered" -ge 20 ] || fail "only $answered of 40 parallel hooks answered; the lock test proves nothing"
+[ "$kept" = "$answered" ] || fail "parallel hooks lost memory updates: $kept paths kept for $answered hooks that answered"
 END other "$SIDH"; [ ! -e "$STATE/$SIDH.seen" ] || fail "the memory file outlived the session"
 rm -f "$STATE"/bulk-*.seen "$STATE/proc-$$.name"
 ok "dead pids pruned, links ignored, 40 parallel updates kept, memory dropped at SessionEnd"
+
+echo
+echo "TEST 32: an index written with index.skipHash (no checksum) is read: untracked works, tracked is refused"
+newbus p32; printf x >"$P/f.txt"; git -C "$P" config index.skipHash true; gitq "$P" add f.txt; gitq "$P" commit -qm base
+"$PY" -c 'import sys; b=open(sys.argv[1],"rb").read(); sys.exit(0 if b[-20:]==bytes(20) else 1)' "$P/.git/index" || fail "the skipHash index test did not write a zero checksum"
+SS; [ -n "$OUT" ] || fail "an untracked bus with a skipHash index was refused: rc $RC err $ERR"
+gitq "$P" add -f .agentbus; before=$(sha "$P/.agentbus/bus.db")
+SS; quiet || fail "a tracked bus with a skipHash index was used: rc $RC out $OUT"
+[ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a tracked bus (skipHash index)"
+ok "all-zero checksum accepted for the untracked and the tracked case"
+
+echo
+echo "TEST 33: a changed index is read again; an unchanged one is not (cache keyed on the file's identity)"
+mkgenindex() {  # mkgenindex FILE COUNT [EXTRA_NAME]: a version 2 index of COUNT entries (and one more named EXTRA_NAME)
+  "$PY" -I - "$@" <<'PY'
+import hashlib, struct, sys
+path, count = sys.argv[1], int(sys.argv[2])
+names = ["src/d%d/f%d.c" % (i // 100, i) for i in range(count)] + sys.argv[3:]
+names.sort()
+out = [b"DIRC", struct.pack(">II", 2, len(names))]
+for n in names:
+    b = n.encode()
+    e = struct.pack(">10I", 0, 0, 0, 0, 0, 0, 0o100644, 0, 0, 0) + bytes(20) + struct.pack(">H", len(b)) + b
+    out.append(e + bytes(8 - len(e) % 8))
+body = b"".join(out)
+open(path, "wb").write(body + hashlib.sha1(body).digest())
+PY
+}
+newbus p33; mkgenindex "$P/.git/index" 2000
+SS; [ -n "$OUT" ] || fail "an untracked bus with a generated index was refused: rc $RC err $ERR"
+UPS; ab --as peer join --tool t >/dev/null; ab --as peer post "x" --to "$(dname "$SID1")" --kind note >/dev/null 2>&1; UPS
+[ -n "$OUT" ] || fail "an unchanged index: UserPromptSubmit said nothing"
+mkgenindex "$P/.git/index" 2000 .agentbus/bus.db      # same size class, new identity (a new file)
+UPS; quiet || fail "a changed index that now tracks the bus was served from the cache: rc $RC out $OUT"
+mkgenindex "$P/.git/index" 2000
+UPS; [ -n "$OUT" ] || fail "an index that no longer tracks the bus was served from the cache"
+mkgenindex "$P/.git/index" 2000
+STATE="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; ls "$STATE"/idx-*.json >/dev/null 2>&1 || fail "no index answer was remembered"
+ok "tracked flips are seen; the answer is remembered while the index file is unchanged"
+
+echo
+echo "TEST 34: a 1,000,000-entry index: SessionStart joins, the next events and SessionEnd fit their budgets"
+newbus p34; N=$(dname "$SID1"); mkgenindex "$P/.git/index" 1000000
+ab --as peer join --tool t >/dev/null; ab --as peer post "x" --to "$N" --kind note >/dev/null 2>&1
+timed1() {  # timed1 EVENT FIXTURE: "seconds exit stdout_bytes"
+  payload "$2" session_id="\"$SID1\"" >"$T/pl"
+  "$PY" -I - "$T/pl" "$P" "$1" "${AB[@]}" <<'PY'
+import subprocess, sys, time
+pl, cwd, ev, argv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+t0 = time.time()
+p = subprocess.run([*argv, "hook", "claude", ev], stdin=open(pl), capture_output=True, cwd=cwd, timeout=60)
+print("%.2f %d %d" % (time.time() - t0, p.returncode, len(p.stdout)))
+PY
+}
+set -- $(timed1 SessionStart session_start_startup_print); [ "$2 $3" != "0 0" ] || fail "SessionStart with a 1M-entry index said nothing within its limit ($1 s)"
+"$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 4.5 else 1)' "$1" || fail "SessionStart with a 1M-entry index took $1 s"
+set -- $(timed1 UserPromptSubmit user_prompt_submit); [ "$3" != 0 ] || fail "UserPromptSubmit with an unchanged 1M-entry index said nothing"
+"$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)' "$1" || fail "UserPromptSubmit re-read an unchanged 1M-entry index ($1 s)"
+touch "$P/.git/index"      # git rewrites the index all the time; SessionEnd must not depend on reading it again
+set -- $(timed1 SessionEnd session_end_other); [ "$2" = 0 ] || fail "SessionEnd exit $2"
+"$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$1" || fail "SessionEnd with a 1M-entry index took $1 s, past its 1.5 s budget"
+[ "$(roster)" = "peer" ] || fail "SessionEnd with a 1M-entry index did not leave: $(roster)"
+ok "1M entries: join within the limit, warm events under 1 s, SessionEnd under 1.5 s and left"
 
 echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"

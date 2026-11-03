@@ -919,4 +919,25 @@ export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
 ok "claude: absolute PATH entries only, outside the project and its buses, not writable by others, run from HOME; check never starts it"
 
 echo
+echo "TEST: hooks: a claude under any project root below HOME (git or not), or in a git home, is not started"
+export AGENTBUS_CLAUDE_BIN=
+setup_in() {  # setup_in CWD PATH: setup claude from CWD with that PATH; the log says whether a claude was started
+  rm -f "$T/claude.log"; RC=0; OUT=$(cd "$1" && PATH="$2" "${AB[@]}" setup claude 2>&1) || RC=$?
+  [ "$RC" = 0 ] || fail "setup in $1: exit $RC: $OUT"
+}
+reset; mkdir -p "$HOME/tarball/sub" "$HOME/tarball/node_modules/.bin"; mkclaude "$HOME/tarball/node_modules/.bin/claude"
+setup_in "$HOME/tarball/sub" "$HOME/tarball/node_modules/.bin:$PATH"
+! ran || fail "setup started a claude under an ancestor project root of the working directory (no git repository)"
+reset; mkdir -p "$HOME/proj" "$HOME/.local/bin"; mkclaude "$HOME/.local/bin/claude"
+setup_in "$HOME/proj" "$HOME/.local/bin:$PATH"
+ran || fail "setup refused a claude in the home folder's own bin, outside the project and not in a repository"
+reset; git -C "$HOME" init -q; mkdir -p "$HOME/bin" "$HOME/proj"; mkclaude "$HOME/bin/claude"
+setup_in "$HOME/proj" "$HOME/bin:$PATH"
+! ran || fail "setup started a claude inside a home folder that is a git repository"
+setup_in "$HOME" "$HOME/bin:$PATH"
+! ran || fail "setup run from a home folder that is a git repository started a claude there"
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
+ok "no claude under the working directory's ancestors below HOME, nor in a git work tree (HOME included); one in HOME's own bin outside a repository is trusted"
+
+echo
 echo "All setup tests passed"
