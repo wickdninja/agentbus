@@ -73,7 +73,8 @@ mkdir -p "$C/root/x"; new_bus "$C/root/x"
 ab update "$C/root" --dry-run >/dev/null || fail "recording the root failed (dry-run records nothing, so this is the control for the next line)"
 before=$(tree_sum "$PREFIX" "$C/b1" "$C/b2" "$C/root" "$(state_path)" "$HOME/.claude" )
 out=$(ab update --dry-run --all-buses) || fail "dry run failed: $out"
-grep -qF "would run: $C/stubs/uv tool install --force $(cache_path)/$wheel_rel" <<<"$out" || fail "no exact would run line: $out"
+grep -qF "would download agentbus-0.3.0-py3-none-any.whl and SHA256SUMS from github.com/wickdninja/agentbus/releases" <<<"$out" && grep -qF "would then run: $C/stubs/uv tool install --force <the downloaded wheel>" <<<"$out" || fail "no exact would run line: $out"
+! grep -qF "$(cache_path)/$wheel_rel" <<<"$out" || fail "a dry run named a wheel file that does not exist yet: $out"
 grep -qF "$C/b1" <<<"$out" || fail "a planned bus row is missing: $out"
 grep -qF "dry run: nothing was changed." <<<"$out" || fail "dry run summary: $out"
 after=$(tree_sum "$PREFIX" "$C/b1" "$C/b2" "$C/root" "$(state_path)" "$HOME/.claude")
@@ -81,6 +82,8 @@ after=$(tree_sum "$PREFIX" "$C/b1" "$C/b2" "$C/root" "$(state_path)" "$HOME/.cla
 [ ! -e "$(state_path)/update.lock" ] || fail "--dry-run created update.lock"
 [ ! -s "$STUB_LOG" ] || fail "--dry-run ran the installer"
 j=$(ab update --dry-run --all-buses --json) || fail "dry run json failed"
+[ "$(jx 'd["tool"]["argv"]' <<<"$j")" = None ] && [ "$(jx 'd["tool"]["download"]["install_with"][-1]' <<<"$j")" = --force ] \
+  && [ "$(jx 'd["tool"]["download"]["wheel"]' <<<"$j")" = "$REPO_URL/releases/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" ] || fail "dry-run json shows an installer argv for a file that does not exist: $j"
 [ "$(jx 'd["tool"]["status"]' <<<"$j")" = dry_run ] && [ "$(jx 'd["restart"]' <<<"$j")" = False ] || fail "dry-run json: $j"
 [ "$(jx 'sorted(r["directory"] for r in d["buses"] if r["status"] == "skipped")' <<<"$j")" = "['$C/gone/b3']" ] || fail "the vanished folder is not reported: $j"
 ok "exact argv, vanished folder reported and still listed, nothing changed"
@@ -225,6 +228,7 @@ ab update --check >/dev/null; ab update --check >/dev/null
 [ "$(reqs)" = 1 ] || fail "two --check runs made $(reqs) requests"
 [ ! -s "$STUB_LOG" ] && [ "$(installed_version)" = 0.2.0 ] || fail "--check changed something"
 j=$(ab update --check --json)
+[ "$(jx 'd["argv"]' <<<"$j")" = None ] && [ "$(jx 'd["download"]["wheel"]' <<<"$j")" = "$REPO_URL/releases/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl" ] || fail "check json shows an installer argv for a file that does not exist: $j"
 [ "$(jx 'd["update_available"]' <<<"$j")" = True ] && [ "$(jx 'd["latest"]' <<<"$j")" = 0.3.0 ] && [ "$(jx 'd["notes"]' <<<"$j")" = "$REPO_URL/releases/tag/v0.3.0" ] || fail "check json: $j"
 ok "one request, nothing changed"
 
@@ -477,5 +481,64 @@ out=$(ab update "$C/b") || fail "update in an agent session failed: $out"
 grep -qxF "setup: skipped (agent session). Run with --all-buses to include it." <<<"$out" || fail "no setup line in an agent session: $out"
 unset CLAUDE_CONFIG_DIR CODEX_HOME; export CLAUDE_CONFIG_DIR="$T/cc"
 ok "HTTP status, the next command, and a setup line every time"
+
+echo "TEST 26: the installed version must be the release that was downloaded and checked"
+rel_latest 0.3.0
+new_case mismatch uv; new_bus "$C/b"; before=$(bus_version "$C/b")
+STUB_VERSION=0.2.5 ab update --json 2>"$C/err" >/dev/null && fail "an installer that put another version in place was accepted"
+[ "$(errof <"$C/err")" = installer_failed ] && [ "$(ej 'd["error"]["reason"]' "$C/err")" = version_mismatch ] || fail "version mismatch: $(cat "$C/err")"
+grep -qF "agentbus is 0.2.5, not the release 0.3.0 that was downloaded" "$C/err" && [ "$(ej 'd["error"]["committed"]' "$C/err")" = True ] || fail "version mismatch message: $(cat "$C/err")"
+[ "$(bus_version "$C/b")" = "$before" ] || fail "a bus step ran after a version mismatch"
+ok "installer_failed (version_mismatch), committed, no bus step"
+
+echo "TEST 27: Ctrl-C while downloading says so (no installer ran); a slow server, a refused redirect and every download failure read right"
+rel_latest 0.3.0
+new_case dlint uv; reset_reqs
+printf '{"wait_for": "%s/never"}' "$C" >"$SERVER/download-answer.json"
+( cd "$CWD" && exec "$PY" -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' \
+  "$ENTRY" update --json --no-buses --no-setup 2>"$C/err" >/dev/null ) &
+pid=$!
+w=0; until grep -q '/download/' "$SERVER/requests.log" 2>/dev/null; do sleep 0.1; w=$((w+1)); [ $w -lt 300 ] || fail "the download never started"; done
+kill -INT "$pid"; rc=0; wait "$pid" || rc=$?
+unset STUB_STARTED
+[ "$rc" = 130 ] && [ "$(errof <"$C/err")" = interrupted ] || fail "Ctrl-C in the download: exit $rc: $(cat "$C/err")"
+grep -qF "interrupted while downloading the release. Nothing was installed." "$C/err" && ! grep -qF "installer" "$C/err" && [ "$(ej 'd["error"]["argv"] if "argv" in d["error"] else None' "$C/err")" = None ] || fail "Ctrl-C in the download talks about the installer: $(cat "$C/err")"
+[ ! -s "$STUB_LOG" ] || fail "an installer ran"
+rm -f "$SERVER/download-answer.json"
+new_case dlslow uv; printf '{"delay": 6}' >"$SERVER/download-answer.json"
+ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "a download that never arrives succeeded"
+m=$(ej 'd["error"]["message"]' "$C/err")
+grep -qF "no answer in time" <<<"$m" && ! grep -qF "online" <<<"$m" && [[ "$m" == *"agentbus update" ]] || fail "slow download message: $m"
+printf '{"status": 302, "location": "https://example.invalid/x"}' >"$SERVER/download-answer.json"
+new_case dlredir2 uv
+ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "a redirect off GitHub was followed"
+m=$(ej 'd["error"]["message"]' "$C/err")
+grep -qF "pointed somewhere that is not GitHub" <<<"$m" && ! grep -qF "302" <<<"$m" || fail "redirect message: $m"
+rm -f "$SERVER/download-answer.json"
+for mode in bad big; do
+  rel_latest 0.3.0 "$mode"; new_case "dlend-$mode" uv
+  ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "$mode: succeeded"
+  m=$(ej 'd["error"]["message"]' "$C/err"); [[ "$m" == *"agentbus update" ]] || fail "$mode: the message does not end with the next command: $m"
+done
+rel_latest 0.3.0; rm -f "$SERVER/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl"; new_case dlend404 uv
+ab update --json --no-buses --no-setup 2>"$C/err" >/dev/null && fail "404: succeeded"
+m=$(ej 'd["error"]["message"]' "$C/err"); [[ "$m" == *"agentbus update" ]] && grep -qF "HTTP 404" <<<"$m" || fail "404: the message: $m"
+ok "interrupted while downloading; a slow server is not 'offline'; the redirect is named; every download_failed ends with agentbus update"
+
+echo "TEST 28: a hook set up through a symlinked entry (uv's ~/.local/bin/agentbus) stays byte for byte, and one through another spelling that resolves elsewhere is repaired"
+rel_latest 0.3.0
+new_case lnk uv; new_bus "$C/b"; export CLAUDE_CONFIG_DIR="$C/cc"
+mkdir -p "$C/localbin"; ln -s "$PREFIX/bin/agentbus" "$C/localbin/agentbus"
+(cd "$CWD" && "$C/localbin/agentbus" setup claude >/dev/null) || fail "setup through the link failed"
+before=$(cat "$C/cc/settings.json")
+grep -qF "$C/localbin/agentbus" <<<"$before" || fail "the premise failed: the hook does not run the link: $before"
+out=$(ab update --all-buses "$C/b") || fail "update failed: $out"
+[ "$(cat "$C/cc/settings.json")" = "$before" ] || fail "update rewrote a hook set up through a link to this install: $(cat "$C/cc/settings.json")"
+mkdir -p "$C/other/bin"; printf '#!/bin/sh\nexit 0\n' >"$C/other/bin/agentbus"; chmod 755 "$C/other/bin/agentbus"; ln -sf "$C/other/bin/agentbus" "$C/localbin/agentbus"
+reset_module
+out=$(ab update --all-buses "$C/b") || fail "update with a link to another program failed: $out"
+! grep -qF "$C/localbin/agentbus" "$C/cc/settings.json" && grep -qF "$PREFIX/bin/agentbus" "$C/cc/settings.json" || fail "a hook that runs another program through a link was kept: $(cat "$C/cc/settings.json")"
+unset CLAUDE_CONFIG_DIR; export CLAUDE_CONFIG_DIR="$T/cc"
+ok "kept as spelled; repaired when the link goes elsewhere"
 
 all_passed "All update tests passed"

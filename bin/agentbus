@@ -559,7 +559,7 @@ CONTRACT = {
                          "action": "Read each failed item's error, fix it, then run the command again."},
         "installer_failed": {"exit": 1, "retryable": False, "fields": ["argv", "exit_status", "reason", "recovery"],
                              "meaning": "The installer update ran did not finish, or finished without moving agentbus to the new release "
-                                        "(reason: exit, signal, timeout, version_unchanged).",
+                                        "(reason: exit, signal, timeout, version_unchanged, version_mismatch).",
                              "action": "Run agentbus update again (recovery); the installer's own output is above the error."},
         "download_failed": {"exit": 1, "retryable": False, "fields": ["reason", "asset"],
                             "meaning": "The release's wheel or SHA256SUMS could not be downloaded or did not check out "
@@ -699,7 +699,7 @@ CONTRACT = {
                                       "tool": _o({"status": {"type": "string", "enum": ["updated", "current", "dry_run", "manual"]},
                                                   "argv": {"anyOf": [{"type": "null"}, _list(_STR)]}, "exit_status": _NINT,
                                                   "commands": {"anyOf": [{"type": "null"}, _list(_STR)]},
-                                                  "download": {"anyOf": [{"type": "null"}, _o({"wheel": _STR, "sha256sums": _STR})]}},
+                                                  "download": {"anyOf": [{"type": "null"}, _o({"wheel": _STR, "sha256sums": _STR, "install_with": _list(_STR)}, optional=("install_with",))]}},
                                                  optional=("download",)),
                                       "buses": _list(_ref("UpgradeRow")), "setup": _list(_ref("SetupResult")),
                                       "plugin": {"anyOf": [{"type": "null"}, _o({"fix": _STR})]}, "restart": _BOOL,
@@ -707,16 +707,18 @@ CONTRACT = {
                                   _o({"running": _STR, "latest": _NSTR, "update_available": _BOOL,
                                       "install": _o({"method": _STR, "url": _NSTR}),
                                       "argv": {"anyOf": [{"type": "null"}, _list(_STR)]},
-                                      "commands": {"anyOf": [{"type": "null"}, _list(_STR)]}, "notes": _NSTR})]},
+                                      "commands": {"anyOf": [{"type": "null"}, _list(_STR)]},
+                                      "download": {"anyOf": [{"type": "null"}, _o({"wheel": _STR, "sha256sums": _STR, "install_with": _list(_STR)}, optional=("install_with",))]},
+                                      "notes": _NSTR}, optional=("download",))]},
                        ["installer_failed", "manual_step", "release_offline", "rate_limited", "release_unknown", "download_failed",
                         "update_running", "items_failed"], retry=_REPEAT, base=_PLAIN_ERRORS,
                        text='{"from": string, "to": string, "latest": string or null, "install": {"method": string, "url": string or null}, '
                             '"tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null, '
-                            '"download": {"wheel": string, "sha256sums": string} or null (only when update downloads the release wheel)}, '
+                            '"download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null (only when update downloads the release wheel; "install_with" in a dry run)}, '
                             '"buses": [UpgradeRow], "setup": [SetupResult], "plugin": {"fix": string} or null, "restart": boolean, '
                             '"scope": {"narrowed": boolean, "why": string or null}}, or with --check '
                             '{"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, '
-                            '"url": string or null}, "argv": [string] or null, "commands": [string] or null, "notes": string or null}'),
+                            '"url": string or null}, "argv": null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null, "notes": string or null}'),
         "schema": _cmd("Result shapes, errors, exit codes and retry rules",
                        _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"}, "objects": {"type": "object"},
                            "error_fields": {"type": "object"}, "errors": {"type": "object"}, "exit_codes": {"type": "object"}, "env": {"type": "object"}}), base=_PLAIN_ERRORS),
@@ -8077,14 +8079,19 @@ def externally_managed(prefix):
 
 
 def release_wheel_install(direct):
-    """True when direct_url.json (PEP 610) records an install from a local release wheel,
-    file://.../agentbus-X.Y.Z-py3-none-any.whl (what `agentbus update` installs, after it checked the file)."""
+    """True when direct_url.json (PEP 610) records an install of the wheel `agentbus update` itself downloaded and
+    checked: file://<cache folder>/downloads/agentbus-X.Y.Z-py3-none-any.whl. A wheel installed from anywhere else (a
+    hand-built dev wheel, a fork's) is not this repository's release, whatever it is called, and `update` must not
+    replace it with upstream."""
+    import urllib.parse
     info = direct.get("archive_info") if isinstance(direct, dict) else None
     url = direct.get("url") if isinstance(direct, dict) else None
     if not isinstance(info, dict) or not isinstance(url, str) or not url.startswith("file:///"):
         return False
-    m = re.fullmatch(r"agentbus-(.{1,40})-py3-none-any\.whl", url.rsplit("/", 1)[-1])
-    return bool(m and guarded(m.group(1)))
+    path = urllib.parse.unquote(url[len("file://"):])
+    m = re.fullmatch(r"agentbus-(.{1,40})-py3-none-any\.whl", os.path.basename(path))
+    return bool(m and guarded(m.group(1))
+                and os.path.realpath(os.path.dirname(path)) == os.path.realpath(os.path.join(cache_dir(), "downloads")))
 
 
 def detect_install():
@@ -8429,24 +8436,31 @@ def download_release(version):
         try:
             return _bounded(lambda: _http_get(url, ca, "application/octet-stream", limit, redirects=True), DOWNLOAD_TIMEOUT_S, _Fail("timeout"))[1]
         except _Fail as e:
-            if e.reason in ("offline", "timeout"):
-                die(f"could not download {asset} from GitHub ({'no answer in time' if e.reason == 'timeout' else 'offline'}). "
-                    "When you are online, run: agentbus update", "release_offline", reason=e.reason)
+            if e.reason == "offline":
+                die(f"could not download {asset} from GitHub (offline). Nothing was installed. When you are online, run: agentbus update",
+                    "release_offline", reason=e.reason)
+            if e.reason == "timeout":
+                die(f"could not download {asset} from GitHub (no answer in time). Nothing was installed. Try again: agentbus update",
+                    "release_offline", reason=e.reason)
             if e.reason == "rate_limited":
                 release_error({"reason": "rate_limited", "retry_after": e.retry_after})
-            why = f"HTTP {e.status}" if e.status else e.reason
-            die(f"could not download {asset} from GitHub ({why}). Nothing was installed. Try again later, or see {REPO_URL}/releases/tag/v{version}",
+            why = {"redirect": "GitHub's download pointed somewhere that is not GitHub, which agentbus refused",
+                   "tls": "the secure connection to GitHub could not be verified",
+                   "too_large": f"it is bigger than the {limit // 1024} KiB agentbus accepts",
+                   "http": f"GitHub answered with an error (HTTP {e.status})" if e.status else "GitHub answered with an error",
+                   }.get(e.reason, "GitHub's answer could not be used")
+            die(f"could not download {asset}: {why}. Nothing was installed. See {REPO_URL}/releases/tag/v{version}, then try again: agentbus update",
                 "download_failed", reason=e.reason, asset=asset)
     sums = get("SHA256SUMS", SUMS_MAX_BYTES)
     want = parse_sums(sums.decode("utf-8", "replace"), name)
     if not want:
-        die(f"SHA256SUMS of release {version} does not list {name} exactly once. Nothing was installed. See {REPO_URL}/releases/tag/v{version}",
+        die(f"SHA256SUMS of release {version} does not list {name} exactly once. Nothing was installed. See {REPO_URL}/releases/tag/v{version}, then try again: agentbus update",
             "download_failed", reason="malformed", asset="SHA256SUMS")
     data = get(name, WHEEL_MAX_BYTES)
     got = sha256_hex(data)
     if got != want:
         die(f"the downloaded {name} does not match its sha256 in SHA256SUMS (got {got[:12]}..., wanted {want[:12]}...). "
-            "Nothing was installed. Try again later; if it keeps happening, report it at " + REPO_URL + "/issues", "download_failed",
+            "Nothing was installed. If it keeps happening, report it at " + REPO_URL + "/issues. Try again: agentbus update", "download_failed",
             reason="hash_mismatch", asset=name)
     path = os.path.join(folder, name)
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=name + ".")
@@ -8459,7 +8473,7 @@ def download_release(version):
             os.unlink(tmp)
         except OSError:
             pass
-        die(f"could not save the download ({e.strerror or e}). Nothing was installed.", "download_failed", reason="malformed", asset=name)
+        die(f"could not save the download ({e.strerror or e}). Nothing was installed. Try again: agentbus update", "download_failed", reason="malformed", asset=name)
     return path
 
 
@@ -8965,11 +8979,20 @@ def counts_of(rows):
     return {k: sum(1 for r in rows if r.get("status") == k) for k in ("upgraded", "current", "skipped", "failed")}
 
 
+def planned_download(plan):
+    """What --check and --dry-run show instead of an installer argv (its last word is the wheel, which does not exist
+    until update downloads it): the download, and the installer that would then run on it."""
+    if not (plan.get("argv") and plan.get("download")):
+        return None
+    return dict(plan["download"], install_with=plan["argv"][:-1])
+
+
 def update_check(a, inst, install, latest, newer, no_release, plan):
     notes = f"{REPO_URL}/releases/tag/v{latest}" if latest and not no_release else None
     if a.json:
         print_json({"running": __version__, "latest": None if no_release else latest, "update_available": bool(newer),
-                    "install": install, "argv": plan["argv"], "commands": plan["commands"], "notes": notes})
+                    "install": install, "argv": None if plan["download"] else plan["argv"], "commands": plan["commands"],
+                    "download": planned_download(plan), "notes": notes})
         return
     head = f"agentbus {__version__} ({method_label(inst)})."
     if no_release:
@@ -9023,11 +9046,17 @@ def cmd_update(a):
     tool = {"status": "current", "argv": None, "exit_status": None, "commands": None, "download": None}
     if newer:
         if plan["argv"]:
-            tool.update({"status": "dry_run" if a.dry_run else "current", "argv": plan["argv"], "download": plan["download"]})
+            if a.dry_run:  # the wheel does not exist yet: show the download, not an installer line for a missing file
+                tool.update({"status": "dry_run", "argv": None, "download": planned_download(plan)})
+            else:
+                tool.update({"status": "current", "argv": plan["argv"], "download": plan["download"]})
             if human:
                 tell(("would download " if a.dry_run else "downloading ") + f"{wheel_name(newer)} and SHA256SUMS from "
                      f"github.com/{REPO}/releases (the wheel's sha256 is checked against SHA256SUMS before anything is installed)")
-                tell(("would run: " if a.dry_run else "running: ") + shlex_join(plan["argv"]))
+                if a.dry_run:
+                    tell("would then run: " + shlex_join(plan["argv"][:-1]) + " <the downloaded wheel>")
+                else:
+                    tell("running: " + shlex_join(plan["argv"]))
         else:
             tool.update({"status": "manual", "commands": plan["commands"]})
             if plan.get("missing_assets"):
@@ -9076,16 +9105,21 @@ def update_real(a, inst, scope, result, newer, plan, targets, new_buses, new_roo
     if newer and plan["argv"]:
         argv = plan["argv"]
         recovery = shlex_join(argv)
+        phase = "download"
         try:
             wheel = download_release(newer)  # verified against SHA256SUMS, or it dies and nothing is installed
             argv = installer_plan(inst, newer, wheel)["argv"] or argv
             recovery = "agentbus update"  # the downloaded file is removed afterwards, so the installer line alone would not run again
+            phase = "installer"
             try:
                 how, val = run_installer(argv, a.json)
             finally:
                 remove_downloads()
         except KeyboardInterrupt:
             remove_downloads()
+            if phase == "download":
+                die("interrupted while downloading the release. Nothing was installed. Run: agentbus update", "interrupted",
+                    rerun="agentbus update")
             die("interrupted while the installer was running. Run: agentbus update to finish", "interrupted",
                 argv=argv, rerun="agentbus update")
         if how != "exit" or val != 0:
@@ -9096,6 +9130,11 @@ def update_real(a, inst, scope, result, newer, plan, targets, new_buses, new_roo
         if not got or release_key(got) <= release_key(before):
             die(f"the installer finished, but agentbus is still {got or 'not answering'}. Try again with: {recovery}",
                 "installer_failed", argv=argv, exit_status=0, reason="version_unchanged", recovery=recovery)
+        if got != newer:
+            # something other than the release that was downloaded and checked is installed now
+            file_changed(inst["prefix"])
+            die(f"the installer finished, but agentbus is {got}, not the release {newer} that was downloaded. "
+                f"Try again with: {recovery}", "installer_failed", argv=argv, exit_status=0, reason="version_mismatch", recovery=recovery)
         file_changed(inst["prefix"])
         tool.update({"status": "updated", "argv": argv, "exit_status": 0})
         result["to"], result["restart"] = got, True
@@ -10237,6 +10276,11 @@ def hook_tool_runs_this_install(tool):
         return False
     prefix = os.path.abspath(sys.prefix) + os.sep
     first = os.path.abspath(tool[0])
+    entry = os.path.join(prefix, "bin", "agentbus")
+    # uv's default is a link in ~/.local/bin to the environment's entry script: what it resolves to is what runs
+    linked = len(tool) == 1 and os.path.realpath(first) == os.path.realpath(entry) and os.access(first, os.X_OK)
+    if linked:
+        return True
     if not first.startswith(prefix + "bin" + os.sep) or not os.access(first, os.X_OK):
         return False
     if len(tool) == 1:
