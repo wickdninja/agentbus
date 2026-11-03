@@ -1,8 +1,87 @@
 # Upgrade agentbus
 
+One command takes you from one release to the next, everywhere:
+
+```
+agentbus update
+```
+
+It reinstalls agentbus from the new release, upgrades every bus folder it knows, and refreshes the
+skill and the `AGENTS.md` block that are there and unedited. Nothing else is touched. Releases come
+from GitHub Releases only; agentbus is never installed by name from a package index (the name
+`agentbus` on PyPI belongs to an unrelated project).
+
+```
+$ agentbus update
+agentbus 0.2.0, installed with uv from github.com/wickdninja/agentbus
+latest release: 0.3.0
+running: /Users/me/.local/bin/uv tool install --force git+REPOSITORY@v0.3.0
+...the installer's own output...
+agentbus 0.3.0 is installed.
+bus folders: upgraded 3, current 1, skipped 0, failed 0
+  ~/src/app   0.2.0 -> 0.3.0
+  ...
+done: 0.2.0 -> 0.3.0. Restart Claude Code and Codex sessions, and any agentbus watch, to load it.
+```
+
+- `agentbus update --check` only says whether a newer release exists (`agentbus 0.2.0 (uv). Latest release: 0.3.0.`) and exits 0 either way. `--json` gives `update_available` and the installer command.
+- `agentbus update --dry-run` prints `would run: ...` and the folders it would upgrade, and changes nothing.
+- `agentbus update ~/src/app` names one bus folder. A folder that is not a bus (`agentbus update ~/src`, the folder that holds your repos) is remembered, and every bus under it is upgraded now and on later plain `agentbus update` runs. Buses made by `init` and `upgrade` are remembered too; older buses are not, until you name their folder once.
+- `--no-buses` and `--no-setup` skip those steps.
+- The Claude Code plugin updates through Claude Code. When `update` finds it installed it says so: `/plugin marketplace update agentbus`, then `/reload-plugins`. It never runs `claude` and never writes plugin files.
+
+### How the tool is reinstalled
+
+`update` asks which tool installed agentbus and runs that tool's own command at the new tag, where
+`REPOSITORY` is `https://github.com/wickdninja/agentbus`. These are also the commands to run yourself:
+
+| Installed with | `update` runs |
+|---|---|
+| uv | `uv tool install --force git+REPOSITORY@vX.Y.Z` |
+| pipx | `pipx install --force git+REPOSITORY@vX.Y.Z` |
+| pip, in a virtual environment | `python -m pip install --upgrade git+REPOSITORY@vX.Y.Z` |
+| a clone of the repository | prints `git -C DIR fetch --tags` and `git -C DIR checkout vX.Y.Z` |
+| anything else, a fork, or no safe installer on PATH | prints the install lines to run |
+
+`uv tool upgrade` does not move a copy that was pinned to a tag, which is why the tag is named. If
+`update` cannot run an installer itself it exits 1 with `manual_step` and the commands. Coming from
+0.1.0, which has no `update`, run the install line from the README once at the new tag.
+
+An installer that fails, hangs (900 s, then it is stopped) or leaves the version unchanged is
+`installer_failed`, with the command to run yourself. Ctrl-C stops the installer and exits 130
+(`interrupted`, with the command and `agentbus update` to run again). To go back, run the same
+command at the old tag, then restore the bus backups described below.
+
+### Inside an agent session
+
+When `CLAUDECODE` or a Codex shell variable is set, or stdin, stdout or stderr is not a terminal,
+`update` upgrades only the current bus and skips setup, and says so (`agent session (CLAUDECODE is
+set): upgrading this bus only and skipping setup. Run with --all-buses for the rest.`). `--all-buses`
+widens it. Typing `--as` or setting `AGENTBUS_AGENT` does not make a session an agent's.
+
+## The release notice
+
+Once a day, a command you run at a terminal on a tool-installed agentbus may print one line on stderr:
+
+```
+agentbus: a new release is available: 0.2.0 -> 0.3.0. Run: agentbus update
+```
+
+A detached background process asks GitHub for the latest release and remembers the answer in a cache
+file (`~/Library/Caches/agentbus/release-check.json` on macOS, `$XDG_CACHE_HOME/agentbus/` or
+`~/.cache/agentbus/` elsewhere); the notice shows on the run after a check and at most once a day. It
+is never shown with `--json`, in CI (`CI`, `BUILD_NUMBER` or `RUN_ID` set), in an agent session, from a
+project copy, a clone or a fork, or by `hook`, `watch`, `doctor`, `schema`, `skill` and `update` itself.
+Turn it off with `AGENTBUS_NO_UPDATE_CHECK=1` (`DO_NOT_TRACK=1` and `NO_UPDATE_NOTIFIER=1` also do);
+`AGENTBUS_NO_UPDATE_NOTICE=1` silences the notice and the stale-copy notice below. The check sends one
+request to `api.github.com` with no identifier; see [SECURITY.md](../../SECURITY.md).
+
+## Upgrade a bus folder without `update`
+
 Each bus folder carries its own copy of agentbus (`.agentbus/bin/agentbus`) and its own database
 (`.agentbus/bus.db`). Upgrading means replacing the copy and, when the new release changed the
-database's shape, migrating the database. `agentbus upgrade` does both.
+database's shape, migrating the database. `agentbus upgrade` does both, and `agentbus update` runs it for
+each bus it knows.
 
 ## Upgrade every bus under a folder
 

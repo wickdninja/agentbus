@@ -9,6 +9,12 @@ unset AGENTBUS_DB AGENTBUS_AGENT
 # Nor may a test reach the caller's real Claude Code or Codex config: setup honours both variables, so a caller
 # who exported either would get its skill or AGENTS.md block written there. A test that wants one sets it itself.
 unset CODEX_HOME CLAUDE_CONFIG_DIR
+# Nor may the caller's agent or CI signals decide what a test sees: update's release notice is silent for an agent
+# session (CLAUDECODE, a Codex shell's marker, no terminal) and in CI, and off with the switches below, so a test that
+# wants one sets it itself (CI stays: tests/test_package.sh reads it; the update tests unset it in tests/update_lib.sh). CODEX_MARKER_VARS is bin/agentbus's list of the variables a Codex shell carries.
+CODEX_MARKER_VARS="CODEX_THREAD_ID CODEX_SANDBOX CODEX_SANDBOX_NETWORK_DISABLED"
+unset CLAUDECODE BUILD_NUMBER RUN_ID NO_UPDATE_NOTIFIER DO_NOT_TRACK AGENTBUS_NO_UPDATE_CHECK AGENTBUS_NO_UPDATE_NOTICE GH_TOKEN GITHUB_TOKEN
+for _v in $CODEX_MARKER_VARS; do unset "$_v"; done
 # Human output is hard-wrapped to COLUMNS (else the terminal, else 80). Tests that grep long human
 # lines run unwrapped, whatever terminal started them; tests/test_wrap.sh sets COLUMNS per call.
 export COLUMNS=4096

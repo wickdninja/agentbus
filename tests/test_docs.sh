@@ -267,6 +267,12 @@ assert len(checked) >= 25, checked
 version = runpy.run_path(bin_, run_name='agentbus_docs')['__version__']
 pins = set()
 pinned = 0
+# GitHub Releases is the only channel: the name `agentbus` on PyPI belongs to an unrelated project, so no document
+# may tell anyone to install the bare name.
+BARE = re.compile(r'(?:uv tool install|uv pip install|pipx install|pip3? install)(?:\s+--?[\w-]+)*\s+agentbus(?=[\s`\'"<>~=]|$)')
+for name in ['README.md', 'SECURITY.md', 'RELEASING.md', *sorted(str(p.relative_to(root)) for p in (root/'docs').rglob('*.md'))]:
+    assert not BARE.search((root/name).read_text()), (name, 'installs agentbus by its bare name, which is not this project on PyPI')
+assert BARE.search('run: pipx install agentbus') and BARE.search('uv tool install --force agentbus') and not BARE.search('pipx install git+https://github.com/wickdninja/agentbus@v0.1.0'), 'the bare-name check is vacuous or too wide'
 for name in ['README.md', *sorted(str(p.relative_to(root)) for p in (root/'docs').rglob('*.md'))]:
     for m in re.finditer(r'git\+https://github\.com/wickdninja/agentbus(@[^\s`"\')]*)?', (root/name).read_text()):
         assert m.group(1) and re.fullmatch(r'@v\d+\.\d+\.\d+', m.group(1)), (name, 'install line must pin a release tag', m.group(0))

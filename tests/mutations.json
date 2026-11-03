@@ -223,5 +223,194 @@
     "count": 1,
     "run": "tests/test_planted.sh",
     "expect": "database disk image is malformed"
+  },
+  {
+    "name": "update: the release notice also fires in an agent session",
+    "file": "bin/agentbus",
+    "find": "if a\\.json or a\\.cmd in RELEASE_QUIET_COMMANDS or release_switches_off\\(\\) or in_ci\\(\\) or agent_session\\(\\):",
+    "replace": "if a.json or a.cmd in RELEASE_QUIET_COMMANDS or release_switches_off() or in_ci():",
+    "count": 1,
+    "run": "tests/test_no_network.sh",
+    "expect": "the canary tripped"
+  },
+  {
+    "name": "update: a version that fails the tag-shape guard is accepted",
+    "file": "bin/agentbus",
+    "find": "return v if isinstance\\(v, str\\) and _GUARD\\.fullmatch\\(v\\) else None",
+    "replace": "return v if isinstance(v, str) else None",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "reached an installer"
+  },
+  {
+    "name": "update: the cache is written through a symlink in its way",
+    "file": "bin/agentbus",
+    "find": "        check_node\\(path, \"file\"\\)  # refuses a link or another user\\'s file in the way\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_update_notice.sh",
+    "expect": "a request was made though the cache could not be written"
+  },
+  {
+    "name": "update: the attempt is not recorded before the child starts",
+    "file": "bin/agentbus",
+    "find": "\"v\": 1, \"checked_at\": at, \"ok\": None,",
+    "replace": "\"v\": 1, \"checked_at\": 0, \"ok\": None,",
+    "count": 1,
+    "run": "tests/test_update_notice.sh",
+    "expect": "the detached check never wrote the cache"
+  },
+  {
+    "name": "update: the release check follows a redirect",
+    "file": "bin/agentbus",
+    "find": "            def redirect_request\\(self, \\*args, \\*\\*kwargs\\):\\n                return None",
+    "replace": "            def redirect_request(self, *args, **kwargs):\n                return super().redirect_request(*args, **kwargs)",
+    "count": 1,
+    "run": "tests/test_update_notice.sh",
+    "expect": "the redirect target was fetched"
+  },
+  {
+    "name": "update: the answer's media type is not checked",
+    "file": "bin/agentbus",
+    "find": "        if kind != \"application/json\":",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_update_notice.sh",
+    "expect": "wrongtype: cache says"
+  },
+  {
+    "name": "update: the release request carries an Authorization header",
+    "file": "bin/agentbus",
+    "find": "\"User-Agent\": \"agentbus\"\\}\\)",
+    "replace": "\"User-Agent\": \"agentbus\", \"Authorization\": \"token x\"})",
+    "count": 1,
+    "run": "tests/test_update_notice.sh",
+    "expect": "the request carried more than the plan allows"
+  },
+  {
+    "name": "update: pip runs without -I",
+    "file": "bin/agentbus",
+    "find": "argv = \\[py, \"-I\", \"-m\", \"pip\"",
+    "replace": "argv = [py, \"-m\", \"pip\"",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "the planted pip ran under -I -m pip"
+  },
+  {
+    "name": "update: an installer in a group-writable folder is used",
+    "file": "bin/agentbus",
+    "find": "if any\\(st\\.st_mode & 0o022 or \\(uid is not None and st\\.st_uid not in \\(uid, 0\\)\\) for st in \\(fst, dst\\)\\):",
+    "replace": "if any((uid is not None and st.st_uid not in (uid, 0)) for st in (fst, dst)):",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a group-writable PATH entry was used"
+  },
+  {
+    "name": "update: a relative PATH entry is used",
+    "file": "bin/agentbus",
+    "find": "        if not entry or not os\\.path\\.isabs\\(entry\\):",
+    "replace": "        if not entry:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a relative PATH entry was used"
+  },
+  {
+    "name": "update: an agent session is not narrowed",
+    "file": "bin/agentbus",
+    "find": "narrowed = bool\\(why\\) and not a\\.all_buses",
+    "replace": "narrowed = False",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "no narrowing line"
+  },
+  {
+    "name": "update: a second update runs beside the lock",
+    "file": "bin/agentbus",
+    "find": "    if folder and not lock:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "ran beside the lock"
+  },
+  {
+    "name": "update: --dry-run runs the installer",
+    "file": "bin/agentbus",
+    "find": "    if a\\.dry_run:\\n        if not a\\.no_buses:",
+    "replace": "    if False:\n        if not a.no_buses:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "no exact would run line"
+  },
+  {
+    "name": "update: an installer that changed nothing is accepted",
+    "file": "bin/agentbus",
+    "find": "if not got or release_key\\(got\\) <= release_key\\(before\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "unchanged:"
+  },
+  {
+    "name": "update: a hung installer is killed without SIGTERM",
+    "file": "bin/agentbus",
+    "find": "        p\\.terminate\\(\\)\\n        try:\\n            p\\.wait\\(grace\\)",
+    "replace": "        p.kill()\n        try:\n            p.wait(grace)",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "the hung installer was never sent SIGTERM"
+  },
+  {
+    "name": "update: --check ignores a rate limit still in force",
+    "file": "bin/agentbus",
+    "find": "and 0 <= now < cur\\[\"checked_at\"\\] \\+ cur\\[\"retry_after\"\\]:",
+    "replace": "and False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "--check did not replay the limit"
+  },
+  {
+    "name": "update: a clone is not told apart from an install",
+    "file": "bin/agentbus",
+    "find": "    if editable or \\(os\\.path\\.basename\\(os\\.path\\.dirname\\(me\\)\\) == \"bin\" and",
+    "replace": "    if editable or (False and",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "clone:"
+  },
+  {
+    "name": "update: a RECORD that does not list this file still counts",
+    "file": "bin/agentbus",
+    "find": "            if not any\\(os\\.path\\.realpath\\(str\\(dist\\.locate_file\\(f\\)\\)\\) == me for f in \\(dist\\.files or \\[\\]\\)\\):",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "RECORD without the file"
+  },
+  {
+    "name": "update: a fork is treated as the canonical repository",
+    "file": "bin/agentbus",
+    "find": "    fork = url != REPO_URL",
+    "replace": "    fork = False",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "fork:"
+  },
+  {
+    "name": "release check: DIST_NAME is not compared with the project name",
+    "file": "scripts/release_check.py",
+    "find": "    elif dist\\.group\\(1\\) != proj\\.group\\(1\\):",
+    "replace": "    elif False:",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "DIST_NAME vs pyproject"
+  },
+  {
+    "name": "release check: a final tag below the highest final tag passes",
+    "file": "scripts/release_check.py",
+    "find": "        if finals and key\\(a\\.tag\\) < key\\(max\\(finals, key=key\\)\\):",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "a final tag below the highest"
   }
 ]

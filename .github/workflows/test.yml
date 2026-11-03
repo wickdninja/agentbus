@@ -126,6 +126,9 @@ jobs:
       - name: Verify the installed command
         # Every step runs: a skipped step fails the job, here as in release.yml.
         run: bash scripts/verify_installed.sh "$INSTALLED" "${{ matrix.installer }}"
+      - name: update recognises this installer's real layout (a local tag pin, the release fixture)
+        if: endsWith(matrix.installer, '-wheel')
+        run: bash scripts/verify_update_layout.sh "${{ startsWith(matrix.installer, 'uv') && 'uv' || 'pipx' }}"
       - name: Negative control (a broken installed file must fail the verify)
         run: |
           file=$("$INSTALLED_PY" -c 'import agentbus; print(agentbus.__file__)')

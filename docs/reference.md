@@ -116,6 +116,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `schema` | `{"contract": integer, "agentbus": string, "commands": object, "objects": object, "error_fields": object, "errors": object, "exit_codes": object, "env": object}` |
 | `skill` | `{"text": string}` |
 | `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved)}]}` |
+| `update` | `{"from": string, "to": string, "latest": string or null, "install": {"method": string, "url": string or null}, "tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null}, "buses": [UpgradeRow], "setup": [SetupResult], "plugin": {"fix": string} or null, "restart": boolean, "scope": {"narrowed": boolean, "why": string or null}}, or with --check {"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, "url": string or null}, "argv": [string] or null, "commands": [string] or null, "notes": string or null}` |
 <!-- /generated:results -->
 
 Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; timestamps are UTC strings in JSON.
@@ -132,6 +133,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `Goal` | `goal`, `set_by`, `set_at`, `unchanged` (optional) |
 | `BusLevel` | `level`, `directory`, `exists`, `copy_version`, `stale` |
 | `UpgradeRow` | `directory`, `status`, `old`, `new`, `schema_old`, `schema_new`, `backup`, `error` |
+| `SetupResult` | `target`, `scope`, `directory`, `changes`, `error` |
 <!-- /generated:objects -->
 
 `watch --json` returns once, with or without `--once`; its row projections differ from `status`. Data written directly through SQLite can have other types; JSON renders BLOBs and non-finite numbers as strings.
@@ -186,8 +188,14 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `bus_unavailable` | 3 | no | `file` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. Read the message, fix the folder, then run the command again. |
 | `ack_failed` | 3 | yes | `delivered` | inbox printed its messages but could not mark them read. The output was complete: use it, expect the same messages again, and dedupe by id. |
 | `output_failed` | 1 | yes | none | stdout could not be written; committed effects stand. Retry with the same token. |
-| `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun). |
+| `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional), `argv` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun). |
 | `items_failed` | 1 | no | `failed` | Some of the items the command works on failed or were refused (buses of upgrade --all, files of setup); stdout holds the whole result, and failed lists those items. Read each failed item's error, fix it, then run the command again. |
+| `installer_failed` | 1 | no | `argv`, `exit_status`, `reason`, `recovery` | The installer update ran did not finish, or finished without moving agentbus to the new release (reason: exit, signal, timeout, version_unchanged). Run the recovery command yourself, then agentbus update again. |
+| `manual_step` | 1 | no | `commands` | This copy of agentbus is not one update may replace (a clone, a fork, an install of unknown origin, or no safe installer on PATH); the commands to run are listed. Run the listed commands, then agentbus update. |
+| `release_offline` | 1 | yes | `reason` | GitHub could not be reached to look for a release (reason: offline, timeout). Retry when online. |
+| `rate_limited` | 1 | yes | `retry_after` | GitHub is limiting requests from this network. Retry after retry_after seconds. |
+| `release_unknown` | 1 | no | `reason` | GitHub's answer about releases could not be used (reason: http, redirect, tls, malformed, too_large). Try again later, or read the releases page. |
+| `update_running` | 1 | yes | `lock` | Another agentbus update is running. Wait for it, then retry. |
 | `internal` | 4 | no | none | A bug in agentbus. Report it. |
 <!-- /generated:errors -->
 
@@ -236,6 +244,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `schema` | safe | repeat freely |
 | `skill` | safe | repeat freely |
 | `setup` | idempotent | a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object |
+| `update` | idempotent | repeat |
 <!-- /generated:retry -->
 
 `post --request-id TOKEN` makes a retry by the same sender return the original message ID with `duplicate: true`. Body, recipient, kind, topic and reply target must match; a different payload gives `request_id_reused`. Tokens belong to their sender and remain on the message row. Without a token each post creates a message.
@@ -250,6 +259,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `NO_COLOR` | Turns colour off in watch. | unset |
 | `AGENTBUS_NO_EMOJI` | Turns emoji off in watch. | unset |
 | `COLUMNS` | Width human output is wrapped to. | the terminal width, else 80 |
+| `AGENTBUS_NO_UPDATE_CHECK` | Set to anything but 0 to turn off the once-a-day release check (DO_NOT_TRACK and NO_UPDATE_NOTIFIER do the same). | unset |
 <!-- /generated:env -->
 
 ## Locking

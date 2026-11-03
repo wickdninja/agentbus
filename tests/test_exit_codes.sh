@@ -109,6 +109,7 @@ both(None, ["buses", "--up", "5"], 3, "no_bus")
 both(bad, ["buses"], 3, "bus_unavailable")
 empty = os.path.join(tmp, "emptydir"); os.makedirs(empty)
 both(None, ["upgrade", empty], 3, "no_bus")
+both(None, ["update", os.path.join(tmp, "no-such-folder")], 2, "bad_input")  # refused before GitHub is asked
 both(None, ["init", os.path.join(tmp, "not-a-dir")], 2, "bad_input")
 print("PASS: exit 3 for no bus, a refused schema, an unsafe folder and a held database (busy is retryable)")
 
