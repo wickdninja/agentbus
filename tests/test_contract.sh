@@ -155,7 +155,7 @@ for name in ("who", "claims"):
 assert doc["errors"]["bad_input"]["optional_fields"] == ["field"] and "64 KB" in doc["errors"]["bad_input"]["meaning"]
 assert "pipe" in doc["env"]["COLUMNS"]["meaning"]
 trim = ok("schema", "post")
-assert set(trim["objects"]) == set() and set(trim["errors"]) <= set(doc["errors"]) and "claim_conflict" not in trim["errors"], trim.keys()
+assert set(trim["objects"]) == {"Warning"} and set(trim["errors"]) <= set(doc["errors"]) and "claim_conflict" not in trim["errors"], trim.keys()
 assert set(ok("schema", "ctx")["objects"]) == {"Fact", "FactVersion"}
 print("PASS: schema COMMAND prints one command's entry, with arguments read from the parser")
 

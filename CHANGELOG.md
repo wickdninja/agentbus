@@ -50,7 +50,7 @@
 
 - `read --id N` shows one message whole (a `Message` under `--json`, not a listing); `no_message` when there is none, `bad_input` with `--since`, `--before` or `--topic`. Listings (`inbox`, `read`, `status`) cut a message body at 2 KB (2,048 bytes, on a character boundary) and mark the row `"body_truncated": true`; a body that fits has no such key. In text the cut row ends with `... cut at 2 KB. Full text: agentbus read --id N`.
 - A body over 64 KB is refused when it is sent: `bad_input` with `field` `body` (`post`), `value` (`ctx set`), `detail` (`log add`) or `text` (`goal`), and nothing is stored.
-- `schema COMMAND --json` carries only that command's entry and the objects and error codes it uses (`post` is about 7 KB, the full schema 60 KB); `schema --index` lists every command's argument names and its own error codes in under 3 KB (`--json` too). `schema --json` now lists `global_args` in its own result schema.
+- `schema COMMAND --json` carries only that command's entry and the objects and error codes it uses (`post` is about 9 KB, the full schema 60 KB); `schema --index` lists every command's argument names and its own error codes in under 3 KB (`--json` too). `schema --json` now lists `global_args` in its own result schema.
 - A paging cursor is short and versioned, `v1.r.3fa9c1.4021` (command, filter hash, row id), so a `next:` line fits 80 columns. Treat it as opaque.
 - In text, every cut listing says how many rows it left out and, on the next line, the exact command that shows more: `next: agentbus read --before v1.eyJ... --limit 20` (`--topic`, `--as` and `--up` kept; `inbox --peek` continues with `--after`).
 

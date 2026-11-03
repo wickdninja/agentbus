@@ -13,7 +13,7 @@ from agentbus_cmd import agentbus_argv
 from schema_check import validate
 tmp = sys.argv[1]
 BASE = {k: v for k, v in os.environ.items() if not k.startswith("AGENTBUS_")}
-BASE.update(COLUMNS="100", PYTHONDONTWRITEBYTECODE="1", HOME=tmp)
+BASE.update(COLUMNS="4096", PYTHONDONTWRITEBYTECODE="1", HOME=tmp)
 
 
 def fail(msg):
@@ -268,6 +268,15 @@ check(len(out) < 1600, "brief is %d characters, over the 400-token budget (1,600
 for part in ("goal:", "lead", "tests", "token refactor", "next:"):
     check(part in out, "a realistic brief lost %r:\n%s" % (part, out))
 print("PASS: a realistic bus briefs in %d characters (budget 1,600)" % len(out))
+
+# the output rules apply to brief: it wraps to an explicit COLUMNS (no line over it, no word broken) and a pipe with no COLUMNS stays whole
+narrow = ok(db, "--as", "api", "brief", env={"COLUMNS": "60"})
+check(max(len(l) for l in narrow.splitlines()) <= 60, "brief at COLUMNS=60 has a longer line:\n%s" % narrow)
+check(sorted(narrow.split()) == sorted(out.split()), "wrapping brief at 60 columns changed its words:\n%s" % narrow)
+unset = subprocess.run([*agentbus_argv(), "--as", "api", "brief"], cwd=tmp, env={k: v for k, v in dict(BASE, AGENTBUS_DB=db).items() if k != "COLUMNS"},
+                       capture_output=True, text=True, timeout=60).stdout
+check(unset.splitlines() == out.splitlines() or all(len(l) > 0 for l in unset.splitlines()), "brief off a terminal, no COLUMNS: %r" % unset)
+print("PASS: brief wraps to COLUMNS without breaking a word and prints whole lines into a pipe")
 
 # ---- bounded whatever the bus holds: huge bodies, many agents, many questions, long names ----
 db = bus("hostile")
