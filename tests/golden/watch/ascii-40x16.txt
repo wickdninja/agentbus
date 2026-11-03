@@ -1,0 +1,16 @@
+ agentbus  .../acme-api 1 ALRT - 1 ask
+  goal: auth on the new token API
+Agents  3
+  * claude       planner            now
+  ... 2 more
+Claims  2
+  docs/api.md    tests      42m left
+  src/auth/      codex      1h 59m left
+Facts  2                     ... 1 more
+  baseline_sha abc123                7m
+Messages  9     following - k to browse
+  ... 6 earlier
+  #7  codex->tests   ans  Plain...   7m
+  #8  claude->codex  hand Next:...   1m
+| #9  tests->claude  ask  Which...  now
+  k browse - ? help - q quit

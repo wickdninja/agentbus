@@ -1,0 +1,40 @@
+ agentbus  ~/src/acme-api                                                                                         keys
+  watch only reads the bus. It never marks a message read and never changes a claim.
+
+Move
+  j k  ↓ ↑        one row                                    g G  Home End   first, last row
+  PgUp PgDn       one page                                   Ctrl-u Ctrl-d   half a page
+  Tab  Shift-Tab  next, previous section                     1 2 3 4         Agents, Claims, Facts, Messages
+
+Look closer
+  Enter           open the selected row; in a detail, open the selected related row
+  t               show or hide the thread of an open message
+  y               copy the selected id, or in a message its reply command (OSC 52; if paste fails, the footer says
+                  where it is on screen)
+  /               filter: from:NAME to:NAME kind:KIND topic:NAME, or any words
+  p               pause the whole view, or follow again
+  r               read the bus now
+  Esc  q          back one level: a detail, the filter or this page; q quits from the overview
+  Ctrl-C          quit from anywhere
+
+Marks
+  ●   seen in the last 5 minutes         ○   quiet for 5 minutes or more        >   selected row
+  *   the record open in a detail        ▌   new in the last 3 seconds          ◆   the team's goal
+  ↳#6 a reply to message 6               ↵+1 one more line; Enter shows it
+
+Words
+  following          the newest messages, as they arrive
+  paused at 16:44    the whole view is frozen as it was then; +N new counts what came since
+  … N earlier        rows above the window; … N later, … N more: rows not shown
+  N of M             rows the filter kept, of all there are
+  of newest 200      watch holds the newest 200; older ones are not searched (agentbus read)
+  n/a                the filter does not apply to this section
+  open               an alert or question no message replies to yet
+  waiting · 27s old  the bus is busy; you are looking at the last frame, 27s old
+  restart for X      the bus was upgraded; restart watch to run the new code
+
+Kinds  kind: takes the word or the short code; narrow rows show the code
+  hand handoff   ask question   ans answer   done   dec decision   ALRT alert   note
+
+
+  j/k scroll · Esc/q back

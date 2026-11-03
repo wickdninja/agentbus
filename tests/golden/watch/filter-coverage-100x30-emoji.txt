@@ -1,0 +1,30 @@
+ 🚌 agentbus  ~/src/acme-api                               newest 200: 0 alerts · 0 open questions
+  🎯 auth on the new token API                                                            nate · 2h
+
+👥 Agents  n/a                                                                kind: is for messages
+
+🔒 Claims  n/a                                                                kind: is for messages
+
+📌 Facts  n/a                                                                 kind: is for messages
+
+💬 Messages  0 of newest 200                                                               no match
+  … 9 older not searched · agentbus read
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  /kind:alert · Esc clear · / edit · j/k move · Enter open · ? help · q quit

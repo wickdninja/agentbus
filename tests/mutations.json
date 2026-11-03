@@ -11,7 +11,7 @@
   {
     "name": "watch_snapshot advances inbox cursors",
     "file": "bin/agentbus",
-    "find": "        con = open_bus\\(path, strict, read_only=read_only\\)\\n",
+    "find": "        con = open_bus\\(path, strict, read_only=read_only, busy_wait=busy_wait\\)\\n",
     "replace": "        con = open_bus(path, strict)\\n        con.execute(\"UPDATE cursors SET last_read_id=(SELECT COALESCE(MAX(id),0) FROM messages)\")\\n        con.commit()\\n",
     "count": 1,
     "run": "tests/test_watch.sh",
@@ -700,5 +700,59 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "reached through a tracked directory link"
+  },
+  {
+    "name": "watch: q in the filter input quits",
+    "file": "bin/agentbus",
+    "find": "        elif len\\(key\\) == 1:  # every printable character is text, q and the digits too",
+    "replace": "        elif key == \"q\":\n            v.effects.append((\"quit\", 0))\n        elif len(key) == 1:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: state machine"
+  },
+  {
+    "name": "watch: cleanup skips the termios restore",
+    "file": "bin/agentbus",
+    "find": "^                termios\\.tcsetattr\\(stdin, termios\\.TCSADRAIN, saved\\)$",
+    "replace": "                pass",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: colours and cleanup"
+  },
+  {
+    "name": "watch: an unknown escape sequence leaks as keys",
+    "file": "bin/agentbus",
+    "find": "return i \\+ 1, _CSI_TILDE\\.get\\(params\\.split\\(\";\"\\)\\[0\\]\\)",
+    "replace": "return 2, None",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: key decoder"
+  },
+  {
+    "name": "watch: mentions match with LIKE",
+    "file": "bin/agentbus",
+    "find": "match, params = \"instr\\(body, \\?\\) > 0\", \\(key,\\)",
+    "replace": "match, params = \"body LIKE '%' || ? || '%'\", (key,)",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: behaviour cases"
+  },
+  {
+    "name": "watch: pause does not freeze the view",
+    "file": "bin/agentbus",
+    "find": "        if view\\.paused and held is not None:",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: state machine"
+  },
+  {
+    "name": "watch: wrapping a long word is quadratic",
+    "file": "bin/agentbus",
+    "find": "^                cw = cell_width\\(c\\)\\n                if lw \\+ cw > width:$",
+    "replace": "                cw = cell_width(c) + 0 * text_width(word)\n                if lw + cw > width:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: behaviour cases"
   }
 ]

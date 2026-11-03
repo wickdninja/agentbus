@@ -25,6 +25,7 @@ import posixpath  # noqa: E402
 import random  # noqa: E402
 import re  # noqa: E402
 import secrets  # noqa: E402
+import shlex  # noqa: E402
 import shutil  # noqa: E402
 import signal  # noqa: E402
 import sqlite3  # noqa: E402
@@ -577,6 +578,8 @@ CONTRACT = {
         "AGENTBUS_AGENT": {"meaning": "Your agent identity; --as overrides it.", "default": "unset"},
         "NO_COLOR": {"meaning": "Turns colour off in watch.", "default": "unset"},
         "AGENTBUS_NO_EMOJI": {"meaning": "Turns emoji off in watch.", "default": "unset"},
+        "AGENTBUS_ASCII": {"meaning": "Draws watch's own marks in ASCII, with emoji off (also under TERM=linux).",
+                           "default": "unset"},
         "COLUMNS": {"meaning": "Width human output is wrapped to.", "default": "the terminal width, else 80"},
     },
     # Commands the parser may have that `schema` leaves out.
@@ -638,7 +641,9 @@ CONTRACT = {
                           "claims": _list(_o({"resource": _STR, "agent": _STR, "purpose": _NSTR, "expires_at": _STR})),
                           "goal": _NGOAL, "context": _list(_ref("Fact")),
                           "messages": _list(_o({"id": _INT, "ts": _STR, "sender": _STR, "recipient": _STR, "kind": _STR,
-                                                "body": _STR, "reply_to": _NINT})),
+                                                "topic": _NSTR, "body": _STR, "reply_to": _NINT})),
+                          "unread": {"type": "object", "description": "messages waiting in each listed agent's inbox, "
+                                                                      "by name (integers; cursors are read, never moved)"},
                           "counts": _o({"agents": _INT, "claims": _INT, "messages": _INT}), "omitted": _OMITTED})),
         "buses": _cmd("List buses from nearest to outermost", _env(_ref("BusLevel")), base=_FIND_ERRORS),
         "init": _cmd("Install this tool into DIR/.agentbus/",
@@ -4257,7 +4262,11 @@ def register_goal(sub):
 
 
 def register_watch(sub):
-    w = sub("watch", help="A live view of the bus: agents, claims, facts and messages, updated in place")
+    w = sub("watch", help="A live view of the bus: agents, claims, facts and messages, updated in place",
+            description="A live view of the bus: agents, claims, facts and messages, updated in place. "
+                        "Keys: j/k move, Tab section, Enter open, / filter, p pause, y copy, ? help, q quit. Read-only. "
+                        "Esc and q go back; q quits from the main view, Esc never quits. "
+                        "--once prints one frame (so do a pipe and TERM=dumb); --json prints one snapshot.")
     w.add_argument("--interval", type=interval, default=1.0, help="Seconds between refreshes, 0.2 to 60; default 1.")
     w.add_argument("--once", action="store_true", help="Print one frame and exit (what it does anyway when stdout is not a terminal).")
 
@@ -4367,27 +4376,48 @@ def refuse_bad_inputs(a):
 # ==== watch ====
 
 # ---- watch: a live, read-only view of the bus ----------------------------------------------------
-# Each tick opens the bus, copies what the view needs, and closes it before anything is formatted or
+# Each read opens the bus, copies what the view needs, and closes it before anything is formatted or
 # drawn, like every other command: the view never holds the lock while it draws, and its read-only open
-# changes no data or schema (no join, no touch; it may finish SQLite's recovery of a crashed writer's journal). Every lane-written string goes through clean() and is cut to its column, and
+# changes no data or schema (no join, no touch; it may finish SQLite's recovery of a crashed writer's
+# journal). Every lane-written string goes through clean() and is cut to its column or wrapped, and
 # every row starts with text agentbus wrote, so nothing a lane stores can draw outside its cell.
+# Layout: the data reads (watch_snapshot, watch_detail), the pure core (View, decode_keys, step, render)
+# and the thin shell (cmd_watch: terminal, signals, the reader thread). docs/design/watch-v2.md and
+# tests/golden/watch/ are the contract for every frame.
+
+HELD = 200          # rows per section watch holds
+SCAN = 5000         # detail queries look at most at the newest 5000 messages
+THREAD_MAX = 20     # ancestors and direct replies a message detail loads, each; fact history rows
+LIST_MAX = 5        # messages an agent or claim detail lists
+LOCK_WAIT_MS = 250  # the longest a watch read waits for the bus lock; then it keeps the last frame
+BODY_HEAD = 4096    # characters of each held body the live view reads per tick (a row shows its first line);
+                    # a detail reads its own message whole. A word filter searches these characters.
+
 
 def empty_snapshot():
-    return {"agents": [], "claims": [], "goal": None, "context": [], "messages": [],
-            "counts": {"agents": 0, "claims": 0, "messages": 0}}
+    return {"agents": [], "claims": [], "goal": None, "context": [], "messages": [], "unread": {},
+            "counts": {"agents": 0, "claims": 0, "messages": 0},
+            "omitted": {"agents": 0, "context": 0, "claims": 0, "messages": 0}}
 
 
-def watch_snapshot(path, strict, limit, read_only=True):
+def watch_snapshot(path, strict, limit, read_only=True, busy_wait=BUSY_WAIT_S, opened=None, body_head=None, bodies=None):
     """Everything the view shows, as plain values, read in one short open. Read-only: it never
     creates, stamps, migrates or tidies the bus. A bus folder whose bus.db nothing has written yet
-    is shown as the empty bus it is (and still not created)."""
+    is shown as the empty bus it is (and still not created). opened(con), when given, is told the
+    connection (the live view interrupts it on quit). body_head: read at most that many characters of
+    each body (and body_cut, whether there was more), so a tick never copies whole large bodies into Python;
+    --json reads them whole. bodies: the live view's {id: (head, cut)} from earlier ticks; a message's body
+    is then read once, when it first appears (SQLite does not even page in the body of a row it already has),
+    and the dict is trimmed to the held ids."""
     try:
-        con = open_bus(path, strict, read_only=read_only)
+        con = open_bus(path, strict, read_only=read_only, busy_wait=busy_wait)
     except SystemExit as e:
         if read_only and refusal(e)["code"] == "no_bus" and os.path.isdir(os.path.dirname(path)):
             return empty_snapshot()
         raise
     try:
+        if opened:
+            opened(con)
         q = lambda sql, *p: [dict(r) for r in con.execute(sql, p).fetchall()]
         snap = {
             "agents": q("SELECT name, role, last_seen, joined_at FROM agents ORDER BY joined_at, name LIMIT ?", limit),
@@ -4396,16 +4426,125 @@ def watch_snapshot(path, strict, limit, read_only=True):
             "goal": current_goal(con),
             "context": q("SELECT key, value, updated_by, updated_at FROM context WHERE key<>? ORDER BY updated_at DESC LIMIT ?",
                          GOAL_KEY, limit),
-            "messages": list(reversed(q("SELECT id, ts, sender, recipient, kind, body, reply_to FROM messages "
-                                        "ORDER BY id DESC LIMIT ?", limit))),
+            "messages": list(reversed(q("SELECT id, ts, sender, recipient, kind, topic, body, reply_to FROM messages "
+                                        "ORDER BY id DESC LIMIT ?", limit) if body_head is None else
+                                      _watch_messages(con, q, limit, body_head, bodies))),
             "counts": {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("agents", "messages")},
         }
+        snap["unread"] = watch_unread(con, [a["name"] for a in snap["agents"]])
         snap["counts"]["claims"] = con.execute("SELECT COUNT(*) FROM claims WHERE expires_at > ?", (now(),)).fetchone()[0]
         facts = con.execute("SELECT COUNT(*) FROM context WHERE key<>?", (GOAL_KEY,)).fetchone()[0]
         snap["omitted"] = {"agents": snap["counts"]["agents"] - len(snap["agents"]), "context": facts - len(snap["context"]),
                            "claims": snap["counts"]["claims"] - len(snap["claims"]),
                            "messages": snap["counts"]["messages"] - len(snap["messages"])}
         return snap
+    finally:
+        con.close()
+
+
+def _watch_messages(con, q, limit, head, bodies):
+    """The newest `limit` messages, newest first, with each body cut to `head` characters (body_cut says
+    there was more). With `bodies` (the cache of earlier ticks) only messages not in it have their bodies read."""
+    if bodies is None:
+        return q("SELECT id, ts, sender, recipient, kind, topic, substr(body, 1, ?) AS body, reply_to, "
+                 "substr(body, ?, 1) <> '' AS body_cut FROM messages ORDER BY id DESC LIMIT ?", head, head + 1, limit)
+    rows = q("SELECT id, ts, sender, recipient, kind, topic, reply_to FROM messages ORDER BY id DESC LIMIT ?", limit)
+    # Entries belong to one bus file (device and inode) and one message (id, time, sender): a bus.db replaced
+    # under watch, or an id that came back with another message, is read again, never shown from the cache.
+    if bodies.get("bus") != con.ident:
+        bodies.clear()
+        bodies["bus"] = con.ident
+    stamp = lambda r: (r["ts"], r["sender"])
+    need = [r["id"] for r in rows if r["id"] not in bodies or bodies[r["id"]][2] != stamp(r)]
+    by_id = {r["id"]: r for r in rows}
+    for i in range(0, len(need), 500):
+        part = need[i:i + 500]
+        for r in con.execute("SELECT id, substr(body, 1, ?), substr(body, ?, 1) <> '' FROM messages WHERE id IN (%s)"
+                             % ",".join("?" * len(part)), (head, head + 1, *part)):
+            bodies[r[0]] = (r[1], bool(r[2]), stamp(by_id[r[0]]))
+    held = {r["id"] for r in rows} | {"bus"}
+    for i in [i for i in bodies if i not in held]:
+        del bodies[i]
+    for r in rows:
+        r["body"], r["body_cut"] = bodies.get(r["id"], ("", False, None))[:2]
+    return rows
+
+
+def watch_unread(con, names):
+    """{name: messages waiting in its inbox}: addressed to it or broadcast after its cursor, not sent by it,
+    as inbox counts them (an agent with no cursor yet gets broadcasts from now). Reads cursors, writes
+    nothing; each count is an index range on (recipient, id)."""
+    newest = con.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
+    cur = {r[0]: (r[1], r[2]) for r in con.execute("SELECT agent, last_read_id, bcast_from FROM cursors")}
+    out = {}
+    for name in names:
+        last, bcast = cur.get(name, (0, newest))
+        out[name] = con.execute(
+            "SELECT (SELECT COUNT(*) FROM messages WHERE recipient=? AND id>? AND sender<>?)"
+            " + (SELECT COUNT(*) FROM messages WHERE recipient='*' AND id>? AND sender<>?)",
+            (name, last, name, max(last, bcast), name)).fetchone()[0]
+    return out
+
+
+DETAIL_MESSAGE = "SELECT id, ts, sender, recipient, kind, topic, body, reply_to FROM messages"
+# The rows a detail lists show a first line: their bodies are read to BODY_HEAD characters.
+DETAIL_ROW = ("SELECT id, ts, sender, recipient, kind, topic, substr(body, 1, %d) AS body, reply_to, "
+              "substr(body, %d, 1) <> '' AS body_cut FROM messages" % (BODY_HEAD, BODY_HEAD + 1))
+
+
+def watch_detail_rows(con, section, key, top):
+    """What a detail shows beyond the snapshot, read from an open connection: at most the newest SCAN
+    messages up to `top` (the newest id of the snapshot on screen), counted, and LIMIT-ed. Mentions use
+    instr(), never LIKE, so _ and % in a resource are characters."""
+    lo = max(0, top - SCAN)  # the scan window is id > lo AND id <= top, a range on the primary key
+    q = lambda sql, *p: [dict(r) for r in con.execute(sql, p).fetchall()]
+    one = lambda sql, *p: (q(sql, *p) or [None])[0]
+    out = {"section": section, "key": key, "top": top,
+           "scanned": bool(con.execute("SELECT EXISTS(SELECT 1 FROM messages WHERE id <= ?)", (lo,)).fetchone()[0])}
+    window = "id > ? AND id <= ?"
+    if section == "messages":
+        m = one(DETAIL_MESSAGE + " WHERE id=?", key)
+        chain, further = [], None
+        cur = m
+        while cur and cur["reply_to"] is not None and len(chain) < THREAD_MAX:
+            up = one(DETAIL_ROW + f" WHERE id=? AND {window}", cur["reply_to"], lo, top)
+            if up is None:
+                break
+            chain.append(up)
+            cur = up
+        if cur and cur["reply_to"] is not None and len(chain) == THREAD_MAX:
+            further = cur["reply_to"]
+        out.update(record=m, chain=chain, further=further,
+                   replies=q(DETAIL_ROW + f" WHERE {window} AND reply_to=? ORDER BY id LIMIT ?", lo, top, key, THREAD_MAX),
+                   n_replies=con.execute(f"SELECT COUNT(*) FROM messages WHERE {window} AND reply_to=?",
+                                         (lo, top, key)).fetchone()[0])
+        return out
+    if section == "agents":
+        out["record"] = one("SELECT name, role, last_seen, joined_at FROM agents WHERE name=?", key)
+        match, params = "(sender=? OR recipient=?)", (key, key)
+    elif section == "claims":
+        out["record"] = one("SELECT resource, agent, purpose, claimed_at, expires_at FROM claims WHERE resource=?", key)
+        match, params = "instr(body, ?) > 0", (key,)
+    else:
+        out["record"] = one("SELECT key, value, updated_by, updated_at FROM context WHERE key=?", key)
+        out["history"] = q("SELECT value, updated_by, updated_at FROM context_history WHERE key=? ORDER BY id DESC LIMIT ?",
+                           key, THREAD_MAX)
+        out["n_history"] = con.execute("SELECT COUNT(*) FROM context_history WHERE key=?", (key,)).fetchone()[0]
+        return out
+    n, first = con.execute(f"SELECT COUNT(*), MIN(id) FROM messages WHERE {window} AND {match}", (lo, top) + params).fetchone()
+    out.update(n=n, first=first, list=list(reversed(q(DETAIL_ROW + f" WHERE {window} AND {match} ORDER BY id DESC LIMIT ?",
+                                                        lo, top, *params, LIST_MAX))))
+    return out
+
+
+def watch_detail(path, strict, section, key, top, busy_wait=BUSY_WAIT_S, opened=None):
+    """watch_detail_rows in one short read-only open (no setup writes, no migration). Run when a detail
+    opens and on r, never per tick."""
+    con = open_bus(path, strict, read_only=True, busy_wait=busy_wait)
+    try:
+        if opened:
+            opened(con)
+        return watch_detail_rows(con, section, key, top)
     finally:
         con.close()
 
@@ -4439,10 +4578,25 @@ def time_left(ts, t_now):
     return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
 
 
+_WATCH_ENCODING = None  # set by watch on a stdout that is not UTF-8: what it cannot encode is written as ?
+
+
+@lru_cache(maxsize=4096)
+def _unencodable(c, encoding):
+    try:
+        c.encode(encoding)
+        return False
+    except (UnicodeError, LookupError):
+        return True
+
+
 def cell_width(c):
     """Columns a character takes in the live view: 2 for wide (East Asian W/F), 0 for combining
     marks, else 1. clean() has already escaped every control and format character. Ambiguous-width
-    characters (é, the em dash) count 1, as in every non-CJK terminal; each row keeps one spare column."""
+    characters (é, the em dash) count 1, as in every non-CJK terminal; each row keeps one spare column.
+    On a stdout that is not UTF-8 (_WATCH_ENCODING) a character it cannot encode is written as ?: 1."""
+    if _WATCH_ENCODING and _unencodable(c, _WATCH_ENCODING):
+        return 1
     if unicodedata.combining(c):
         return 0
     return 2 if unicodedata.east_asian_width(c) in "WF" else 1
@@ -4484,17 +4638,23 @@ def fit_left(text, n):
 
 
 class Paint:
-    def __init__(self, on, emoji=False):
+    """SGR painting: on (colour), emoji, and ascii (watch's own marks in ASCII, emoji off)."""
+
+    def __init__(self, on, emoji=False, ascii=False):
         self.on = on
         self.emoji = emoji
+        self.ascii = ascii
 
     def __call__(self, code, s):
-        return f"\033[{code}m{s}\033[0m" if self.on and code else s
+        return f"\033[{code}m{s}\033[0m" if self.on and code and s else s
 
 
 # Agent colours, assigned in roster order so the first eight never share one. No red: red means alert.
 AGENT_COLOURS = (34, 36, 35, 32, 33, 94, 96, 95)
 KIND_COLOURS = {"handoff": 33, "question": 35, "answer": 36, "done": 32, "decision": 34, "alert": 31}
+# The short kind codes narrow rows show and kind: accepts.
+KIND_CODE = {"handoff": "hand", "question": "ask", "answer": "ans", "done": "done", "decision": "dec",
+             "alert": "ALRT", "note": "note"}
 FRESH_S = 3.0  # how long a new message is marked, and an agent that just posted is lit
 IDLE_MIN = 5  # an agent not seen for this long shows a hollow dot
 ONCE_MESSAGES = 20  # messages in a single frame (--once, or stdout not a terminal)
@@ -4508,7 +4668,22 @@ ROLE_EMOJI = ((("brain", "lead", "orchestrat", "planner", "coordinat"), "🧠"),
               (("deploy", "ops", "release"), "🚀"), (("design", "ui", "ux"), "🎨"),
               (("human", "owner", "user", "you"), "🙋"))
 KIND_EMOJI = {"handoff": "🤝", "question": "❓", "answer": "💬", "done": "✅", "decision": "🧭", "alert": "🚨", "note": "📝"}
-SECTION_EMOJI = {"Agents": "👥", "Claims": "🔒", "Facts": "📌", "Messages": "💬"}
+SECTION_EMOJI = {"Agents": "👥", "Claims": "🔒", "Facts": "📌", "Messages": "💬",
+                 "Thread": "🧵", "History": "📜", "Mentioned in": "🔗"}
+# Header bar: black on bus yellow, never bold (a terminal that draws bold as bright turns bold black
+# grey). ASCII mode uses reverse video instead. `waiting · Ns old` on the bar is yellow on black.
+HEADER_SGR, HEADER_PLAIN, WAIT_SGR = "30;43", "1;7", "33;40"
+# Watch's own glyphs: Unicode, or ASCII (AGENTBUS_ASCII=1, TERM=linux, or a terminal that draws East
+# Asian Ambiguous characters two columns wide).
+GLYPHS = {
+    False: {"on": "●", "off": "○", "goal": "◆ ", "nogoal": "◇ ", "new": "▌", "ell": "…", "dot": "·",
+            "arrow": "→", "reply": "↳#", "lines": "↵+", "open": "*", "up": "↑", "down": "↓"},
+    True: {"on": "*", "off": "o", "goal": "goal: ", "nogoal": "", "new": "|", "ell": "...", "dot": "-",
+           "arrow": "->", "reply": "re:#", "lines": "+", "open": "*", "up": "Up", "down": "Down"},
+}
+FULL_SCREEN = ("schema_refused", "schema_older", "schema_newer", "no_bus")  # errors that replace the frame
+SECTIONS = ("agents", "claims", "facts", "messages")
+TITLES = {"agents": "Agents", "claims": "Claims", "facts": "Facts", "messages": "Messages"}
 
 
 def role_emoji(role):
@@ -4517,6 +4692,8 @@ def role_emoji(role):
         if any(k in words for k in keys):
             return e
     return "🤖"
+
+
 WIDE_COLS = 72  # from here the kind gets its own column
 
 
@@ -4545,20 +4722,6 @@ def share_rows(needs, room):
     return got
 
 
-def watch_fix_line(error, where, interval):
-    """The one line that says what to do about an unreadable bus, by error code."""
-    code = error.get("code")
-    if code == "schema_older":
-        return f"Run: agentbus upgrade {where}"
-    if code == "schema_newer":
-        return f"Run: agentbus upgrade {where} from a newer install"
-    if code == "busy":
-        return f"Another process holds the bus. Retrying every {interval:g}s."
-    if code == "no_bus":
-        return f"Run: agentbus init {where}"
-    return None
-
-
 def tilde(path):
     """path with the home directory (as named, or as resolved) shown as ~."""
     for home in dict.fromkeys((os.path.expanduser("~"), os.path.realpath(os.path.expanduser("~")))):
@@ -4567,271 +4730,2058 @@ def tilde(path):
     return path
 
 
-def render_error_frame(error, where, cols, rows, paint, interval, live=True):
-    """The frame for a bus that could not be read: what happened and the fix, never empty sections
-    (which would look like lost history)."""
-    width = cols - 1
-    head, tail = " agentbus  ", " not readable "
-    room = width - len(head) - len(tail)
-    header = paint("1;7", head + fit_left(where, room) + tail if room >= 8 else fit(head + tail.strip(), width))
-    out = [header, "", "  " + fit("This bus could not be read, so the sections below are not drawn.", width - 2)]
-    fix = watch_fix_line(error, error.get("directory") or where, interval)
-    for text in (error.get("message", ""), fix):
-        if text:  # wrapped, never cut: the fix names a path to type
-            for row in wrap_line(INDENT + " ".join(clean(str(text)).split()), width).split("\n"):
-                out.append(INDENT + fit(row[len(INDENT):], width - len(INDENT)))
-    if error.get("code") != "busy":
-        out += ["", "  " + fit(f"Retrying every {interval:g}s.", width - 2)]
-    if not live:
+def screen_text(s):
+    """The one boundary between watch and the terminal: every segment of every row passes here, so no
+    control, C1, format (bidi) or default-ignorable character reaches the screen raw, whatever a caller
+    forgot to clean(). Text clean() made is returned unchanged (its escapes are printable ASCII), so a
+    cleaned string is never escaped twice."""
+    if s.isascii() and s.isprintable():
+        return s
+    return "".join(_esc(c) if _unsafe(c) else c for c in s)
+
+
+class Row:
+    """One physical row: segments of (text, SGR). sel: the whole row in reverse video, inner colours off.
+    Every segment goes through screen_text() as it is added."""
+
+    def __init__(self, *segs, sel=False):
+        self.segs, self.sel = [], sel
+        for s in segs:
+            self.add(*s)
+
+    def add(self, text, sgr=""):
+        if text:
+            self.segs.append((screen_text(text), sgr))
+        return self
+
+    def extend(self, other):
+        self.segs.extend(other.segs)  # already through screen_text() when other was built
+        return self
+
+    @property
+    def width(self):
+        return sum(text_width(t) for t, _ in self.segs)
+
+    @property
+    def text(self):
+        return "".join(t for t, _ in self.segs)
+
+    def painted(self, paint):
+        if self.sel:
+            return paint("7", self.text)
+        return "".join(paint(s, t) for t, s in self.segs)
+
+
+def _right(left, right_segs, W):
+    """left, then right_segs ending at column W; right_segs dropped when they do not fit."""
+    r = Row(*right_segs)
+    if right_segs and left.width + 2 + r.width <= W:
+        left.add(" " * (W - left.width - r.width))
+        left.extend(r)
+    return left
+
+
+def _first_fit(left, variants, W, sgr):
+    for v in variants:
+        if not v or left.width + 2 + text_width(v) <= W:
+            return _right(left, [(v, sgr)] if v else [], W)
+    return left
+
+
+@lru_cache(maxsize=4096)
+def wrap_lines(text, width):
+    """Cleaned text wrapped at width columns: linear in the text, cached by (text, width).
+    A word longer than the row is broken, never cut."""
+    width = max(1, width)
+    out = []
+    for para in text.split("\n"):
+        line, lw = [], 0
+        for word in para.split(" "):
+            ww = text_width(word)
+            if lw and lw + 1 + ww <= width:
+                line += [" ", word]
+                lw += 1 + ww
+                continue
+            if not lw and ww <= width:
+                line, lw = [word], ww
+                continue
+            if ww <= width:
+                out.append("".join(line))
+                line, lw = [word], ww
+                continue
+            if lw:  # a long word starts on the current row after a space, as far as it goes
+                if lw + 1 < width:
+                    line.append(" ")
+                    lw += 1
+                else:
+                    out.append("".join(line))
+                    line, lw = [], 0
+            for c in word:
+                cw = cell_width(c)
+                if lw + cw > width:
+                    out.append("".join(line))
+                    line, lw = [], 0
+                line.append(c)
+                lw += cw
+        out.append("".join(line))
+    return tuple(out)
+
+
+def fit_ascii(text, n):
+    """fit() with an ASCII ellipsis."""
+    s = " ".join(clean(text if isinstance(text, str) else ("" if text is None else str(text))).split())
+    n = max(0, n)
+    if text_width(s) <= n:
+        return s + " " * (n - text_width(s))
+    keep = max(0, n - 3)
+    out, w = [], 0
+    for c in s:
+        if w + cell_width(c) > keep:
+            break
+        out.append(c)
+        w += cell_width(c)
+    return "".join(out) + "..."[:n - w] + " " * max(0, n - w - 3)
+
+
+def fit_left_ascii(text, n):
+    s = clean(text)
+    if text_width(s) <= n:
+        return s + " " * (n - text_width(s))
+    out, w = [], 0
+    for c in reversed(s):
+        if w + cell_width(c) > n - 3:
+            break
+        out.append(c)
+        w += cell_width(c)
+    return "..." + "".join(reversed(out)) + " " * (n - 3 - w)
+
+
+def _plural(n, word):
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+# ---- filter: whitespace-separated tokens, every one must match (docs/design/watch-v2.md section 4)
+
+MSG_ONLY = ("to", "kind", "topic")  # filter fields that apply to messages only
+KIND_ERROR = "kind must be one of: " + ", ".join(
+    k if KIND_CODE[k] == k else f"{k} ({KIND_CODE[k]})" for k in KINDS)
+SECTION_KEY = {"agents": "name", "claims": "resource", "facts": "key", "messages": "id"}
+
+
+def kind_matches(kind, want):
+    """kind:X matches a kind that starts with X or whose short code is X (case ignored)."""
+    k, w = str(kind).lower(), want.lower()
+    return k.startswith(w) or KIND_CODE.get(k, "").lower() == w
+
+
+def filter_tokens(text):
+    return (text or "").split()
+
+
+def filter_kind_error(tokens):
+    for tok in tokens:
+        if tok.lower().startswith("kind:") and not any(kind_matches(k, tok[5:]) for k in KINDS):
+            return KIND_ERROR
+    return None
+
+
+def filter_not_applicable(section, tokens):
+    """The first filter field that does not apply to this section, or None."""
+    if section == "messages":
+        return None
+    for tok in tokens:
+        field, colon, _ = tok.lower().partition(":")
+        if colon and field in MSG_ONLY:
+            return field
+    return None
+
+
+def filter_matches(section, item, tokens):
+    if not tokens:
+        return True
+    if filter_kind_error(tokens):
+        return False
+    for tok in tokens:
+        low = tok.lower()
+        field, colon, val = low.partition(":")
+        if colon and field in ("from",) + MSG_ONLY:
+            if section == "messages":
+                if field == "from":
+                    ok = str(item["sender"]).lower().startswith(val)
+                elif field == "to":
+                    r = str(item["recipient"]).lower()
+                    ok = r == "*" and val in ("*", "all", "everyone") or r != "*" and r.startswith(val)
+                elif field == "topic":
+                    ok = str(item.get("topic") or "").lower().startswith(val)
+                else:
+                    ok = kind_matches(item["kind"], val)
+            else:
+                who = {"agents": "name", "claims": "agent", "facts": "updated_by"}[section]
+                ok = str(item[who]).lower().startswith(val)
+        else:
+            fields = {"agents": ("name", "role"), "claims": ("resource", "agent", "purpose"),
+                      "facts": ("key", "value", "updated_by"),
+                      "messages": ("id", "sender", "recipient", "body")}[section]
+            vals = [str(item.get(f) or "").lower() for f in fields]
+            if section == "messages" and item["recipient"] == "*":
+                vals += ["everyone", "all"]  # a broadcast is shown as everyone (wide) or all (narrow)
+            ok = any(low in x for x in vals)
+        if not ok:
+            return False
+    return True
+
+
+def section_items(snap, section):
+    return snap["context"] if section == "facts" else snap[section]
+
+
+def visible_keys(snap, section, text):
+    """The keys of a section's rows the filter keeps, in screen order."""
+    toks = filter_tokens(text)
+    if toks and filter_not_applicable(section, toks):
+        return []
+    k = SECTION_KEY[section]
+    return [x[k] for x in section_items(snap, section) if filter_matches(section, x, toks)]
+
+
+def shell_word(v):
+    """v as one shell word that holds no control byte: shlex.quote when v has no unsafe character, else
+    bash/zsh ANSI-C quoting ($'...') with every unsafe character, quote and backslash escaped. A pasted
+    control byte goes to the line editor before any parser (ESC [ 2 0 1 ~ ends a bracketed paste, Ctrl-U kills
+    the line, CR runs what follows), so no quoting may keep one raw."""
+    v = str(v)
+    if not any(_unsafe(c) for c in v):
+        return shlex.quote(v)
+    return "$'" + "".join("\\" + c if c in "\\'" else _esc(c) if _unsafe(c) else c for c in v) + "'"
+
+
+def copy_text(v):
+    """Plain text as y copies it: as written, unless it holds an unsafe character, then in its clean()ed
+    form, so nothing copied carries a control byte into a paste."""
+    v = str(v)
+    return clean(v) if any(_unsafe(c) for c in v) else v
+
+
+def reply_command(m, name="NAME"):
+    """The command that replies to m, shown in its detail and copied by y, as the text a shell takes: every
+    value is one shell word (shell_word), so a sender named `ops$(touch x)` is one argument and runs nothing,
+    and no control byte is ever in it. name: $AGENTBUS_AGENT or --as when set, else the word NAME."""
+    kind = " --kind answer" if m["kind"] == "question" else ""
+    return (f"agentbus --as {shell_word(name)} post --to {shell_word(m['sender'])} "
+            f"--reply-to {int(m['id'])}{kind} \"...\"")
+
+
+class View:
+    """All of watch's UI state, no I/O. step() makes a new one from a key; render() draws one.
+    sel: section -> the selected row's stable key (agent name, claim resource, fact key, message id), so a
+    refresh never moves it; idx: section -> its last index, so a row that goes moves it to its neighbour.
+    frozen: while paused, {"snap": the retained snapshot, "t_now": its time}; pending (+N new) is counted
+    from it by render. detail: {"section", "key", "thread", "sel" ((section, key) or None), "stack": [...]}.
+    help_from: (mode, scroll) to go back to from help. me: the name the reply command uses.
+    effects: what the shell should do after this key ("quit", code), ("read",), ("detail",), ("copy", text)."""
+
+    def __init__(self):
+        self.mode = "overview"
+        self.focus = "messages"
+        self.sel = {}
+        self.idx = {}
+        self.paused = False
+        self.frozen = {}
+        self.filter = ""
+        self.filter_input = False
+        self.detail = None
+        self.scroll = 0
+        self.copied = None
+        self.help_from = None
+        self.me = None
+        self.effects = []
+
+    def copy(self):
+        v = View.__new__(View)
+        v.__dict__.update(self.__dict__)
+        v.sel, v.idx, v.effects = dict(self.sel), dict(self.idx), []
+        if self.detail is not None:
+            v.detail = dict(self.detail, stack=[dict(s) for s in self.detail.get("stack") or []])
+        return v
+
+    def shown(self, snap):
+        """The snapshot on screen: the frozen one while paused, else the newest."""
+        return self.frozen.get("snap") or snap if self.paused else snap
+
+
+class FrameRows(list):
+    """render()'s rows, plus scroll: the page scroll it actually drew (the shell keeps it in View)."""
+    scroll = 0
+
+
+class _Frame:
+    """One frame. A port of the approved design mock (docs/design/watch_v2_mock.py), which drew every
+    golden; change a frame there first, then here."""
+
+    def __init__(self, cols, rows, paint, view, snap, where, t_now, live=True, held=None, error=None, stale=None,
+                 fresh=(), detail=None):
+        self.cols, self.rows, self.live = cols, rows, live
+        self.A = bool(getattr(paint, "ascii", False))
+        self.E = paint.emoji and not self.A
+        self.g = GLYPHS[self.A]
+        self.W, self.wide = cols - 1, cols >= WIDE_COLS
+        self.v = {"mode": view.mode, "focus": view.focus, "sel": view.sel, "paused": view.paused,
+                  "frozen": view.frozen or {}, "filter": view.filter, "filter_input": view.filter_input,
+                  "detail": view.detail, "scroll": view.scroll, "copied": view.copied, "fresh": fresh,
+                  "error": error, "stale": stale}
+        self.me = view.me or "NAME"
+        self.data = detail
+        self.cur, self.where, self.t_cur = snap, where, t_now
+        held = held if held is not None else (view.frozen or {}).get("snap")
+        # Paused: the whole display is the frozen snapshot at its own time; only +N new comes from now.
+        if view.paused and held is not None:
+            self.snap, self.t = held, _when((view.frozen or {}).get("t_now")) or t_now
+            self.pending = max(0, snap["counts"]["messages"] - held["counts"]["messages"])
+        else:
+            self.snap, self.t, self.pending = snap, t_now, 0
+        self.colour = colour_map(self.snap["agents"])
+        self.hsgr = HEADER_PLAIN if self.A else HEADER_SGR
+        self.scroll = 0
+
+    # ------------------------------------------------ shared pieces
+
+    def tx(self, s):
+        """Watch's own words in the current glyph set."""
+        if not self.A:
+            return s
+        return s.replace("…", "...").replace("·", "-").replace("→", "->").replace("↳#", "re:#")
+
+    def fit(self, text, n):
+        return fit_ascii(text, n) if self.A else fit(text, n)
+
+    def cut(self, text, n):
+        """Text that is already clean, cut to n columns with the ellipsis (never cleaned again)."""
+        if text_width(text) <= n:
+            return text
+        ell = self.g["ell"]
+        out, w = [], 0
+        for c in text:
+            if w + cell_width(c) > max(0, n - len(ell)):
+                break
+            out.append(c)
+            w += cell_width(c)
+        return "".join(out) + ell[:max(0, n - w)]
+
+    def ac(self, name):
+        return str(self.colour(name))
+
+    def hhmm(self, ts):
+        t = _when(ts)
+        if t is None:
+            return "?"
+        local = t.astimezone()
+        today = self.t.astimezone().date()
+        return local.strftime("%H:%M") if local.date() == today else \
+            f"{local.strftime('%b')} {local.day} {local.strftime('%H:%M')}"
+
+    def ago_words(self, ts):
+        a = ago(ts, self.t)
+        return "now" if a == "now" else f"{a} ago"
+
+    def idle(self, a):
+        seen = _when(a["last_seen"]) if a else None
+        return seen is None or (self.t - seen).total_seconds() > IDLE_MIN * 60
+
+    def header(self, right_text, wait=None):
+        """The bar: name, folder cut from the left, then the right-hand text. wait (`waiting · Ns old`, the
+        bus is busy) is always shown; the right-hand text goes first when both do not fit."""
+        W, H = self.W, self.hsgr
+        head = " 🚌 agentbus  " if self.E else " agentbus  "
+        sep = self.tx(" · ")
+        right_text = self.tx(right_text or "")
+        wait = self.tx(wait) if wait else ""
+        if wait and right_text and text_width(head) + text_width(right_text) + text_width(sep) + text_width(wait) > W:
+            right_text = ""
+        segs = [(right_text + (sep if right_text and wait else ""), H), (wait, WAIT_SGR)]
+        tail_w = sum(text_width(t) for t, _ in segs)
+        room = W - text_width(head) - tail_w - 2
+        if room >= 8:
+            row = Row((head + (fit_left_ascii if self.A else fit_left)(self.where, room) + " ", H), *segs)
+        else:  # no room for the folder: the name, then the right-hand text, as much as fits
+            left = next((h for h in (head, head[:-1], " agentbus ") if text_width(h) + tail_w <= W), " agentbus ")
+            if text_width(left) + tail_w > W:
+                segs = [(self.cut(segs[0][0] + segs[1][0], W - text_width(left)), WAIT_SGR if wait else H)]
+            row = Row((left, H), *segs)
+        row.add(" " * (W - row.width), H)
+        return row
+
+    def summary(self):
+        """The header's right-hand text in the overview: what needs a person. Counted over the messages
+        watch holds, and saying so when the bus has more."""
+        msgs = self.snap["messages"]
+        replied = {m["reply_to"] for m in msgs if m["reply_to"]}
+        alerts = sum(1 for m in msgs if m["kind"] == "alert" and m["id"] not in replied)
+        asks = sum(1 for m in msgs if m["kind"] == "question" and m["id"] not in replied)
+        if self.wide:
+            text = f"{_plural(alerts, 'alert')} · {_plural(asks, 'open question')}"
+        else:
+            text = f"{alerts} ALRT · {asks} ask"
+        if self.snap["counts"]["messages"] > len(msgs):
+            text = f"newest {len(msgs)}: " + text
+        return text
+
+    def wait(self):
+        e = self.v["error"]
+        return f"waiting · {e.get('last_good_s') or 0}s old" if e and e["code"] == "busy" else None
+
+    def goal_row(self):
+        W, g = self.W, self.snap.get("goal")
+        if g:
+            lead = "  🎯 " if self.E else "  " + self.g["goal"]
+            tail = clean(f"{g['set_by']} {self.g['dot']} {ago(g['set_at'], self.t)}")
+            goal_w = W - text_width(lead) - 2 - text_width(tail)
+            if goal_w < 12 or not self.wide and text_width(clean(g["goal"])) > goal_w:  # narrow: the goal first
+                tail, goal_w = "", W - text_width(lead)
+            text = self.fit(g["goal"], goal_w)
+            row = Row((lead, "1;33"), (text.rstrip() if not tail else text, "1"))
+            if tail:
+                row.add("  " + tail, "2")
+            return row
+        lead = "  🎯 " if self.E else "  " + self.g["nogoal"]
+        return Row((lead + self.fit(self.tx('no goal yet · agentbus --as NAME goal "..."'), W - text_width(lead)), "2"))
+
+    def title(self, name, count, right_variants=(), right_sgr="2"):
+        left = Row(((SECTION_EMOJI.get(name, "") + " " if self.E and name in SECTION_EMOJI else "") + name, "1"),
+                   (f"  {count}" if count != "" else "", "2"))
+        return _first_fit(left, [self.tx(v) for v in right_variants], self.W, right_sgr)
+
+    def footer(self, items, prefix=None):
+        """items: (key, words, priority); lowest priority dropped first until the row fits. Keys bold, words
+        at normal intensity (they are instructions), separators dim."""
+        W = self.W
+        keep = list(items)
+        sep = self.tx(" · ")
+        while True:
+            row = Row(("  ", ""))
+            if prefix:
+                row.extend(prefix)
+                if keep:
+                    row.add(sep, "2")
+            for i, (k, w, _) in enumerate(keep):
+                if i:
+                    row.add(sep, "2")
+                row.add(k, "1")
+                row.add((" " + self.tx(w)) if w else "", "")
+            if row.width <= W or not keep:
+                break
+            keep.remove(min(keep, key=lambda x: x[2]))
+        return row
+
+    def more_row(self, text):
+        return Row(("  " + self.fit(self.tx(text), self.W - 2).rstrip(), "2"))
+
+    # ------------------------------------------------ section rows
+
+    def agent_row(self, a, sel=False, hot=()):
+        W, E = self.W, self.E
+        idle = self.idle(a)
+        nw = 16 if self.wide else 12
+        lead_w = 4 if E else 1
+        rw = W - 2 - lead_w - 1 - nw - 1 - 5
+        rolew = 16 if self.wide else 12
+        info = self.agent_info(a)
+        if info and rw >= rolew + 8:
+            text = self.fit(a["role"], rolew - 1) + " " + self.fit(info, rw - rolew)
+        else:
+            text = self.fit(a["role"], rw) if (self.wide or rw >= 8) else " " * rw
+        row = Row(("> " if sel else "  ", ""),
+                  (self.g["off"] if idle else self.g["on"], "2" if idle else self.ac(a["name"])), sel=sel)
+        if E:
+            row.add(" " + role_emoji(a["role"]))
+        row.add(" ")
+        row.add(self.fit(a["name"], nw), "1" if a["name"] in hot else "")
+        row.add(" ")
+        row.add(text, "2")
+        row.add(ago(a["last_seen"], self.t).rjust(5), "2")
+        return row
+
+    def agent_info(self, a):
+        parts = []
+        n = (self.snap.get("unread") or {}).get(a["name"], 0)
+        if n:
+            parts.append(f"{n} unread")
+        held = [c["resource"] for c in self.snap["claims"] if c["agent"] == a["name"]]
+        if held:
+            parts.append(f"holds {held[0]}" + (f" +{len(held) - 1}" if len(held) > 1 else ""))
+        return self.tx(" · ").join(parts)
+
+    def claim_row(self, c, sel=False):
+        W = self.W
+        res_w = max(14, min(36, W // 3))
+        hw = 12 if self.wide else 10
+        rest = f"{time_left(c['expires_at'], self.t)} left" + (f" · {c['purpose']}" if self.wide and c["purpose"] else "")
+        return Row(("> " if sel else "  ", ""), (self.fit(c["resource"], res_w), ""), (" ", ""),
+                   (self.fit(c["agent"], hw), self.ac(c["agent"])), (" ", ""),
+                   (self.fit(self.tx(rest), W - 2 - res_w - 1 - hw - 1), "2"), sel=sel)
+
+    def fact_row(self, x, sel=False):
+        W = self.W
+        key_w = max(10, min(24, W // 5)) if self.wide else max(12, min(24, W // 4))
+        if self.wide:
+            by_w, by = min(20, W // 4), self.tx(f"{x['updated_by']} · {ago(x['updated_at'], self.t)}")
+        else:
+            by_w, by = 4, ago(x["updated_at"], self.t)
+        return Row(("> " if sel else "  ", ""), (self.fit(x["key"], key_w), ""), (" ", ""),
+                   (self.fit(x["value"], W - 2 - key_w - 1 - by_w - 1), ""), (" ", ""),
+                   (self.fit(by, by_w).rstrip().rjust(by_w), "2"), sel=sel)
+
+    def msg_row(self, m, sel=False, new=False, here=False):
+        W, E, g = self.W, self.E, self.g
+        kind = str(m["kind"])
+        kc = str(KIND_COLOURS.get(kind, 2))
+        emo = (KIND_EMOJI.get(kind, "📝") + " ") if E else ""
+        if self.wide:
+            to = "everyone" if m["recipient"] == "*" else m["recipient"]
+            mid_w, route_w, arrow, kind_cell = 5, 24, f" {g['arrow']} ", emo + self.fit(kind, 9)
+        else:
+            to = "all" if m["recipient"] == "*" else m["recipient"]
+            route_w = 13 + len(g["arrow"]) - 1  # the ASCII arrow takes a column from the body, not the names
+            mid_w, arrow, kind_cell = 4, g["arrow"], emo + self.fit(KIND_CODE.get(kind, kind[:4]), 4)
+        part = (route_w - len(arrow)) // 2
+        frm, dest = self.fit(m["sender"], part).rstrip(), self.fit(to, part).rstrip()
+        lines = str(m["body"] or "").split("\n")
+        extra = f" {g['lines']}{len(lines) - 1}" if len(lines) > 1 else ""
+        if m.get("body_cut") and extra:
+            extra += g["ell"]  # at least that many more lines: only the head of a long body was read
+        reply = f"{g['reply']}{m['reply_to']} " if m["reply_to"] else ""
+        fixed = 2 + mid_w + route_w + 1 + text_width(kind_cell) + 1 + text_width(extra) + 1 + 4
+        if not self.wide and W - fixed - text_width(reply) < 8:
+            reply = ""  # narrow: the body keeps 8 columns before the reply mark is shown
+        body_w = W - fixed - text_width(reply)
+        mark = ">" if sel else g["open"] if here else g["new"] if new else " "
+        row = Row(sel=sel)
+        row.add(mark, kc if mark == g["new"] else "1" if here else "")
+        row.add(" ")
+        row.add(self.fit("#" + str(m["id"]), mid_w), "1" if here else "2")
+        row.add(frm, self.ac(m["sender"]))
+        row.add(arrow, "2")
+        row.add(dest, "2" if m["recipient"] == "*" else self.ac(to))
+        row.add(" " * (route_w - text_width(frm) - len(arrow) - text_width(dest)) + " ")
+        row.add(kind_cell, kc)
+        row.add(" ")
+        row.add(reply, "2")
+        first = lines[0]
+        part = first[:max(0, body_w) * 4 + 16]  # cut before clean(): a row never cleans more than it can show
+        if len(part) < len(first) and text_width(part) > body_w:
+            first = part
+        text = self.fit(first, body_w).rstrip()  # the ↵+N mark follows the text, then the padding
+        row.add(text, "1" if new else "")
+        row.add(extra, "2")
+        row.add(" " * (body_w - text_width(text)) + " ")
+        row.add(ago(m["ts"], self.t).rjust(4), "2")
+        return row
+
+    # ------------------------------------------------ whole frames
+
+    def render(self):
+        if self.cols < WATCH_MIN_COLS:
+            return self.pad([Row((fit(f"watch needs {WATCH_MIN_COLS}+ columns", self.cols), ""))])
+        e = self.v["error"]
+        if self.v["mode"] == "help" and self.live:
+            return self.help_frame()
+        if e and e["code"] != "busy":
+            return self.error_frame()
+        if self.v["mode"] == "detail" and self.v["detail"]:
+            return self.detail_frame()
+        return self.overview()
+
+    def pad(self, out, footer=None):
+        out = out[:self.rows - (1 if footer else 0)]
+        while len(out) < self.rows - (1 if footer else 0):
+            out.append(Row())
+        if footer:
+            out.append(footer)
         return out
-    out = out[:rows - 1]
-    while len(out) < rows - 1:
-        out.append("")
-    out.append(paint("2", "  " + fit("q quit · read-only", width - 2)))
+
+    @staticmethod
+    def window(n, k, si, bottom):
+        """First index of a k-row window over n rows that shows row si: anchored at the bottom (Messages) or
+        the top (the other sections), moved only as far as the selection needs."""
+        if n <= k:
+            return 0
+        start = n - k if bottom else 0
+        if si is not None:
+            if si < start:
+                start = si
+            elif si >= start + k:
+                start = si - k + 1
+        return start
+
+    def overview(self):
+        W, v, snap, live = self.W, self.v, self.snap, self.live
+        toks = filter_tokens(v["filter"])
+        filtering = bool(toks)
+        fresh = set(v["fresh"]) if not v["paused"] else set()
+        hot = {m["sender"] for m in snap["messages"] if m["id"] in fresh}
+        focus, sel = v["focus"], v["sel"]
+        secs = []
+        for name, key, items, rowf, empty, cmd in (
+                ("Agents", "agents", snap["agents"], self.agent_row,
+                 "no one yet. Join with: agentbus --as NAME join", "who"),
+                ("Claims", "claims", snap["claims"], self.claim_row, "nothing claimed", "claims"),
+                ("Facts", "facts", snap["context"], self.fact_row, "none yet", "ctx get")):
+            keyf = SECTION_KEY[key]
+            total = snap["counts"]["agents"] if key == "agents" else snap["counts"]["claims"] if key == "claims" \
+                else len(items) + (snap.get("omitted") or {}).get("context", 0)
+            na = filter_not_applicable(key, toks) if filtering else None
+            keep = [] if na else [x for x in items if filter_matches(key, x, toks)]
+            rows_ = [rowf(x, sel=(focus == key and sel.get(key) == x[keyf]), **({"hot": hot} if key == "agents" else {}))
+                     for x in keep]
+            beyond = max(0, total - len(items))
+            secs.append({"name": name, "key": key, "total": total, "held": len(items), "n": len(keep), "rows": rows_,
+                         "empty": empty, "cmd": cmd, "na": na, "beyond": beyond, "older": filtering and beyond > 0})
+        msgs = snap["messages"]
+        n_msgs = snap["counts"]["messages"]
+        capped = n_msgs > len(msgs)
+        msg_keep = [m for m in msgs if filter_matches("messages", m, toks)]
+        msg_rows = [self.msg_row(m, sel=(focus == "messages" and sel.get("messages") == m["id"]),
+                                 new=m["id"] in fresh) for m in msg_keep]
+        sel_idx = next((i for i, m in enumerate(msg_keep) if focus == "messages" and sel.get("messages") == m["id"]), None)
+        older_m = filtering and capped
+        err = filter_kind_error(toks) if live else None
+
+        def need(s):
+            if s["na"]:
+                return 0
+            if filtering:
+                return s["n"] + (1 if s["older"] else 0)
+            return max(1, len(s["rows"]) + (1 if s["beyond"] else 0))
+        natural = 3 + 4 + sum(need(s) for s in secs) + max(1, len(msg_rows)) + older_m
+        gap = live and (self.rows >= 30 or natural + 4 <= self.rows)
+        err_rows = [Row((r.text, "31")) for r in self.wrap(err, W - 2, "  ")] if err else []
+        if live:
+            fixed = 1 + 1 + 1 + 4 + (4 if gap else 0) + len(err_rows)
+            body_rows = max(4, self.rows - fixed)
+            want = max(1, len(msg_rows) + older_m)
+            msg_share = min(want, max(3, body_rows // 2))
+            shares = share_rows([need(s) for s in secs], max(0, body_rows - msg_share))
+            msg_share = max(1, body_rows - sum(shares))
+        else:
+            shares = [need(s) for s in secs]
+            msg_share = ONCE_MESSAGES + 1
+
+        out = [self.header(self.summary(), self.wait()), self.goal_row()]
+        for s, share in zip(secs, shares):
+            name, key, rows_, n, total = s["name"], s["key"], s["rows"], s["n"], s["total"]
+            if gap or not live:
+                out.append(Row())
+            if s["na"]:
+                out.append(self.title(name, "n/a", [f"{s['na']}: is for messages", ""]))
+                continue
+            count = (f"{n} of newest {s['held']}" if s["beyond"] else f"{n} of {total}") if filtering else str(total)
+            older_row = self.more_row(f"… {s['beyond']} older not searched · agentbus {s['cmd']}")
+            if filtering and n == 0:
+                out.append(self.title(name, count, ["no match"]))
+                if s["older"] and share:
+                    out.append(older_row)
+                continue
+            hint = ["j/k move · Enter open", "j/k · Enter", ""] if live and focus == key else []
+            if not rows_:
+                out.append(self.title(name, count, hint))
+                out.append(Row(("  " + self.fit(s["empty"], W - 2), "2")))
+                continue
+            show_older = s["older"] and share >= 2
+            avail = share - (1 if show_older else 0) if live else len(rows_) + 1
+            extra = 0 if filtering else s["beyond"]
+            nr = len(rows_)
+            si = next((i for i, r in enumerate(rows_) if r.sel), None)
+            if nr + (1 if extra else 0) <= avail:
+                out.append(self.title(name, count, hint))
+                out.extend(rows_)
+                if extra:
+                    out.append(self.more_row(f"… {extra} more · agentbus {s['cmd']}"))
+            elif avail >= 2:
+                k = avail - 1
+                start = self.window(nr, k, si, bottom=False)
+                hidden = nr - k + extra
+                out.append(self.title(name, count, hint))
+                out.extend(rows_[start:start + k])
+                out.append(self.more_row(f"… {hidden} more" + (f" · agentbus {s['cmd']}" if extra else "")))
+            elif avail <= 0:  # no row at all: the title says how many are hidden (never 0)
+                out.append(self.title(name, count, [f"… {nr + extra} more"]))
+            else:  # one row: the selected one, and the title says how many are hidden
+                hidden = nr - 1 + extra
+                mark = f"… {hidden} more"
+                out.append(self.title(name, count, [mark + " · j/k move · Enter open", mark + " · j/k · Enter", mark]
+                                      if live and focus == key else [mark]))
+                out.append(rows_[si or 0])
+            if show_older:
+                out.append(older_row)
+        if gap or not live:
+            out.append(Row())
+        out += self.messages_block(msgs, msg_keep, msg_rows, sel_idx, n_msgs, capped, older_m, msg_share, filtering)
+        if not live:
+            return out
+        footer = self.overview_footer()
+        body = out[:self.rows - 1 - len(err_rows)]
+        while len(body) < self.rows - 1 - len(err_rows):
+            body.append(Row())
+        return body + err_rows + [footer]
+
+    def messages_block(self, msgs, keep, rows_, si, total, capped, older_m, share, filtering):
+        v, live, focus = self.v, self.live, self.v["focus"]
+        out = []
+        rhs, fsgr = [], "2"
+        if live:
+            if v["paused"]:
+                p, base = self.pending, f"paused at {self.t.astimezone().strftime('%H:%M')}"
+                follow = ([f"{base} · +{p} new · p or G to follow", f"paused · +{p} new · p or G to follow",
+                           f"paused · +{p} new", "paused"] if p else
+                          [f"{base} · p or G to follow", "paused · p or G to follow", "paused"])
+                fsgr = "33"
+            else:
+                follow = ["following · k to browse", "following"] if focus == "messages" else ["following"]
+            if v["stale"]:
+                follow = [f"restart for {v['stale']} · {f}" for f in follow] + follow
+                fsgr = "33"
+            rhs = follow
+        count = (f"{len(keep)} of newest {len(msgs)}" if capped else f"{len(keep)} of {total}") if filtering else str(total)
+        older_row = self.more_row(f"… {total - len(msgs)} older not searched · agentbus read")
+        if filtering and not keep:
+            out.append(self.title("Messages", count, ["no match"]))
+            if older_m:
+                out.append(older_row)
+            return out
+        out.append(self.title("Messages", count, rhs, fsgr))
+        if not rows_:
+            out.append(Row(("  quiet so far", "2")))
+            return out
+        pre = [older_row] if older_m else []
+        avail = (share if live else ONCE_MESSAGES + 1) - len(pre)
+        beyond = 0 if filtering else total - len(msgs)
+        n = len(rows_)
+        if n <= avail and not beyond:
+            return out + pre + rows_
+        k = avail
+        for _ in range(4):
+            start = self.window(n, k, si, bottom=True)
+            earlier, later = start + beyond, n - start - min(k, n)
+            marks = (1 if earlier else 0) + (1 if later > 0 else 0)
+            if min(k, n) + marks <= avail:
+                break
+            k = max(1, avail - marks)
+        k = min(k, n)
+        out += pre
+        if earlier:
+            out.append(self.more_row(f"… {earlier} earlier" + (" · agentbus read" if beyond else "")))
+        out += rows_[start:start + k]
+        if later > 0:
+            out.append(self.more_row(f"… {later} later"))
+        return out
+
+    def filter_footer(self):
+        W = self.W
+        text = clean(self.v["filter"])
+        rhs = [("Enter", "1"), (" keep", ""), (self.tx(" · "), "2"), ("Esc", "1"), (" clear", "")]
+        rw = sum(text_width(t) for t, _ in rhs)
+        room = W - 2 - rw - 2
+        if text_width(text) > room:  # scroll the input so the cursor end shows
+            ell = self.g["ell"]
+            keep, w = [], text_width(ell)
+            for c in reversed(text):
+                if w + cell_width(c) > room:
+                    break
+                keep.append(c)
+                w += cell_width(c)
+            text = ell + "".join(reversed(keep))
+        row = Row(("/", "1;33"), (text, ""), ("_", "1;33"))
+        return _right(row, rhs, W)
+
+    def copied_footer(self):
+        text, W = clean(self.v["copied"]), self.W
+        short = self.tx(f"  copied: {text} · if paste fails, select it here")
+        if text_width(short) <= W:
+            return Row((short, ""))
+        what = "the reply command" if self.v["mode"] == "detail" else "the selected row"
+        return Row(("  " + self.fit(self.tx(f"copied {what} · if paste fails, select it above"), W - 2).rstrip(), ""))
+
+    def overview_footer(self):
+        v = self.v
+        if v["copied"]:
+            return self.copied_footer()
+        if v["mode"] == "filter":
+            return self.filter_footer()
+        q = [("?", "help", 90), ("q", "quit", 100)]
+        if v["filter"]:  # the keys to leave the filter always fit; the filter text is cut instead
+            req = [("Esc", "clear", 95)] + q
+            room = self.W - self.footer(req).width - 3
+            text = "/" + clean(v["filter"])
+            if text_width(text) > room:
+                text = self.fit(text, room).rstrip()
+            return self.footer([req[0], ("/", "edit", 70), ("j/k", "move", 60), ("Enter", "open", 50)] + q,
+                               prefix=Row((text, "1;33")))
+        if v["paused"]:
+            return self.footer([("j/k", "move", 60), ("Enter", "open", 50), ("p", "follow", 80), ("y", "copy", 15),
+                                ("g/G", "top/bottom", 20), ("/", "filter", 40)] + q)
+        if v["focus"] != "messages":
+            return self.footer([("j/k", "move", 60), ("Enter", "open", 50), ("y", "copy", 15), ("Tab", "section", 30),
+                                ("/", "filter", 40)] + q)
+        return self.footer([("k", "browse", 60), ("Enter", "open", 50), ("/", "filter", 40), ("p", "pause", 20),
+                            ("Tab", "section", 30)] + q)
+
+    # ------------------------------------------------ detail
+
+    def wrap(self, text, width, indent):
+        return [Row((indent + l, "")) for l in wrap_lines(clean(text, newlines=True), max(1, width))]
+
+    def label_rows(self, label, text, sgr="", sel=False, shell=False):
+        """A label and a value wrapped under itself; nothing in a detail is cut. shell: text that is already a
+        shell command holding no unsafe character (reply_command), shown exactly as y copies it."""
+        lab = label.ljust(10)
+        lines = wrap_lines(text if shell else clean(text), max(1, self.W - 2 - text_width(lab)))
+        return [Row(("> " if sel and i == 0 else "  ", ""), (lab if i == 0 else " " * text_width(lab), "2"), (l, sgr),
+                    sel=sel and i == 0) for i, l in enumerate(lines)]
+
+    def pack(self, fields, indent="  ", gap="  "):
+        """Fields (lists of segments) on rows of the page width, `gap` apart, wrapped between fields (a field
+        that starts a row drops its leading separator); a field wider than a row wraps inside itself."""
+        W, iw = self.W, text_width(indent)
+        rows, cur = [], Row((indent, ""))
+        for f in fields:
+            fw = sum(text_width(t) for t, _ in f)
+            if cur.width > iw and cur.width + text_width(gap) + fw > W:
+                rows.append(cur)
+                cur = Row((indent, ""))
+            if cur.width > iw:
+                cur.add(gap, "2")
+            if fw > W - cur.width:
+                text = "".join(t for t, _ in f)
+                lines = wrap_lines(text, W - iw)
+                for l in lines[:-1]:
+                    cur.add(l, f[0][1])
+                    rows.append(cur)
+                    cur = Row((indent, ""))
+                cur.add(lines[-1], f[0][1])
+                continue
+            for t, s in f:
+                cur.add(t, s)
+        rows.append(cur)
+        return rows
+
+    def find_agent(self, name):
+        return next((x for x in self.snap["agents"] if x["name"] == name), None)
+
+    def agent_line(self, name, sel=False, prefix="", extra=""):
+        """`held by   ○ ✋ codex · implementer · seen 6m ago`: the same activity dot as the overview, wrapped
+        between fields when the row is short."""
+        a = self.find_agent(name)
+        idle = self.idle(a)
+        first = [(self.g["off"] if idle else self.g["on"], "2" if idle else self.ac(name))]
+        if self.E and a:
+            first.append((" " + role_emoji(a["role"]), ""))
+        first.append((" " + clean(name), self.ac(name)))
+        fields = [first]
+        sep = self.tx(" · ")
+        if a and a["role"]:
+            fields.append([(clean(a["role"]), "2")])
+        if a:
+            fields.append([(self.tx(f"seen {self.ago_words(a['last_seen'])}"), "2")])
+        if extra:
+            fields.append([(self.tx(extra), "2")])
+        rows = self.pack(fields, indent=" " * (2 + text_width(prefix)), gap=sep)
+        lead = Row(("> " if sel else "  ", ""), (prefix, "2"), sel=sel)
+        lead.segs += rows[0].segs[1:]
+        return [lead] + rows[1:]
+
+    def detail_frame(self):
+        d, W = self.v["detail"], self.W
+        sec, key = d["section"], d["key"]
+        sel = tuple(d["sel"]) if d.get("sel") else None
+        data = self.data if self.data and self.data.get("section") == sec and self.data.get("key") == key else None
+        body = [Row()]
+        related = False
+        hint = ["j/k select · Enter open", "j/k · Enter", ""]
+        label = {"messages": f"message #{key}", "agents": f"agent {clean(key)}", "claims": f"claim {clean(key)}",
+                 "facts": f"fact {clean(key)}"}[sec]
+        if sec == "messages":
+            rec = data and data["record"] or next((m for m in self.snap["messages"] if m["id"] == key), None)
+        else:
+            rec = next((x for x in section_items(self.snap, sec) if x[SECTION_KEY[sec]] == key), None) \
+                or (data or {}).get("record")
+        if rec is None or data is None and sec != "messages":
+            body.append(Row(("  " + self.fit("reading the bus…" if data is None else "gone from the bus", W - 2).rstrip(),
+                             "2")))
+        elif sec == "messages":
+            m = rec
+            kind = str(m["kind"])
+            kc = str(KIND_COLOURS.get(kind, 2))
+            to = "everyone" if m["recipient"] == "*" else m["recipient"]
+            fields = [[(f"#{m['id']}", "1")],
+                      [(clean(m["sender"]), self.ac(m["sender"])), (f" {self.g['arrow']} ", "2"),
+                       (clean(to), "2" if to == "everyone" else self.ac(to))],
+                      [((KIND_EMOJI.get(kind, "📝") + " " if self.E else "") + clean(kind), kc)]]
+            if m["reply_to"]:
+                fields.append([(f"{self.g['reply']}{m['reply_to']}", "2")])
+            if m.get("topic"):
+                fields.append([(f"topic {clean(m['topic'])}", "2")])
+            when_t = self.tx(f"{self.hhmm(m['ts'])} · {self.ago_words(m['ts'])}")
+            meta = self.pack(fields)
+            if len(meta) == 1 and meta[0].width + 2 + text_width(when_t) <= W:
+                body.append(_right(meta[0], [(when_t, "2")], W))
+            else:
+                body += meta + [Row(("  " + when_t, "2"))]
+            body.append(Row())
+            body += self.wrap(m["body"], W - 4, "    ")
+            body.append(Row())
+            body += self.label_rows("reply", reply_command(m, self.me), "1", shell=True)
+            if d.get("thread", True):
+                body.append(Row())
+                if data is None:
+                    body.append(self.title("Thread", "", ["t hides it", ""]))
+                    body.append(Row(("  " + self.fit("reading the bus…", W - 2).rstrip(), "2")))
+                else:
+                    chain, further = data["chain"], data["further"]
+                    thread = sorted(chain + [m] + data["replies"], key=lambda x: x["id"])
+                    related = len(thread) > 1
+                    n_more = data["n_replies"] - len(data["replies"])
+                    count = str(len(thread)) if not (further or n_more > 0) else f"{len(thread)} shown"
+                    body.append(self.title("Thread", count, hint + ["t hides it"] if related else ["t hides it", ""]))
+                    if further:
+                        body.append(self.more_row(f"… #{chain[-1]['id']} replies to #{further} · open #{chain[-1]['id']} "
+                                                  f"to go further up"))
+                    body += [self.msg_row(x, sel=sel == ("messages", x["id"]), here=x["id"] == m["id"]) for x in thread]
+                    if n_more > 0:
+                        body.append(self.more_row(f"… {n_more} more replies · agentbus read --since {m['id']}"))
+        elif sec == "agents":
+            a = rec
+            body += self.pack([[(self.g["off"] if self.idle(a) else self.g["on"],
+                                 "2" if self.idle(a) else self.ac(a["name"]))]
+                               + ([(" " + role_emoji(a["role"]), "")] if self.E else [])
+                               + [(" " + clean(a["name"]), "1")], [(clean(a["role"]), "2")]])
+            body += self.wrap(self.tx(f"last seen {self.hhmm(a['last_seen'])}, {self.ago_words(a['last_seen'])}"
+                                      f" · joined {self.hhmm(a['joined_at'])}"), W - 2, "  ")
+            n = (self.snap.get("unread") or {}).get(a["name"], 0)
+            if n:
+                body += self.wrap(self.tx(f"{n} unread · agentbus --as {a['name']} inbox --peek shows them"), W - 2, "  ")
+            body.append(Row())
+            cl = [c for c in self.snap["claims"] if c["agent"] == a["name"]]
+            body.append(self.title("Claims", str(len(cl)), hint if cl else []))
+            body += [self.claim_row(c, sel=sel == ("claims", c["resource"])) for c in cl] or [Row(("  nothing claimed", "2"))]
+            body.append(Row())
+            last = data["list"]
+            related = bool(cl or last)
+            count = f"{len(last)} of {data['n']}" + (f" in newest {SCAN}" if data["scanned"] else "")
+            body.append(self.title("Messages", count, [f"from or to {clean(a['name'])}", ""]))
+            body += [self.msg_row(m, sel=sel == ("messages", m["id"])) for m in last] or [Row(("  quiet so far", "2"))]
+            if data["n"] > len(last):
+                body.append(self.more_row(self.older_route(data, a["name"])))
+        elif sec == "claims":
+            c = rec
+            claimed = (data.get("record") or {}).get("claimed_at")
+            body += self.label_rows("claim", c["resource"], "1")
+            body += self.agent_line(c["agent"], sel=sel == ("agents", c["agent"]), prefix="held by   ")
+            body += self.label_rows("purpose", c["purpose"] or "none given")
+            if claimed:
+                body += self.label_rows("claimed", f"{self.hhmm(claimed)}, {self.ago_words(claimed)}")
+            body += self.label_rows("expires", f"{self.hhmm(c['expires_at'])}, {time_left(c['expires_at'], self.t)} left")
+            body.append(Row())
+            last = data["list"]
+            related = True
+            count = (f"{len(last)} of {data['n']}" if data["n"] > len(last) else str(data["n"])) + \
+                (f" in newest {SCAN}" if data["scanned"] else "")
+            body.append(self.title("Mentioned in", count, ["messages that name it", ""]))
+            body += [self.msg_row(m, sel=sel == ("messages", m["id"])) for m in last] or [Row(("  no message names it", "2"))]
+            if data["n"] > len(last):
+                body.append(self.more_row(self.older_route(data, c["resource"])))
+        else:
+            x = rec
+            body += self.label_rows("key", x["key"], "1")
+            body += self.label_rows("value", x["value"])
+            body += self.agent_line(x["updated_by"], sel=sel == ("agents", x["updated_by"]), prefix="set by    ",
+                                    extra=f"set {self.hhmm(x['updated_at'])}")
+            related = True
+            hist, nh = data["history"], data["n_history"]
+            body.append(Row())
+            body.append(self.title("History", str(nh) if nh <= THREAD_MAX else f"{THREAD_MAX} of {nh}",
+                                   ["newest first", ""]))
+            stamps = [self.hhmm(h["updated_at"]) for h in hist[:THREAD_MAX]]
+            sw = max([5] + [len(t) for t in stamps])  # HH:MM today, `Nov 2 00:00` on an earlier day
+            vw = W - 2 - sw - 2 - 13
+            for h, stamp in zip(hist[:THREAD_MAX], stamps):
+                lines = wrap_lines(clean(h["value"]), max(1, vw))
+                body.append(Row(("  " + stamp.rjust(sw) + "  ", "2"),
+                                (self.fit(h["updated_by"], 12), self.ac(h["updated_by"])), (" ", ""), (lines[0], "")))
+                body += [Row((" " * (W - vw) + l, "")) for l in lines[1:]]
+            if nh > THREAD_MAX:
+                body.append(self.more_row(f"… {nh - THREAD_MAX} older · agentbus ctx history {x['key']}"))
+        stack = d.get("stack") or []
+        back = "back"
+        if stack:
+            p = stack[-1]
+            back = f"back to #{p['key']}" if p["section"] == "messages" else f"back to {self.cut(clean(p['key']), 24)}"
+        items = ([("j/k", "select", 60), ("Enter", "open", 55)] if related else [("j/k", "scroll", 60)])
+        items.append(("y", "copy", 30))
+        if sec == "messages":
+            items.append(("t", "thread", 50))
+        items += [("Esc/q", back, 95), ("?", "help", 90)]
+        footer = self.copied_footer() if self.v["copied"] else self.footer(items)
+        return self.page([self.header(label, self.wait()), self.goal_row()] + body, footer)
+
+    def older_route(self, data, word):
+        """The way to the rows a detail list leaves out: the filter, when they are all in the view's 200."""
+        older = data["n"] - len(data["list"])
+        held = [m["id"] for m in self.snap["messages"]]
+        if held and data["first"] is not None and data["first"] >= min(held):
+            return f"… {older} older · /{word} lists them"
+        return f"… {older} older · agentbus read"
+
+    def page(self, rows, footer, keep=2):
+        """Rows above the footer, scrolled by view.scroll and moved so the selected row shows; rows hidden
+        above or below are counted on a dim row. keep: the rows that never scroll (the header and the goal; help
+        keeps its header and its whole intro, so a scrolled page never shows half a sentence)."""
+        room = self.rows - 1
+        head, rest = rows[:keep], rows[keep:]
+        avail = room - len(head)
+        n = len(rest)
+        if n <= avail:
+            self.scroll = 0
+            return self.pad(head + rest, footer)
+        si = next((i for i, r in enumerate(rest) if r.sel), None)
+        s = max(0, min(self.v["scroll"], n - (avail - 1)))  # never past the page that ends at the last row
+        for _ in range(4):
+            top = 1 if s else 0
+            k = avail - top
+            if n - s > k:
+                k -= 1
+            if si is not None and si >= s + k:
+                s = si - k + 1
+                continue
+            if si is not None and si < s:
+                s = si
+                continue
+            break
+        self.scroll = s
+        out = head
+        if s:
+            out = out + [self.more_row(f"… {s} lines above · PgUp")]
+        out = out + rest[s:s + k]
+        if n - s - k > 0:
+            out.append(self.more_row(f"… {n - s - k} more lines · PgDn"))
+        return self.pad(out, footer)
+
+    # ------------------------------------------------ help
+
+    def help_frame(self):
+        W, E, g = self.W, self.E, self.g
+        kw = 16
+        move = [(f"j k  {g['down']} {g['up']}", "one row"), ("g G  Home End", "first, last row"),
+                ("PgUp PgDn", "one page"), ("Ctrl-u Ctrl-d", "half a page"),
+                ("Tab  Shift-Tab", "next, previous section"), ("1 2 3 4", "Agents, Claims, Facts, Messages")]
+        look = [("Enter", "open the selected row; in a detail, open the selected related row"),
+                ("t", "show or hide the thread of an open message"),
+                ("y", "copy the selected id, or in a message its reply command (OSC 52; if paste fails, the "
+                      "footer says where it is on screen)"),
+                ("/", "filter: from:NAME to:NAME kind:KIND topic:NAME, or any words"),
+                ("p", "pause the whole view, or follow again"),
+                ("r", "read the bus now"),
+                ("Esc  q", "back one level: a detail, the filter or this page; q quits from the overview"),
+                ("Ctrl-C", "quit from anywhere")]
+        rows = [self.header("keys")]
+        rows += self.wrap("watch only reads the bus. It never marks a message read and never changes a claim.",
+                          W - 2, "  ")
+        pinned = len(rows)  # the header and the whole intro stay; the keys below scroll, so no sentence is cut
+        rows.append(Row())
+
+        def entry(k, d, width, kwid=kw):
+            return [Row(("  " + (k if i == 0 else "").ljust(kwid), "1"), (line.text, ""))
+                    for i, line in enumerate(self.wrap(self.tx(d), width - 2 - kwid, ""))]
+        rows.append(Row(("Move", "1")))
+        half = W // 2
+        if self.wide and all(len(entry(k, d, half if i % 2 == 0 else W - half)) == 1 for i, (k, d) in enumerate(move)):
+            for i in range(0, len(move), 2):  # two entries a row, when each fits its half on one row
+                r = Row(*entry(*move[i], half)[0].segs)
+                r.add(" " * (half - r.width))
+                r.extend(entry(*move[i + 1], W - half)[0])
+                rows.append(r)
+        else:
+            for k, d in move:
+                rows += entry(k, d, W)
+        rows.append(Row())
+        rows.append(Row(("Look closer", "1")))
+        for k, d in look:
+            rows += entry(k, d, W)
+        rows.append(Row())
+        rows.append(Row(("Marks", "1")))
+        marks = [(g["on"], "seen in the last 5 minutes"), (g["off"], "quiet for 5 minutes or more"),
+                 (">", "selected row"), (g["open"], "the record open in a detail"),
+                 (g["new"], "new in the last 3 seconds"),
+                 ("🎯" if E else g["goal"].strip(), "the team's goal"), (f"{g['reply']}6", "a reply to message 6"),
+                 (f"{g['lines']}1", "one more line; Enter shows it")]
+        mw = max(text_width(m) for m, _ in marks) + 1
+        cells = ["  " + gl + " " * (mw - text_width(gl)) + d for gl, d in marks]
+
+        def fits(per):  # every row of `per` cells, each but the last padded to W // per, within W
+            return all(sum(max(text_width(c), W // per) for c in cells[i:i + per][:-1]) + text_width(cells[i:i + per][-1]) <= W
+                       for i in range(0, len(cells), per))
+        per = 3 if W >= 99 else 2 if self.wide else 1
+        while per > 1 and not fits(per):
+            per -= 1
+        cw = W // per
+        for i in range(0, len(marks), per):
+            r = Row()
+            for j, (gl, d) in enumerate(marks[i:i + per]):
+                cell = "  " + gl + " " * (mw - text_width(gl)) + d
+                if j + 1 < per and i + j + 1 < len(marks):
+                    cell += " " * (cw - text_width(cell))
+                r.add(cell)
+            rows.append(r)
+        rows.append(Row())
+        rows.append(Row(("Words", "1")))
+        words = [("following", "the newest messages, as they arrive"),
+                 ("paused at 16:44", "the whole view is frozen as it was then; +N new counts what came since"),
+                 ("… N earlier", "rows above the window; … N later, … N more: rows not shown"),
+                 ("N of M", "rows the filter kept, of all there are"),
+                 ("of newest 200", "watch holds the newest 200; older ones are not searched (agentbus read)"),
+                 ("n/a", "the filter does not apply to this section"),
+                 ("open", "an alert or question no message replies to yet"),
+                 ("waiting · 27s old", "the bus is busy; you are looking at the last frame, 27s old"),
+                 ("restart for X", "the bus was upgraded; restart watch to run the new code")]
+        ww = max(text_width(self.tx(k)) for k, _ in words) + 2
+        for k, d in words:
+            rows += entry(self.tx(k), d, W, ww)
+        rows.append(Row())
+        rows += self.titled("Kinds", "kind: takes the word or the short code; narrow rows show the code")
+        kinds = ["handoff", "question", "answer", "done", "decision", "alert", "note"]
+        cells = [((KIND_EMOJI[k] + " ") if E else "") + (f"{KIND_CODE[k]} {k}" if KIND_CODE[k] != k else k)
+                 for k in kinds]
+        rows += self.flow(cells, [str(KIND_COLOURS.get(k, 2)) for k in kinds])
+        if E:
+            rows.append(Row())
+            rows += self.titled("Roles", "matched on words in the role")
+            roles = [("🧠", "brain, lead, planner"), ("✋", "hand, implementer"), ("🧪", "tests"), ("🔍", "review"),
+                     ("📚", "docs"), ("🚀", "ops, release"), ("🎨", "design"), ("🙋", "human"), ("🤖", "anyone else")]
+            rows += self.flow([f"{e} {d}" for e, d in roles], [""] * len(roles))
+        return self.page(rows, self.footer([("j/k", "scroll", 60), ("Esc/q", "back", 95)]), keep=pinned)
+
+    def titled(self, title, note):
+        """A help title with a dim note beside it, or wrapped under it when the row is short."""
+        if text_width(title) + 2 + text_width(note) <= self.W:
+            return [Row((title, "1"), ("  " + note, "2"))]
+        return [Row((title, "1"))] + [Row((r.text, "2")) for r in self.wrap(note, self.W - 2, "  ")]
+
+    def flow(self, cells, sgrs):
+        """Cells laid out left to right, three spaces apart, wrapped at the row width."""
+        out, row = [], Row(("  ", ""))
+        for c, s in zip(cells, sgrs):
+            if row.width > 2 and row.width + 3 + text_width(c) > self.W:
+                out.append(row)
+                row = Row(("  ", ""))
+            if row.width > 2:
+                row.add("   ")
+            row.add(c, s)
+        out.append(row)
+        return out
+
+    # ------------------------------------------------ errors (full screen: refused, newer, no bus)
+
+    def error_frame(self):
+        e, W, E = self.v["error"], self.W, self.E
+        code = e["code"]
+        where = e.get("directory") or self.where  # the folder `agentbus upgrade` and `init` take
+        unreadable = ("not readable", "1;31", "🚧", "This bus could not be read, so the sections are not drawn.")
+        label, sgr, icon, head, lines = {
+            "schema_refused": unreadable + ([("Run: ", f"agentbus upgrade {where}")],),
+            "schema_older": unreadable + ([("Run: ", f"agentbus upgrade {where}")],),
+            "schema_newer": ("not readable", "1;31", "🚧", "This bus is newer than this watch, so the sections are not drawn.",
+                             [("", f"This watch is agentbus {e.get('version') or short_version(__version__)}; "
+                                   "the bus needs a newer one."),
+                              ("Run: ", f"agentbus upgrade {where} from a newer install")]),
+            "no_bus": ("no bus", "1;31", "", "There is no bus here any more, so the sections are not drawn.",
+                       [("Run: ", f"agentbus init {where}")]),
+        }.get(code, unreadable + ([],))
+        rows = [self.header(label), Row()]
+        lead = "  " + (icon + " " if E and icon else "")
+        for i, r in enumerate(self.wrap(head, W - text_width(lead), "")):
+            rows.append(Row(((lead if i == 0 else " " * text_width(lead)), sgr if i == 0 else ""), (r.text, sgr)))
+        ind = " " * text_width(lead)
+        rows += self.wrap(e.get("message") or "", W - text_width(ind), ind)  # the reason: normal intensity
+        for pre, cmd in lines:
+            for i, r in enumerate(self.wrap(pre + cmd, W - text_width(ind), "")):
+                t = r.text
+                if i == 0 and pre:
+                    rows.append(Row((ind + pre, ""), (t[len(pre):], "1")))
+                else:
+                    rows.append(Row((ind + t, "1" if pre else "")))
+        rows.append(Row())
+        last = "none" if e.get("last_good_s") is None else f"{e['last_good_s']}s ago"
+        rows += self.wrap(f"Retrying every {e.get('retry_s', 1):g}s. Last good frame: {last}. Your place (filter, "
+                          "selection, pause, open detail) comes back with the bus.", W - text_width(ind), ind)
+        if not self.live:
+            return rows
+        return self.page(rows, self.footer([("r", "retry now", 80), ("?", "help", 90), ("q", "quit", 100)]))
+
+
+def render(view, snap, where, size, t_now, paint, error=None, stale=None, fresh=(), live=True, detail=None, held=None):
+    """The frame for view (pure): a list of rows, painted with paint (plain text when colour is off).
+    size: (cols, rows). error: {"code", "message", "retry_s", "last_good_s"} of the last read (busy keeps the
+    frame and adds `waiting · Ns old`; the others replace it). stale: the newer version of the bus copy on
+    disk. fresh: ids of messages under 3 seconds old. live: the full screen with footer and hints; else the
+    one frame (--once, a pipe, TERM=dumb). detail: watch_detail()'s result for the open detail. held: the
+    frozen snapshot of a paused view (default view.frozen["snap"]). The returned list's .scroll is the page
+    scroll it drew."""
+    cols, rows = size
+    f = _Frame(cols, rows, paint, view, snap, where, t_now, live=live, held=held, error=error, stale=stale,
+               fresh=fresh, detail=detail)
+    out = FrameRows(r.painted(paint) for r in f.render())
+    out.scroll = f.scroll
     return out
 
 
 def render_watch(snap, where, cols, rows, fresh, t_now, paint, live=True, error=None, interval=1.0):
-    """The frame: a header bar, then Agents, Claims, Facts and Messages (newest last). Messages, the
-    part that moves, get their share of the screen first; any section cut short says how many it
-    left out and which command shows them. live: fill the screen and end with the key hint; else
-    (one frame: --once, or not a terminal) the content alone, with the last ONCE_MESSAGES messages.
-    error ({"code", "message"}): the bus could not be read; the frame says so and names the fix
-    instead of drawing sections."""
-    if cols < WATCH_MIN_COLS:
-        return [fit(f"watch needs {WATCH_MIN_COLS}+ columns", cols)]
+    """The overview frame of a fresh View (v0.1.0's entry point, kept for callers that draw one frame)."""
     if error is not None:
-        return render_error_frame(error, where, cols, rows, paint, interval, live)
-    width = cols - 1  # one spare column: an ambiguous-width character drawn wide never wraps a row
-    wide = cols >= WIDE_COLS
-    colour = colour_map(snap["agents"])
-    n = snap["counts"]
-    hot = {m["sender"] for m in snap["messages"] if m["id"] in fresh}
+        error = dict({"retry_s": interval, "last_good_s": None}, **error)
+    return list(render(View(), snap, where, (cols, rows), t_now, paint, error=error, fresh=fresh, live=live))
 
-    def plural(k, word):
-        return f"{n[k]} {word}{'' if n[k] == 1 else 's'}"
-    stats = f"{plural('agents', 'agent')} · {plural('claims', 'claim')} · {plural('messages', 'message')} "
-    head = " agentbus  "
-    room = width - len(head) - len(stats) - 1
-    header = paint("1;7", head + fit_left(where, room) + " " + stats if room >= 8 else fit(head + stats.strip(), width))
 
-    def more(k, shown, command):
-        return paint("2", "  " + fit(f"… {k - shown} more · agentbus {command}", width - 2))
+# ---- keys: bytes from the terminal to key names (pure) ----
 
-    # Agents
-    agent_rows = []
-    for a in snap["agents"]:
-        seen = _when(a["last_seen"])
-        idle = seen is None or (t_now - seen).total_seconds() > IDLE_MIN * 60
-        dot = paint("2", "○") if idle else paint(colour(a["name"]), "●")
-        name_w = 16 if wide else 12
-        lead_w = 1  # the dot; with emoji, "● 🧠"
-        if paint.emoji:
-            dot += " " + role_emoji(a["role"])
-            lead_w = 4
-        name = paint("1" if a["name"] in hot else "", fit(a["name"], name_w))
-        role_w = max(0, width - 2 - lead_w - 1 - name_w - 1 - 5)
-        role = fit(a["role"], role_w) if wide else " " * role_w
-        agent_rows.append(f"  {dot} {name} {paint('2', role)}{paint('2', ago(a['last_seen'], t_now).rjust(5))}")
-    # Claims
-    claim_rows = []
-    res_w = max(14, min(36, width // 3))
-    for c in snap["claims"]:
-        holder = paint(colour(c["agent"]), fit(c["agent"], 12))
-        rest = f"{time_left(c['expires_at'], t_now)} left" + (f" · {c['purpose']}" if wide and c["purpose"] else "")
-        claim_rows.append(f"  {fit(c['resource'], res_w)} {holder} {paint('2', fit(rest, width - 2 - res_w - 14))}")
-    # Facts, newest first
-    fact_rows = []
-    key_w, by_w = max(10, min(24, width // 5)), min(20, width // 4)
-    for x in snap["context"]:
-        by = f"{x['updated_by']} · {ago(x['updated_at'], t_now)}"
-        fact_rows.append(f"  {fit(x['key'], key_w)} {fit(x['value'], width - 2 - key_w - 1 - by_w - 1)} "
-                         f"{paint('2', fit(by, by_w).rstrip().rjust(by_w))}")
-    # Messages, oldest to newest
-    msg_rows = []
-    for m in snap["messages"]:
-        new = m["id"] in fresh
-        kind = str(m["kind"])
-        kc = KIND_COLOURS.get(kind, 2)
-        to = "everyone" if m["recipient"] == "*" else m["recipient"]
-        route_w = 24 if wide else 15
-        arrow = " → " if wide else "→"
-        part = (route_w - len(arrow)) // 2
-        frm, dest = fit(m["sender"], part).rstrip(), fit(to, part).rstrip()
-        route_plain_w = text_width(frm) + len(arrow) + text_width(dest)
-        route = (paint(colour(m["sender"]), frm) + paint("2", arrow)
-                 + (paint("2", dest) if to == "everyone" else paint(colour(to), dest))
-                 + " " * (route_w - route_plain_w))
-        lines_ = str(m["body"] or "").split("\n")
-        extra = f" ↵+{len(lines_) - 1}" if len(lines_) > 1 else ""
-        reply = f"↳#{m['reply_to']} " if m["reply_to"] else ""
-        mid = fit("#" + str(m["id"]), 5)
-        age = ago(m["ts"], t_now).rjust(4)
-        emo = KIND_EMOJI.get(kind, "📝") if paint.emoji else ""
-        if wide:
-            bar = paint(kc, "▌") if new else " "
-            kind_cell = (emo + " " if emo else "") + fit(kind, 9)
-            body_w = (width - 1 - 1 - 5 - route_w - 1 - text_width(kind_cell) - 1 - text_width(reply)
-                      - text_width(extra) - 1 - 4)
-            msg_rows.append(f"{bar} {paint('2', mid)}{route} {paint(kc, kind_cell)} {paint('2', reply)}"
-                            f"{paint('1' if new else '', fit(lines_[0], body_w))}{paint('2', extra)} {paint('2', age)}")
-        else:
-            lead = emo or paint(kc, "▌")  # narrow: the kind is the emoji, or a bar in the kind's colour
-            body_w = (width - text_width(emo or "▌") - 1 - 5 - route_w - 1 - text_width(reply)
-                      - text_width(extra) - 1 - 4)
-            msg_rows.append(f"{lead} {paint('2', mid)}{route} {paint('2', reply)}"
-                            f"{paint('1' if new else '', fit(lines_[0], body_w))}{paint('2', extra)} {paint('2', age)}")
+ESC_WAIT_S = 0.05  # a lone ESC is the Esc key only when nothing follows it this soon
+FILTER_MAX = 200  # characters a filter holds; more typed (or pasted) are dropped
+_CSI_FINAL = {"A": "Up", "B": "Down", "C": "Right", "D": "Left", "H": "Home", "F": "End", "Z": "S-Tab"}
+_CSI_TILDE = {"1": "Home", "7": "Home", "4": "End", "8": "End", "5": "PgUp", "6": "PgDn"}
+_SS3 = {"A": "Up", "B": "Down", "C": "Right", "D": "Left", "H": "Home", "F": "End"}
+_CTRL = {"\r": "Enter", "\n": "Enter", "\t": "Tab", "\x7f": "Backspace", "\x08": "Backspace",
+         "\x03": "C-c", "\x15": "C-u", "\x04": "C-d"}
+CSI_MAX = 32  # an escape sequence longer than this is junk, dropped whole
 
-    sections = [("Agents", n["agents"], agent_rows, "no one yet. Join with: agentbus --as NAME join", "who"),
-                ("Claims", n["claims"], claim_rows, "nothing claimed", "claims"),
-                ("Facts", len(snap["context"]), fact_rows, "none yet", "ctx get")]
-    # A blank line between sections whenever the whole frame fits with them (or the screen is tall).
-    natural = 3 + 4 + sum(max(1, len(r)) for _, _, r, _, _ in sections) + max(1, len(msg_rows))
-    gap = live and (rows >= 30 or natural + 4 <= rows)
-    if live:
-        fixed = 1 + 1 + 1 + 4 + (4 if gap else 0)  # header, goal, footer, four titles, blank lines
-        body_rows = max(4, rows - fixed)
-        want_msgs = max(1, len(msg_rows))
-        msg_share = min(want_msgs + (1 if n["messages"] > len(msg_rows) else 0), max(3, body_rows // 2))
-        needs = [max(1, len(r) + (1 if total > len(r) else 0)) for _, total, r, _, _ in sections]
-        shares = share_rows(needs, max(0, body_rows - msg_share))
-        msg_share = max(1, body_rows - sum(shares))  # rows the others did not need go to messages
-    else:
-        shares = [len(r) + (1 if total > len(r) else 0) or 1 for _, total, r, _, _ in sections]
-        msg_share = ONCE_MESSAGES + 1
 
-    g = snap.get("goal")
-    if g:
-        tail = f" · {g['set_by']} · {ago(g['set_at'], t_now)}"
-        goal_row = (paint("1;33", "  🎯 " if paint.emoji else "  ◆ ") + paint("1", fit(g["goal"], width - 4 - text_width(clean(tail))))
-                    + paint("2", fit(tail, text_width(clean(tail)))))
-    else:
-        goal_row = paint("2", ("  🎯 " if paint.emoji else "  ◇ ") + fit('no goal yet · agentbus --as NAME goal "..."',
-                                                                            width - (5 if paint.emoji else 4)))
-    out = [header, goal_row]
-    for (title, total, rows_, empty, command), share in zip(sections, shares):
-        if gap or not live:
-            out.append("")
-        out.append(paint("1", (SECTION_EMOJI[title] + " " if paint.emoji else "") + title) + paint("2", f"  {total}"))
-        if not rows_:
-            out.append(paint("2", "  " + fit(empty, width - 2)))
+class KeyDecoder:
+    """Turns terminal input into key names: printable characters as themselves, and Up, Down, Left, Right,
+    Home, End, PgUp, PgDn, Tab, S-Tab, Enter, Esc, Backspace, C-c, C-u, C-d. A sequence split across reads
+    is kept until it completes; an unknown or overlong sequence is dropped whole, never read as separate
+    keys; other control characters are dropped. A lone ESC is held: flush() (called when nothing followed
+    within ESC_WAIT_S) turns it into Esc."""
+
+    def __init__(self):
+        self.buf = b""
+
+    def pending(self):
+        return bool(self.buf)
+
+    def feed(self, data):
+        self.buf += data
+        keys = []
+        while self.buf:
+            n, key = self._one(self.buf)
+            if n == 0:  # incomplete: wait for more input (or flush)
+                break
+            self.buf = self.buf[n:]
+            if key:
+                keys.append(key)
+        return keys
+
+    def flush(self):
+        """Nothing more arrived: a held lone ESC is the Esc key; any other partial input is dropped."""
+        keys = ["Esc"] if self.buf[:1] == b"\x1b" and len(self.buf) == 1 else []
+        self.buf = b""
+        return keys
+
+    @staticmethod
+    def _one(b):
+        """(bytes used, key name or None) for the start of b; (0, None) when b is an incomplete sequence."""
+        c = b[0]
+        if c == 0x1b:
+            if len(b) == 1:
+                return 0, None
+            nxt = b[1]
+            if nxt == 0x5b:  # CSI: ESC [ params intermediates final
+                i = 2
+                while i < len(b) and 0x30 <= b[i] <= 0x3f:
+                    i += 1
+                while i < len(b) and 0x20 <= b[i] <= 0x2f:
+                    i += 1
+                if i >= len(b):
+                    return (len(b), None) if len(b) > CSI_MAX else (0, None)
+                final = chr(b[i]) if 0x40 <= b[i] <= 0x7e else None
+                if final is None:  # not a well-formed sequence: drop what was read so far
+                    return i, None
+                params = b[2:i].decode("ascii", "replace")
+                if final == "~":
+                    return i + 1, _CSI_TILDE.get(params.split(";")[0])
+                if final == "R" and re.fullmatch(r"[0-9]+;[0-9]+", params):
+                    return i + 1, "CPR " + params  # a cursor position report: the start-up probe's answer
+                return i + 1, _CSI_FINAL.get(final)
+            if nxt == 0x4f:  # SS3: ESC O X
+                if len(b) == 2:
+                    return 0, None
+                return 3, _SS3.get(chr(b[2]))
+            if nxt == 0x1b:  # ESC ESC: the first is a key of its own
+                return 1, "Esc"
+            # ESC then anything else (Alt+key, or a sequence type watch does not use): dropped whole
+            if nxt < 0x80:
+                return 2, None
+            n = _utf8_len(nxt)
+            if n and len(b) < 1 + n:
+                return 0, None
+            return 1 + max(n, 1), None
+        if c < 0x80:
+            ch = chr(c)
+            if ch in _CTRL:
+                return 1, _CTRL[ch]
+            if c < 0x20:
+                return 1, None
+            return 1, ch
+        n = _utf8_len(c)
+        if not n:
+            return 1, None
+        if len(b) < n:
+            return 0, None
+        try:
+            ch = b[:n].decode("utf-8")
+        except UnicodeDecodeError:
+            return 1, None
+        return n, ch if ch.isprintable() else None
+
+
+def _utf8_len(lead):
+    return 2 if 0xc2 <= lead <= 0xdf else 3 if 0xe0 <= lead <= 0xef else 4 if 0xf0 <= lead <= 0xf4 else 0
+
+
+def decode_keys(buf):
+    """The keys in buf, as if nothing followed it (a trailing lone ESC is Esc)."""
+    d = KeyDecoder()
+    return d.feed(buf) + d.flush()
+
+
+# ---- the state machine: one key at a time (pure) ----
+
+def _pause(v, snap, t_now):
+    if not v.paused:
+        v.paused = True
+        v.frozen = {"snap": snap, "t_now": t_now.strftime("%Y-%m-%dT%H:%M:%SZ") if t_now else None}
+
+
+def _resume(v):
+    v.paused, v.frozen = False, {}
+
+
+def settle(view, snap):
+    """The selection after a refresh or a filter change: kept by key; a row that went moves it to the row
+    now at its old place (the nearest remaining one); a section with rows that has the focus, other than
+    Messages, always has a selection."""
+    v = view.copy()
+    shown = v.shown(snap)
+    for sec in SECTIONS:
+        keys = visible_keys(shown, sec, v.filter)
+        cur = v.sel.get(sec)
+        if cur in keys:
+            v.idx[sec] = keys.index(cur)
             continue
-        cut = len(rows_) > share or total > len(rows_)
-        keep = rows_[:share - 1] if cut and share > 1 else rows_[:share]
-        out.extend(keep)
-        if cut and share > 1:
-            out.append(more(total, len(keep), command))
-    if gap or not live:
-        out.append("")
-    out.append(paint("1", ("💬 " if paint.emoji else "") + "Messages") + paint("2", f"  {n['messages']}"))
-    if not msg_rows:
-        out.append(paint("2", "  quiet so far"))
-    else:
-        earlier = n["messages"] - min(len(msg_rows), msg_share)
-        if earlier > 0:
-            shown = msg_rows[-(msg_share - 1):] if msg_share > 1 else []
-            out.append(paint("2", "  " + fit(f"… {n['messages'] - len(shown)} earlier · agentbus read", width - 2)))
-            out.extend(shown)
+        if cur is None and not (sec == v.focus and sec != "messages"):
+            continue
+        if keys:
+            v.sel[sec] = keys[min(v.idx.get(sec, 0), len(keys) - 1)]
+            v.idx[sec] = keys.index(v.sel[sec])
         else:
-            out.extend(msg_rows[-msg_share:])
-    if not live:
+            v.sel.pop(sec, None)
+    return v
+
+
+def detail_related(view, snap, data):
+    """The selectable rows of the open detail, in screen order, as (section, key) pairs."""
+    d = view.detail
+    if not d or not data or data.get("section") != d["section"] or data.get("key") != d["key"]:
+        return []
+    sec, shown = d["section"], view.shown(snap)
+    if sec == "messages":
+        if not d.get("thread", True) or not data.get("record"):
+            return []
+        ids = sorted({x["id"] for x in data["chain"] + data["replies"]} - {d["key"]})
+        return [("messages", i) for i in ids]
+    if sec == "agents":
+        return [("claims", c["resource"]) for c in shown["claims"] if c["agent"] == d["key"]] + \
+            [("messages", m["id"]) for m in data.get("list") or []]
+    rec = next((x for x in section_items(shown, sec) if x[SECTION_KEY[sec]] == d["key"]), None) or data.get("record")
+    if not rec:
+        return []
+    if sec == "claims":
+        return [("agents", rec["agent"])] + [("messages", m["id"]) for m in data.get("list") or []]
+    return [("agents", rec["updated_by"])]
+
+
+def _copy_text(view, snap, data):
+    """What y copies (OSC 52 carries it base64; the footer shows it clean()ed): in the overview the selected
+    row's key, in a detail the reply command (message), the name, the resource or the value. Never a control
+    byte: plain text is copied as written unless it holds one (copy_text), the command quotes it (shell_word)."""
+    shown = view.shown(snap)
+    if view.mode == "detail" and view.detail:
+        d = view.detail
+        if d["section"] == "messages":
+            m = (data or {}).get("record") if data and data.get("key") == d["key"] else None
+            m = m or next((x for x in shown["messages"] if x["id"] == d["key"]), None)
+            return reply_command(m, view.me or "NAME") if m else None
+        if d["section"] == "facts":
+            rec = next((x for x in shown["context"] if x["key"] == d["key"]), None) or (data or {}).get("record")
+            return copy_text(rec["value"]) if rec else None
+        return copy_text(d["key"])
+    key = view.sel.get(view.focus)
+    if key is None and view.focus == "messages":
+        keys = visible_keys(shown, "messages", view.filter)
+        key = keys[-1] if keys else None
+    return None if key is None else copy_text(key)
+
+
+def _open(v, section, key, stack):
+    v.mode, v.scroll = "detail", 0
+    v.detail = {"section": section, "key": key, "thread": True, "sel": None, "stack": stack}
+    v.effects.append(("detail",))
+
+
+def step(view, key, snap, size, t_now=None, detail=None, error=None):
+    """The view after one key (pure: the effects the shell must carry out are in the result's .effects).
+    snap: the newest snapshot; size: (cols, rows); t_now: the time pause freezes at; detail: the open
+    detail's data (watch_detail); error: the last read's error, if any."""
+    v = view.copy()
+    v.copied = None  # the copied footer lasts until the next key
+    if key == "C-c":
+        v.effects.append(("quit", 0))
+        return v
+    rows = max(1, size[1])
+    page, half = max(1, rows - 6), max(1, (rows - 6) // 2)
+    shown = v.shown(snap)
+    full_screen = bool(error and error.get("code") != "busy")
+
+    if v.mode == "help":
+        if key in ("Esc", "q", "?"):
+            v.mode, v.scroll = v.help_from or ("overview", 0)
+            v.help_from = None
+        elif key in ("j", "Down"):
+            v.scroll += 1
+        elif key in ("k", "Up"):
+            v.scroll = max(0, v.scroll - 1)
+        elif key in ("PgDn", "C-d"):
+            v.scroll += page if key == "PgDn" else half
+        elif key in ("PgUp", "C-u"):
+            v.scroll = max(0, v.scroll - (page if key == "PgUp" else half))
+        elif key in ("g", "Home"):
+            v.scroll = 0
+        elif key in ("G", "End"):
+            v.scroll = 10 ** 6
+        elif key == "r":
+            v.effects.append(("read",))
+        return v
+
+    if v.mode == "filter":
+        if key == "Enter":
+            v.mode, v.filter_input = "overview", False
+        elif key == "Esc":
+            v.mode, v.filter_input, v.filter = "overview", False, ""
+        elif key == "Backspace":
+            v.filter = v.filter[:-1]
+        elif len(key) == 1:  # every printable character is text, q and the digits too
+            if len(v.filter) >= FILTER_MAX:
+                return v  # full: the key is dropped, and the selection need not settle again
+            v.filter += key
+        return settle(v, snap)
+
+    if full_screen:
+        if key == "q":
+            v.effects.append(("quit", 0))
+        elif key == "r":
+            v.effects.append(("read",))
+        elif key == "?":
+            v.help_from, v.mode, v.scroll = (v.mode, v.scroll), "help", 0
+        return v
+
+    if key == "?":
+        v.help_from, v.mode, v.scroll = (v.mode, v.scroll), "help", 0
+        return v
+    if key == "/":
+        v.detail, v.mode, v.filter_input, v.scroll = None, "filter", True, 0
+        return v
+    if key == "r":
+        v.effects.append(("read",))
+        if v.mode == "detail":
+            v.effects.append(("detail",))
+        return v
+
+    if v.mode == "detail" and v.detail:
+        d = v.detail
+        related = detail_related(v, snap, detail)
+        if key in ("Esc", "q"):
+            stack = d.get("stack") or []
+            if stack:
+                p = stack[-1]
+                v.detail = {"section": p["section"], "key": p["key"], "thread": p.get("thread", True),
+                            "sel": p.get("sel"), "stack": stack[:-1]}
+                v.scroll = p.get("scroll", 0)
+                v.effects.append(("detail",))
+            else:
+                v.mode, v.detail, v.scroll = "overview", None, 0
+        elif key in ("j", "Down", "k", "Up", "g", "Home", "G", "End") and related:
+            cur = tuple(d["sel"]) if d.get("sel") else None
+            i = related.index(cur) if cur in related else None
+            if key in ("j", "Down"):
+                i = 0 if i is None else min(i + 1, len(related) - 1)
+            elif key in ("k", "Up"):
+                i = len(related) - 1 if i is None else max(i - 1, 0)
+            else:
+                i = 0 if key in ("g", "Home") else len(related) - 1
+            d["sel"] = related[i]
+        elif key in ("j", "Down"):
+            v.scroll += 1
+        elif key in ("k", "Up"):
+            v.scroll = max(0, v.scroll - 1)
+        elif key in ("g", "Home"):
+            v.scroll = 0
+        elif key in ("G", "End"):
+            v.scroll = 10 ** 6
+        elif key in ("PgDn", "C-d", "PgUp", "C-u"):
+            d["sel"] = None  # paging moves the page, not the selection
+            n = page if key in ("PgDn", "PgUp") else half
+            v.scroll = max(0, v.scroll + (n if key in ("PgDn", "C-d") else -n))
+        elif key == "Enter" and d.get("sel"):
+            sec, k = d["sel"]
+            here = {"section": d["section"], "key": d["key"], "sel": d["sel"], "scroll": v.scroll,
+                    "thread": d.get("thread", True)}
+            _open(v, sec, k, (d.get("stack") or []) + [here])
+        elif key == "t" and d["section"] == "messages":
+            d["thread"] = not d.get("thread", True)
+            d["sel"] = None
+        elif key == "y":
+            text = _copy_text(v, snap, detail)
+            if text:
+                v.copied = text
+                v.effects.append(("copy", text))
+        return v
+
+    # the overview
+    v.mode = "overview"
+    sec = v.focus
+    keys = visible_keys(shown, sec, v.filter)
+    cur = v.sel.get(sec)
+    i = keys.index(cur) if cur in keys else None
+    following = sec == "messages" and not v.paused
+    if key in ("Tab", "S-Tab", "1", "2", "3", "4"):
+        if key in ("1", "2", "3", "4"):
+            v.focus = SECTIONS[int(key) - 1]
+        else:
+            v.focus = SECTIONS[(SECTIONS.index(sec) + (1 if key == "Tab" else -1)) % len(SECTIONS)]
+        return settle(v, snap)
+    if key == "Esc":
+        if v.filter:
+            v.filter = ""
+            return settle(v, snap)
+        return v
+    if key == "q":
+        v.effects.append(("quit", 0))
+        return v
+    if key == "p":
+        if v.paused:
+            _resume(v)
+            return settle(v, snap)
+        _pause(v, snap, t_now)
+        return v
+    if key == "y":
+        text = _copy_text(v, snap, None)
+        if text:
+            v.copied = text
+            v.effects.append(("copy", text))
+        return v
+    if key == "Enter":
+        target = cur if cur in keys else (keys[-1] if following and keys else None)
+        if target is not None:
+            _open(v, sec, target, [])
+        return v
+    moves = ("j", "Down", "k", "Up", "g", "Home", "G", "End", "PgUp", "PgDn", "C-u", "C-d")
+    if key not in moves or not keys:
+        return v
+    if sec == "messages":
+        if key in ("G", "End"):
+            _resume(v)
+            v.sel.pop("messages", None)
+            return settle(v, snap)
+        if following:
+            if key in ("j", "Down", "PgDn", "C-d"):
+                return v  # following: nothing is below the newest row
+            _pause(v, snap, t_now)  # k, g, PgUp: browse from the newest row
+            if i is None:
+                i = len(keys) - 1
+                if key in ("k", "Up"):
+                    v.sel["messages"], v.idx["messages"] = keys[i], i
+                    return v
+    if i is None:
+        i = 0 if key in ("j", "Down", "PgDn", "C-d", "g", "Home") else len(keys) - 1
+    elif key in ("j", "Down"):
+        i += 1
+    elif key in ("k", "Up"):
+        i -= 1
+    elif key in ("g", "Home"):
+        i = 0
+    elif key in ("G", "End"):
+        i = len(keys) - 1
+    else:
+        n = page if key in ("PgUp", "PgDn") else half
+        i += n if key in ("PgDn", "C-d") else -n
+    i = max(0, min(i, len(keys) - 1))
+    v.sel[sec], v.idx[sec] = keys[i], i
+    return v
+
+
+# ---- the shell: terminal, signals, and the reader thread ----
+
+DUMB_LINE = "TERM=dumb, printing one frame. Use a terminal for the live view."
+SHOW_CURSOR_LEAVE_ALT = "\033[?25h\033[?1049l"
+
+
+class WatchReader:
+    """The one thread that reads the bus, so the input loop never waits on SQL. Requests: ("snap",) or
+    ("detail", section, key, top). At most one snapshot read is queued or running (a tick that finds one
+    skips). Each result is appended to .results and a byte is written to the result pipe the loop selects
+    on. stop() interrupts a running query and waits at most 50 ms; the connection is read-only, so
+    nothing is left half-written."""
+
+    def __init__(self, path, strict, interval):
+        self.path, self.strict, self.interval = path, strict, interval
+        self.cond = threading.Condition()
+        self.queue, self.results = [], []
+        self.snap_busy = False
+        self.bodies = {}  # message id -> (head of its body, cut): a body is read once, when it first shows
+        self.con = None
+        self.done = False
+        self.res_r, self.res_w = os.pipe()
+        os.set_blocking(self.res_w, False)
+        self.thread = threading.Thread(target=self._run, name="agentbus-watch-reader", daemon=True)
+
+    def start(self):
+        self.thread.start()
+
+    def ask(self, req):
+        with self.cond:
+            if req[0] == "snap":
+                if self.snap_busy:
+                    return False
+                self.snap_busy = True
+            self.queue.append(req)
+            self.cond.notify()
+            return True
+
+    def _opened(self, con):
+        self.con = con
+
+    def _run(self):
+        if hasattr(signal, "pthread_sigmask"):  # signals go to the main thread, whose select() they wake
+            signal.pthread_sigmask(signal.SIG_BLOCK, signal.valid_signals())
+        wait = LOCK_WAIT_MS / 1000.0
+        while True:
+            with self.cond:
+                while not self.queue and not self.done:
+                    self.cond.wait()
+                if self.done:
+                    return
+                req = self.queue.pop(0)
+            try:
+                if req[0] == "snap":
+                    value = watch_snapshot(self.path, self.strict, HELD, busy_wait=wait, opened=self._opened,
+                                           body_head=BODY_HEAD, bodies=self.bodies)
+                    value = (value, bus_copy_version(self.path))
+                else:
+                    value = watch_detail(self.path, self.strict, req[1], req[2], req[3], busy_wait=wait,
+                                         opened=self._opened)
+                res = (req, None, value)
+            except SystemExit as e:
+                res = (req, refusal(e), None)
+            except Exception as e:  # a database error: shown like a refusal, retried on the next tick
+                res = (req, {"code": "internal", "message": f"{type(e).__name__}: {e}"}, None)
+            self.con = None
+            with self.cond:
+                if req[0] == "snap":
+                    self.snap_busy = False
+                if self.done:
+                    return
+                self.results.append(res)
+            try:
+                os.write(self.res_w, b"x")
+            except OSError:
+                pass
+
+    def take(self):
+        with self.cond:
+            out, self.results = self.results, []
         return out
-    out = out[:rows - 1]
-    while len(out) < rows - 1:
-        out.append("")
-    out.append(paint("2", "  " + fit("q quit · read-only", width - 2)))
-    return out
+
+    def stop(self):
+        with self.cond:
+            self.done = True
+            self.cond.notify()
+        con = self.con
+        if con is not None:
+            try:
+                con.interrupt()
+            except Exception:
+                pass
+        if self.thread.is_alive():
+            self.thread.join(0.05)
+        for fd in (self.res_r, self.res_w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def watch_settings(stdout_tty):
+    """(colour, emoji, ascii) from the terminal and the environment. A stdout that is not UTF-8 (a latin-1 or
+    ASCII locale) gets the ASCII glyphs, and a character it cannot encode is written as ?, never an error."""
+    term = os.environ.get("TERM", "")
+    utf8 = (sys.stdout.encoding or "").lower().replace("-", "").replace("_", "") == "utf8"
+    ascii_mode = os.environ.get("AGENTBUS_ASCII", "") not in ("", "0") or term == "linux" or not utf8
+    if not utf8:
+        global _WATCH_ENCODING
+        _WATCH_ENCODING = sys.stdout.encoding or "ascii"
+        try:
+            sys.stdout.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    colour = stdout_tty and not os.environ.get("NO_COLOR")
+    emoji = stdout_tty and not ascii_mode and not os.environ.get("AGENTBUS_NO_EMOJI") and utf8
+    return colour, emoji, ascii_mode
+
+
+def ambiguous_is_wide(stdin, out, select_mod):
+    """The start-up probe: draw ● and ask the terminal where the cursor went (ESC [ 6 n), waiting at most
+    100 ms. A two-column advance means East Asian Ambiguous characters are drawn wide: use ASCII glyphs.
+    Bytes that are not the answer are handed back as input."""
+    try:
+        out.write("\r●\033[6n")
+        out.flush()
+    except (OSError, UnicodeError):
+        return False, b"", True
+    got, end = b"", time.monotonic() + 0.1
+    while time.monotonic() < end:
+        ready, _, _ = select_mod.select([stdin], [], [], max(0.0, end - time.monotonic()))
+        if not ready:
+            break
+        try:
+            chunk = os.read(stdin, 64)
+        except OSError:
+            break
+        if not chunk:
+            break
+        got += chunk
+        m = re.search(rb"\x1b\[(\d+);(\d+)R", got)
+        if m:
+            rest = got[:m.start()] + got[m.end():]
+            try:
+                out.write("\r\033[K")
+                out.flush()
+            except OSError:
+                pass
+            return int(m.group(2)) - 1 >= 2, rest, True
+    try:
+        out.write("\r\033[K")
+        out.flush()
+    except OSError:
+        pass
+    return False, got, False  # no answer yet: a late one arrives as a "CPR" key and is applied then
 
 
 def cmd_watch(a, strict):
-    """The live view, redrawn in place until q. --json: one snapshot as JSON. --once, or stdout not
-    a terminal: one frame, then exit."""
-    colour_on = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
-    emoji_on = sys.stdout.isatty() and not os.environ.get("AGENTBUS_NO_EMOJI") and \
-        (sys.stdout.encoding or "").lower().replace("-", "") == "utf8"
-    paint = Paint(colour_on, emoji_on)
+    """The live view, redrawn in place until q. --json: one snapshot as JSON. --once, stdout not a terminal,
+    or TERM dumb or unset: one frame, then exit."""
     folder = os.path.dirname(a._db)
     where = tilde(os.path.dirname(folder) if os.path.basename(folder) == ".agentbus" else a._db)
-    limit = 200
     if a.json:
-        snap = watch_snapshot(a._db, strict, limit)
+        snap = watch_snapshot(a._db, strict, HELD)
         print_json({"bus": a._db, "directory": where, **snap})
         return
-    if a.once or not sys.stdout.isatty():
-        snap = watch_snapshot(a._db, strict, limit)
+    tty_out = sys.stdout.isatty()
+    term = os.environ.get("TERM", "")
+    dumb = tty_out and not a.once and term in ("", "dumb")
+    colour, emoji, ascii_mode = watch_settings(tty_out and not dumb)
+    paint = Paint(colour, emoji, ascii_mode)
+    if a.once or not tty_out or dumb:
+        snap = watch_snapshot(a._db, strict, HELD, body_head=BODY_HEAD)
         size = shutil.get_terminal_size((100, 40))
-        frame = render_watch(snap, where, size.columns, size.lines, set(), datetime.now(timezone.utc), paint, live=False)
+        frame = render(View(), snap, where, (size.columns, size.lines), datetime.now(timezone.utc), paint, live=False)
         write_out("\n".join(l.rstrip() for l in frame) + "\n")
+        if dumb:
+            note(DUMB_LINE if term == "dumb" else "TERM is not set, printing one frame. Use a terminal for the live view.")
         return
+    code = watch_live(a, strict, where, paint)
+    if code:
+        raise SystemExit(code)
+
+
+def watch_live(a, strict, where, paint):
+    """The live loop. Returns the exit status: 0, or 129 after SIGHUP."""
     import select
-    import signal
     import termios
     import tty as ttymod
+    out = sys.stdout
     stdin = sys.stdin.fileno() if sys.stdin and sys.stdin.isatty() else None
     saved = termios.tcgetattr(stdin) if stdin is not None else None
-    wake_r, wake_w = os.pipe()  # SIGWINCH writes here, so a resize redraws at once, not on the next tick
+    wake_r, wake_w = os.pipe()  # signals write here, so a resize redraws and a stop is seen at once
     os.set_blocking(wake_w, False)
-    old_winch = signal.signal(signal.SIGWINCH, lambda *_: os.write(wake_w, b"r"))
-    # Ctrl-C sets a flag and wakes the loop instead of raising: a KeyboardInterrupt raised inside a
-    # query (the budget's progress handler is Python) comes back as a database error, which the loop
-    # would show and carry on from.
     stop = []
-    old_int = signal.signal(signal.SIGINT, lambda *_: (stop.append(1), os.write(wake_w, b"i")))
-    # Ctrl-C must end watch however it was started. A blocked signal survives exec, and a CI runner
-    # or a parent shell can start us with SIGINT or SIGWINCH blocked: the handler above would then
-    # never run and watch would ignore Ctrl-C for good. And the C-level handler writes the signal
-    # number to the wakeup fd from whichever thread took the signal, so select() wakes even when the
-    # kernel did not deliver the signal to this thread.
-    old_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGWINCH})
-    old_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)
-    first_seen, out = {}, sys.stdout
-    snap = empty_snapshot()
-    out.write("\033[?1049h\033[?25l")
-    try:
-        if stdin is not None:
-            ttymod.setcbreak(stdin)
-        next_read = 0.0
-        error = None
-        while not stop:
-            if time.monotonic() >= next_read:
-                try:
-                    snap = watch_snapshot(a._db, strict, limit)
-                    error = None
-                except SystemExit as e:  # busy, or refused: say so, draw no sections, try again next tick
-                    if stop:
-                        break
-                    error = dict(refusal(e), directory=tilde(bus_directory(a._db)))
-                next_read = time.monotonic() + a.interval
-                started = not first_seen
-                for m in snap["messages"]:
-                    first_seen.setdefault(m["id"], 0.0 if started else time.monotonic())
-            fresh = {i for i, t in first_seen.items() if t and time.monotonic() - t < FRESH_S}
-            size = shutil.get_terminal_size()
-            frame = render_watch(snap, where, size.columns, size.lines, fresh, datetime.now(timezone.utc), paint,
-                                 error=error, interval=a.interval)
-            out.write("\033[H" + "\n".join(l + "\033[K" for l in frame) + "\033[J")
+
+    def on_signal(code):
+        def handler(*_):
+            stop.append(code)
+            try:
+                os.write(wake_w, b"s")
+            except OSError:
+                pass
+        return handler
+    old = {}
+    # Ctrl-C, SIGTERM and SIGHUP set a stop code and wake the loop instead of raising: a KeyboardInterrupt
+    # raised inside a query comes back as a database error. Ctrl-C must end watch however it was started:
+    # a blocked signal survives exec, and a CI runner or a parent shell can start us with SIGINT or SIGWINCH
+    # blocked, so they are unblocked here; the C-level handler writes to the wakeup fd from whichever thread
+    # took the signal, so select() wakes even when the kernel did not deliver it to this thread.
+    entered = []  # set once the loop has taken the terminal (cbreak, the alternate screen)
+
+    def leave_terminal(on_fail=None):
+        """The terminal as it was: its modes first, then the cursor shown and the alternate screen left; each on
+        its own, so a failing write never skips the modes."""
+        if saved is not None:
+            try:
+                termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
+            except Exception:
+                pass
+        try:
+            out.write(SHOW_CURSOR_LEAVE_ALT)
             out.flush()
-            wait = max(0.05, next_read - time.monotonic())
-            ready, _, _ = select.select([wake_r] + ([stdin] if stdin is not None else []), [], [], wait)
-            if wake_r in ready:
-                os.read(wake_r, 64)
-            if stdin is not None and stdin in ready:
-                key = os.read(stdin, 32)
-                if key in (b"q", b"Q", b"\x1b"):  # a lone ESC; arrow keys and the like arrive as \x1b[...
-                    break
+        except Exception:
+            if on_fail:
+                on_fail()
+
+    def enter_terminal():
+        try:
+            if stdin is not None:
+                ttymod.setcbreak(stdin)
+            out.write("\033[?1049h\033[?25l")
+            out.flush()
+            os.write(wake_w, b"c")  # redraw the whole frame at once
+        except Exception:
+            pass
+
+    jobs = []  # "stop" (Ctrl-Z) or "cont" (continued), done by the loop at a safe point, never inside a handler
+
+    def on_job(what):
+        def handler(*_):
+            jobs.append(what)
+            try:
+                os.write(wake_w, b"j")
+            except OSError:
+                pass
+        return handler
+
+    def do_jobs():
+        """Ctrl-Z, the standard way: give the terminal back, stop with SIGTSTP's default action, and take the
+        terminal again when continued (fg); after any other stop (SIGSTOP) take it again too, since a shell may
+        have reset its modes. Run from the loop between frames, so no write is ever cut in two."""
+        while jobs:
+            what = jobs.pop(0)
+            if what == "stop":
+                leave_terminal()
+                signal.signal(signal.SIGTSTP, signal.SIG_DFL)
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTSTP})
+                os.kill(os.getpid(), signal.SIGTSTP)  # stops here until continued
+                signal.signal(signal.SIGTSTP, on_job("stop"))
+                jobs[:] = [j for j in jobs if j != "cont"]
+            enter_terminal()
+    for sig, handler in ((signal.SIGWINCH, lambda *_: os.write(wake_w, b"r")), (signal.SIGINT, on_signal(0)),
+                         (signal.SIGTERM, on_signal(0)), (signal.SIGHUP, on_signal(129)),
+                         (signal.SIGTSTP, on_job("stop")), (signal.SIGCONT, on_job("cont"))):
+        old[sig] = signal.signal(sig, handler)
+    old_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGWINCH, signal.SIGTERM, signal.SIGHUP,
+                                                           signal.SIGTSTP, signal.SIGCONT})
+    old_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)
+    reader = WatchReader(a._db, strict, a.interval)
+    cleaned = []
+
+    def cleanup():
+        """In this order, each step on its own, so one failing never skips the next: the terminal modes,
+        the screen (cursor shown, alternate screen left), the signal handlers, the pipes."""
+        if cleaned:
+            return
+        cleaned.append(1)
+        leave_terminal(_stdout_to_devnull)  # the terminal gone (SIGHUP): the exit's own flush must not fail too
+        for step_ in (lambda: signal.set_wakeup_fd(old_wakeup),
+                      *[(lambda s=s: signal.signal(s, old[s])) for s in old],
+                      lambda: signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)):
+            try:
+                step_()
+            except Exception:
+                pass
+        reader.stop()
+        for fd in (wake_r, wake_w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    halted = []
+
+    def watchdog_cleanup():
+        """Run by the watchdog thread just before it ends the process with its own message: the terminal only.
+        The loop stops drawing; nothing is closed under it, so the exit shows the watchdog's reason."""
+        halted.append(1)
+        cleaned.append(1)
+        leave_terminal()
+    _KILL_CLEANUP.append(watchdog_cleanup)
+    try:
+        _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod, entered, do_jobs, halted)
     except KeyboardInterrupt:
         pass
     finally:
-        signal.set_wakeup_fd(old_wakeup)
-        signal.signal(signal.SIGWINCH, old_winch)
-        signal.signal(signal.SIGINT, old_int)
-        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
-        os.close(wake_r)
-        os.close(wake_w)
-        out.write("\033[?25h\033[?1049l")
-        out.flush()
-        if saved is not None:
-            termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
+        cleanup()
+        if watchdog_cleanup in _KILL_CLEANUP:
+            _KILL_CLEANUP.remove(watchdog_cleanup)
+    return stop[0] if stop else 0
+
+
+def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod, entered=None, do_jobs=None,
+                halted=()):
+    me_name = getattr(a, "as_", None) or os.environ.get("AGENTBUS_AGENT") or None
+    view = View()
+    view.me = me_name
+    snap, error, stale, last_good = empty_snapshot(), None, None, None
+    first_seen = {}
+    cache = {}  # (section, key) -> detail data, read on open and on r
+    asked = set()  # (section, key) of detail reads queued or running
+    decoder = KeyDecoder()
+    probing = [False]  # the ambiguous-width probe was sent and not yet answered
+    out.write("\033[?1049h\033[?25l")
+    out.flush()
+    if stdin is not None:
+        ttymod.setcbreak(stdin)
+    if entered is not None:
+        entered.append(1)
+    if stdin is not None:
+        if not paint.ascii and (out.encoding or "").lower().replace("-", "") == "utf8":
+            wide, rest, answered = ambiguous_is_wide(stdin, out, select)
+            probing[0] = not answered
+            if wide:
+                paint.ascii, paint.emoji = True, False
+            if rest:
+                decoder.feed(rest)
+    reader.start()
+    reader.ask(("snap",))
+    next_read = time.monotonic() + a.interval
+    got_first = False
+    esc_at = time.monotonic()
+
+    def want_detail():
+        """Read the open detail unless it is cached (r clears the cache): on open and on r, never per tick."""
+        d = view.detail
+        if view.mode != "detail" or not d:
+            return
+        k = (d["section"], d["key"])
+        if k not in cache and k not in asked:
+            asked.add(k)
+            shown = view.shown(snap)
+            top = max((m["id"] for m in shown["messages"]), default=0)
+            if d["section"] == "messages":
+                top = max(top, d["key"])
+            reader.ask(("detail", d["section"], d["key"], top))
+
+    def apply(keys):
+        nonlocal view
+        size = shutil.get_terminal_size()
+        for key in keys:
+            if key.startswith("CPR "):  # the probe's answer, however late (a loaded machine): apply it once
+                if probing[0]:
+                    probing[0] = False
+                    if int(key.split(";")[1]) - 1 >= 2:
+                        paint.ascii, paint.emoji = True, False
+                continue
+            d = view.detail
+            data = cache.get((d["section"], d["key"])) if d else None
+            view = step(view, key, snap, (size.columns, size.lines), datetime.now(timezone.utc), data, error)
+            for eff in view.effects:
+                if eff[0] == "quit":
+                    stop.append(eff[1])
+                elif eff[0] == "read":
+                    cache.clear()
+                    asked.clear()
+                    reader.ask(("snap",))
+                elif eff[0] == "detail":
+                    want_detail()
+                elif eff[0] == "copy":
+                    try:
+                        out.write("\033]52;c;" + base64.b64encode(eff[1].encode("utf-8")).decode("ascii") + "\a")
+                    except OSError:
+                        pass
+            view.effects = []
+            if stop:
+                return
+
+    while not stop:
+        now_m = time.monotonic()
+        if now_m >= next_read:
+            reader.ask(("snap",))
+            next_read = now_m + a.interval
+        for req, err, value in reader.take():
+            if req[0] == "snap":
+                if err is None:
+                    snap, copy_v = value
+                    error, last_good = None, time.monotonic()
+                    mine, theirs = release_key(__version__), release_key(copy_v) if copy_v else None
+                    stale = copy_v if mine is not None and theirs is not None and theirs > mine else None
+                    for m in snap["messages"]:
+                        first_seen.setdefault(m["id"], time.monotonic() if got_first else 0.0)
+                    got_first = True
+                    view = settle(view, snap)
+                    want_detail()
+                else:
+                    age = None if last_good is None else int(time.monotonic() - last_good)
+                    error = dict(err, retry_s=a.interval, last_good_s=age, directory=tilde(bus_directory(a._db)))
+            else:
+                asked.discard((req[1], req[2]))
+                if err is None:
+                    cache[(req[1], req[2])] = value
+        fresh = {i for i, t in first_seen.items() if t and time.monotonic() - t < FRESH_S}
+        if error and error.get("code") == "busy" and last_good is not None:
+            error["last_good_s"] = int(time.monotonic() - last_good)
+        if halted:  # the watchdog is ending the process with its own message: draw nothing more
+            threading.Event().wait()
+        if got_first or error is not None:  # never an empty frame before the first read is in
+            size = shutil.get_terminal_size()
+            d = view.detail
+            frame = render(view, snap, where, (size.columns, size.lines), datetime.now(timezone.utc), paint,
+                           error=error, stale=stale, fresh=fresh,
+                           detail=cache.get((d["section"], d["key"])) if d else None)
+            if view.mode in ("detail", "help"):
+                view.scroll = frame.scroll
+            try:
+                out.write("\033[H" + "\n".join(l + "\033[K" for l in frame) + "\033[J")
+                out.flush()
+            except OSError:
+                stop.append(129)  # the terminal went away
+                break
+        wait = max(0.0, min(next_read - time.monotonic(), a.interval))
+        if decoder.pending():
+            wait = min(wait, max(0.0, esc_at + ESC_WAIT_S - time.monotonic()))
+        fds = [wake_r, reader.res_r] + ([stdin] if stdin is not None else [])
+        try:
+            ready, _, _ = select.select(fds, [], [], wait)
+        except InterruptedError:
+            continue
+        if wake_r in ready:
+            os.read(wake_r, 64)
+        if do_jobs:
+            do_jobs()  # Ctrl-Z and fg
+        if reader.res_r in ready:
+            os.read(reader.res_r, 64)
+        keys = []
+        if stdin is not None and stdin in ready:
+            data = os.read(stdin, 4096)
+            if not data:
+                stdin = None  # the terminal closed its input: keep drawing until a signal
+            had = decoder.pending()
+            keys = decoder.feed(data)
+            if decoder.pending() and not had:
+                esc_at = time.monotonic()
+        if decoder.pending() and time.monotonic() - esc_at >= ESC_WAIT_S:
+            keys += decoder.flush()  # nothing followed the ESC within ESC_WAIT_S
+        if keys:
+            apply(keys)
 
 
 # ==== embedded skill ====

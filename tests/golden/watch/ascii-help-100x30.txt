@@ -1,0 +1,30 @@
+ agentbus  ~/src/acme-api                                                                     keys
+  watch only reads the bus. It never marks a message read and never changes a claim.
+
+Move
+  j k  Down Up    one row                          g G  Home End   first, last row
+  PgUp PgDn       one page                         Ctrl-u Ctrl-d   half a page
+  Tab  Shift-Tab  next, previous section           1 2 3 4         Agents, Claims, Facts, Messages
+
+Look closer
+  Enter           open the selected row; in a detail, open the selected related row
+  t               show or hide the thread of an open message
+  y               copy the selected id, or in a message its reply command (OSC 52; if paste fails,
+                  the footer says where it is on screen)
+  /               filter: from:NAME to:NAME kind:KIND topic:NAME, or any words
+  p               pause the whole view, or follow again
+  r               read the bus now
+  Esc  q          back one level: a detail, the filter or this page; q quits from the overview
+  Ctrl-C          quit from anywhere
+
+Marks
+  *     seen in the last 5 minutes  o     quiet for 5 minutes or more  >     selected row
+  *     the record open in a detail  |     new in the last 3 seconds  goal: the team's goal
+  re:#6 a reply to message 6       +1    one more line; Enter shows it
+
+Words
+  following          the newest messages, as they arrive
+  paused at 16:44    the whole view is frozen as it was then; +N new counts what came since
+  ... N earlier      rows above the window; ... N later, ... N more: rows not shown
+  ... 9 more lines - PgDn
+  j/k scroll - Esc/q back
