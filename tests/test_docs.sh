@@ -213,7 +213,7 @@ non_commands = {
     'pipx install git+https://github.com/wickdninja/agentbus@v0.1.0',
     'examples/two-agent-handoff.sh',
     'mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus',
-    'AGENTS.md', '.agentbus/bin/agentbus', '/path/to/agentbus/skill/SKILL.md',
+    'AGENTS.md', '.agentbus/bin/agentbus', '/path/to/agentbus/skill/SKILL.md', '/hooks',
     'issue:17', '.git', 'AGENTBUS_DB', '.agentbus/bin/',
 }
 for snippet in re.findall(r'`([^`]+)`', inline):

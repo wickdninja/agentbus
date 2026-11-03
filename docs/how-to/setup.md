@@ -6,10 +6,13 @@ One command gives an agent the agentbus protocol. No clone, no symlink, no path 
 
 ```bash
 agentbus setup claude     # Claude Code: installs the skill and the hooks
-agentbus setup codex      # Codex: adds the agentbus block to AGENTS.md and the hooks (see Codex)
+agentbus setup codex      # Codex: adds the agentbus block to AGENTS.md and the hooks
 ```
 
-Start a new session afterwards so the agent loads it. Then, in each repo or folder of repos:
+Then:
+
+1. Start a new session so the agent loads it. For Codex, also type `/hooks` in Codex and approve the four agentbus entries: Codex runs no hook until you do. Setup prints the exact command to look for (it starts with the installed `agentbus` and ends `# agentbus:managed`). With `--scope project`, Codex also has to trust the project. [Use agentbus with Codex](codex.md) has the details.
+2. In each repo or folder of repos:
 
 ```bash
 agentbus init .

@@ -10,13 +10,26 @@ agentbus setup codex
 agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
   + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
-done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the agentbus entries.
+  = /bin/zsh   prints nothing at startup (started once as $SHELL -lc)
+done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts '/usr/bin/python3' '/path/to/agentbus' hook codex and ends # agentbus:managed.
 next: cd your-repo && agentbus init .
 ```
 
+Two steps are yours: run `agentbus init .` in each repo, and approve the hooks in Codex (next section).
+
 ## Trust the hooks
 
-Codex runs no hook until you approve it. Start `codex`, type `/hooks`, and approve the agentbus entries. Installing never trusts them for you. Codex trusts the exact entry: if setup updates the hooks later, or another tool reorders `hooks.json`, approve them again.
+Codex runs no hook until you approve it. Start `codex`, type `/hooks`, and approve the four entries agentbus added. Installing never trusts them for you.
+
+To recognise them: the command starts with the installed `agentbus` (the exact words setup printed) followed by `hook codex EVENT`, and ends with `# agentbus:managed`. Approve only those; an entry that runs something else is not ours. Running `agentbus setup codex` again changes nothing and prints the same reminder while the hooks are in place.
+
+Codex trusts the exact entry: if setup updates the hooks later, or another tool reorders `hooks.json`, approve them again. With `--scope project`, Codex also has to trust the project itself, or it skips the project's hooks.
+
+## Your login shell
+
+Setup starts your login shell once, as Codex will (`$SHELL -lc`), and says how many bytes it printed at startup, never what. It sets `AGENTBUS_SHELL_PROBE=1` while it runs, so a profile can skip slow work or output when that is set. Anything a profile prints reaches Codex in front of the hook's JSON, which Codex may then fail to read; make it print nothing unless it runs in a terminal (for example `[ -t 1 ]`). A shell that does not finish within 10 seconds is stopped and reported as unknown, and so is anything it left running.
+
+The hook command is written for a POSIX shell (`sh`, `bash`, `zsh`). If `$SHELL` is `fish`, `nu`, `xonsh` or `elvish`, setup says so and does not start it; start Codex as `SHELL=/bin/sh codex`.
 
 ## Check it worked
 
@@ -40,14 +53,14 @@ The `AGENTS.md` block shows `--as NAME`: any name works if you run commands your
 
 ## What the hooks do
 
-| Event | What the agent sees |
-| --- | --- |
-| `SessionStart` | joins the bus; its name, how many agents are on it, unread counts |
-| `UserPromptSubmit` | the unread count, only when something is unread |
-| `PreToolUse` (`apply_patch`) | a note when another name holds a claim on a file the patch touches, or when the file has no claim yet |
-| `Stop` | a reminder when it still holds claims and has not posted `done` or a handoff |
+| Event | Shown to | What it says |
+| --- | --- | --- |
+| `SessionStart` | the agent | it joined the bus; its name, how many agents are on it, unread counts, and the commands to read, each with `--as` and its name |
+| `UserPromptSubmit` | the agent | the unread count and `agentbus --as NAME inbox`, only when something is unread |
+| `PreToolUse` (matcher `apply_patch\|Edit\|Write`) | the agent | a note when another name holds a claim on a file the patch touches; or, when another agent is on the bus, which file has no claim and the exact command to claim it |
+| `Stop` | you | `codex-xxxxxxxx still holds 1 claim and has not posted a handoff or done.`, once for each set of claims |
 
-Messages, goals and names other agents wrote are never put in a hook message, only counts and the tool's own text. Edits made through the shell (`sed -i`, redirects) are invisible to the claim note.
+Messages, goals and names other agents wrote are never put in a hook message, only counts and the tool's own text. A file name is printed only when it is plain (letters, digits, `. _ / @ + -`). Edits made through the shell (`sed -i`, redirects) are invisible to the claim note.
 
 ## Limits
 
@@ -56,7 +69,8 @@ Messages, goals and names other agents wrote are never put in a hook message, on
 - Codex reads at most 32 KiB of `AGENTS.md` files in total. Setup refuses to grow the file past that.
 - Use one scope. User and project hooks both run on every event, so installing both doubles them.
 - Project hooks (`--scope project`) load only for a project you have told Codex to trust.
-- Codex starts each hook as `$SHELL -lc COMMAND`, a login shell, so your shell profile runs first. Anything it prints reaches Codex in front of the hook's JSON, which Codex may then fail to read. Make the profile print nothing unless it runs in a terminal. `agentbus setup codex` cannot fix that, and the check that backs `doctor` starts your login shell once and reports how many bytes it printed, never what.
+- Codex starts each hook as `$SHELL -lc COMMAND`, a login shell: see "Your login shell" above.
+- A project's `.codex` that is a link is refused: setup will not write through it.
 
 ## Print the hooks yourself
 
@@ -75,4 +89,4 @@ Every command in them names the installed tool by absolute path and ends with `#
 agentbus setup codex --uninstall
 ```
 
-Only the entries and the block setup added are removed; anything you edited stays. `--dry-run` shows the plan first.
+Only the entries and the block setup added are removed; anything you edited stays. A `hooks.json` or `AGENTS.md` that held nothing else is deleted with them. `--dry-run` shows the plan first.

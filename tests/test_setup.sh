@@ -218,7 +218,7 @@ cmp -s "$T/agents.orig" "$HOME/.codex/AGENTS.md" || fail "a file without a trail
 ok "block added and removed; original bytes restored"
 
 echo
-echo "TEST: an edit made elsewhere after install survives uninstall; an empty or absent AGENTS.md ends up empty, not deleted; a stale block is updated in place"
+echo "TEST: an edit made elsewhere after install survives uninstall; an AGENTS.md that held only our block is deleted with it; a stale block is updated in place"
 reset
 mkdir -p "$HOME/.codex"; printf 'top\n' >"$HOME/.codex/AGENTS.md"
 run_setup codex >/dev/null
@@ -229,10 +229,10 @@ grep -q 'agentbus' "$HOME/.codex/AGENTS.md" && fail "the block is still there"
 reset
 run_setup codex >/dev/null; [ -f "$HOME/.codex/AGENTS.md" ] || fail "AGENTS.md not created"
 run_setup codex --uninstall >/dev/null
-[ -f "$HOME/.codex/AGENTS.md" ] && [ ! -s "$HOME/.codex/AGENTS.md" ] || fail "a file that held only our block must be left empty"
+[ ! -e "$HOME/.codex/AGENTS.md" ] || fail "a file that held only our block must be removed with it, not left empty"
 reset; mkdir -p "$HOME/.codex"; : >"$HOME/.codex/AGENTS.md"
 run_setup codex >/dev/null; run_setup codex --uninstall >/dev/null
-[ -f "$HOME/.codex/AGENTS.md" ] && [ ! -s "$HOME/.codex/AGENTS.md" ] || fail "an empty file did not round-trip"
+[ ! -e "$HOME/.codex/AGENTS.md" ] || fail "an AGENTS.md that held nothing but our block was left behind empty"
 reset; run_setup codex >/dev/null
 sed -i.orig 's/^## agentbus$/## agentbus (old)/' "$HOME/.codex/AGENTS.md"; rm "$HOME/.codex/AGENTS.md.orig"
 run_setup codex
@@ -999,6 +999,19 @@ ok "enclosing work tree, .AGENTBUS, another spelling and a tracked directory lin
 
 echo
 echo "TEST: codex hooks: setup codex adds the block and four tagged hooks, keeps existing hooks and keys, and a second run changes nothing"
+# Setup starts the user's login shell once to look at what it prints: every test here names a quiet one (the check test
+# makes noisy and hanging ones).
+mkdir -p "$T/shells"; printf '#!/bin/sh\nexit 0\n' >"$T/shells/quiet"; chmod +x "$T/shells/quiet"; export SHELL="$T/shells/quiet"
+# trust_line SCOPE_TEXT: the line setup prints, with the tool word read from the hooks file setup wrote.
+trust_line() {
+  "$PY" -I - "$1" "${2:-}" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+cmd = next(h["command"] for g in doc["hooks"]["Stop"] for h in g["hooks"] if h["command"].endswith("# agentbus:managed"))
+line = "Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts " + cmd[:cmd.index(" hook codex")] + " hook codex and ends # agentbus:managed."
+print(line + (" Codex loads project hooks only for a project you have trusted." if sys.argv[2] == "project" else ""))
+PY
+}
 reset
 mkdir -p "$HOME/.codex"; CH="$HOME/.codex/hooks.json"
 "$PY" -I - "$CH" <<'PY'
@@ -1013,7 +1026,7 @@ run_setup codex
 has "agentbus setup codex (user)"
 has "  + ~/.codex/AGENTS.md   added the agentbus block ($BLOCK_LINES lines)"
 grep -qF "  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop); the file as it was is saved as hooks.json.agentbus-" <<<"$OUT" || { echo "$OUT" >&2; fail "codex hooks install line"; }
-has "done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the agentbus entries."
+has "done. $(trust_line "$CH")"
 has "next: cd your-repo && agentbus init ."
 "$PY" -I - "$CH" "$T/ch.orig" <<'PY' || fail "hooks.json lacks four tagged entries, or lost an existing hook or key"
 import json, os, shlex, sys
@@ -1040,7 +1053,7 @@ run_setup codex
 has "  = ~/.codex/AGENTS.md   unchanged"
 has "  = ~/.codex/hooks.json   unchanged"
 has "done. Nothing to change."
-lacks "type /hooks"
+has "Reminder: $(trust_line "$CH")"
 [ "$(hash_tree "$HOME")" = "$h1" ] || fail "a second codex hooks run changed a file"
 ok "AGENTS.md block plus four tagged hooks, existing hooks and keys kept, a rerun changes nothing"
 
@@ -1056,16 +1069,16 @@ has "dry run: nothing was written."
 run_setup codex
 [ "$RC" = 0 ] || fail "codex fresh install: exit $RC: $OUT"
 has "  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)"
-grep -qxF "done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the agentbus entries." <<<"$OUT" || { echo "$OUT" >&2; fail "trust line"; }
+grep -qxF "done. $(trust_line "$HOME/.codex/hooks.json")" <<<"$OUT" || { echo "$OUT" >&2; fail "trust line"; }
 [ "$(mode "$HOME/.codex/hooks.json")" = 600 ] && [ "$(mode "$HOME/.codex")" = 700 ] || fail "fresh hooks.json modes"
 [ -z "$(ls "$HOME/.codex" | grep -F .bak || true)" ] || fail "a fresh install made a backup"
 run_setup codex --json
 "$PY" -I - "$OUT" <<'PY' || fail "codex --json lacks the hooks change"
 import json, sys
 d = json.loads(sys.argv[1])
-assert d["target"] == "codex" and [c["action"] for c in d["changes"]] == ["unchanged", "unchanged"], d
+assert d["target"] == "codex" and [c["action"] for c in d["changes"]] == ["unchanged", "unchanged", "unchanged"], d
 PY
-ok "dry run: nothing written; fresh install 0600 in 0700; trust line exact; --json lists both files"
+ok "dry run: nothing written; fresh install 0600 in 0700; trust line exact; --json lists both files and the shell check"
 
 echo
 echo "TEST: codex hooks: uninstall gives parsed-JSON equality with the original plus an edit made after install"
@@ -1089,7 +1102,7 @@ assert now == orig, (now, orig)
 PY
 grep -q 'agentbus' "$HOME/.codex/AGENTS.md" && fail "the AGENTS.md block is still there after uninstall"
 reset; run_setup codex >/dev/null; run_setup codex --uninstall >/dev/null
-[ "$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1])))' "$HOME/.codex/hooks.json")" = "{}" ] || fail "uninstalling from a file we made left something"
+[ ! -e "$HOME/.codex/hooks.json" ] && [ -z "$(ls "$HOME/.codex" | grep -F .bak || true)" ] || fail "uninstalling from a file we made left a file or a backup behind"
 ok "tagged entries gone, everything else (including the edit) kept"
 
 echo
@@ -1129,59 +1142,153 @@ grep -qF ".codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, Pre
 ok "project scope: both files are under the work folder"
 
 echo
-echo "TEST: codex hooks: check reads text only, names the recorded executable, a user and project duplicate and the login shell, and says trust cannot be checked"
+echo "TEST: codex hooks: check reads text only, vouches only for hooks that run this agentbus (every entry), and says trust cannot be checked"
 reset; run_setup codex >/dev/null
-mkdir -p "$T/shells"
-printf '#!/bin/sh\nexit 0\n' >"$T/shells/quiet"; printf '#!/bin/sh\necho "welcome back, fortune of the day"\nexit 0\n' >"$T/shells/noisy"; chmod +x "$T/shells/quiet" "$T/shells/noisy"
-rows() { SHELL="${SHELLFOR:-$T/shells/quiet}" "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$HOME/.codex/hooks.json" "$1" <<'PY'
+rows() { "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$HOME/.codex/hooks.json" "$1" <<'PY'
 import json, runpy, shlex, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_check")
-sys.argv[0] = shlex.split(json.load(open(sys.argv[2]))["hooks"]["Stop"][0]["hooks"][0]["command"])[0]
+# the running tool is the one setup recorded: this interpreter and this file
 for r in m["CodexHooksPiece"]().check(sys.argv[3]):
-    print(r[0], r[1], r[2] if r[0] in ("codex_trust", "codex_login_shell") else "")
+    print(r[0], r[1], r[2] if r[0] in ("codex_trust", "codex_hooks_tool") else "")
+PY
+}
+# set_tool EVENT TOOLWORD: point one event's agentbus entry at another executable (EVENT "all": every entry)
+set_tool() {
+  "$PY" -I - "$HOME/.codex/hooks.json" "$1" "$2" <<'PY'
+import json, re, sys
+d = json.load(open(sys.argv[1]))
+for event, groups in d["hooks"].items():
+    for g in groups:
+        for h in g["hooks"]:
+            if sys.argv[2] in ("all", event):
+                h["command"] = re.sub(r"^.*? hook codex", sys.argv[3] + " hook codex", h["command"])
+json.dump(d, open(sys.argv[1], "w"), indent=2)
 PY
 }
 got=$(cd "$W" && rows user)
-[ "$got" = "$(printf 'codex_hooks ok \ncodex_hooks_tool ok \ncodex_login_shell ok your login shell prints nothing at startup, so hook output stays clean\ncodex_trust ok Codex trust cannot be checked from outside Codex; type /hooks to confirm')" ] || fail "check after install: $got"
-got=$(cd "$W" && SHELLFOR="$T/shells/noisy" rows user)
-grep -qx "codex_login_shell problem $T/shells/noisy prints text at startup (33 bytes), which Codex puts in front of each hook's output and breaks it" <<<"$got" || fail "check with a login shell that prints: $got"
-! grep -qF "fortune" <<<"$got" || fail "check printed what the login shell wrote"
+grep -qx "codex_hooks ok " <<<"$got" && grep -q "^codex_hooks_tool ok the hooks run " <<<"$got" && grep -qx "codex_trust ok Codex trust cannot be checked from outside Codex; type /hooks to confirm" <<<"$got" || fail "check after install: $got"
+! grep -q login_shell <<<"$got" || fail "check reports the login shell, which only setup looks at"
 (cd "$W" && "${AB[@]}" setup codex --scope project >/dev/null)
 got=$(cd "$W" && rows user); grep -qx "codex_hooks_duplicate problem " <<<"$got" || fail "check with user and project hooks both present: $got"
 rm -rf "$W/.codex"
 # a hooks file can be a project's: check looks at the executable it names and never starts it
 mkdir -p "$T/planted"; printf '#!/bin/sh\ntouch "%s"\n' "$T/canary-check" >"$T/planted/agentbus"; chmod +x "$T/planted/agentbus"
-"$PY" -I - "$HOME/.codex/hooks.json" "$T/planted/agentbus" <<'PY'
-import json, re, sys
-d = json.load(open(sys.argv[1]))
-for groups in d["hooks"].values():
-    for g in groups:
-        for h in g["hooks"]:
-            h["command"] = re.sub(r"^.*? hook codex", "'" + sys.argv[2] + "' hook codex", h["command"])
-json.dump(d, open(sys.argv[1], "w"), indent=2)
-PY
+# one forged entry among genuine ones is not vouched for: every tagged command is checked, not only the first
+run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
+set_tool Stop "'$T/planted/agentbus'"
+got=$(cd "$W" && rows user)
+grep -q "^codex_hooks_tool problem 1 of 4 hook commands run $T/planted/agentbus, not this agentbus" <<<"$got" || fail "check with one forged entry among four: $got"
+run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
+set_tool all "'$T/planted/agentbus'"
 got=$(cd "$W" && rows user)
 [ ! -e "$T/canary-check" ] || fail "check started the executable a hooks file names"
-grep -qx "codex_hooks_tool ok " <<<"$got" || fail "check with a planted executable: $got"
-"$PY" -I - "$HOME/.codex/hooks.json" <<'PY'
-import json, re, sys
-d = json.load(open(sys.argv[1]))
-for groups in d["hooks"].values():
-    for g in groups:
-        for h in g["hooks"]:
-            h["command"] = re.sub(r"^.*? hook codex", "'/nonexistent/agentbus' hook codex", h["command"])
-json.dump(d, open(sys.argv[1], "w"), indent=2)
-PY
-got=$(cd "$W" && rows user); grep -qx "codex_hooks_tool problem " <<<"$got" || fail "check with a missing executable: $got"
-ok "check: ok after install, with the login shell and trust rows; a noisy login shell, a missing executable and a doubled install are problems; nothing the file names is started"
+grep -q "^codex_hooks_tool problem 4 of 4 hook commands run $T/planted/agentbus, not this agentbus" <<<"$got" || fail "check with a planted agentbus executable (a readable file named agentbus is not this agentbus): $got"
+set_tool all "'/nonexistent/agentbus'"
+got=$(cd "$W" && rows user); grep -q "^codex_hooks_tool problem the hooks run /nonexistent/agentbus, which is not an agentbus executable" <<<"$got" || fail "check with a missing executable: $got"
+ok "check: ok after install with the trust row; a planted, forged-in-one-entry or missing executable and a doubled install are problems; nothing the file names is started"
 
 echo
-echo "TEST: setup help says what setup installs for both targets"
+echo "TEST: setup help says what setup installs for both targets, and that Codex needs /hooks"
 help=$("${AB[@]}" setup --help | tr -s ' \n' '  ')
 grep -qF "the skill and hooks for Claude Code, the AGENTS.md block and hooks for Codex" <<<"$help" || fail "setup help does not mention the hooks: $help"
-grep -qF "claude (skill and hooks) or codex (AGENTS.md block and hooks)" <<<"$help" || fail "setup target help does not mention the hooks: $help"
+grep -qF "claude (skill and hooks) or codex (AGENTS.md block and hooks, then /hooks in Codex to trust them)" <<<"$help" || fail "setup target help does not mention the hooks: $help"
+grep -qF "Codex runs the hooks only after you approve them with /hooks" <<<"$help" || fail "setup help does not mention the trust step: $help"
 "${AB[@]}" --json schema | grep -qF "Install the skill and hooks for Claude Code, or the AGENTS.md block and hooks for Codex" || fail "the setup entry of schema does not mention the hooks"
-ok "setup --help and schema name the hooks"
+ok "setup --help and schema name the hooks and the trust step"
+
+echo
+echo "TEST: a project's .codex or .claude that is a link is refused, in a dry run and an uninstall too, and nothing is written through it"
+PW=$(cd "$W" && pwd -P)
+for target in codex claude; do
+  dir=".$target"
+  for mode in "" "--dry-run" "--uninstall"; do
+    reset; mkdir -p "$T/out"; rm -rf "$T/out"/*; mkdir -p "$T/out"; ln -s "$T/out" "$W/$dir"
+    run_setup "$target" --scope project $mode
+    [ "$RC" = 1 ] && grep -qF "$PW/$dir is a link, so setup would write outside this project; not changed." <<<"$OUT" || fail "a linked $dir ($mode): exit $RC: $OUT"
+    [ -z "$(ls -A "$T/out")" ] || fail "setup $target $mode wrote through a linked $dir: $(ls -A "$T/out")"
+  done
+  # a relative link, and a link to the user's own config folder
+  reset; mkdir -p "$T/out" "$HOME/.$target"; ln -s ../out "$W/$dir" 2>/dev/null || true; h0=$(hash_tree "$HOME")
+  rm -f "$W/$dir"; ln -s "$HOME/.$target" "$W/$dir"
+  run_setup "$target" --scope project
+  [ "$RC" = 1 ] && [ "$h0" = "$(hash_tree "$HOME")" ] || fail "a $dir linked to the user's ~/.$target was written through: exit $RC: $OUT"
+  # a link further down: .claude real, skills a link (claude); a real folder is fine
+  reset; run_setup "$target" --scope project; [ "$RC" = 0 ] || fail "a real $dir was refused: $RC $OUT"
+done
+# the skill piece guards it on its own: with the plugin providing the hooks, the hooks piece plans nothing
+reset; mkdir -p "$HOME/.claude/plugins" "$T/out"; rm -rf "$T/out"/*
+printf '{"plugins":{"agentbus@agentbus":[{"scope":"user"}]}}' >"$HOME/.claude/plugins/installed_plugins.json"; ln -s "$T/out" "$W/.claude"
+run_setup claude --scope project
+[ "$RC" = 1 ] && [ -z "$(ls -A "$T/out")" ] || fail "a linked .claude was written through when the plugin provides the hooks: exit $RC: $OUT"
+ok "a linked .codex or .claude is refused by name for install, dry run and uninstall; a link to ~/.codex or ~/.claude is not followed; a real folder works"
+
+echo
+echo "TEST: setup codex looks at the login shell once; a read-only check never starts it"
+printf '#!/bin/sh\nprintf "%%s" "$AGENTBUS_SHELL_PROBE" >"%s"\nexit 0\n' "$T/probe.env" >"$T/shells/spy"; chmod +x "$T/shells/spy"
+printf '#!/bin/sh\necho "welcome back, fortune of the day"\nexit 0\n' >"$T/shells/noisy"; chmod +x "$T/shells/noisy"
+export SHELL="$T/shells/spy"; reset; rm -f "$T/probe.env"
+run_setup codex --dry-run
+has "  = would start your login shell $T/shells/spy once (as \$SHELL -lc) to check that it prints nothing at startup"
+[ ! -e "$T/probe.env" ] || fail "a dry run started the login shell"
+run_setup codex
+has "  = $T/shells/spy   prints nothing at startup (started once as \$SHELL -lc)"
+[ "$(cat "$T/probe.env")" = 1 ] || fail "the login shell was not told it is being probed (AGENTBUS_SHELL_PROBE=1): $(cat "$T/probe.env" 2>&1)"
+rm -f "$T/probe.env"; "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$HOME/.codex/hooks.json" <<'PY' >/dev/null
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_check")
+m["CodexHooksPiece"]().check("user")
+PY
+[ ! -e "$T/probe.env" ] || fail "check started the user's login shell"
+export SHELL="$T/shells/noisy"; reset
+run_setup codex
+[ "$RC" = 0 ] && has "  ! $T/shells/noisy   printed 33 bytes at startup, which Codex puts in front of each hook's output and breaks it; make the profile print nothing unless it runs in a terminal (for example [ -t 1 ])" || fail "setup with a login shell that prints: $RC $OUT"
+lacks fortune
+run_setup codex --json; "$PY" -I - "$OUT" "$T/shells/noisy" <<'PY' || fail "--json does not report the noisy login shell as skipped"
+import json, sys
+c = json.loads(sys.argv[1])["changes"][-1]
+assert c["path"] == sys.argv[2] and c["action"] == "skipped" and "33" in c["detail"], c
+PY
+# a profile that leaves a process running, and one that never finishes: setup does not hang, reports unknown, leaves nothing
+printf '#!/bin/sh\nsleep 300 &\necho $! >"%s"\nexit 0\n' "$T/sleeper.pid" >"$T/shells/sleeper"; chmod +x "$T/shells/sleeper"
+export SHELL="$T/shells/sleeper"; reset; rm -f "$T/sleeper.pid"
+t0=$(date +%s); run_setup codex; t1=$(date +%s)
+[ "$RC" = 0 ] && [ $((t1 - t0)) -lt 8 ] && has "  = $T/shells/sleeper   prints nothing at startup (started once as \$SHELL -lc)" || fail "a profile that leaves a process running: exit $RC after $((t1 - t0)) s: $OUT"
+orphan() { for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$(cat "$1")" 2>/dev/null || return 1; sleep 0.3; done; return 0; }
+! orphan "$T/sleeper.pid" || { kill "$(cat "$T/sleeper.pid")" 2>/dev/null || true; fail "the login shell's background process outlived setup"; }
+printf '#!/bin/sh\nsleep 300 &\necho $! >"%s"\nwait\n' "$T/hang.pid" >"$T/shells/hang"; chmod +x "$T/shells/hang"
+export SHELL="$T/shells/hang"; reset; rm -f "$T/hang.pid"
+AGENTBUS_TEST_SHELL_PROBE=2 run_setup codex --json
+"$PY" -I - "$OUT" <<'PY' || fail "a login shell that never finishes was reported as fine"
+import json, sys
+c = json.loads(sys.argv[1])["changes"][-1]
+assert c["action"] == "skipped" and "could not tell" in c["detail"], c
+PY
+! orphan "$T/hang.pid" || { kill "$(cat "$T/hang.pid")" 2>/dev/null || true; fail "a login shell that never finished left a process running"; }
+AGENTBUS_TEST_SHELL_PROBE=2 run_setup codex; grep -qF "did not finish within 2 s as \$SHELL -lc, so setup cannot tell whether it prints at startup" <<<"$OUT" || fail "the timeout line: $OUT"
+export SHELL="$T/shells/quiet"
+ok "dry run does not start it; setup starts it once with AGENTBUS_SHELL_PROBE=1; a noisy one is reported by size, a hanging or backgrounding one is bounded and killed; check never starts it"
+
+echo
+echo "TEST: setup codex says when the login shell is not POSIX, and does not start it"
+for sh in fish nu xonsh elvish; do
+  printf '#!/bin/sh\ntouch "%s"\n' "$T/canary-$sh" >"$T/shells/$sh"; chmod +x "$T/shells/$sh"
+  export SHELL="$T/shells/$sh"; reset
+  run_setup codex
+  [ "$RC" = 0 ] && has "  ! $T/shells/$sh   is not a POSIX shell, but Codex runs each hook command through \$SHELL -lc and the command setup wrote needs sh, bash or zsh. Start Codex as: SHELL=/bin/sh codex" || fail "a $sh login shell: exit $RC: $OUT"
+  [ ! -e "$T/canary-$sh" ] || fail "setup started a $sh login shell"
+done
+export SHELL="$T/shells/quiet"
+ok "fish, nu, xonsh and elvish get the POSIX-shell note and are not started"
+
+echo
+echo "TEST: the trust step is in every codex result: project scope says the project must be trusted; a rerun reminds; output is not wrapped in a pipe"
+reset; run_setup codex --scope project
+[ "$RC" = 0 ] && has "done. $(trust_line "$W/.codex/hooks.json" project)" || fail "project trust line: $RC $OUT"
+run_setup codex --scope project; has "Reminder: $(trust_line "$W/.codex/hooks.json" project)"
+reset
+out=$(cd "$W" && env -u COLUMNS "${AB[@]}" setup codex --dry-run | cat)
+grep -qxF "  + would add 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop) to ~/.codex/hooks.json" <<<"$out" || { echo "$out" >&2; fail "setup output was wrapped in a pipe"; }
+ok "project trust note, rerun reminder, and one line per change when stdout is not a terminal"
 
 echo
 echo "All setup tests passed"

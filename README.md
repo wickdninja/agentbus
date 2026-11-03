@@ -104,14 +104,12 @@ Full diagrams and their sources: [docs/workflow.md](docs/workflow.md)
 
 ## Teach your agents
 
-| Agent | Setup |
-| --- | --- |
-| **Claude Code** | From a clone: `mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus` |
-| **Codex**, or anything that reads `AGENTS.md` | Add: *Coordinate with other agents through `.agentbus/bin/agentbus`; follow `/path/to/agentbus/skill/SKILL.md`.* |
+| Agent | Setup in this release (v0.1.0) | From v0.2.0 |
+| --- | --- | --- |
+| **Claude Code** | From a clone: `mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus` | One command, no clone: [Set up your agents](docs/how-to/setup.md) |
+| **Codex**, or anything that reads `AGENTS.md` | Add: *Coordinate with other agents through `.agentbus/bin/agentbus`; follow `/path/to/agentbus/skill/SKILL.md`.* | One command, then approve the hooks with `/hooks` in Codex: [Use agentbus with Codex](docs/how-to/codex.md) |
 
 The skill tells an agent when to join, check its inbox, claim files and hand off.
-
-From v0.2.0 one command does this without a clone: see [Set up your agents](docs/how-to/setup.md).
 
 <br>
 
