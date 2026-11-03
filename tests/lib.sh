@@ -15,6 +15,9 @@ unset CODEX_HOME CLAUDE_CONFIG_DIR
 CODEX_MARKER_VARS="CODEX_THREAD_ID CODEX_SANDBOX CODEX_SANDBOX_NETWORK_DISABLED"
 unset CLAUDECODE BUILD_NUMBER RUN_ID NO_UPDATE_NOTIFIER DO_NOT_TRACK AGENTBUS_NO_UPDATE_CHECK AGENTBUS_NO_UPDATE_NOTICE GH_TOKEN GITHUB_TOKEN
 for _v in $CODEX_MARKER_VARS; do unset "$_v"; done
+# Setup asks `claude plugin list --json` whether the plugin is installed. A test never starts the real claude: this names
+# no executable (setup then reads the plugin files), and a test that wants an answer points it at a stub it wrote.
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
 # Human output is hard-wrapped to COLUMNS (else the terminal, else 80). Tests that grep long human
 # lines run unwrapped, whatever terminal started them; tests/test_wrap.sh sets COLUMNS per call.
 export COLUMNS=4096

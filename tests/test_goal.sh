@@ -48,7 +48,7 @@ ok "join and status put the goal first"
 echo "TEST 4: watch pins the goal under its header and keeps it out of Facts"
 agentbus --as lead ctx set api_url "http://x" >/dev/null
 o=$(outof env COLUMNS=100 "${AB[@]}" watch --once)
-[ "$(sed -n 2p <<<"$o")" != "" ] && grep -q '^  ◆ ship v0.1 and a demo .* · lead · ' <<<"$(sed -n 2p <<<"$o")" || fail "goal not pinned on row 2: $o"
+[ "$(sed -n 2p <<<"$o")" != "" ] && grep -q '^  ◆ ship v0.1 and a demo  *lead · [0-9a-z]*$' <<<"$(sed -n 2p <<<"$o")" || fail "goal not pinned on row 2: $o"
 grep -q '^Facts  1$' <<<"$o" || fail "goal counted among facts: $o"
 json_ok agentbus --json watch | python3 -c '
 import json, sys

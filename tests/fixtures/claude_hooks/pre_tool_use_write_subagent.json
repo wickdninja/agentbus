@@ -1,0 +1,19 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000004",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/aaaaaaaa-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "21799fd5-b1b3-426a-bd10-44254ccc9490",
+  "permission_mode": "acceptEdits",
+  "agent_id": "a5fb4f9c0335de2e7",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/home/user/proj/sub.txt",
+    "content": "x"
+  },
+  "tool_use_id": "toolu_014ZC9LajXU7uahK2Y9AKzrW"
+}

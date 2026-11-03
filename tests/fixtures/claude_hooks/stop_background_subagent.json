@@ -1,0 +1,23 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000004",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/aaaaaaaa-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "21799fd5-b1b3-426a-bd10-44254ccc9490",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "I've started one subagent to write `sub.txt` containing `x`. It's still running, so I don't have a result yet; I'll reply `done` once it reports back.",
+  "background_tasks": [
+    {
+      "id": "a5fb4f9c0335de2e7",
+      "type": "subagent",
+      "status": "running",
+      "description": "Create sub.txt with x",
+      "agent_type": "general-purpose"
+    }
+  ],
+  "session_crons": []
+}

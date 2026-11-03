@@ -53,7 +53,8 @@ doc = ok("schema")
 objects, commands = doc["objects"], doc["commands"]
 
 # ---- the parser and the registry list the same commands ----
-parser = runpy.run_path(bin_, run_name="agentbus_test")["build_parser"]()
+module = runpy.run_path(bin_, run_name="agentbus_test")
+parser = module["build_parser"]()
 def leaves(p, prefix=()):
     found = []
     for action in p._actions:
@@ -63,6 +64,7 @@ def leaves(p, prefix=()):
                 found.extend(inner or [prefix + (name,)])
     return found
 parser_commands = {" ".join(path) for path in leaves(parser)} | {"schema"}
+parser_commands -= set(module["CONTRACT"]["hidden"])  # commands the parser has that `schema` leaves out (hook)
 assert doc["contract"] == 1 and isinstance(doc["agentbus"], str), doc["contract"]
 assert set(commands) == parser_commands, ("registry vs parser", sorted(set(commands) ^ parser_commands))
 print("PASS: schema --json has an entry for every subcommand in the parser and none for a command that does not exist")
@@ -101,6 +103,8 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
 assert set(doc["errors"]) == set(EXPECTED_ERRORS), sorted(set(doc["errors"]) ^ set(EXPECTED_ERRORS))
 # fields every error of the code may carry, when they apply (a refused bus file names itself)
 EXPECTED_OPTIONAL = {"bus_unavailable": ["file"],
+                     # an identifier with a control character: the argument that held it
+                     "bad_input": ["field"],
                      # upgrade stopped once a migration committed: what was migrated, its backup, how to finish
                      # and the files the command had already changed (init, upgrade's copy, setup)
                      "interrupted": ["directory", "backup", "migrations", "rerun", "changed", "argv"]}
@@ -424,6 +428,9 @@ step("skill", "skill", "--agents-md")
 # a dry run writes nothing; the config folders point into this test's own temp folder all the same
 step("setup", "setup", "claude", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("setup", "setup", "codex", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
+# doctor reads only; its config folders point into this test's own temp folder too
+step("doctor", "doctor", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
+step("doctor", "doctor", "--scope", "project", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 LISTINGS = ["who", "inbox", "read", "claims", "ctx get", "ctx history", "log show", "buses"]
 if NEEDS_ENVELOPE:
     step("who", "who")

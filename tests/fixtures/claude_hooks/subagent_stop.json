@@ -1,0 +1,26 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000004",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/aaaaaaaa-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "21799fd5-b1b3-426a-bd10-44254ccc9490",
+  "permission_mode": "acceptEdits",
+  "agent_id": "a5fb4f9c0335de2e7",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/user/.claude/projects/-home-user-proj/aaaaaaaa-0000-4000-8000-000000000004/subagents/agent-a5fb4f9c0335de2e7.jsonl",
+  "last_assistant_message": "done",
+  "background_tasks": [
+    {
+      "id": "a5fb4f9c0335de2e7",
+      "type": "subagent",
+      "status": "running",
+      "description": "Create sub.txt with x",
+      "agent_type": "general-purpose"
+    }
+  ],
+  "session_crons": []
+}

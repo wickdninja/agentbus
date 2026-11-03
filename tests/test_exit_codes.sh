@@ -110,7 +110,8 @@ both(bad, ["buses"], 3, "bus_unavailable")
 empty = os.path.join(tmp, "emptydir"); os.makedirs(empty)
 both(None, ["upgrade", empty], 3, "no_bus")
 both(None, ["update", os.path.join(tmp, "no-such-folder")], 2, "bad_input")  # refused before GitHub is asked
-both(None, ["init", os.path.join(tmp, "not-a-dir")], 2, "bad_input")
+plain_file = os.path.join(tmp, "not-a-dir"); open(plain_file, "w").close()
+both(None, ["init", plain_file], 2, "bad_input")  # a file, not a missing folder: init creates those since 0.2
 print("PASS: exit 3 for no bus, a refused schema, an unsafe folder and a held database (busy is retryable)")
 
 # 4: a bug is exit 4 in both modes (and a traceback in human mode, not exit 1)

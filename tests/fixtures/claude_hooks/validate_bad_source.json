@@ -1,0 +1,54 @@
+{
+  "success": false,
+  "strict": false,
+  "target": "/home/user/scratch/v4/.claude-plugin/marketplace.json",
+  "manifest": {
+    "file": "/home/user/scratch/v4/.claude-plugin/marketplace.json",
+    "type": "marketplace",
+    "errors": [
+      {
+        "path": "plugins.3.source",
+        "message": "Invalid input",
+        "code": null
+      }
+    ],
+    "warnings": [],
+    "notes": [],
+    "gatingHooks": []
+  },
+  "contents": [],
+  "advice": [],
+  "directory": {
+    "profile": null,
+    "findings": [
+      {
+        "code": "README_MISSING",
+        "title": "README missing",
+        "severity": "error",
+        "blocking": true,
+        "hold": false,
+        "file": "README.md",
+        "field": "",
+        "message": "This plugin has no README.md. People who install it and the directory's automated review read the README to learn what it does; the first line of a README in the plugin folder also stands in as the listing summary when plugin.json has no description.",
+        "fix": "Add a README.md to the plugin folder describing what the plugin does, how to use it, and any setup it needs, in at least 40 words. A README at the repository root also counts for a plugin in a sub-folder."
+      },
+      {
+        "code": "ICON_MISSING",
+        "title": "No icon",
+        "severity": "warning",
+        "blocking": false,
+        "hold": false,
+        "file": ".claude-plugin/plugin.json",
+        "field": "icon",
+        "message": "No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.",
+        "fix": "Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon."
+      }
+    ],
+    "undecided": [],
+    "incomplete": false,
+    "failure": null,
+    "notes": [
+      "This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder."
+    ]
+  }
+}

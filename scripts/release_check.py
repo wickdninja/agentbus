@@ -135,12 +135,15 @@ def main():
         entries = [p for p in data.get("plugins", []) if p.get("name") == "agentbus"]
         if not entries:
             problems.append(".claude-plugin/marketplace.json does not name the agentbus plugin")
+        # Between releases (an untagged dev build) the marketplace points at main, which exists; the release-prep commit
+        # moves the ref to the tag, and a tagged or release-versioned tree must name exactly that tag.
+        want_ref = "main" if dev and not a.tag else tag
         for p in entries:
             s = p.get("source")
             if isinstance(s, str):
-                problems.append(f".claude-plugin/marketplace.json source '{s}' is a path; it must be a git source with ref {tag}")
-            elif not isinstance(s, dict) or s.get("ref") != tag:
-                problems.append(f".claude-plugin/marketplace.json source ref is {s.get('ref') if isinstance(s, dict) else s}, not {tag}")
+                problems.append(f".claude-plugin/marketplace.json source '{s}' is a path; it must be a git source with ref {want_ref}")
+            elif not isinstance(s, dict) or s.get("ref") != want_ref:
+                problems.append(f".claude-plugin/marketplace.json source ref is {s.get('ref') if isinstance(s, dict) else s}, not {want_ref}")
 
     skill = open(os.path.join(ROOT, "skills", "agentbus", "SKILL.md"), "rb").read()
     history = re.search(r"^SKILL_SHA256_HISTORY = \((.*?)^\)", src, re.S | re.M)

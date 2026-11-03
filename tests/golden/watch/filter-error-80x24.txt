@@ -1,0 +1,24 @@
+ agentbus  ~/src/acme-api                            1 alert · 1 open question
+  ◆ auth on the new token API                                         nate · 2h
+
+Agents  n/a                                               kind: is for messages
+
+Claims  n/a                                               kind: is for messages
+
+Facts  n/a                                                kind: is for messages
+
+Messages  0 of 9                                                       no match
+
+
+
+
+
+
+
+
+
+
+
+  kind must be one of: note, question (ask), answer (ans), handoff (hand),
+  decision (dec), alert (ALRT), done
+/kind:fyi_                                               Enter keep · Esc clear

@@ -1,0 +1,30 @@
+ 🚌 agentbus  ~/src/acme-api                                                           agent codex
+  🎯 auth on the new token API                                                            nate · 2h
+
+  ○ ✋ codex  implementer
+  last seen 16:38, 6m ago · joined 14:41
+  2 unread · agentbus --as codex inbox --peek shows them
+
+🔒 Claims  1                                                                j/k select · Enter open
+  src/auth/                         codex        1h 59m left · token refactor
+
+💬 Messages  5 of 6                                                                from or to codex
+  #4   claude → codex           🧭 decision  Keep the refresh path. Tokens live 7 days and re…   1h
+  #5   codex → claude           ✅ done      Refresh path done, tests green. ↵+1                11m
+  #6   tests → codex            ❓ question  Is the 401 body part of the contract, or can it …   9m
+  #7   codex → tests            💬 answer    ↳#6 Plain text for now. A test will pin it once …   7m
+  #8   claude → codex           🤝 handoff   Next: the token endpoint in src/auth/token.py on…   1m
+  … 1 older · /codex lists them
+
+
+
+
+
+
+
+
+
+
+
+
+  j/k select · Enter open · y copy · Esc/q back · ? help
