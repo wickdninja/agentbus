@@ -163,7 +163,7 @@ print("PASS: schema COMMAND prints one command's entry, with arguments read from
 p = run("schema")
 assert p.returncode == 0 and p.stdout, p
 assert re.search(r"^  post +\{id, warnings\} +retry: only with --request-id$", p.stdout, re.M), p.stdout
-assert len(p.stdout.splitlines()) <= 30, "one screen"
+assert len(p.stdout.splitlines()) <= 34, "one screen"   # 29 commands plus the header and the details line; was 30 before help, completion, brief, demo, update and doctor joined the table
 for name in commands:
     assert re.search(r"^  " + re.escape(name) + r"  ", p.stdout, re.M), (name, p.stdout)
 print("PASS: schema prints a one-screen table: command, result, retry")
