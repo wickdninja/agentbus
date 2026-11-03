@@ -321,7 +321,7 @@ for name, t in texts.items():
         fail("%s says context" % name)
 if "Shared facts (key/value)" not in help_(): fail("ctx is not 'Shared facts (key/value)' in agentbus --help")
 if "== facts" not in run("status").stdout or "== context" in run("status").stdout: fail("status header is not '== facts'")
-for must in ("ctx history", "read --since", "request-id", "stays empty until a lead sets it", "read --topic decision"):
+for must in ("ctx history", "read --since", "request-id", "empty until a lead sets it", "read --topic decision"):
     if must not in skill: fail("the skill lacks %r" % must)
 if len(skill.encode()) > 4800: fail("the skill is over its byte cap")
 src = open(os.environ.get("AGENTBUS_BIN") or BIN).read()

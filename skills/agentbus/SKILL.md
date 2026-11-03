@@ -17,7 +17,7 @@ Discovery finds the nearest ancestor bus (linked worktrees use their main checko
 
 ## Start
 
-Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal, which stays empty until a lead sets it with `goal "TEXT"`. Choose another name if join reports a live session. Read facts with `ctx get`, and a fact's earlier values with `ctx history KEY`. Use `read --topic decision` if this project uses that topic.
+Start with `join`, then `status --limit 20` and `inbox --limit 20`. Join prints the shared goal, empty until a lead sets it with `goal "TEXT"`. Choose another name if join reports a live session. Read facts with `ctx get`, earlier values with `ctx history KEY`. Use `read --topic decision` if this project uses that topic.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim for you and never replace reading inbox.
 
@@ -39,9 +39,9 @@ Check recipients with `who`. Messages queue for absent names; posting does not s
 
 ## Read correctly
 
-Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, and `read --since ID` for what came after message ID. Duplicate delivery is possible; check message IDs before repeating actions.
+Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. Duplicate delivery is possible; check message IDs before repeating actions.
 
-A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`: the same token and text returns the original id; changed text is refused.
+A nonzero exit does not imply rollback. A write may commit before output fails. When a post might be retried, use `post --request-id TOKEN`; a repeat returns the original id.
 
 ## Finish the session
 
