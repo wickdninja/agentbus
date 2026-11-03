@@ -178,7 +178,15 @@ echo "TEST: the narrow grant (bus.db, -wal and -shm only) runs the bus and denie
 R3="$T/repo-narrow"; mkrepo "$R3"; agentbus init "$R3" >/dev/null; B3="$R3/.agentbus"
 AGENTBUS_DB="$B3/bus.db" agentbus --as lead join >/dev/null   # the brain makes bus.db before the lane starts
 B3RE=$(printf '%s' "$B3" | sed 's/[][\\.*^$+?(){}|]/\\&/g')
-cat > "$T/narrow.sb" <<SB
+# narrow [no-dir-rule|no-sti-rule|no-socket-rule|no-dns-allow]: the recipe's profile, or it without one rule
+# (the negative controls below).
+narrow() {
+  local dir="(deny file-write-create (require-all (subpath \"$B3\") (vnode-type DIRECTORY)))"
+  local sti='(deny file-ioctl (ioctl-command TIOCSTI))'
+  local sock='(deny network-outbound (remote unix-socket))'
+  local dns='(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))'
+  case "${1:-}" in no-dir-rule) dir='';; no-sti-rule) sti='';; no-socket-rule) sock=''; dns='';; no-dns-allow) dns='';; esac
+  cat <<SB
 (version 1)
 (allow default)
 (deny file-write*)
@@ -186,10 +194,17 @@ $DEV_RULE
 (allow file-write* (subpath "$LT"))
 (deny file-write* (subpath "$B3"))
 (allow file-write* (regex #"^$B3RE/bus\.db(-wal|-shm)?\$"))
+$dir
 (deny file-write-create (vnode-type SYMLINK))
 (deny file-write-create (vnode-type FIFO SOCKET CHARACTER-DEVICE BLOCK-DEVICE))
 (deny file-link (subpath "$B3"))
+$sti
+$sock
+$dns
 SB
+}
+narrow > "$T/narrow.sb"
+for c in no-dir-rule no-sti-rule no-socket-rule no-dns-allow; do narrow $c > "$T/narrow-$c.sb"; done
 nl() { AGENTBUS_DB="$B3/bus.db" /usr/bin/sandbox-exec -f "$T/narrow.sb" "$@"; }
 nl "${AB[@]}" --as worker join >/dev/null || fail "narrow: join"
 nl "${AB[@]}" --as worker claim src/a.py >/dev/null || fail "narrow: claim"
@@ -210,6 +225,131 @@ if nl ln "$B3/bus.db" "$B3/bus.db-shm" 2>/dev/null; then fail "narrow: hard link
 if nl ln -s "$T/victim" "$B3/bus.db-shm" 2>/dev/null; then fail "narrow: symlink at a granted name"; fi
 if nl mkfifo "$B3/bus.db-shm" 2>/dev/null; then fail "narrow: FIFO at a granted name"; fi
 if other_tty "$T/narrow.sb"; then fail "narrow: a lane can write to another terminal"; fi
-left=$(find "$B3" \( -type l -o -type p -o -type s -o -type b -o -type c -o \( -type f -links +1 \) \) -print)
+left=$(find "$B3" \( -type l -o -type p -o -type s -o -type b -o -type c -o \( -type f -links +1 \) -o \( -type d -name 'bus.db*' \) \) -print)
 [ -z "$left" ] || fail "narrow: the sweep found $left"
-ok "narrow grant: join, claim, post, release, read, leave work; journal, VERSION, bin/, backups/, new files and dirs, links and FIFOs denied"
+ok "narrow grant: join, claim, post, release, read, leave work; journal, VERSION, bin/, backups/, new files, links and FIFOs denied"
+
+echo "TEST: no directory can be made or moved in at a granted name"
+# Bug it catches: the regex grants bus.db-shm as a path, not as a file, so a lane could mkdir it or move a
+# directory there (one holding a hard-linked pair); the CLI then refused the bus for every agent.
+mkdir "$LT/carry"; echo a > "$LT/carry/a"; ln "$LT/carry/a" "$LT/carry/b"
+if nl mkdir "$B3/bus.db-shm" 2>/dev/null; then fail "narrow: a directory made at bus.db-shm"; fi
+if nl mv "$LT/carry" "$B3/bus.db-shm" 2>/dev/null; then fail "narrow: a directory moved in at bus.db-shm"; fi
+[ ! -e "$B3/bus.db-shm" ] || fail "narrow: bus.db-shm exists"
+AGENTBUS_DB="$B3/bus.db" agentbus --as lead post "after the directory probes" >/dev/null || fail "narrow: the lead cannot post after the directory probes"
+# Negative control: without the rule the move succeeds, the sweep sees it, and the bus is refused.
+/usr/bin/sandbox-exec -f "$T/narrow-no-dir-rule.sb" mv "$LT/carry" "$B3/bus.db-shm" || fail "control: the directory move failed even without the rule"
+left=$(find "$B3" \( -type l -o -type p -o -type s -o -type b -o -type c -o \( -type f -links +1 \) -o \( -type d -name 'bus.db*' \) \) -print)
+grep -q "bus.db-shm$" <<<"$left" && grep -q "bus.db-shm/a$" <<<"$left" && grep -q "bus.db-shm/b$" <<<"$left" \
+  || fail "control: the sweep did not list the directory and both names of the hard-linked pair: $left"
+if AGENTBUS_DB="$B3/bus.db" agentbus --as lead post x >/dev/null 2>&1; then fail "control: the bus was used with a directory at bus.db-shm"; fi
+rm -r "$B3/bus.db-shm"
+ok "a directory at a granted name is denied, made or moved in; without the rule the sweep lists it and the bus is refused"
+
+echo "TEST: the lane cannot push input into its controlling terminal (TIOCSTI)"
+# Bug it catches: inside the profile, ioctl(/dev/tty, TIOCSTI) queued "echo INJECTED" as terminal input, which
+# the shell that started the lane would run after the lane exits. ctty.py gives the sandboxed child a fresh pty
+# as its controlling terminal (setsid, TIOCSCTTY) and never touches the terminal this test runs in; every
+# wait has a deadline.
+cat > "$T/ctty.py" <<'PY'
+import fcntl, os, select, signal, sys, termios, time
+PROFILE, MODE = sys.argv[1], sys.argv[2]
+CHILD = {
+    "sti": "import fcntl, os, termios\nfd = os.open('/dev/tty', os.O_RDWR)\n"
+           "for c in b'echo INJECTED\\n': fcntl.ioctl(fd, termios.TIOCSTI, bytes([c]))\n",
+    "tty-ok": "import fcntl, os, termios, tty\nfd = os.open('/dev/tty', os.O_RDWR)\n"
+              "fcntl.ioctl(fd, termios.TIOCGWINSZ, b'\\0' * 8)\n"
+              "old = termios.tcgetattr(fd); tty.setraw(fd); termios.tcsetattr(fd, termios.TCSANOW, old)\n",
+}[MODE]
+m, s = os.openpty()
+pid = os.fork()
+if pid == 0:
+    # The session leader stands in for the user's shell: it outlives the sandboxed child, then reads one
+    # line of its terminal's input, which is what a shell would run next.
+    code = 2
+    try:
+        os.close(m); os.setsid(); fcntl.ioctl(s, termios.TIOCSCTTY, 0)
+        for fd in (0, 1, 2):
+            os.dup2(s, fd)
+        kid = os.fork()
+        if kid == 0:
+            try:
+                os.execv("/usr/bin/sandbox-exec", ["sandbox-exec", "-f", PROFILE, sys.executable, "-c", CHILD])
+            finally:
+                os._exit(2)
+        kcode = os.waitstatus_to_exitcode(os.waitpid(kid, 0)[1])
+        if MODE == "tty-ok":
+            code = 0 if kcode == 0 else 1
+        else:
+            r, _, _ = select.select([0], [], [], 1.0)
+            code = 0 if r and b"INJECTED" in os.read(0, 4096) else 1
+    finally:
+        os._exit(code)
+os.close(s)
+deadline, status, log = time.monotonic() + 20, None, b""
+while status is None:
+    if select.select([m], [], [], 0.1)[0]:
+        try:
+            log += os.read(m, 4096)
+        except OSError:
+            pass
+    done, st = os.waitpid(pid, os.WNOHANG)
+    if done:
+        status = st
+    elif time.monotonic() > deadline:
+        os.killpg(pid, signal.SIGKILL); os.waitpid(pid, 0)
+        sys.exit("ctty: timeout; terminal output %r" % log)
+code = os.waitstatus_to_exitcode(status)
+if code not in (0, 1):
+    sys.exit("ctty: harness exit %d; terminal output %r" % (code, log))
+sys.exit(code)
+PY
+rc=0; "$PY" "$T/ctty.py" "$T/narrow.sb" sti || rc=$?
+[ "$rc" != 0 ] || fail "TIOCSTI pushed input into the lane's controlling terminal"
+[ "$rc" = 1 ] || fail "the TIOCSTI probe did not finish (rc $rc)"
+"$PY" "$T/ctty.py" "$T/narrow.sb" tty-ok || fail "the window size or raw mode does not work under the profile"
+"$PY" "$T/ctty.py" "$T/narrow-no-sti-rule.sb" sti || fail "control: no input pushed even without the TIOCSTI rule"
+ok "TIOCSTI denied, the window size and raw mode still work; without the rule the input reaches the shell"
+
+echo "TEST: the lane cannot connect to a unix socket outside the grant; DNS's socket stays open"
+# Bug it catches: a lane connected to a listening socket outside the grant (ssh-agent, Docker, tmux and terminal
+# multiplexers all act outside the sandbox). The listener here is the test's own, in a dir the lane cannot write.
+mkdir "$T/out"
+cat > "$T/listen.py" <<'PY'
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(5); s.settimeout(0.5)
+end = time.time() + 30
+while time.time() < end:
+    try:
+        c, _ = s.accept()
+    except socket.timeout:
+        continue
+    c.settimeout(2)
+    try:
+        data = c.recv(100)
+    except OSError:
+        data = b""
+    with open(sys.argv[2], "ab") as f:
+        f.write(data + b"\n")
+    c.close()
+PY
+cat > "$T/conn.py" <<'PY'
+import socket, sys
+c = socket.socket(socket.AF_UNIX); c.settimeout(3); c.connect(sys.argv[1])
+if len(sys.argv) > 2:
+    c.sendall(sys.argv[2].encode())
+PY
+"$PY" "$T/listen.py" "$T/out/sock" "$T/out/got" & LISTENER=$!
+for _ in $(seq 100); do [ -S "$T/out/sock" ] && break; sleep 0.05; done
+[ -S "$T/out/sock" ] || fail "the test's listener did not start"
+if nl "$PY" "$T/conn.py" "$T/out/sock" from-lane 2>/dev/null; then fail "a lane connected to a unix socket outside the grant"; fi
+/usr/bin/sandbox-exec -f "$T/narrow-no-socket-rule.sb" "$PY" "$T/conn.py" "$T/out/sock" from-control || fail "control: no connect even without the socket rule"
+for _ in $(seq 60); do grep -q from-control "$T/out/got" 2>/dev/null && break; sleep 0.05; done
+kill "$LISTENER" 2>/dev/null || true; wait "$LISTENER" 2>/dev/null || true
+grep -q from-control "$T/out/got" || fail "control: the listener got nothing"
+! grep -q from-lane "$T/out/got" || fail "the listener got the lane's message"
+# DNS on macOS goes through mDNSResponder's socket: the profile keeps it, and without the allow it is refused.
+nl "$PY" "$T/conn.py" /private/var/run/mDNSResponder || fail "the profile refuses mDNSResponder's socket (DNS)"
+if /usr/bin/sandbox-exec -f "$T/narrow-no-dns-allow.sb" "$PY" "$T/conn.py" /private/var/run/mDNSResponder 2>/dev/null; then fail "control: mDNSResponder reachable without the allow"; fi
+nl "${AB[@]}" --as worker post "after the socket probes" >/dev/null || fail "narrow: post after the socket probes"
+ok "unix-socket connect outside the grant denied, mDNSResponder allowed; without the rule the connect works"

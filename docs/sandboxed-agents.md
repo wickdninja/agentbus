@@ -1,15 +1,23 @@
 # Sandboxed agents on the bus
 
 A lane that runs under an OS sandbox can still use the bus. On macOS you grant it write access to
-three files, `bus.db`, `bus.db-wal` and `bus.db-shm`, and nothing else in the bus folder. This page
-shows how, how to check it, and what that does and does not protect.
+three names, `bus.db`, `bus.db-wal` and `bus.db-shm`, only as files, and nothing else in the bus
+folder. This page shows how, how to check it, and what that does and does not protect.
+
+The profile below limits what a lane can write, plus three more things: writing to terminals,
+pushing input into its own terminal, and connecting to unix sockets. Nothing else. The lane can
+still read every file you can (SSH keys, tokens, `~/.claude`), use the network, and signal your
+processes. Checked under the recipe's profile: a lane read a file in the home folder, stopped
+another process of the same user with `kill -STOP`, and fetched `https://example.com`. To close
+those, add read rules (`deny file-read*`) and network rules (`deny network-outbound`) that fit
+your setup; this page does not cover them.
 
 ## Who this is for
 
 - You run several coding agents at once, and some of them run under a sandbox you control.
 - Every agent runs as the same OS user as you. agentbus checks that the bus files are owned by the
   user running it; it does not separate users.
-- Tested on macOS 27.0.1 with `/usr/bin/sandbox-exec`. Linux is not covered here.
+- Tested on macOS 27.0.1 with `/usr/bin/sandbox-exec`, in bash and zsh. Linux is not covered here.
 
 ## Terms
 
@@ -23,7 +31,7 @@ shows how, how to check it, and what that does and does not protect.
 
 ## Quick recipe (macOS, sandbox-exec)
 
-Every step except the last runs in your own shell, unsandboxed.
+Every step except the lane itself runs in your own shell, unsandboxed.
 
 **1. Set the paths, once.** Use physical paths. A regex rule is matched against the real path,
 and on macOS `mktemp -d` returns `/var/folders/...`, which is really `/private/var/folders/...`.
@@ -53,7 +61,18 @@ added .agentbus/ to ~/src/app/.git/info/exclude (local only; the repo stays clea
 joined as lead on ~/src/app/.agentbus/bus.db
 ```
 
-**3. Write the lane's profile.**
+The `added .agentbus/ to ... exclude` line appears only when the folder is a git checkout root.
+
+For a workspace that holds several repos (`~/src/work/frontend`, `~/src/work/backend`), make the
+bus in the parent, `~/src/work`. Claims are paths relative to the bus folder's parent, whichever
+repo the lane works in:
+
+```
+$ agentbus --as worker claim frontend/src/login.tsx
+claimed frontend/src/login.tsx until 2026-11-03T18:29:43Z
+```
+
+**3. Write the lane's profile, and a function that runs a command under it.**
 
 ```bash
 BRE=$(printf '%s' "$B" | sed 's/[][\\.*^$+?(){}|]/\\&/g')   # $B as a regex
@@ -67,22 +86,38 @@ cat > "$P/lane.sb" <<SB
 (allow file-write* (subpath "$LT"))
 (deny file-write* (subpath "$B"))
 (allow file-write* (regex #"^$BRE/bus\.db(-wal|-shm)?\$"))
+(deny file-write-create (require-all (subpath "$B") (vnode-type DIRECTORY)))
 (deny file-write-create (vnode-type SYMLINK))
 (deny file-write-create (vnode-type FIFO SOCKET CHARACTER-DEVICE BLOCK-DEVICE))
 (deny file-link (subpath "$B"))
+(deny file-ioctl (ioctl-command TIOCSTI))
+(deny network-outbound (remote unix-socket))
+(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))
 SB
+lane() { /usr/bin/sandbox-exec -f "$P/lane.sb" "$@"; }
 ```
 
-Later rules win. Line by line:
+The function keeps every argument whole, in bash and in zsh. Later rules win. Line by line:
 
 - `/dev`: only these files. All of `/dev` would include your other terminals, and a lane could
   write escape sequences into them.
-- `$LT`: the lane's own tmp dir. For a real lane, add its worktree and the harness's own state
-  dir here (see "Per harness").
+- `$LT`: the lane's own tmp dir. For a real lane, add its worktree here, and its own copy of the
+  harness's config dir (see "Per harness").
 - `(deny ... (subpath "$B"))`, then the regex: inside the bus folder, only `bus.db`, `bus.db-wal`
   and `bus.db-shm`. This holds even when `$B` sits inside a folder granted above it.
-- The last three: no symlink and no FIFO, socket or device node anywhere, and no hard link in the
-  bus folder. See "Why the link rules".
+- `DIRECTORY`: those names only as files. Without it a lane can make a directory at `bus.db-shm`,
+  or move one in there, and every agent's next command refuses the bus.
+- `SYMLINK`, `FIFO ...`, `file-link`: no symlink and no FIFO, socket or device node anywhere, and
+  no hard link in the bus folder. See "Why the link rules".
+- `TIOCSTI`: no pushing input into the lane's own terminal. Without it, a lane can type a command
+  into the terminal it runs in, and your shell runs that command after the lane exits, outside the
+  sandbox. The window size and raw mode still work. Run lanes in a terminal or pty that nothing
+  else reads from.
+- `unix-socket`: no connecting to unix sockets, except DNS. A socket is a door to the process that
+  listens on it, and that process acts with its own access: ssh-agent, Docker, tmux and other
+  terminal multiplexers all act outside the sandbox. The allow keeps DNS working; without it, name
+  lookups fail and so does HTTPS. A harness that needs another socket (an IDE bridge, a credential
+  helper) needs an allow for that exact path.
 
 A path with a `"` in it breaks the profile; use another folder.
 
@@ -91,7 +126,7 @@ A path with a `"` in it breaks the profile; use another folder.
 ```bash
 ( export AGENTBUS_DB="$B/bus.db" AGENTBUS_AGENT=codex-app-docs \
          PATH="$B/bin:$PATH" TMPDIR="$LT/"
-  exec /usr/bin/sandbox-exec -f "$P/lane.sb" YOUR-HARNESS-COMMAND )
+  lane YOUR-HARNESS-COMMAND )
 ```
 
 - `AGENTBUS_DB` names the bus. A lane never has to find it (see "Discovery").
@@ -99,26 +134,35 @@ A path with a `"` in it breaks the profile; use another folder.
   `-`: the Claude Code hooks ignore any other name.
 - `TMPDIR` gives the lane its own temp dir. Never give a lane yours (see "Threat notes").
 
-To test it, run a shell script in place of the harness:
+To test it, post the lane its task (it does not have to have joined yet), then run a shell script
+in place of the harness:
 
 ```bash
+agentbus --as lead post "take src/api.py" --to worker
 ( export AGENTBUS_DB="$B/bus.db" AGENTBUS_AGENT=worker PATH="$B/bin:$PATH" TMPDIR="$LT/"
-  exec /usr/bin/sandbox-exec -f "$P/lane.sb" sh -c '
+  lane sh -c '
     agentbus join &&
+    agentbus inbox &&
     agentbus claim src/api.py --purpose "fix the retry" &&
     agentbus post "retry fixed in src/api.py" --to lead --kind handoff &&
-    agentbus release src/api.py' )
+    agentbus release src/api.py &&
+    agentbus leave' )
 agentbus --as lead inbox
 ```
 
 Output, trimmed the same way:
 
 ```
+agentbus: worker is not on the roster; the message waits for that name.
+posted #1 to worker [note]
 joined as worker on ~/src/app/.agentbus/bus.db
-claimed src/api.py until 2026-11-03T17:27:45Z
-posted #1 to lead [handoff]
+#1 lead -> worker [note] · 11:33
+  take src/api.py
+claimed src/api.py until 2026-11-03T18:33:03Z
+posted #2 to lead [handoff]
 released src/api.py
-#1 worker -> lead [handoff] · 10:27
+left as worker, released 0 claims
+#2 worker -> lead [handoff] · 11:33
   retry fixed in src/api.py
 ```
 
@@ -127,27 +171,50 @@ Message kinds are `note` (the default), `question`, `answer`, `handoff`, `decisi
 
 ## Check it
 
-From outside the lane, in `~/src/app`, run [`agentbus doctor`](how-to/doctor.md). The `bus` and
-`copy` rows should say `ok`.
+From outside the lane, in `~/src/app`, run [`agentbus doctor`](how-to/doctor.md):
 
-Inside the lane, `agentbus join` is the test that the grant works. Then run each probe below with
-the same `/usr/bin/sandbox-exec -f "$P/lane.sb"` prefix. Each must fail:
+```
+  ok    bus        ~/src/app (schema 1)
+  ok    copy       0.2.0, same as the installed agentbus
+  n/a   skill      no ~/.claude found
+  n/a   agents-md  no ~/.codex found
+  warn  hooks      ~/.claude/settings.json has no agentbus hooks. Run: agentbus setup claude
+```
+
+`bus` and `copy` must say `ok`. `skill`, `agents-md` and `hooks` may say `warn` or `n/a` in a lane
+setup; that is fine.
+
+Inside the lane, `agentbus join` is the test that the grant works. Then run each probe below. Each
+must fail:
 
 | Probe | What it shows |
 |---|---|
-| `sh -c "echo x > '$B/bin/agentbus'"` | the bus copy is read only |
-| `sh -c "echo x > '$B/VERSION'"` | nothing in the folder is writable but the three bus files |
-| `sh -c "echo x > '$B/bus.db-journal'"` | no journal can be planted |
-| `mkdir "$B/backups"` | no new dirs |
-| `mv "$B" "$LT/ab"`, `mv "$B/bin" "$LT/bin"` | the folder and `bin/` stay put |
-| `ln -s /etc/hosts "$B/x"`, `ln -s /etc/hosts "$LT/x"` | no symlinks, anywhere |
-| `ln "$B/bus.db" "$B/bus.db-shm"` | no hard links in the folder |
-| `mkfifo "$B/f"`, `mkfifo "$LT/f"` | no FIFOs, anywhere |
-| `sh -c "printf '' > /dev/ttys001"` (another of your terminals: `ls /dev/ttys*`) | no writes to other terminals |
-| `sh -c "echo x > ~/src/app/elsewhere"` | nothing outside the grant |
+| `lane sh -c "echo x > '$B/bin/agentbus'"` | the bus copy is read only |
+| `lane sh -c "echo x > '$B/VERSION'"` | nothing in the folder is writable but the three bus files |
+| `lane sh -c "echo x > '$B/bus.db-journal'"` | no journal can be planted |
+| `lane mkdir "$B/backups"`, `lane mkdir "$B/bus.db-shm"` | no new dirs |
+| `mkdir "$LT/d"; lane mv "$LT/d" "$B/bus.db-shm"` | no dirs moved in |
+| `lane mv "$B" "$LT/ab"`, `lane mv "$B/bin" "$LT/bin"` | the folder and `bin/` stay put |
+| `lane ln -s /etc/hosts "$B/x"`, `lane ln -s /etc/hosts "$LT/x"` | no symlinks, anywhere |
+| `lane ln "$B/bus.db" "$B/bus.db-shm"` | no hard links in the folder |
+| `lane mkfifo "$B/f"`, `lane mkfifo "$LT/f"` | no FIFOs, anywhere |
+| `lane python3 -c 'import socket; socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM).connect("/var/run/syslog")'` | no unix sockets outside the grant |
+| `lane sh -c "printf '' > /dev/ttys001"` (another of your terminals: `ls /dev/ttys*`) | no writes to other terminals |
+| `lane sh -c "echo x > ~/src/app/elsewhere"` | nothing outside the grant |
 
-`sh -c "echo x > '$LT/scratch'"` must work. Checked on macOS 27.0.1: every probe above was denied
-and the scratch write worked. `tests/test_sandbox.sh` runs the same checks.
+With no other terminal open (on a headless machine, say), open a pty to probe instead:
+`python3 -c 'import os, time; m, s = os.openpty(); print(os.ttyname(s), flush=True); time.sleep(60)' &`
+prints a name like `/dev/ttys034`; probe that, then `kill %1`.
+
+From a terminal, also check that a lane cannot type into it:
+`lane python3 -c 'import fcntl, termios; fcntl.ioctl(open("/dev/tty"), termios.TIOCSTI, b"#")'`
+must fail with `Operation not permitted`. If it works, a `#` appears at your prompt; delete it and
+check the profile.
+
+`lane sh -c "echo x > '$LT/scratch'"` must work, and so must DNS and HTTPS
+(`lane curl -sS -o /dev/null https://example.com`). Checked on macOS 27.0.1, in bash and in zsh:
+every probe above was denied, and the scratch write, DNS and HTTPS worked. `tests/test_sandbox.sh`
+runs the same checks, the `TIOCSTI` one in a pty of its own.
 
 If the lane runs `/usr/bin/python3` (the Xcode shim), it can print `python3: error: couldn't
 create cache file '.../xcrun_db-...' (errno=Operation not permitted)`. That is `xcrun` failing to
@@ -157,16 +224,18 @@ and exits 0. Setting `TMPDIR` does not stop it. To avoid it, put a `python3` tha
 
 ## After the lane exits: the sweep
 
-Before you or the brain run anything else on the bus, list every link and special file in the bus
-folder:
+Before you or the brain run anything else on the bus, list every link, special file and stray
+directory in the bus folder:
 
 ```bash
-find "$B" \( -type l -o -type p -o -type s -o -type b -o -type c -o \( -type f -links +1 \) \) -print
+find "$B" \( -type l -o -type p -o -type s -o -type b -o -type c -o \( -type f -links +1 \) \
+  -o \( -type d -name 'bus.db*' \) \) -print
 ```
 
-Under the recipe's grant this prints nothing. Any output fails the run: remove what it lists and
-find out how the lane made it. The sweep is required with the folder grant below, and for any
-harness whose sandbox does not meet the link rules.
+Any output fails the run: remove what it lists and find out how the lane made it. A hard-linked
+pair shows up under both its names. Checked: under the recipe's grant every plant this page names
+was denied, and the sweep printed nothing. The sweep is required with the folder grant below, and
+for any harness whose sandbox does not meet the link rules.
 
 ## Per harness
 
@@ -180,10 +249,16 @@ Claude Code's own sandbox does not cover its hooks. From the
 only. Claude's file tools, MCP servers, and hooks run outside it." The agentbus hooks write to the
 bus (`join` when a session starts, `leave` when it ends), so they run with your full access.
 
-- Run the whole `claude` process under the recipe's profile, with the worktree and Claude Code's
-  own state dir added to the grant. Its hooks are its child processes, so the profile covers them.
-  Not measured here: a full Claude Code session under `sandbox-exec`, and whether Claude Code's own
-  sandbox can start inside one (Codex's cannot, below).
+- Run the whole `claude` process under the recipe's profile, with the worktree added to the grant.
+  Its hooks are its child processes, so the profile covers them. Not measured here: a full Claude
+  Code session under `sandbox-exec`, and whether Claude Code's own sandbox can start inside one
+  (Codex's cannot, below).
+- Give the lane its own config dir: set `CLAUDE_CONFIG_DIR` to a copy of what the lane needs under
+  `$LT`, never your `~/.claude`. A lane that can write your config can add hooks that your own
+  sessions then run unsandboxed. The [official docs](https://code.claude.com/docs/en/sandboxing)
+  give the same reason for keeping those files write-denied: "A command that could edit those
+  files could grant itself permissions, or add a hook or MCP server that Claude Code runs outside
+  the sandbox."
 - Set `AGENTBUS_DB` and `AGENTBUS_AGENT` in the environment `claude` starts with, as in step 4. The
   hooks use `AGENTBUS_DB` when it is set there, and otherwise find the bus from the session's
   working directory. A variable set later, inside the agent's shell, never reaches the hooks.
@@ -217,8 +292,9 @@ instead of `default_permissions`."
 sandbox cannot start inside it: `codex sandbox` under the profile fails with `sandbox-exec:
 sandbox_apply: Operation not permitted`. So Codex's sandbox has to be off, which its help reserves
 for this case: `--dangerously-bypass-approvals-and-sandbox` is "Intended solely for running in
-environments that are externally sandboxed". Add `CODEX_HOME` and the worktree to the grant. Not
-measured here: a full `codex exec` run under the profile.
+environments that are externally sandboxed". Add the worktree to the grant, and set `CODEX_HOME` to
+a copy of what the lane needs under `$LT`, never your `~/.codex`, for the same reason as Claude
+Code's config above. Not measured here: a full `codex exec` run under the profile.
 
 ### Antigravity CLI (`agy`): not re-measured
 
@@ -238,7 +314,9 @@ From `copilot help sandbox` (1.0.105):
 - "Built-in file edits aren't OS-sandboxed, but still follow the same policy on a best-effort
   basis." Read-only rules hold for shell commands, not for Copilot's own edits.
 - "By default access is limited to your working directory, PATH directories, the temp directory,
-  and your user profile."
+  and your user profile." The help does not say which part of the user profile, or with what
+  access. If it means your whole home folder, that includes the bus, `~/.claude` and `~/.codex`.
+  The official docs say application directories in the profile are read-only. Not measured.
 - "Enabling seeds a sensible starting policy: ... and a per-command bypass escape hatch is
   available." That is `sandbox.allowBypass`; set it to `false` for a lane.
 - The path settings are `sandbox.userPolicy.filesystem.readwritePaths`, `readonlyPaths` and
@@ -271,9 +349,9 @@ files in `.agentbus/`, a `bus.db-journal` included (the CLI then refuses the bus
 (deny file-link (subpath "$B"))
 ```
 
-Keep the recipe's other rules (`/dev`, `$LT`). `bin/` and `backups/` stay read only ("Threat notes"
-says why `backups/`). The literal rule stops the lane moving the folder itself. Run the sweep after
-every lane.
+Keep the recipe's other rules (`/dev`, `$LT`, `TIOCSTI`, unix sockets). `bin/` and `backups/` stay
+read only ("Threat notes" says why `backups/`). The literal rule stops the lane moving the folder
+itself. Run the sweep after every lane.
 
 ## What agentbus guarantees, and what it does not
 
@@ -435,6 +513,9 @@ folder, and with all of `/dev` granted a lane can write to another terminal.
   replaced there, and the [restore steps](how-to/upgrade.md#restore-a-backup) copy it back into
   `bin/`, which the brain runs unsandboxed. If a lane could write `backups/`, reinstall the copy
   with `agentbus upgrade` instead; the upgrade guide says how.
+- **Apple Events and `open` are not restricted by this profile.** It does not deny sending Apple
+  Events or asking LaunchServices to open a file, URL or app, and what those start runs outside
+  the sandbox. Not measured here, since a probe would open apps on the machine.
 - **No secrets on the bus.** Every agent with the grant can read every message. Say where a secret
   lives, never its value, and never post environment dumps.
 - **The bus is shared state.** Anything with write access can edit or delete rows directly with
@@ -447,8 +528,9 @@ folder, and with all of `/dev` granted a lane can write to another terminal.
   that could fire one or write. All of a command's SQL together gets 6 seconds and the whole hold
   8 (see above); a statement still running when the SQL budget is spent is stopped (its write
   rolled back). Formatting the output happens after the bus is closed. Listings stop at their
-  default limit (500 rows at most) unless `--limit` says otherwise. `leave` and `release --all` take no `--limit` (passing one
-  is a usage error, exit 2); what they print and log stops at 500 claims, then a `... N more` line.
+  default limit (500 rows at most) unless `--limit` says otherwise. `leave` and `release --all`
+  take no `--limit` (passing one is a usage error, exit 2); what they print and log stops at 500
+  claims, then a `... N more` line.
   `claim` takes at most 1024 characters and finds overlapping claims through the resource index,
   never by reading every claim; text a lane planted is cut to 1024 characters wherever agentbus
   writes it into a log row or an error, and a planted resource longer than that is never read by
