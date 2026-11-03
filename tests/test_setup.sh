@@ -966,4 +966,36 @@ export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
 ok "no claude under the working directory's ancestors below HOME or tracked in its work tree's index (itself, a symlink hop, or an unreadable index); untracked ones (Caskroom, node_modules, a dotfiles home) are trusted"
 
 echo
+echo "TEST: hooks: the enclosing work tree, other spellings of a folder, and a tracked directory link all keep a claude from starting"
+export AGENTBUS_CLAUDE_BIN=
+# a repository outside HOME: the working directory is a subfolder, the claude sits in the repository's node_modules (untracked)
+reset; OP="$T/outproj"; rm -rf "$OP"; mkdir -p "$OP/sub" "$OP/node_modules/.bin"; git -C "$OP" init -q; mkclaude "$OP/node_modules/.bin/claude"
+setup_in "$OP/sub" "$OP/node_modules/.bin:$PATH"
+! ran || fail "setup started a claude inside the work tree enclosing the working directory (a repository outside HOME)"
+# a folder named .agentbus in any case, anywhere
+reset; mkdir -p "$T/pj3/.AGENTBUS/bin"; mkclaude "$T/pj3/.AGENTBUS/bin/claude"
+setup_in "$W" "$T/pj3/.AGENTBUS/bin:$PATH"
+! ran || fail "setup started a claude inside a folder named .AGENTBUS"
+# another spelling of the working directory's repository, where the file system treats the spellings alike
+mkdir -p "$T/CaseProbe"
+if [ -d "$T/caseprobe" ]; then
+  reset; CP="$T/capsproj"; rm -rf "$CP"; mkdir -p "$CP/sub" "$CP/node_modules/.bin"; git -C "$CP" init -q; mkclaude "$CP/node_modules/.bin/claude"
+  setup_in "$CP/sub" "$T/CAPSPROJ/node_modules/.bin:$PATH"
+  ! ran || fail "setup started a claude reached through another spelling of the repository's path"
+  echo "checked another spelling of a path (case-insensitive file system)"
+else
+  echo "case-sensitive file system: another spelling of a path names another folder here; the identity comparison is the same code as the plain case above"
+fi
+# a directory link that the index lists: tools -> real; real/claude itself is untracked
+reset; WT2="$T/wt2"; rm -rf "$WT2"; mkdir -p "$WT2/real"; git -C "$WT2" init -q; mkclaude "$WT2/real/claude"; ln -s real "$WT2/tools"
+gitq "$WT2" add tools
+setup_in "$W" "$WT2/tools:$PATH"
+! ran || fail "setup started a claude reached through a tracked directory link"
+gitq "$WT2" update-index --force-remove tools
+setup_in "$W" "$WT2/tools:$PATH"
+ran || fail "setup refused a claude behind a directory link that nothing tracks"
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
+ok "enclosing work tree, .AGENTBUS, another spelling and a tracked directory link are refused; an untracked directory link is fine"
+
+echo
 echo "All setup tests passed"

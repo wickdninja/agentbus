@@ -655,10 +655,13 @@ payload pre_tool_use_write session_id="\"$SIDH\"" tool_input.file_path="\"$P/see
 PA="$T/pause-a"; PB="$T/pause-b"; mkdir -p "$PA" "$PB"
 ( cd "$P" && AGENTBUS_TEST_PAUSE="hook-seen-read=$PA" "${AB[@]}" hook claude PreToolUse <"$T/seen-a.json" >"$T/seen-a.out" 2>/dev/null ) & PIDA=$!
 wait_for "$PA/hook-seen-read.reached"
-( cd "$P" && AGENTBUS_TEST_PAUSE="hook-seen-lock=$PB" "${AB[@]}" hook claude PreToolUse <"$T/seen-b.json" >"$T/seen-b.out" 2>/dev/null ) & PIDB=$!
+touch "$PB/hook-seen-wrote.go"                 # B only marks that its update is saved, never stops there
+( cd "$P" && AGENTBUS_TEST_PAUSE="hook-seen-lock=$PB;hook-seen-wrote=$PB" "${AB[@]}" hook claude PreToolUse <"$T/seen-b.json" >"$T/seen-b.out" 2>/dev/null ) & PIDB=$!
 wait_for "$PB/hook-seen-lock.reached"          # B is at the lock, A holds the file
 touch "$PB/hook-seen-lock.go"
-for i in $(seq 1 30); do kill -0 "$PIDB" 2>/dev/null || break; sleep 0.05; done     # without a lock B is done in milliseconds
+# Without a lock B saves its update and says so (hook-seen-wrote); with it B cannot get past the lock while A holds the file,
+# so the mark never comes. Wait for the mark for up to 4 s (B's work after the lock is a few milliseconds).
+for i in $(seq 1 80); do [ -e "$PB/hook-seen-wrote.reached" ] && break; sleep 0.05; done
 touch "$PA/hook-seen-read.go"
 wait "$PIDA" "$PIDB" || true
 [ -s "$T/seen-a.out" ] && [ -s "$T/seen-b.out" ] || fail "the forced-interleaving hooks did not both answer: a=$(cat "$T/seen-a.out") b=$(cat "$T/seen-b.out")"
@@ -710,8 +713,16 @@ after = os.stat(sys.argv[1])
 assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
 PY
 UPS; [ -n "$OUT" ] || fail "a cached answer was not used: an unchanged-identity index was read again"
-mkgenindex "$P/.git/index" 2000 .agentbus/bus.db      # same size class, new identity (a new file)
-UPS; quiet || fail "a changed index that now tracks the bus was served from the cache: rc $RC out $OUT"
+mkgenindex "$P/.git/index" 2000 .agentbus/bus.db      # the same file (opened for writing, so the same inode), now longer: a new size and time
+UPS
+# The silence must be the tracked answer, not just silence: the stored answer for this index now says tracked, under the new stamp.
+"$PY" -I - "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)" "$P/.git/index" <<'PY' || fail "a changed index that now tracks the bus was served from the cache (no stored tracked answer for its new stamp, or the hook spoke): out $OUT"
+import glob, json, os, sys
+st = os.lstat(sys.argv[2]); stamp = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
+answers = [json.load(open(f)) for f in glob.glob(sys.argv[1] + "/idx-*.json")]
+assert any(a["stamp"] == stamp and a["tracked"] is True for a in answers), answers
+PY
+[ -z "$OUT" ] || fail "a changed index that now tracks the bus was served from the cache: out $OUT"
 mkgenindex "$P/.git/index" 2000
 UPS; [ -n "$OUT" ] || fail "an index that no longer tracks the bus was served from the cache"
 mkgenindex "$P/.git/index" 0
@@ -726,22 +737,47 @@ ab --as peer join --tool t >/dev/null; ab --as peer post "x" --to "$N" --kind no
 timed1() {  # timed1 EVENT FIXTURE: "seconds exit stdout_bytes"
   payload "$2" session_id="\"$SID1\"" >"$T/pl"
   "$PY" -I - "$T/pl" "$P" "$1" "${AB[@]}" <<'PY'
-import subprocess, sys, time
+import json, subprocess, sys, time
 pl, cwd, ev, argv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 t0 = time.time()
 p = subprocess.run([*argv, "hook", "claude", ev], stdin=open(pl), capture_output=True, cwd=cwd, timeout=60)
-print("%.2f %d %d" % (time.time() - t0, p.returncode, len(p.stdout)))
+took = time.time() - t0
+if not p.stdout:
+    valid = 0                    # nothing said
+else:
+    try:
+        d = json.loads(p.stdout)
+        valid = 1 if isinstance(d, dict) and "hookSpecificOutput" in d and d["hookSpecificOutput"].get("additionalContext") else -1
+    except ValueError:
+        valid = -1
+print("%.2f %d %d %d" % (took, p.returncode, len(p.stdout), valid))
 PY
 }
-set -- $(timed1 SessionStart session_start_startup_print); [ "$2 $3" != "0 0" ] || fail "SessionStart with a 1M-entry index said nothing within its limit ($1 s)"
+set -- $(timed1 SessionStart session_start_startup_print)
+[ "$2" = 0 ] && [ "$4" = 1 ] || fail "SessionStart with a 1M-entry index: exit $2, $3 bytes, hook JSON valid=$4 (1 wanted) within $1 s"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 4.5 else 1)' "$1" || fail "SessionStart with a 1M-entry index took $1 s"
-set -- $(timed1 UserPromptSubmit user_prompt_submit); [ "$3" != 0 ] || fail "UserPromptSubmit with an unchanged 1M-entry index said nothing"
+[[ " $(roster) " == *" $N "* ]] || fail "SessionStart with a 1M-entry index did not put $N on the roster: $(roster)"
+set -- $(timed1 UserPromptSubmit user_prompt_submit)
+[ "$2" = 0 ] && [ "$4" = 1 ] || fail "UserPromptSubmit with an unchanged 1M-entry index: exit $2, $3 bytes, hook JSON valid=$4 (1 wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)' "$1" || fail "UserPromptSubmit re-read an unchanged 1M-entry index ($1 s)"
 printf garbage >"$P/.git/index"      # git rewrites the index all the time (here: into something unreadable); SessionEnd must not depend on it
-set -- $(timed1 SessionEnd session_end_other); [ "$2" = 0 ] || fail "SessionEnd exit $2"
+set -- $(timed1 SessionEnd session_end_other); [ "$2" = 0 ] && [ "$4" = 0 ] || fail "SessionEnd with a 1M-entry index: exit $2, valid=$4 (0: no output wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$1" || fail "SessionEnd with a 1M-entry index took $1 s, past its 1.5 s budget"
 [ "$(roster)" = "peer" ] || fail "SessionEnd with a 1M-entry index did not leave: $(roster)"
 ok "1M entries: join within the limit, warm events under 1 s, SessionEnd under 1.5 s and left"
+
+echo
+echo "TEST 35: SessionEnd leaves only the bus its own SessionStart joined, not a tracked bus in the project it moved to"
+newbus p35a; PA35="$P"; N=$(dname "$SID1"); SS
+[[ " $(roster) " == *" $N "* ]] || fail "setup: SessionStart did not join $N in project A"
+newbus p35b; PB35="$P"; ab --as "$N" join --tool t >/dev/null      # project B holds the same name, as an older session might
+gitq "$PB35" add -f .agentbus
+before=$(sha "$PB35/.agentbus/bus.db")
+HCWD="$PB35" END other                                              # the session's working directory is now project B
+[ "$(sha "$PB35/.agentbus/bus.db")" = "$before" ] || fail "SessionEnd wrote to a tracked bus in another project"
+[[ " $(HCWD="$PB35" roster) " == *" $N "* ]] || fail "SessionEnd removed the name from a tracked bus in another project"
+unset HCWD; P="$PA35"
+ok "a tracked bus elsewhere is not written by SessionEnd"
 
 echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"

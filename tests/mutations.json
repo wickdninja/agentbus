@@ -290,8 +290,8 @@
   {
     "name": "a hook trusts a .agentbus that git tracks",
     "file": "bin/agentbus",
-    "find": "if directory is None or not \\(joined or hook_untracked\\(directory\\)\\):",
-    "replace": "if directory is None:",
+    "find": "        if not \\(same or hook_untracked\\(directory\\)\\):",
+    "replace": "        if False:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "a tracked bus with a v2 index was used"
@@ -389,8 +389,8 @@
   {
     "name": "setup starts a claude that lives inside the project",
     "file": "bin/agentbus",
-    "find": "if any\\(under\\(real, root\\) for root in roots if root != os\\.sep\\) or ",
-    "replace": "if False or ",
+    "find": "if claude_in_project\\(real, os\\.path\\.realpath\\(os\\.getcwd\\(\\)\\), home\\):",
+    "replace": "if False:",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "setup started a claude that lives inside the working directory's repo"
@@ -461,8 +461,8 @@
   {
     "name": "SessionEnd re-reads the index before it leaves",
     "file": "bin/agentbus",
-    "find": "joined=hook_state_get\\(hook_state_key\\(sid, \"\\.name\"\\)\\) is not None",
-    "replace": "joined=False",
+    "find": "joined_db = \\(hook_state_get\\(hook_state_key\\(sid, \"\\.bus\"\\)\\) or \"\"\\)\\.strip\\(\\) or None",
+    "replace": "joined_db = None",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd with a 1M-entry index did not leave"
@@ -470,8 +470,8 @@
   {
     "name": "setup trusts a claude under an ancestor project root",
     "file": "bin/agentbus",
-    "find": "while here != home and here != os\\.path\\.dirname\\(here\\):",
-    "replace": "while False:",
+    "find": "roots = list\\(up\\) if under_home else up\\[:1\\]",
+    "replace": "roots = up[:1]",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "setup started a claude under an ancestor project root"
@@ -488,8 +488,8 @@
   {
     "name": "setup trusts a claude reached through a tracked symlink",
     "file": "bin/agentbus",
-    "find": "        if not os\\.path\\.islink\\(here\\):\\n            break",
-    "replace": "        if True:\n            break",
+    "find": "            links\\.append\\(here\\)\\n",
+    "replace": "            pass\n",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "setup started a claude reached through a tracked symlink hop"
@@ -520,5 +520,50 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "an index with no entries was taken for a damaged one"
+  },
+  {
+    "name": "SessionEnd trusts any bus once its session has joined one",
+    "file": "bin/agentbus",
+    "find": "same = bool\\(joined_db\\) and os\\.path\\.samefile\\(path, joined_db\\)",
+    "replace": "same = bool(joined_db)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd wrote to a tracked bus in another project"
+  },
+  {
+    "name": "setup ignores the work tree enclosing the working directory",
+    "file": "bin/agentbus",
+    "find": "if d != os\\.sep and os\\.path\\.lexists\\(os\\.path\\.join\\(d, \"\\.git\"\\)\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "enclosing the working directory"
+  },
+  {
+    "name": "setup compares a .agentbus folder name case-sensitively",
+    "file": "bin/agentbus",
+    "find": "unicodedata\\.normalize\\(\"NFC\", os\\.path\\.basename\\(here\\)\\)\\.casefold\\(\\) == \"\\.agentbus\"",
+    "replace": "os.path.basename(here) == \".agentbus\"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "inside a folder named .AGENTBUS"
+  },
+  {
+    "name": "setup compares project folders without file identity",
+    "file": "bin/agentbus",
+    "find": "if any\\(same\\(here, r\\) for r in roots\\):",
+    "replace": "if any(False for r in roots):",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup started a claude that lives inside the working directory's repo"
+  },
+  {
+    "name": "setup ignores a directory link on the way to the claude",
+    "file": "bin/agentbus",
+    "find": "            links\\.append\\(here\\)\\n",
+    "replace": "            if not todo:\n                links.append(here)\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "reached through a tracked directory link"
   }
 ]
