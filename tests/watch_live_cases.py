@@ -641,6 +641,58 @@ def bigbodies():
         s.close()
 
 
+@case
+def watchdog():
+    """L2: when the watchdog ends a hung read, the terminal is restored and the exit shows the watchdog's own
+    reason (not an error from pipes closed under the loop)."""
+    wrapper = os.path.join(os.path.dirname(ROOT), "hang_read.py")
+    with open(wrapper, "w") as f:
+        f.write("import runpy, sys, time\n"
+                "g = runpy.run_path(sys.argv[1], run_name='agentbus_hang')\n"
+                "G = g['render_watch'].__globals__\n"
+                "real, n = G['watch_snapshot'], [0]\n"
+                "def hangs(*a, **k):\n"
+                "    n[0] += 1\n"
+                "    if n[0] == 4:\n"
+                "        with G['watched'](0.3, 'test: the read hung'):\n"
+                "            time.sleep(20)\n"
+                "    return real(*a, **k)\n"
+                "G['watch_snapshot'] = hangs\n"
+                "sys.argv = ['agentbus'] + sys.argv[2:]\n"
+                "G['contract_main']()\n")
+    s = start(argv=[os.environ.get("PYTHON") or "python3", wrapper, bin_path()])
+    try:
+        rc = s.wait(15)
+        out = s.buf.decode("utf-8", "replace")
+        assert "test: the read hung" in out, ("the exit does not show the watchdog's reason", out[-400:])
+        assert "Bad file descriptor" not in out and "Traceback" not in out, out[-600:]
+        assert rc == 3, rc
+        assert b"\x1b[?25h\x1b[?1049l" in s.buf, "the watchdog's exit did not restore the screen"
+        now, before = s.termios_now(), s.before
+        assert now[:3] + now[4:] == before[:3] + before[4:] and \
+            (now[3] | getattr(__import__("termios"), "PENDIN", 0)) == (before[3] | getattr(__import__("termios"), "PENDIN", 0)), \
+            ("terminal modes not restored after the watchdog's exit", now, before)
+    finally:
+        s.close()
+
+
+@case
+def encodings():
+    """L6: a stdout that is not UTF-8 (ASCII, or a latin-1 locale) draws the ASCII glyphs and keeps running."""
+    for extra, want_ascii in (({"PYTHONIOENCODING": "ascii"}, True), ({"LC_ALL": "en_US.ISO8859-1", "LANG": "en_US.ISO8859-1"}, False)):
+        s = start(**extra)
+        try:
+            f = s.frame_after(0, lambda f: any(r.startswith("Messages") for r in f), 5, f"a frame under {extra}")
+            if want_ascii:
+                assert all(ord(c) < 128 for r in f for c in r), ("non-ASCII under an ASCII stdout", f)
+            key(s, b"\t", lambda f: any(r.startswith("Agents") and "j/k" in r for r in f), f"Tab under {extra}")
+            s.send(b"q")
+            assert s.wait(10) == 0, extra
+            assert b"Traceback" not in s.buf and s.termios_now() == s.before, extra
+        finally:
+            s.close()
+
+
 CASES["restore"] = restore
 
 if __name__ == "__main__":

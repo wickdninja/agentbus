@@ -41,13 +41,14 @@ topic:auth          messages with that topic
 token refresh       any words, in any field
 ```
 
+A filter holds up to 200 characters, and words are searched in the first 4096 characters of each message.
 Watch holds the newest 200 rows of each section. When a section has more, a filter says
 `N of newest 200` and `agentbus read` (or `who`, `claims`, `ctx get`) reads the rest.
 
 ## Leave
 
 `q` from the main view or `Ctrl-C` from anywhere. `Esc` never quits. Watch restores your terminal on
-`q`, `Ctrl-C`, SIGTERM and SIGHUP.
+`q`, `Ctrl-C`, SIGTERM and SIGHUP. `Ctrl-Z` puts it in the background like any program; `fg` brings it back.
 
 ## Other terminals and scripts
 

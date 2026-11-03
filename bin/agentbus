@@ -5868,6 +5868,7 @@ def render_watch(snap, where, cols, rows, fresh, t_now, paint, live=True, error=
 # ---- keys: bytes from the terminal to key names (pure) ----
 
 ESC_WAIT_S = 0.05  # a lone ESC is the Esc key only when nothing follows it this soon
+FILTER_MAX = 200  # characters a filter holds; more typed (or pasted) are dropped
 _CSI_FINAL = {"A": "Up", "B": "Down", "C": "Right", "D": "Left", "H": "Home", "F": "End", "Z": "S-Tab"}
 _CSI_TILDE = {"1": "Home", "7": "Home", "4": "End", "8": "End", "5": "PgUp", "6": "PgDn"}
 _SS3 = {"A": "Up", "B": "Down", "C": "Right", "D": "Left", "H": "Home", "F": "End"}
@@ -6098,6 +6099,8 @@ def step(view, key, snap, size, t_now=None, detail=None, error=None):
         elif key == "Backspace":
             v.filter = v.filter[:-1]
         elif len(key) == 1:  # every printable character is text, q and the digits too
+            if len(v.filter) >= FILTER_MAX:
+                return v  # full: the key is dropped, and the selection need not settle again
             v.filter += key
         return settle(v, snap)
 
@@ -6347,12 +6350,18 @@ class WatchReader:
 
 
 def watch_settings(stdout_tty):
-    """(colour, emoji, ascii) from the terminal and the environment."""
+    """(colour, emoji, ascii) from the terminal and the environment. A stdout that is not UTF-8 (a latin-1 or
+    ASCII locale) gets the ASCII glyphs, and a character it cannot encode is written as ?, never an error."""
     term = os.environ.get("TERM", "")
-    ascii_mode = os.environ.get("AGENTBUS_ASCII", "") not in ("", "0") or term == "linux"
+    utf8 = (sys.stdout.encoding or "").lower().replace("-", "").replace("_", "") == "utf8"
+    ascii_mode = os.environ.get("AGENTBUS_ASCII", "") not in ("", "0") or term == "linux" or not utf8
+    if not utf8:
+        try:
+            sys.stdout.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     colour = stdout_tty and not os.environ.get("NO_COLOR")
-    emoji = stdout_tty and not ascii_mode and not os.environ.get("AGENTBUS_NO_EMOJI") and \
-        (sys.stdout.encoding or "").lower().replace("-", "") == "utf8"
+    emoji = stdout_tty and not ascii_mode and not os.environ.get("AGENTBUS_NO_EMOJI") and utf8
     return colour, emoji, ascii_mode
 
 
@@ -6449,8 +6458,9 @@ def watch_live(a, strict, where, paint):
     # took the signal, so select() wakes even when the kernel did not deliver it to this thread.
     entered = []  # set once the loop has taken the terminal (cbreak, the alternate screen)
 
-    def leave_terminal():
-        """The terminal as it was: its modes first, then the cursor shown and the alternate screen left."""
+    def leave_terminal(on_fail=None):
+        """The terminal as it was: its modes first, then the cursor shown and the alternate screen left; each on
+        its own, so a failing write never skips the modes."""
         if saved is not None:
             try:
                 termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
@@ -6460,7 +6470,8 @@ def watch_live(a, strict, where, paint):
             out.write(SHOW_CURSOR_LEAVE_ALT)
             out.flush()
         except Exception:
-            pass
+            if on_fail:
+                on_fail()
 
     def enter_terminal():
         try:
@@ -6513,16 +6524,7 @@ def watch_live(a, strict, where, paint):
         if cleaned:
             return
         cleaned.append(1)
-        if saved is not None:
-            try:
-                termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
-            except Exception:
-                pass
-        try:
-            out.write(SHOW_CURSOR_LEAVE_ALT)
-            out.flush()
-        except Exception:
-            _stdout_to_devnull()  # the terminal is gone (SIGHUP): the exit's own flush must not fail too
+        leave_terminal(_stdout_to_devnull)  # the terminal gone (SIGHUP): the exit's own flush must not fail too
         for step_ in (lambda: signal.set_wakeup_fd(old_wakeup),
                       *[(lambda s=s: signal.signal(s, old[s])) for s in old],
                       lambda: signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)):
@@ -6536,19 +6538,28 @@ def watch_live(a, strict, where, paint):
                 os.close(fd)
             except OSError:
                 pass
-    _KILL_CLEANUP.append(cleanup)  # the watchdog ending the process restores the terminal first
+    halted = []
+
+    def watchdog_cleanup():
+        """Run by the watchdog thread just before it ends the process with its own message: the terminal only.
+        The loop stops drawing; nothing is closed under it, so the exit shows the watchdog's reason."""
+        halted.append(1)
+        cleaned.append(1)
+        leave_terminal()
+    _KILL_CLEANUP.append(watchdog_cleanup)
     try:
-        _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod, entered, do_jobs)
+        _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod, entered, do_jobs, halted)
     except KeyboardInterrupt:
         pass
     finally:
         cleanup()
-        if cleanup in _KILL_CLEANUP:
-            _KILL_CLEANUP.remove(cleanup)
+        if watchdog_cleanup in _KILL_CLEANUP:
+            _KILL_CLEANUP.remove(watchdog_cleanup)
     return stop[0] if stop else 0
 
 
-def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod, entered=None, do_jobs=None):
+def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymod, entered=None, do_jobs=None,
+                halted=()):
     me_name = getattr(a, "as_", None) or os.environ.get("AGENTBUS_AGENT") or None
     view = View()
     view.me = me_name
@@ -6642,6 +6653,8 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
         fresh = {i for i, t in first_seen.items() if t and time.monotonic() - t < FRESH_S}
         if error and error.get("code") == "busy" and last_good is not None:
             error["last_good_s"] = int(time.monotonic() - last_good)
+        if halted:  # the watchdog is ending the process with its own message: draw nothing more
+            threading.Event().wait()
         if got_first or error is not None:  # never an empty frame before the first read is in
             size = shutil.get_terminal_size()
             d = view.detail

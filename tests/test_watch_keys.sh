@@ -229,6 +229,32 @@ print(len(evil), "hostile senders pasted into sh: agentbus got each as one argum
 PY
 ok "y copies the raw value (C:\\Users as written); a reply command with a hostile sender, pasted into sh, runs only agentbus with the sender as one argument"
 
+echo "TEST 2c: a filter holds at most FILTER_MAX characters; a 4 KB paste settles the selection at most that many times"
+"$PY" - <<'PY' || fail "filter cap"
+import os, sys
+sys.path.insert(0, os.environ["TESTS_DIR"])
+from watch_case import W
+g = W.g
+S, T0 = W.snap("big"), W.when(W.T_NOW)
+cap = g["FILTER_MAX"]
+assert cap == 200, cap
+real, calls = g["settle"], [0]
+def counted(*a, **k):
+    calls[0] += 1
+    return real(*a, **k)
+g["settle"] = counted
+try:
+    v = g["step"](g["View"](), "/", S, (100, 30), T0)
+    for k in g["decode_keys"](b"x" * 4096):
+        v = g["step"](v, k, S, (100, 30), T0)
+finally:
+    g["settle"] = real
+assert v.filter == "x" * cap and v.mode == "filter", len(v.filter)
+assert calls[0] <= cap, f"a 4 KB paste settled the selection {calls[0]} times"
+print(f"4096 keys: filter {len(v.filter)} characters, {calls[0]} settles")
+PY
+ok "the filter stops at 200 characters and a 4 KB paste costs at most 200 selection updates"
+
 echo "TEST 3: the design's behaviour cases, on bin/agentbus's render (ported from the design mock)"
 "$PY" - <<'PY' || fail "behaviour cases"
 import os, re, sys, time
@@ -643,5 +669,13 @@ ok "Ctrl-Z shows the cursor and leaves the alternate screen before the prompt; f
 echo "TEST 20: 200 held messages of 1 MB each: keys redraw under 100 ms and the process stays small"
 live bigbodies || fail "large bodies"
 ok "with 200 bodies of 1 MB a tick reads only each body's head: keys redraw under 100 ms, under 150 MB resident"
+
+echo "TEST 21: when the watchdog ends a hung read, the terminal is restored and the exit says why"
+live watchdog || fail "watchdog exit"
+ok "a hung read ended by the watchdog exits 3 with its own reason, the screen and modes restored"
+
+echo "TEST 22: a stdout that is not UTF-8 draws ASCII and keeps running"
+live encodings || fail "encodings"
+ok "PYTHONIOENCODING=ascii draws pure ASCII; a latin-1 locale runs; both quit cleanly"
 
 echo "All watch key tests passed"
