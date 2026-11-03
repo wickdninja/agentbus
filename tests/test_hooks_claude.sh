@@ -808,13 +808,19 @@ print("handler p95 %.0f ms" % (times[18] * 1000))
 sys.exit(0 if times[18] <= 0.25 else 1)
 PY
 # The whole process, 20 runs: CPU (child user+system) at most 250 ms and wall at most 1 s at the 95th percentile.
-"$PY" -I - "$T/pl" "$P" "${AB[@]}" <<'PY' || fail "hook process p95 over its CPU or wall bound"
-import resource, subprocess, sys, time
+# It is the process the plugin starts, hooks/launch.py as hooks/hooks.json names it: run as a script, bin/agentbus is
+# compiled from source on every run (half the CPU), and the launcher keeps the bytecode. An installed command or a
+# mutation copy under test (AGENTBUS_CMD, AGENTBUS_BIN) is run as given. The first of the 20 fills the cache (the 95th
+# percentile of 20 leaves the slowest out); the user's PYTHONDONTWRITEBYTECODE and XDG_CACHE_HOME are not passed on.
+if [ -n "${AGENTBUS_CMD:-}" ] || [ -n "${AGENTBUS_BIN:-}" ]; then HB=("${AB[@]}"); else HB=("$PY" "$CHECKOUT/hooks/launch.py"); fi
+"$PY" -I - "$T/pl" "$P" "${HB[@]}" <<'PY' || fail "hook process p95 over its CPU or wall bound"
+import os, resource, subprocess, sys, time
 pl, cwd, argv = sys.argv[1], sys.argv[2], sys.argv[3:]
+env = {k: v for k, v in os.environ.items() if k not in ("PYTHONDONTWRITEBYTECODE", "XDG_CACHE_HOME")}
 wall, cpu = [], []
 for _ in range(20):
     r0, t0 = resource.getrusage(resource.RUSAGE_CHILDREN), time.time()
-    p = subprocess.run([*argv, "hook", "claude", "UserPromptSubmit"], stdin=open(pl), capture_output=True, cwd=cwd, timeout=60)
+    p = subprocess.run([*argv, "hook", "claude", "UserPromptSubmit"], stdin=open(pl), capture_output=True, cwd=cwd, env=env, timeout=60)
     r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
     wall.append(time.time() - t0); cpu.append(r1.ru_utime + r1.ru_stime - r0.ru_utime - r0.ru_stime)
     assert p.returncode == 0 and p.stdout, (p.returncode, p.stdout, p.stderr)

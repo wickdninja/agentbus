@@ -19,5 +19,6 @@ What the hooks protect, from what, and what they leave open. The hooks run on ev
 ## Left open
 
 - The plugin form of the hook command looks up `python3` on `PATH`. A `PATH` that begins with a folder another party can write could run a planted `python3`. The `setup` form records an absolute interpreter and script instead. Claude Code starts plugin hooks through a shell command string, and a plugin cannot know the interpreter's path in advance, so the lookup stays for the plugin.
+- The plugin's launcher (`hooks/launch.py`) keeps the compiled program in `~/.cache/agentbus/pycache` (or under `XDG_CACHE_HOME`). A .pyc is code, so a planted one would run as the user. The launcher uses that folder only when it and its parent are real directories (links are not followed) owned by the user with no group or other access; otherwise it compiles in memory and writes nothing. Python's own check applies on top (the .pyc must record the source's modification time and size). `tests/test_launch.sh` plants a valid .pyc in a linked, an open and an open-parent folder and requires that none runs. The cache is never inside a project or `.agentbus`.
 - An `AGENTBUS_DB` in the environment is a dispatcher's choice and is not second-guessed (no tracked-folder check).
 - Any process running as the user can write the bus; names are not credentials (SECURITY.md).

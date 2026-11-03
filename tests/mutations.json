@@ -772,5 +772,86 @@
     "count": 1,
     "run": "tests/test_doctor.sh",
     "expect": "hooks row: status fail, detail with 'the agentbus plugin and setup both register hooks'"
+  },
+  {
+    "name": "launcher never reads or writes the bytecode cache",
+    "file": "hooks/launch.py",
+    "find": "            code = loader\\.get_code\\(\"agentbus\"\\)",
+    "replace": "            code = None",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "the cache folder holds 0 .pyc files"
+  },
+  {
+    "name": "launcher leaves the pycache prefix set for the program's own imports",
+    "file": "hooks/launch.py",
+    "find": "            sys\\.pycache_prefix = before",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "not exactly the agentbus one"
+  },
+  {
+    "name": "launcher follows a link in place of the cache folder",
+    "file": "hooks/launch.py",
+    "find": "st = os\\.lstat\\(folder\\)",
+    "replace": "st = os.stat(folder)",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "a .pyc behind a linked cache folder was run"
+  },
+  {
+    "name": "launcher trusts a cache folder others can write",
+    "file": "hooks/launch.py",
+    "find": " or st\\.st_mode & 0o077:",
+    "replace": ":",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "a .pyc in a group-writable cache folder was run"
+  },
+  {
+    "name": "launcher trusts a cache folder owned by someone else",
+    "file": "hooks/launch.py",
+    "find": " or st\\.st_uid != os\\.geteuid\\(\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "accepted a folder owned by someone else"
+  },
+  {
+    "name": "launcher leaves the folder above the cache open",
+    "file": "hooks/launch.py",
+    "find": "for part in \\(\"agentbus\", \"pycache\"\\):",
+    "replace": "for part in (\"agentbus/pycache\",):",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "the cache's parent folder is not 0700"
+  },
+  {
+    "name": "launcher dies on a damaged bytecode file",
+    "file": "hooks/launch.py",
+    "find": "        except Exception:\\n            code = None",
+    "replace": "        except ImportError:\n            code = None",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "the launcher failed with a damaged .pyc"
+  },
+  {
+    "name": "launcher does not give the program its __file__",
+    "file": "hooks/launch.py",
+    "find": "    module\\.__file__ = source  # self_path\\(\\) reads it\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "launcher hook output differs from the script's"
+  },
+  {
+    "name": "launcher takes the cached code but still compiles the source every run",
+    "file": "hooks/launch.py",
+    "find": "            code = loader\\.get_code\\(\"agentbus\"\\)",
+    "replace": "            code = loader.get_code(\"agentbus\")\n            compile(open(source, \"rb\").read(), source, \"exec\")  # the cost the cache exists to avoid",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "the launcher is not faster than the script"
   }
 ]
