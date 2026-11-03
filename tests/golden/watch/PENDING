@@ -1,0 +1,3 @@
+# Goldens that bin/agentbus does not reproduce yet, one name per line (issue #7).
+# tests/test_watch_golden.sh fails if this list is not exact: remove a name when its frame starts
+# matching, add one if a frame stops matching. 06 (watch v2 build) ends with this list empty.

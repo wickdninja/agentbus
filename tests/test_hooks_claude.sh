@@ -657,10 +657,13 @@ PA="$T/pause-a"; PB="$T/pause-b"; mkdir -p "$PA" "$PB"
 wait_for "$PA/hook-seen-read.reached"
 touch "$PB/hook-seen-wrote.go"                 # B only marks that its update is saved, never stops there
 ( cd "$P" && AGENTBUS_TEST_PAUSE="hook-seen-lock=$PB;hook-seen-wrote=$PB" "${AB[@]}" hook claude PreToolUse <"$T/seen-b.json" >"$T/seen-b.out" 2>/dev/null ) & PIDB=$!
-wait_for "$PB/hook-seen-lock.reached"          # B is at the lock, A holds the file
+# B is at the lock point (it gets there before it tries the lock, in both builds). Event-driven: wait for it, up to 60 s.
+for i in $(seq 1 1200); do [ -e "$PB/hook-seen-lock.reached" ] && break; sleep 0.05; done
+[ -e "$PB/hook-seen-lock.reached" ] || fail "the second hook never reached the lock point within 60 s"
 touch "$PB/hook-seen-lock.go"
 # Without a lock B saves its update and says so (hook-seen-wrote); with it B cannot get past the lock while A holds the file,
-# so the mark never comes. Wait for the mark for up to 4 s (B's work after the lock is a few milliseconds).
+# so the mark never comes. That absence is the one bounded wait here: up to 4 s after B was let go (B's work from the lock
+# to the mark is a few milliseconds), so only a B that stalls for seconds right then could hide a missing lock.
 for i in $(seq 1 80); do [ -e "$PB/hook-seen-wrote.reached" ] && break; sleep 0.05; done
 touch "$PA/hook-seen-read.go"
 wait "$PIDA" "$PIDB" || true
@@ -767,7 +770,7 @@ set -- $(timed1 SessionEnd session_end_other); [ "$2" = 0 ] && [ "$4" = 0 ] || f
 ok "1M entries: join within the limit, warm events under 1 s, SessionEnd under 1.5 s and left"
 
 echo
-echo "TEST 35: SessionEnd leaves only the bus its own SessionStart joined, not a tracked bus in the project it moved to"
+echo "TEST 35: SessionEnd leaves only the very bus.db its own SessionStart joined"
 newbus p35a; PA35="$P"; N=$(dname "$SID1"); SS
 [[ " $(roster) " == *" $N "* ]] || fail "setup: SessionStart did not join $N in project A"
 newbus p35b; PB35="$P"; ab --as "$N" join --tool t >/dev/null      # project B holds the same name, as an older session might
@@ -776,8 +779,46 @@ before=$(sha "$PB35/.agentbus/bus.db")
 HCWD="$PB35" END other                                              # the session's working directory is now project B
 [ "$(sha "$PB35/.agentbus/bus.db")" = "$before" ] || fail "SessionEnd wrote to a tracked bus in another project"
 [[ " $(HCWD="$PB35" roster) " == *" $N "* ]] || fail "SessionEnd removed the name from a tracked bus in another project"
-unset HCWD; P="$PA35"
-ok "a tracked bus elsewhere is not written by SessionEnd"
+unset HCWD
+# a lane replaces project A's bus.db with a link to project B's tracked bus.db, then the session ends with its directory in B
+newbus p35c; PC35="$P"; SS
+newbus p35d; PD35="$P"; ab --as "$N" join --tool t >/dev/null; gitq "$PD35" add -f .agentbus
+before=$(sha "$PD35/.agentbus/bus.db")
+rm -f "$PC35/.agentbus/bus.db" "$PC35/.agentbus/bus.db-wal" "$PC35/.agentbus/bus.db-shm"; ln -s "$PD35/.agentbus/bus.db" "$PC35/.agentbus/bus.db"
+HCWD="$PD35" END other
+[ "$(sha "$PD35/.agentbus/bus.db")" = "$before" ] || fail "SessionEnd wrote to a tracked bus reached through a link planted at the recorded bus.db"
+[[ " $(HCWD="$PD35" roster) " == *" $N "* ]] || fail "SessionEnd emptied a tracked bus reached through a planted link"
+unset HCWD
+# a bus.db that was recreated (a new inode at the same path) is not the one that was joined: the full check runs, and an unreadable index is silence
+newbus p35e; PE35="$P"; SS
+cp "$P/.agentbus/bus.db" "$P/.agentbus/bus.db.new" && mv "$P/.agentbus/bus.db.new" "$P/.agentbus/bus.db"
+printf garbage >"$P/.git/index"
+END other
+[[ " $(roster) " == *" $N "* ]] || fail "SessionEnd trusted a recreated bus.db (a new inode at the same path)"
+# the very same file reached through another spelling of the directory still counts, and then needs no index at all
+newbus p35f; PF35="$P"; SS; ln -s "$PF35" "$T/p35-link"
+printf garbage >"$PF35/.git/index"
+HCWD="$T/p35-link" END other
+[ -z "$(HCWD="$PF35" roster)" ] || fail "SessionEnd did not leave the bus it joined when reached through a linked directory"
+unset HCWD
+ok "another project, a planted link and a recreated bus.db get the full check; the same file by another spelling does not"
+
+echo
+echo "TEST 36: a test pause point is honoured only for an existing absolute folder"
+newbus p36; N=$(dname "$SID1"); SS; ab --as peer join --tool t >/dev/null; mkdir -p "$P/rel"; n=0
+for spec in "hook-seen-lock=" "hook-seen-lock=rel" "hook-seen-read=" "hook-seen-read=rel" "hook-seen-lock=$T/does-not-exist"; do
+  n=$((n+1)); rm -f "$P"/*.reached "$P"/rel/*.reached
+  payload pre_tool_use_write session_id="\"$SID1\"" tool_input.file_path="\"$P/pause-probe-$n.txt\"" >"$T/pl36"   # a new path each time, so each hook nudges
+  "$PY" -I - "$T/pl36" "$P" "$spec" "${AB[@]}" <<'PY' || fail "a pause spec '$spec' stopped or broke the hook"
+import os, subprocess, sys
+pl, cwd, spec, argv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+p = subprocess.run([*argv, "hook", "claude", "PreToolUse"], stdin=open(pl), capture_output=True, cwd=cwd,
+                   env=dict(os.environ, AGENTBUS_TEST_PAUSE=spec), timeout=30)
+sys.exit(0 if p.returncode == 0 and p.stdout else 1)
+PY
+  ! ls "$P"/*.reached "$P"/rel/*.reached >/dev/null 2>&1 || fail "a pause spec '$spec' wrote a .reached file into the project"
+done
+ok "empty, relative and missing folders: the hook runs on, nothing is written into the project"
 
 echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"
@@ -808,13 +849,19 @@ print("handler p95 %.0f ms" % (times[18] * 1000))
 sys.exit(0 if times[18] <= 0.25 else 1)
 PY
 # The whole process, 20 runs: CPU (child user+system) at most 250 ms and wall at most 1 s at the 95th percentile.
-"$PY" -I - "$T/pl" "$P" "${AB[@]}" <<'PY' || fail "hook process p95 over its CPU or wall bound"
-import resource, subprocess, sys, time
+# It is the process the plugin starts, hooks/launch.py as hooks/hooks.json names it: run as a script, bin/agentbus is
+# compiled from source on every run (half the CPU), and the launcher keeps the bytecode. An installed command or a
+# mutation copy under test (AGENTBUS_CMD, AGENTBUS_BIN) is run as given. The first of the 20 fills the cache (the 95th
+# percentile of 20 leaves the slowest out); the user's PYTHONDONTWRITEBYTECODE and XDG_CACHE_HOME are not passed on.
+if [ -n "${AGENTBUS_CMD:-}" ] || [ -n "${AGENTBUS_BIN:-}" ]; then HB=("${AB[@]}"); else HB=("$PY" "$CHECKOUT/hooks/launch.py"); fi
+"$PY" -I - "$T/pl" "$P" "${HB[@]}" <<'PY' || fail "hook process p95 over its CPU or wall bound"
+import os, resource, subprocess, sys, time
 pl, cwd, argv = sys.argv[1], sys.argv[2], sys.argv[3:]
+env = {k: v for k, v in os.environ.items() if k not in ("PYTHONDONTWRITEBYTECODE", "XDG_CACHE_HOME")}
 wall, cpu = [], []
 for _ in range(20):
     r0, t0 = resource.getrusage(resource.RUSAGE_CHILDREN), time.time()
-    p = subprocess.run([*argv, "hook", "claude", "UserPromptSubmit"], stdin=open(pl), capture_output=True, cwd=cwd, timeout=60)
+    p = subprocess.run([*argv, "hook", "claude", "UserPromptSubmit"], stdin=open(pl), capture_output=True, cwd=cwd, env=env, timeout=60)
     r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
     wall.append(time.time() - t0); cpu.append(r1.ru_utime + r1.ru_stime - r0.ru_utime - r0.ru_stime)
     assert p.returncode == 0 and p.stdout, (p.returncode, p.stdout, p.stderr)

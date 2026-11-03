@@ -2,7 +2,7 @@
 
 ## Setup
 
-`agentbus init [DIR]` installs `.agentbus/bin/agentbus` and VERSION in an existing directory: a repo or a workspace of repos. DIR defaults to cwd. At a checkout root, it adds `.agentbus/` to the local git exclude. Nested init names the outer bus. The database appears on first use.
+`agentbus init [DIR]` installs `.agentbus/bin/agentbus` and VERSION in a directory: a repo or a workspace of repos. DIR defaults to cwd. A DIR that does not exist is created with its parents (like `mkdir -p`); a path whose nearest existing parent is not a writable directory, or that is a file, is refused with `bad_input` and nothing is created. At a checkout root, it adds `.agentbus/` to the local git exclude. Nested init names the outer bus. The database appears on first use.
 
 Run agents through that copy, using its absolute path from other directories. Run init and `upgrade [DIR]` from the installed tool or a source clone. Upgrade keeps its checkout resolution: DIR selects a repo's main checkout, whose copy is replaced.
 
@@ -38,6 +38,8 @@ New identities receive older direct messages, but broadcasts only from their fir
 
 ## Output
 
+Names, topics, context keys and claim resources are identifiers: `--as`, `AGENTBUS_AGENT`, `post --to`, `--topic`, `ctx` KEY and `claim`/`release` RESOURCE refuse a control character (C0, DEL, C1) or a bidirectional override with `bad_input` (exit 2), naming the field in the message and in `error.field`, and showing the character as `U+XXXX`. Bodies and values stay free text. Rows an older bus already holds are read as before and shown escaped (`\x1b`); such a name can no longer be passed as `--as`, so its claims end by expiry.
+
 Use `--json` for parsing and check exit status; errors go to stderr. Human output escapes controls, invisible characters and backslashes. Rows start with tool-written text or two spaces, and wrap with indented continuations. JSON preserves stored text. Human message headers start with `#<integer id> `, followed by sender, recipient (`everyone` for broadcasts), kind and reply target. Local time comes last: `HH:MM` today, otherwise `Nov 1 16:19`; JSON timestamps stay UTC.
 
 A nonzero exit does not imply rollback. A write command may commit before output fails; inspect the bus before retrying.
@@ -53,7 +55,26 @@ The goal is the context key `goal`, so `ctx history goal` lists every version. `
 
 ## Watch
 
-`agentbus watch` redraws in place until `q`, `Esc` or `Ctrl-C`. `--interval` sets 0.2 to 60 seconds, `--once` prints one frame, and `--json` prints one snapshot. Piped output also prints one frame. It needs 40 columns. `NO_COLOR` turns colour off.
+`agentbus watch` redraws in place until `q` (from the main view) or `Ctrl-C`. `--interval` sets 0.2 to 60 seconds, `--once` prints one frame, and `--json` prints one snapshot. Piped output, `TERM=dumb` and an unset `TERM` also print one frame. It needs 40 columns. `NO_COLOR` turns colour off. Watch only reads: no key marks a message read or changes a claim, and `y` writes only to the terminal.
+
+| Key | Main view | Detail | Help | Filter input |
+|---|---|---|---|---|
+| `j` `k`, Down Up | move in the focused section; in Messages while following, `k` selects the newest and pauses | select a related row, or scroll | scroll | text |
+| `g` `G`, Home End | first, last row; `G` follows again | top, bottom | top, bottom | text |
+| PgUp PgDn, Ctrl-u Ctrl-d | a page, half a page | scroll | scroll | ignored |
+| Tab, Shift-Tab, `1` to `4` | next, previous section; Agents, Claims, Facts, Messages | | | ignored, digits are text |
+| Enter | open the selected row (the newest message while following) | open the selected related row on top | | keep the filter |
+| `t` | | show or hide a message's thread | | text |
+| `y` | copy the selected id, name, resource or key (OSC 52) | copy the reply command, name, resource or value | | text |
+| `/` | filter: `from:NAME to:NAME kind:KIND topic:NAME`, or words | close the details, filter | | text |
+| `p` | pause the whole view, or follow again | | | text |
+| `r` | read the bus now | read the bus and this detail again | read now | text |
+| `?` | help | help | close | text |
+| Esc | clear a kept filter, else nothing | back one level | back | clear and close |
+| `q` | quit | back one level | back | text |
+| Ctrl-C | quit | quit | quit | quit |
+
+`kind:` takes a kind's start or its short code (`hand`, `ask`, `ans`, `dec`, `ALRT`, `done`, `note`), which narrow rows show. Watch holds the newest 200 rows of each section; a filtered section with more says `N of newest 200`, and `agentbus read` (or `who`, `claims`, `ctx get`) reads the rest. A detail reads at most the newest 5000 messages. A busy bus keeps the last frame and adds `waiting · Ns old` to the header; a bus it cannot read (refused, newer, gone) replaces the frame with the reason and the fix, and the view comes back as it was once the bus reads again. A watch left running after its bus copy was upgraded says `restart for X.Y.Z`. `AGENTBUS_ASCII=1`, `TERM=linux` or a terminal that draws `●` two columns wide switch watch's marks to ASCII. SIGTERM ends it like `q`; SIGHUP exits `129`; both restore the terminal. Ctrl-Z gives the terminal back and `fg` takes it again. A filter holds at most 200 characters. The main view reads the first 4096 characters of each body (a word filter searches those); a detail shows its message whole. A stdout that is not UTF-8 gets the ASCII marks. Walkthrough: [Watch your agents](how-to/watch.md).
 
 On a terminal, watch shows emoji: a role per agent (🧠 brain or lead, ✋ lane, hand or implementer, 🧪 tests, 🔍 review, 📚 docs, 🚀 ops, 🎨 design, 🙋 human, 🤖 otherwise), a kind per message (🤝 handoff, ❓ question, 💬 answer, ✅ done, 🧭 decision, 🚨 alert, 📝 note) and a section icon (👥 🔒 📌 💬). `AGENTBUS_NO_EMOJI=1` turns them off. They never appear when stdout is not a terminal.
 
@@ -109,7 +130,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `log show` | `{"v": integer, "items": [LogEntry], "has_more": boolean, "next": string or null}` |
 | `status` | `{"bus": string, "goal": null or Goal, "agents": [Agent], "context": [Fact], "claims": [Claim], "messages": [Message], "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}` |
 | `goal` | `null or a Goal` |
-| `watch` | `{"bus": string, "directory": string, "agents": [{"name": string, "role": string or null, "last_seen": string, "joined_at": string}], "claims": [{"resource": string, "agent": string, "purpose": string or null, "expires_at": string}], "goal": null or Goal, "context": [Fact], "messages": [{"id": integer, "ts": string, "sender": string, "recipient": string, "kind": string, "body": string, "reply_to": integer or null}], "counts": {"agents": integer, "claims": integer, "messages": integer}, "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}` |
+| `watch` | `{"bus": string, "directory": string, "agents": [{"name": string, "role": string or null, "last_seen": string, "joined_at": string}], "claims": [{"resource": string, "agent": string, "purpose": string or null, "expires_at": string}], "goal": null or Goal, "context": [Fact], "messages": [{"id": integer, "ts": string, "sender": string, "recipient": string, "kind": string, "topic": string or null, "body": string, "reply_to": integer or null}], "unread": object, "counts": {"agents": integer, "claims": integer, "messages": integer}, "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}` |
 | `buses` | `{"v": integer, "items": [BusLevel], "has_more": boolean, "next": string or null}` |
 | `init` | `{"directory": string, "copy": string, "old": string, "new": string, "exclude_added": boolean, "gitignore_rule": boolean, "outer": string or null}` |
 | `upgrade` | `{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}` |
@@ -117,6 +138,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `skill` | `{"text": string}` |
 | `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved)}]}` |
 | `hooks` | `{"hooks": {EVENT: [{"matcher": string (optional), "hooks": [{"type": string, "timeout": integer, "command": string}]}]}}` |
+| `doctor` | `{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" \| "warn" \| "fail" \| "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0` |
 <!-- /generated:results -->
 
 Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; timestamps are UTC strings in JSON.
@@ -133,6 +155,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `Goal` | `goal`, `set_by`, `set_at`, `unchanged` (optional) |
 | `BusLevel` | `level`, `directory`, `exists`, `copy_version`, `stale` |
 | `UpgradeRow` | `directory`, `status`, `old`, `new`, `schema_old`, `schema_new`, `backup`, `error` |
+| `DoctorCheck` | `id`, `status`, `detail`, `fix`, `hint`, `scope` (optional) |
 <!-- /generated:objects -->
 
 `watch --json` returns once, with or without `--once`; its row projections differ from `status`. Data written directly through SQLite can have other types; JSON renders BLOBs and non-finite numbers as strings.
@@ -175,7 +198,7 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `not_on_roster` | 1 | no | `agent` | That name has not joined. Join first. |
 | `name_active` | 1 | no | `agent`, `last_seen_min` | The name was active recently and may be another live session. Pick another name, or join --takeover if it is you. |
 | `request_id_reused` | 1 | no | `request_id`, `agent` | That request id was used with a different message. Use a new token for a different message. |
-| `bad_input` | 2 | no | none | The arguments are not valid (a usage error). Fix the arguments. |
+| `bad_input` | 2 | no | `field` (optional) | The arguments are not valid (a usage error). Fix the arguments. |
 | `no_bus` | 3 | no | none | There is no bus here or above. Run agentbus init DIR, or set AGENTBUS_DB. |
 | `busy` | 3 | yes | `bus` | Another process held the bus for 15 seconds. Retry after a few seconds. |
 | `schema_refused` | 3 | no | none | The bus tables are not agentbus's. Stop and tell the user. |
@@ -184,11 +207,11 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `schema_corrupt` | 3 | no | `bus`, `bus_schema` | bus.db records a schema version no agentbus writes; another tool or a lane changed it. Stop and tell the user; restore a backup (docs/how-to/upgrade.md). |
 | `backup_failed` | 3 | no | `bus`, `reason` | The backup before a migration could not be made. Free disk space or move the bus. |
 | `copy_newer` | 1 | no | `directory`, `copy_version`, `tool_version` | The folder's copy of agentbus is newer than this one; it is never downgraded. Run upgrade or init with a newer agentbus. |
-| `bus_unavailable` | 3 | no | `file` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. Read the message, fix the folder, then run the command again. |
+| `bus_unavailable` | 3 | no | `file` (optional), `outcome_unknown` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; committed is then true when that write was the command's own. Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat it only with its request id. |
 | `ack_failed` | 3 | yes | `delivered` | inbox printed its messages but could not mark them read. The output was complete: use it, expect the same messages again, and dedupe by id. |
 | `output_failed` | 1 | yes | none | stdout could not be written; committed effects stand. Retry with the same token. |
 | `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun). |
-| `items_failed` | 1 | no | `failed` | Some of the items the command works on failed or were refused (buses of upgrade --all, files of setup); stdout holds the whole result, and failed lists those items. Read each failed item's error, fix it, then run the command again. |
+| `items_failed` | 1 | no | `failed` | Some of the items the command works on failed or were refused (buses of upgrade --all, files of setup, checks of doctor); stdout holds the whole result, and failed lists those items. Read each failed item's error, fix it, then run the command again. |
 | `internal` | 4 | no | none | A bug in agentbus. Report it. |
 <!-- /generated:errors -->
 
@@ -238,6 +261,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `skill` | safe | repeat freely |
 | `setup` | idempotent | a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object |
 | `hooks` | safe | repeat freely |
+| `doctor` | safe | repeat freely |
 <!-- /generated:retry -->
 
 `post --request-id TOKEN` makes a retry by the same sender return the original message ID with `duplicate: true`. Body, recipient, kind, topic and reply target must match; a different payload gives `request_id_reused`. Tokens belong to their sender and remain on the message row. Without a token each post creates a message.
@@ -251,6 +275,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `AGENTBUS_AGENT` | Your agent identity; --as overrides it. | unset |
 | `NO_COLOR` | Turns colour off in watch. | unset |
 | `AGENTBUS_NO_EMOJI` | Turns emoji off in watch. | unset |
+| `AGENTBUS_ASCII` | Draws watch's own marks in ASCII, with emoji off (also under TERM=linux). | unset |
 | `COLUMNS` | Width human output is wrapped to. | the terminal width, else 80 |
 <!-- /generated:env -->
 

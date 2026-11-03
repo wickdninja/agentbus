@@ -28,6 +28,8 @@ except `bin/`. The human and the orchestrating agent run the CLI unsandboxed, in
   output, no lost or duplicated data for honest agents (beyond `inbox`'s documented
   at-least-once), and the CLI bounding its *own* hold of the lock below the 15 s other agents wait,
   whatever rows a lane planted, so planted rows cannot turn one honest command into a long hold.
+  That bound is 8 s unless the process is blocked in the kernel on a stalled disk (in `fsync`): a
+  process there cannot be ended until the disk answers, so the hold lasts as long as the stall.
 
 Each harness section below says whether the link requirement is met and how that was checked.
 
@@ -102,7 +104,13 @@ The brain runs the CLI unsandboxed, in a folder the lane can write. The CLI:
   statement still running then is stopped and its write rolled back), and everything else done
   with the bus held (Python loops, fetching and decoding rows) 2 s more. At 8 s a second watchdog
   ends the command with an `agentbus:` error, at least 5 s inside the 15 s another agent waits
-  even on a slow machine, where a stopped process takes a moment more to be gone;
+  even on a slow machine, where a stopped process takes a moment more to be gone. The 8 s holds
+  while the process can run: a process blocked in the kernel, in `fsync` on a disk that has stalled,
+  is not ended until the disk answers (holds of 31 s to 200 s were seen with a disk limited to 40 MB/s).
+  If the stop comes while a write is being saved, whether it was saved is not known, since the commit
+  record may already be on disk. The error then says so (`outcome_unknown: true` under `--json`), counts
+  the write as possibly saved (`committed: true`, `retryable: false`), and tells the caller to check the
+  bus or to repeat only with the write's `--request-id`;
 - re-checks inside every write transaction that the path still names the file it holds.
 
 `init` and `upgrade` refuse the same links. They write `bin/agentbus` and `VERSION` only through fresh temp files (`O_EXCL`, then rename). The one file written in place, when the bus belongs to a checkout root, is

@@ -68,12 +68,12 @@ Subagents share their parent's session, so they act under the parent's name and 
 
 ## Safe by design
 
-- A hook runs the plugin's own `bin/agentbus`, or the tool `setup` recorded, never a copy found in the project. It names `agentbus`, the installed command, in what it says, and a project's own copy only when the hook itself is running from that copy.
+- A hook runs the plugin's own `bin/agentbus` (through `hooks/launch.py`, which keeps the compiled program in a private cache under `~/.cache/agentbus`, so a hook does not pay the compile every time), or the tool `setup` recorded, never a copy found in the project. It names `agentbus`, the installed command, in what it says, and a project's own copy only when the hook itself is running from that copy.
 - A hook never makes a bus: a folder without an initialised database is silent. A `.agentbus` that git tracks (a clone can commit a whole one) is refused and nothing is written to it. The hook decides from git's index, which it reads itself (versions 2, 3 and 4, a split index, a submodule's or a linked worktree's); an exclude rule proves nothing, because every agentbus command writes it. An index it cannot read means silence. A hook never runs git, because a repository's own config can name a program git would run.
 - A hook never exits non-zero and never blocks: every registered command ends in `|| true`.
 - A hook waits at most 0.3 seconds for a busy bus, never migrates or repairs one, and says nothing when the bus is busy or unreadable.
 - When the hooks are off for a folder because its bus is older or newer than this agentbus, or because the plugin and `setup` both registered them, the session gets one visible notice with the command that fixes it.
-- One limit: the plugin's hook command is `python3 "${CLAUDE_PLUGIN_ROOT}/bin/agentbus" ...`, so `python3` is found on `PATH` (as with any script that starts `#!/usr/bin/env python3`). A `PATH` that starts with a folder someone else can write could run a `python3` planted there. `agentbus setup claude` does not have this limit: it records the absolute interpreter and script. Where that matters, use `setup`.
+- One limit: the plugin's hook command is `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launch.py" ...`, so `python3` is found on `PATH` (as with any script that starts `#!/usr/bin/env python3`). A `PATH` that starts with a folder someone else can write could run a `python3` planted there. `agentbus setup claude` does not have this limit: it records the absolute interpreter and script. Where that matters, use `setup`.
 
 ## Turn it off or look closer
 

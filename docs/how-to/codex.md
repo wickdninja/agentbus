@@ -37,7 +37,10 @@ The hook command is written for a POSIX shell (`sh`, `bash`, `zsh`). If `$SHELL`
 agentbus init .      # once per repo
 codex                # send one prompt
 agentbus watch       # shows codex-xxxxxxxx on the roster
+agentbus doctor      # checks the hooks file, the executable it runs and the AGENTS.md block
 ```
+
+`agentbus doctor` reads files only: it never starts Codex or your shell. It reports each hook entry that does not run this `agentbus`, and says on its `codex` line that trust cannot be checked from outside Codex, so `/hooks` stays the place to confirm.
 
 Hooks only ever add context: they never block a tool call, never edit a file and never run `leave`.
 

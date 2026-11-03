@@ -54,14 +54,96 @@ rc=0; bash "$RUNNER" --skip-heavy tests/test_mutations.sh tests/test_eval_harnes
 [ "$rc" = 0 ] && [ "$(tail -n 1 "$T/out")" = "ALL TESTS PASSED (0 files)" ] || fail "--skip-heavy ran a heavy file (rc $rc): $(cat "$T/out")"
 rc=0; bash "$RUNNER" --only-heavy "$T/tests/test_a_ok.sh" >"$T/out" 2>&1 || rc=$?
 [ "$rc" = 0 ] && [ "$(tail -n 1 "$T/out")" = "ALL TESTS PASSED (0 files)" ] || fail "--only-heavy ran an ordinary file (rc $rc): $(cat "$T/out")"
-# RUN_ALL_TIMEOUT caps each file: a file that outlives it fails the run with rc 124 (needs timeout or gtimeout).
-if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
-  printf '#!/bin/bash\nsleep 30\n' > "$T/tests/test_d_slow.sh"
-  rc=0; RUN_ALL_TIMEOUT=1 bash "$RUNNER" "$T/tests/test_d_slow.sh" >"$T/out" 2>&1 || rc=$?
-  [ "$rc" = 1 ] && grep -q '^FAIL .*test_d_slow.sh (rc 124)$' "$T/out" || fail "RUN_ALL_TIMEOUT=1 did not stop a slow test (rc $rc): $(cat "$T/out")"
-else
-  skip_part "neither timeout nor gtimeout is installed, so the per-file cap is not checked"
-fi
+# RUN_ALL_TIMEOUT caps each file: a file that outlives it fails the run with rc 124, and its whole process group is
+# gone, a child that ignores SIGTERM too. The cap is the runner's own helper (tests/run_capped.py), never an optional
+# binary: it is checked with no timeout or gtimeout on PATH (GitHub's macOS runners have neither; the old runner then
+# ran with no cap at all) and with the PATH as it is.
+# Bug it catches: a file that hangs holds the whole run until the CI job's own limit, and a child it started outlives it.
+NOTMO="$T/notmo"; mkdir -p "$NOTMO"
+"$PY" - "$NOTMO" <<'PY'
+import os, sys
+dest = sys.argv[1]
+for d in os.environ["PATH"].split(os.pathsep):
+    try:
+        names = os.listdir(d or ".")
+    except OSError:
+        continue
+    for n in names:
+        src = os.path.join(d, n)
+        if n in ("timeout", "gtimeout") or os.path.lexists(os.path.join(dest, n)) or not os.access(src, os.X_OK) or os.path.isdir(src):
+            continue
+        os.symlink(src, os.path.join(dest, n))
+PY
+! PATH="$NOTMO" command -v timeout >/dev/null && ! PATH="$NOTMO" command -v gtimeout >/dev/null || fail "the stripped PATH still has timeout or gtimeout"
+# alive PID: 0 while PID runs (a zombie counts as gone: it has ended and only waits to be reaped).
+alive() { "$PY" -c '
+import os, sys
+pid = int(sys.argv[1])
+try:
+    os.kill(pid, 0)
+except ProcessLookupError:
+    sys.exit(1)
+try:
+    sys.exit(1 if open("/proc/%d/stat" % pid).read().rsplit(")", 1)[1].split()[0] == "Z" else 0)
+except OSError:
+    sys.exit(0)' "$1"; }
+for path in "$NOTMO" "$PATH"; do
+  rm -f "$T"/*.pid
+  # test_d_slow: ignores SIGTERM itself, as do its children, so only the SIGKILL after the grace ends them.
+  printf '#!/bin/bash\ntrap "" TERM\nsleep 30 & echo $! > %s/slow.pid\nsleep 30\n' "$T" > "$T/tests/test_d_slow.sh"
+  # test_d_orphan: ends on SIGTERM, but leaves a child that ignores it.
+  printf '#!/bin/bash\n(trap "" TERM; exec sleep 30) & echo $! > %s/orphan.pid\nsleep 30\n' "$T" > "$T/tests/test_d_orphan.sh"
+  t0=$SECONDS
+  rc=0; PATH="$path" RUN_ALL_TIMEOUT=1 bash "$RUNNER" --keep-going "$T/tests/test_d_slow.sh" "$T/tests/test_d_orphan.sh" >"$T/out" 2>&1 || rc=$?
+  took=$((SECONDS-t0))
+  [ "$rc" = 1 ] && grep -q '^FAIL .*test_d_slow.sh (rc 124)$' "$T/out" && grep -q '^FAIL .*test_d_orphan.sh (rc 124)$' "$T/out" \
+    || fail "RUN_ALL_TIMEOUT=1 did not stop a slow test with rc 124 (PATH $([ "$path" = "$NOTMO" ] && echo 'without timeout' || echo 'as it is'), rc $rc): $(cat "$T/out")"
+  [ "$took" -lt 15 ] || fail "RUN_ALL_TIMEOUT=1 took ${took}s to stop two slow tests"
+  for k in slow orphan; do
+    [ -s "$T/$k.pid" ] || fail "test_d_$k.sh never started its child"
+    pid=$(cat "$T/$k.pid"); w=0
+    while alive "$pid"; do sleep 0.1; w=$((w+1)); [ $w -lt 50 ] || { kill -9 "$pid" 2>/dev/null; fail "test_d_$k.sh's child $pid outlived the cap"; }; done
+  done
+done
+rm -f "$T/tests/test_d_slow.sh" "$T/tests/test_d_orphan.sh"
+# A Ctrl-C (SIGINT) to the helper ends the file's whole group, and the helper dies of the signal itself (not just
+# exit 130), so the shell running it, run_all.sh, stops too. Ready marker: the file writes int.pid once it runs,
+# and the helper's handlers are in place before it starts the file, so the SIGINT can never arrive too early.
+printf '#!/bin/bash\nsleep 30 & echo $! > %s/int.pid\nsleep 30\n' "$T" > "$T/int.sh"
+"$PY" - "$(dirname "$RUNNER")/run_capped.py" "$T/int.sh" "$T/int.pid" <<'PY' || fail "SIGINT to run_capped.py"
+import os, signal, subprocess, sys, time
+helper, script, pidfile = sys.argv[1:]
+p = subprocess.Popen([sys.executable, helper, "60", "bash", script])
+for _ in range(200):
+    if os.path.exists(pidfile) and open(pidfile).read().strip():
+        break
+    time.sleep(0.05)
+else:
+    sys.exit("FAIL: the file under run_capped.py never started")
+p.send_signal(signal.SIGINT)
+rc = p.wait(20)
+child = int(open(pidfile).read())
+def alive(pid):  # a zombie has ended; it only waits to be reaped
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        return open("/proc/%d/stat" % pid).read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return True
+for _ in range(50):
+    if not alive(child):
+        break
+    time.sleep(0.1)
+else:
+    os.kill(child, signal.SIGKILL)
+    sys.exit("FAIL: a child outlived the SIGINT to run_capped.py")
+if rc != -signal.SIGINT:
+    sys.exit("FAIL: run_capped.py did not die of the SIGINT it was sent (status %r)" % rc)
+PY
+rc=0; RUN_ALL_TIMEOUT=1.5 bash "$RUNNER" "$T/tests/test_a_ok.sh" >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 1 ] && grep -q "^RUN_ALL_TIMEOUT must be a whole number of seconds" "$T/out" || fail "RUN_ALL_TIMEOUT=1.5 was not refused (rc $rc): $(cat "$T/out")"
 ok "CONTRIBUTING's test command is the runner: exit 1 at the first failing test with FAILED: <file>, 0 when all pass"
 
 export HOME="$T/home"; mkdir -p "$HOME"

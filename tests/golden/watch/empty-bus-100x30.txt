@@ -1,0 +1,30 @@
+ agentbus  ~/src/acme-api                                              0 alerts · 0 open questions
+  ◇ no goal yet · agentbus --as NAME goal "..."
+
+Agents  0
+  no one yet. Join with: agentbus --as NAME join
+
+Claims  0
+  nothing claimed
+
+Facts  0
+  none yet
+
+Messages  0                                                                 following · k to browse
+  quiet so far
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  k browse · Enter open · / filter · p pause · Tab section · ? help · q quit

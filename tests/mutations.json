@@ -11,7 +11,7 @@
   {
     "name": "watch_snapshot advances inbox cursors",
     "file": "bin/agentbus",
-    "find": "        con = open_bus\\(path, strict, read_only=read_only\\)\\n",
+    "find": "        con = open_bus\\(path, strict, read_only=read_only, busy_wait=busy_wait\\)\\n",
     "replace": "        con = open_bus(path, strict)\\n        con.execute(\"UPDATE cursors SET last_read_id=(SELECT COALESCE(MAX(id),0) FROM messages)\")\\n        con.commit()\\n",
     "count": 1,
     "run": "tests/test_watch.sh",
@@ -198,6 +198,141 @@
     "expect": "FAIL: update line: the edited SKILL.md was not saved as a .bak"
   },
   {
+    "name": "run_all's cap kills only the file, not its process group",
+    "file": "tests/run_capped.py",
+    "find": "    killpg\\(proc\\.pid, signal\\.SIGKILL\\)\\n    proc\\.wait\\(\\)",
+    "replace": "    proc.kill()\\n    proc.wait()",
+    "count": 1,
+    "run": "tests/test_docs.sh",
+    "expect": "outlived the cap"
+  },
+  {
+    "name": "deletes zero the pages they free (secure_delete on)",
+    "file": "bin/agentbus",
+    "find": "con\\.execute\\(\"PRAGMA secure_delete=FAST\"\\)",
+    "replace": "con.execute(\"PRAGMA secure_delete=ON\")",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "the freed pages were zeroed"
+  },
+  {
+    "name": "normalising on open reads every planted claim name",
+    "file": "bin/agentbus",
+    "find": "\\{BYTE_LENGTH\\}\\(resource\\) <= \\{4 \\* RESOURCE_MAX\\} AND ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "database disk image is malformed"
+  },
+  {
+    "name": "doctor opens the bus for writing",
+    "file": "bin/agentbus",
+    "find": "open_bus\\(ctx\\.db, ctx\\.strict, read_only=True, busy_wait=DOCTOR_BUSY_WAIT_S\\)",
+    "replace": "open_bus(ctx.db, ctx.strict, read_only=False, busy_wait=DOCTOR_BUSY_WAIT_S)",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
+  },
+  {
+    "name": "doctor exits 0 when a check failed",
+    "file": "bin/agentbus",
+    "find": "    if fail:\\n        bad = \\[",
+    "replace": "    if False:\\n        bad = [",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "a newer bus must exit 1"
+  },
+  {
+    "name": "doctor treats an older copy as newer",
+    "file": "bin/agentbus",
+    "find": "    if copy is not None and release_key\\(copy\\) < mine:",
+    "replace": "    if copy is not None and release_key(copy) > mine:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "output lacks: 0.1.0 here, 0.2.0 installed"
+  },
+  {
+    "name": "doctor waits five seconds for a busy bus",
+    "file": "bin/agentbus",
+    "find": "^DOCTOR_BUSY_WAIT_S = 0\\.3 ",
+    "replace": "DOCTOR_BUSY_WAIT_S = 5.0 ",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "FAIL: busy"
+  },
+  {
+    "name": "doctor starts a process of its own in discovery",
+    "file": "bin/agentbus",
+    "find": "    try:\\n        ctx\\.db, ctx\\.strict = find_bus_path\\(up\\)",
+    "replace": "    os.waitpid(os.posix_spawnp(\"true\", [\"true\"], {}), 0)\\n    try:\\n        ctx.db, ctx.strict = find_bus_path(up)",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor started a subprocess or an executable"
+  },
+  {
+    "name": "doctor names upgrade --all PARENT for an older copy",
+    "file": "bin/agentbus",
+    "find": "return \\[doctor_result\\(\"copy\", \"warn\", f\"\\{copy\\} here, \\{ctx\\.version\\} installed\", upgrade\\)\\]",
+    "replace": "return [doctor_result(\"copy\", \"warn\", f\"{copy} here, {ctx.version} installed\", f\"agentbus upgrade --all {os.path.dirname(ctx.directory)}\")]",
+    "count": 1,
+    "run": "tests/test_version_policy.sh",
+    "expect": "doctor entry copy (warn, '0.1.0 here, 0.2.0 installed') is not as documented"
+  },
+  {
+    "name": "doctor creates the missing agent config folder",
+    "file": "bin/agentbus",
+    "find": "    if scope == \"user\" and not os\\.path\\.isdir\\(cfg\\):\\n        return doctor_result",
+    "replace": "    if scope == \"user\" and not os.path.isdir(cfg):\\n        os.makedirs(cfg, exist_ok=True)\\n        return doctor_result",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
+  },
+  {
+    "name": "doctor compares the copy's version but not its bytes",
+    "file": "bin/agentbus",
+    "find": "    if theirs is None or ours is None or theirs != ours:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "the copy is from source (0123456)"
+  },
+  {
+    "name": "doctor reports a refused discovery as no bus",
+    "file": "bin/agentbus",
+    "find": "        if r\\[\"code\"\\] == \"no_bus\" and r\\[\"message\"\\]\\.startswith\\(DOCTOR_NO_BUS\\):",
+    "replace": "        if r[\"code\"] == \"no_bus\":",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor must exit 1 where join exits 3"
+  },
+  {
+    "name": "doctor offers setup for a file setup refuses",
+    "file": "bin/agentbus",
+    "find": "return doctor_result\\(\"skill\", \"warn\", f\"\\{skill\\} was not written by agentbus\", scope=scope, hint=refused \\+ \"\\.\"\\)",
+    "replace": "return doctor_result(\"skill\", \"warn\", f\"{skill} was not written by agentbus\", fix, scope=scope, hint=refused + \".\")",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "was not written by agentbus', fix ''"
+  },
+  {
+    "name": "doctor drops null keys from the failed list",
+    "file": "bin/agentbus",
+    "find": "        bad = \\[doctor_json_check\\(r\\) for r in results if r\\[\"status\"\\] == \"fail\"\\]",
+    "replace": "        bad = [{k: v for k, v in doctor_json_check(r).items() if v is not None} for r in results if r[\"status\"] == \"fail\"]",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "stdout is not the full result"
+  },
+  {
+    "name": "doctor writes the git exclude rule",
+    "file": "bin/agentbus",
+    "find": "        ctx\\.db, ctx\\.strict = find_bus_path\\(up\\)\\n",
+    "replace": "        ctx.db, ctx.strict = find_bus_path(up)\\n        _i = repo_info(os.path.dirname(os.path.dirname(ctx.db)))\\n        _i and keep_excluded(*_i)\\n",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
+  },
+  {
     "name": "a hook makes a lane's name (AGENTBUS_AGENT) leave when its session ends",
     "file": "bin/agentbus",
     "find": "if not ident or not ident\\[1\\] or payload.get\\(\"reason\"\\) not in HOOK_END_REASONS:",
@@ -236,8 +371,8 @@
   {
     "name": "PreToolUse nudges about an unclaimed path every time",
     "file": "bin/agentbus",
-    "find": "if not peers or not isinstance\\(payload\\.get\\(\"session_id\"\\), str\\) or not any\\(\\[hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\) for rel in unclaimed\\]\\):",
-    "replace": "if not peers or not unclaimed:",
+    "find": "    new = \\[rel for rel in unclaimed if hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\)\\]",
+    "replace": "    new = list(unclaimed)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "second unclaimed nudge for the same path"
@@ -461,8 +596,8 @@
   {
     "name": "SessionEnd re-reads the index before it leaves",
     "file": "bin/agentbus",
-    "find": "joined_db = \\(hook_state_get\\(hook_state_key\\(sid, \"\\.bus\"\\)\\) or \"\"\\)\\.strip\\(\\) or None",
-    "replace": "joined_db = None",
+    "find": "joined_id = tuple\\(joined_id\\) if isinstance\\(joined_id, list\\)",
+    "replace": "joined_id = None if True or isinstance(joined_id, list)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd with a 1M-entry index did not leave"
@@ -524,8 +659,8 @@
   {
     "name": "SessionEnd trusts any bus once its session has joined one",
     "file": "bin/agentbus",
-    "find": "same = bool\\(joined_db\\) and os\\.path\\.samefile\\(path, joined_db\\)",
-    "replace": "same = bool(joined_db)",
+    "find": "same = joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
+    "replace": "same = joined_id is not None",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd wrote to a tracked bus in another project"
@@ -542,7 +677,7 @@
   {
     "name": "setup compares a .agentbus folder name case-sensitively",
     "file": "bin/agentbus",
-    "find": "unicodedata\\.normalize\\(\"NFC\", os\\.path\\.basename\\(here\\)\\)\\.casefold\\(\\) == \"\\.agentbus\"",
+    "find": "os\\.path\\.basename\\(here\\)\\.casefold\\(\\) == \"\\.agentbus\"",
     "replace": "os.path.basename(here) == \".agentbus\"",
     "count": 1,
     "run": "tests/test_setup.sh",
@@ -565,6 +700,303 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "reached through a tracked directory link"
+  },
+  {
+    "name": "watch: q in the filter input quits",
+    "file": "bin/agentbus",
+    "find": "        elif len\\(key\\) == 1:  # every printable character is text, q and the digits too",
+    "replace": "        elif key == \"q\":\n            v.effects.append((\"quit\", 0))\n        elif len(key) == 1:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: state machine"
+  },
+  {
+    "name": "watch: cleanup skips the termios restore",
+    "file": "bin/agentbus",
+    "find": "^                termios\\.tcsetattr\\(stdin, termios\\.TCSADRAIN, saved\\)$",
+    "replace": "                pass",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: colours and cleanup"
+  },
+  {
+    "name": "watch: an unknown escape sequence leaks as keys",
+    "file": "bin/agentbus",
+    "find": "return i \\+ 1, _CSI_TILDE\\.get\\(params\\.split\\(\";\"\\)\\[0\\]\\)",
+    "replace": "return 2, None",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: key decoder"
+  },
+  {
+    "name": "watch: mentions match with LIKE",
+    "file": "bin/agentbus",
+    "find": "match, params = \"instr\\(body, \\?\\) > 0\", \\(key,\\)",
+    "replace": "match, params = \"body LIKE '%' || ? || '%'\", (key,)",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: behaviour cases"
+  },
+  {
+    "name": "watch: pause does not freeze the view",
+    "file": "bin/agentbus",
+    "find": "        if view\\.paused and held is not None:",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: state machine"
+  },
+  {
+    "name": "watch: wrapping a long word is quadratic",
+    "file": "bin/agentbus",
+    "find": "^                cw = cell_width\\(c\\)\\n                if lw \\+ cw > width:$",
+    "replace": "                cw = cell_width(c) + 0 * text_width(word)\n                if lw + cw > width:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "FAIL: behaviour cases"
+  },
+  {
+    "name": "doctor warns that a project never set up has no hooks",
+    "file": "bin/agentbus",
+    "find": "if code == \"missing\" and ctx\\.scope == \"all\" and scope == \"project\":",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "the documented block differs"
+  },
+  {
+    "name": "doctor drops the fix of a hooks problem that is not an unparseable file",
+    "file": "bin/agentbus",
+    "find": "if code == \"problem\" and _id == piece\\.id:",
+    "replace": "if code == \"problem\":",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "hooks row: status fail, detail with 'the agentbus plugin and setup both register hooks'"
+  },
+  {
+    "name": "control characters pass the input boundary",
+    "file": "bin/agentbus",
+    "find": "    refuse_control_inputs\\(a\\)\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "exit 0, want 2"
+  },
+  {
+    "name": "AGENTBUS_AGENT is not checked for control characters",
+    "file": "bin/agentbus",
+    "find": "refuse_control\\(k, os\\.environ\\.get\\(k\\)\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "AGENTBUS_AGENT: exit 0, want 2"
+  },
+  {
+    "name": "bidi overrides are not control characters",
+    "file": "bin/agentbus",
+    "find": "or c in _BIDI\\)",
+    "replace": ")",
+    "count": 1,
+    "run": "tests/test_control_chars.sh",
+    "expect": "exit 0, want 2"
+  },
+  {
+    "name": "init refuses a missing folder again",
+    "file": "bin/agentbus",
+    "find": "    made = make_target\\(root\\)\\n",
+    "replace": "    made = []\\n    if not os.path.isdir(root):\\n        die(f\"not a directory: {root}\", \"bad_input\")\\n",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "init on a missing folder failed instead of creating it"
+  },
+  {
+    "name": "init creates a folder under an unwritable parent",
+    "file": "bin/agentbus",
+    "find": "    if not os\\.access\\(near, os\\.W_OK \\| os\\.X_OK\\):\\n",
+    "replace": "    if False:\\n",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "unwritable parent"
+  },
+  {
+    "name": "SessionEnd trusts a bus.db of the same device whatever its inode",
+    "file": "bin/agentbus",
+    "find": "\\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
+    "replace": "st.st_dev == joined_id[0]",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd wrote to a tracked bus in another project"
+  },
+  {
+    "name": "setup stops at the innermost work tree",
+    "file": "bin/agentbus",
+    "find": "(            if d != os\\.sep and os\\.path\\.lexists\\(os\\.path\\.join\\(d, \"\\.git\"\\)\\):\\n                roots\\.append\\(d\\))",
+    "replace": "\\1\\n                break",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "outer one of two nested work trees"
+  },
+  {
+    "name": "a test pause point is honoured for any folder",
+    "file": "bin/agentbus",
+    "find": "    if not \\(os\\.path\\.isabs\\(d\\) and os\\.path\\.isdir\\(d\\)\\):\\n        return[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "stopped or broke the hook"
+  },
+  {
+    "name": "the index shortcut says untracked whatever the file holds",
+    "file": "bin/agentbus",
+    "find": " or want\\[:-1\\] in low:",
+    "replace": ":",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "wait_exit never gives up on a stalled command",
+    "file": "tests/lib.sh",
+    "find": "if \\[ \"\\$SECONDS\" -ge \"\\$end\" \\]; then kill_tree \"\\$pid\"; fail \"\\$what: still running",
+    "replace": "if [ \"$SECONDS\" -ge 999999999 ]; then kill_tree \"$pid\"; fail \"$what: still running",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "hung to the cap with a command that never finishes"
+  },
+  {
+    "name": "wait_marker keeps waiting on a command that already exited",
+    "file": "tests/lib.sh",
+    "find": "    if ! kill -0 \"\\$pid\" 2>/dev/null; then\\n      WAIT_RC=0; wait \"\\$pid\" \\|\\| WAIT_RC=\\$\\?\\n      \\[ -e \"\\$file\" \\]",
+    "replace": "    if false; then\\n      WAIT_RC=0; wait \"$pid\" || WAIT_RC=$?\\n      [ -e \"$file\" ]",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "the early exit was not named"
+  },
+  {
+    "name": "the commit is not marked while rows are pending",
+    "file": "bin/agentbus",
+    "find": "_IN_COMMIT = \\(\"own\" if record else \"setup\"\\) if pending else None",
+    "replace": "_IN_COMMIT = None",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "committed is not true"
+  },
+  {
+    "name": "a stop during a commit still says the change was saved before it",
+    "file": "bin/agentbus",
+    "find": " and not self\\.fields\\.get\\(\"outcome_unknown\"\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "human message says the change was saved"
+  },
+  {
+    "name": "a stop during a commit keeps the not-saved message",
+    "file": "bin/agentbus",
+    "find": "        if committing and why_committing:\\n            why = why_committing\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "message does not say the write may have been saved"
+  },
+  {
+    "name": "a stop during setup commit counts the command's change as committed",
+    "file": "bin/agentbus",
+    "find": "if committing == \"own\":",
+    "replace": "if committing:",
+    "count": 1,
+    "run": "tests/test_hold_stall.sh",
+    "expect": "committed is not false for a refresh of last_seen"
+  },
+  {
+    "name": "TEST 2 waits on its output command with no deadline",
+    "file": "tests/test_lock_hold.sh",
+    "find": "wait_exit \"\\$P1\" \"\\$E\" \"\\$cmd after its output was read\"",
+    "replace": "wait \"$P1\" || WAIT_RC=$?; WAIT_RC=${WAIT_RC:-0}",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "hung to the cap with a command that never finishes its output"
+  },
+  {
+    "name": "launcher never reads or writes the bytecode cache",
+    "file": "hooks/launch.py",
+    "find": "            code = loader\\.get_code\\(\"agentbus\"\\)",
+    "replace": "            code = None",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "the cache folder holds 0 .pyc files"
+  },
+  {
+    "name": "launcher leaves the pycache prefix set for the program's own imports",
+    "file": "hooks/launch.py",
+    "find": "            sys\\.pycache_prefix = before",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "not exactly the agentbus one"
+  },
+  {
+    "name": "launcher follows a link in place of the cache folder",
+    "file": "hooks/launch.py",
+    "find": "st = os\\.lstat\\(folder\\)",
+    "replace": "st = os.stat(folder)",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "a .pyc behind a linked cache folder was run"
+  },
+  {
+    "name": "launcher trusts a cache folder others can write",
+    "file": "hooks/launch.py",
+    "find": " or st\\.st_mode & 0o077:",
+    "replace": ":",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "a .pyc in a group-writable cache folder was run"
+  },
+  {
+    "name": "launcher trusts a cache folder owned by someone else",
+    "file": "hooks/launch.py",
+    "find": " or st\\.st_uid != os\\.geteuid\\(\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "accepted a folder owned by someone else"
+  },
+  {
+    "name": "launcher leaves the folder above the cache open",
+    "file": "hooks/launch.py",
+    "find": "for part in \\(\"agentbus\", \"pycache\"\\):",
+    "replace": "for part in (\"agentbus/pycache\",):",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "the cache's parent folder is not 0700"
+  },
+  {
+    "name": "launcher dies on a damaged bytecode file",
+    "file": "hooks/launch.py",
+    "find": "        except Exception:\\n            code = None",
+    "replace": "        except ImportError:\n            code = None",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "the launcher failed with a damaged .pyc"
+  },
+  {
+    "name": "launcher does not give the program its __file__",
+    "file": "hooks/launch.py",
+    "find": "    module\\.__file__ = source  # self_path\\(\\) reads it\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "launcher hook output differs from the script's"
+  },
+  {
+    "name": "launcher takes the cached code but still compiles the source every run",
+    "file": "hooks/launch.py",
+    "find": "            code = loader\\.get_code\\(\"agentbus\"\\)",
+    "replace": "            code = loader.get_code(\"agentbus\")\n            compile(open(source, \"rb\").read(), source, \"exec\")  # the cost the cache exists to avoid",
+    "count": 1,
+    "run": "tests/test_launch.sh",
+    "expect": "the launcher is not faster than the script"
   },
   {
     "name": "a Codex payload without a session id gets a name made from its cwd",
@@ -659,8 +1091,8 @@
   {
     "name": "setup codex does not say how to trust the hooks",
     "file": "bin/agentbus",
-    "find": "^CODEX_TRUST_LINE = .*$",
-    "replace": "CODEX_TRUST_LINE = \"Start a new Codex session to load it.\"",
+    "find": "\"Codex ignores hooks until you trust them: start codex, type /hooks, and approve the \"",
+    "replace": "\"Start a new Codex session and approve the \"",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "missing line: done. Codex ignores hooks until you trust them"
@@ -702,13 +1134,13 @@
     "expect": "hooks claude does not match what setup claude writes"
   },
   {
-    "name": "setup codex check does not notice a login shell that prints",
+    "name": "setup codex does not notice a login shell that prints",
     "file": "bin/agentbus",
-    "find": "    if run\\.stdout:\\n",
-    "replace": "    if False:\n",
+    "find": "        elif printed:\\n",
+    "replace": "        elif False:\n",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check with a login shell that prints"
+    "expect": "printed 33 bytes at startup"
   },
   {
     "name": "codex check starts the executable a hooks file names",
@@ -722,8 +1154,8 @@
   {
     "name": "setup help does not mention the hooks",
     "file": "bin/agentbus",
-    "find": "help=\"Teach your agent to use agentbus: the skill and hooks for Claude Code, the AGENTS.md block and hooks for Codex\"",
-    "replace": "help=\"Teach your agent to use agentbus: install the skill for Claude Code or the block for Codex\"",
+    "find": "help=\"Teach your agent to use agentbus: the skill and hooks for Claude Code, the AGENTS.md block and hooks for Codex \"",
+    "replace": "help=\"Teach your agent to use agentbus: install the skill for Claude Code or the block for Codex \"",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "setup help does not mention the hooks"
@@ -776,11 +1208,11 @@
   {
     "name": "check vouches for any file named agentbus",
     "file": "bin/agentbus",
-    "find": "            if not command\\.startswith\\(here \\+ \" hook \"\\):",
+    "find": "            if here and not command\\.startswith\\(here \\+ \" hook \"\\):",
     "replace": "            if False:",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check with a planted agentbus executable"
+    "expect": "check with one forged entry among four"
   },
   {
     "name": "check starts the user's login shell",

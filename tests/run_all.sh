@@ -1,7 +1,9 @@
 #!/bin/bash
 # bash tests/run_all.sh [--keep-going] [--skip-heavy | --only-heavy] [FILE...]
-# Runs tests/test_*.sh in name order (or the given files), each under `timeout 600` where available
-# (RUN_ALL_TIMEOUT=SECONDS changes the cap; the two heavy files get three times it). PYTHON (and AGENTBUS_CMD / AGENTBUS_BIN) pass through to every file.
+# Runs tests/test_*.sh in name order (or the given files), each capped at 600 s by tests/run_capped.py (run with
+# $PYTHON, default python3; no `timeout` binary needed): a file that outlives the cap has its whole process group
+# killed and fails with rc 124. RUN_ALL_TIMEOUT=SECONDS changes the cap; the two heavy files get three times it.
+# PYTHON (and AGENTBUS_CMD / AGENTBUS_BIN) pass through to every file.
 # Per file: `PASS tests/test_x.sh (4s)`, `FAIL tests/test_x.sh (rc 1)` with the last 40 lines of its output, or
 # `SKIP tests/test_x.sh (reason)` when the file exits 77 (it needs something this build does not have). The run
 # stops at the first FAIL (--keep-going continues). AGENTBUS_NO_SKIP=1 turns a SKIP into a FAIL (CI sets it); only a known platform skip (skip_platform KEY, KEY in PLATFORM_SKIPS) stays a skip then.
@@ -37,10 +39,11 @@ for f in "${candidates[@]}"; do
   else [ "$heavy" = only ] && continue; fi
   files+=("$f")
 done
-tmo=()
 cap="${RUN_ALL_TIMEOUT:-600}"
-if command -v timeout >/dev/null 2>&1; then tmo=(timeout "$cap")
-elif command -v gtimeout >/dev/null 2>&1; then tmo=(gtimeout "$cap"); fi
+case "$cap" in ''|*[!0-9]*) echo "RUN_ALL_TIMEOUT must be a whole number of seconds, not '$cap'"; exit 1 ;; esac
+# The cap is always enforced, by our own helper: GitHub's macOS runners have no timeout or gtimeout.
+capped=("${PYTHON:-python3}" -I "$ROOT/tests/run_capped.py")
+"${capped[@]}" 5 true || { echo "tests/run_capped.py does not run under ${PYTHON:-python3}"; exit 1; }
 out=$(mktemp) || exit 1
 # A short path (/tmp/ab.XXXXXX/t): sockets (AF_UNIX) and the wrap tests need short temp paths, and a long TMPDIR such as
 # macOS's /var/folders/... would eat the budget. test_isolation.sh pins the length.
@@ -86,12 +89,12 @@ for f in ${files[@]+"${files[@]}"}; do
   n=$((n+1))
   start=$SECONDS
   rc=0
-  t=("${tmo[@]+"${tmo[@]}"}")
   # The heavy files run other tests (a baseline and a mutated run per mutation): three times the cap.
-  if is_heavy "$f" && [ ${#tmo[@]} -gt 0 ]; then t=("${tmo[0]}" "$((cap*3))"); fi
+  t=("${capped[@]}" "$cap")
+  if is_heavy "$f"; then t=("${capped[@]}" "$((cap*3))"); fi
   env AGENTBUS_DB="$iso/caller.db" AGENTBUS_AGENT=caller HOME="$iso/h" TMPDIR="$iso/t" PYTHONDONTWRITEBYTECODE=1 \
     CODEX_HOME="$iso/cx" CLAUDE_CONFIG_DIR="$iso/cc" \
-    ${t[@]+"${t[@]}"} bash "$f" >"$out" 2>&1 </dev/null || rc=$?
+    "${t[@]}" bash "$f" >"$out" 2>&1 </dev/null || rc=$?
   secs=$((SECONDS-start))
   # Isolation, per file, so the file that leaked is the one named: the poisoned caller environment must come back
   # untouched, TMPDIR empty and the checkout as it was.

@@ -972,6 +972,10 @@ export AGENTBUS_CLAUDE_BIN=
 reset; OP="$T/outproj"; rm -rf "$OP"; mkdir -p "$OP/sub" "$OP/node_modules/.bin"; git -C "$OP" init -q; mkclaude "$OP/node_modules/.bin/claude"
 setup_in "$OP/sub" "$OP/node_modules/.bin:$PATH"
 ! ran || fail "setup started a claude inside the work tree enclosing the working directory (a repository outside HOME)"
+# nested work trees outside HOME: the outer one's untracked tools/ is refused too, not only the innermost tree's files
+reset; rm -rf "$T/outer"; mkdir -p "$T/outer/inner/src" "$T/outer/tools"; git -C "$T/outer" init -q; git -C "$T/outer/inner" init -q; mkclaude "$T/outer/tools/claude"
+setup_in "$T/outer/inner/src" "$T/outer/tools:$PATH"
+! ran || fail "setup started a claude under the outer one of two nested work trees"
 # a folder named .agentbus in any case, anywhere
 reset; mkdir -p "$T/pj3/.AGENTBUS/bin"; mkclaude "$T/pj3/.AGENTBUS/bin/claude"
 setup_in "$W" "$T/pj3/.AGENTBUS/bin:$PATH"
@@ -1177,12 +1181,12 @@ mkdir -p "$T/planted"; printf '#!/bin/sh\ntouch "%s"\n' "$T/canary-check" >"$T/p
 run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
 set_tool Stop "'$T/planted/agentbus'"
 got=$(cd "$W" && rows user)
-grep -q "^codex_hooks_tool problem 1 of 4 hook commands run $T/planted/agentbus, not this agentbus" <<<"$got" || fail "check with one forged entry among four: $got"
+grep -q "^codex_hooks_tool stale 1 of 4 hook commands run $T/planted/agentbus, not this agentbus" <<<"$got" || fail "check with one forged entry among four: $got"
 run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
 set_tool all "'$T/planted/agentbus'"
 got=$(cd "$W" && rows user)
 [ ! -e "$T/canary-check" ] || fail "check started the executable a hooks file names"
-grep -q "^codex_hooks_tool problem 4 of 4 hook commands run $T/planted/agentbus, not this agentbus" <<<"$got" || fail "check with a planted agentbus executable (a readable file named agentbus is not this agentbus): $got"
+grep -q "^codex_hooks_tool stale 4 of 4 hook commands run $T/planted/agentbus, not this agentbus" <<<"$got" || fail "check with a planted agentbus executable (a readable file named agentbus is not this agentbus): $got"
 set_tool all "'/nonexistent/agentbus'"
 got=$(cd "$W" && rows user); grep -q "^codex_hooks_tool problem the hooks run /nonexistent/agentbus, which is not an agentbus executable" <<<"$got" || fail "check with a missing executable: $got"
 ok "check: ok after install with the trust row; a planted, forged-in-one-entry or missing executable and a doubled install are problems; nothing the file names is started"
@@ -1193,7 +1197,8 @@ help=$("${AB[@]}" setup --help | tr -s ' \n' '  ')
 grep -qF "the skill and hooks for Claude Code, the AGENTS.md block and hooks for Codex" <<<"$help" || fail "setup help does not mention the hooks: $help"
 grep -qF "claude (skill and hooks) or codex (AGENTS.md block and hooks, then /hooks in Codex to trust them)" <<<"$help" || fail "setup target help does not mention the hooks: $help"
 grep -qF "Codex runs the hooks only after you approve them with /hooks" <<<"$help" || fail "setup help does not mention the trust step: $help"
-"${AB[@]}" --json schema | grep -qF "Install the skill and hooks for Claude Code, or the AGENTS.md block and hooks for Codex" || fail "the setup entry of schema does not mention the hooks"
+schema_out=$("${AB[@]}" --json schema)   # not piped into grep -q: under pipefail an early grep exit can fail the writer
+grep -qF "Install the skill and hooks for Claude Code, or the AGENTS.md block and hooks for Codex" <<<"$schema_out" || fail "the setup entry of schema does not mention the hooks"
 ok "setup --help and schema name the hooks and the trust step"
 
 echo

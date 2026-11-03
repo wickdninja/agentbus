@@ -107,16 +107,21 @@ assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbu
 setup = shape(j('setup', 'claude', '--dry-run'), target=str, scope=str, dry_run=bool, changes=list)
 array(setup['changes'], path=str, action=str, detail=str)
 assert set(shape(j('hooks', 'codex'), hooks=dict)['hooks']) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'}
+doctor = shape(j('doctor'), agentbus=str, path=str, contract=int, checks=list, fail=int, warn=int)
+assert doctor['checks'], doctor
+for check in doctor['checks']:   # scope is there for the checks of a user or project file
+    shape(check, id=str, status=str, detail=str, fix=(str, null), hint=(str, null), **({'scope': str} if 'scope' in check else {}))
 j('--as', 'b', 'claim', 'watch-fixture')
 for after in (False, True):
     for once in ((), ('--once',)):
-        snap = shape(j('watch', *once, after=after), bus=str, directory=str, goal=dict, agents=list, claims=list, context=list, messages=list, counts=dict, omitted=dict)
+        snap = shape(j('watch', *once, after=after), bus=str, directory=str, goal=dict, agents=list, claims=list, context=list, messages=list, unread=dict, counts=dict, omitted=dict)
         shape(snap['omitted'], agents=int, context=int, claims=int, messages=int)
         shape(snap['counts'], agents=int, claims=int, messages=int)
         array(snap['agents'], name=str, role=(str, null), last_seen=str, joined_at=str)
         array(snap['claims'], resource=str, agent=str, purpose=null, expires_at=str)
         array(snap['context'], **fact)
-        array(snap['messages'], **{k: v for k, v in message.items() if k != 'topic'})
+        array(snap['messages'], **message)  # topic too (watch v2, additive)
+        assert snap['unread'] == {'b': 0}, snap['unread']
         assert any(m['body'] == 'ans' and m['reply_to'] == qid for m in snap['messages'])
 visible = inventory(parser) - {(h,) for h in json_module['CONTRACT']['hidden']}  # hidden commands (hook) have no JSON result
 assert seen == visible, ('untested parser commands', visible - seen, 'extra', seen - visible)

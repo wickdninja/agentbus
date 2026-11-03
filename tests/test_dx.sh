@@ -76,7 +76,7 @@ checks = {
     ('claim',): ['Claim lifetime in minutes: 1-10080; default 120. Claim again to renew.'],
     ('read',): ['Maximum messages; default 30. Use -1 for all.'],
     ('status',): ['Limit agents, facts, and claims per section; default 500.', 'Recent messages always shows the latest 10.'],
-    ('init',): ['Existing directory to initialize; default current directory. Run from the installed tool or source clone.'],
+    ('init',): ['Directory to initialize, created (with its parents) if missing; default current directory. Run from the installed tool or source clone.'],
 }
 for args, expected in checks.items():
     text = help_(*args)

@@ -96,7 +96,10 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
 }
 assert set(doc["errors"]) == set(EXPECTED_ERRORS), sorted(set(doc["errors"]) ^ set(EXPECTED_ERRORS))
 # fields every error of the code may carry, when they apply (a refused bus file names itself)
-EXPECTED_OPTIONAL = {"bus_unavailable": ["file"],
+# outcome_unknown: the hold watchdog stopped the command during a COMMIT, so the write may or may not have been saved
+EXPECTED_OPTIONAL = {"bus_unavailable": ["file", "outcome_unknown"],
+                     # an identifier with a control character: the argument that held it
+                     "bad_input": ["field"],
                      # upgrade stopped once a migration committed: what was migrated, its backup, how to finish
                      # and the files the command had already changed (init, upgrade's copy, setup)
                      "interrupted": ["directory", "backup", "migrations", "rerun", "changed"]}
@@ -397,6 +400,9 @@ step("skill", "skill", "--agents-md")
 step("setup", "setup", "claude", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("setup", "setup", "codex", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("hooks", "hooks", "codex")
+# doctor reads only; its config folders point into this test's own temp folder too
+step("doctor", "doctor", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
+step("doctor", "doctor", "--scope", "project", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 LISTINGS = ["who", "inbox", "read", "claims", "ctx get", "ctx history", "log show", "buses"]
 if NEEDS_ENVELOPE:
     step("who", "who")

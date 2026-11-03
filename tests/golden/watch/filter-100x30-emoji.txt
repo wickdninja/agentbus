@@ -1,0 +1,30 @@
+ 🚌 agentbus  ~/src/acme-api                                             1 alert · 1 open question
+  🎯 auth on the new token API                                                            nate · 2h
+
+👥 Agents  n/a                                                                kind: is for messages
+
+🔒 Claims  n/a                                                                kind: is for messages
+
+📌 Facts  n/a                                                                 kind: is for messages
+
+💬 Messages  2 of 9                                                         following · k to browse
+  #6   tests → codex            ❓ question  Is the 401 body part of the contract, or can it …   9m
+  #9   tests → claude           ❓ question  ↳#7 Which signing algorithm should the tokens us…  now
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/kind:ask_                                                                   Enter keep · Esc clear
