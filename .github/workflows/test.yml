@@ -34,6 +34,15 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Pick Python
         run: echo "PYTHON=${{ steps.py.outputs.python-path || '/usr/bin/python3' }}" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Claude Code CLI (tests/test_plugin_manifest.sh runs `claude plugin validate .`, which needs no login)
+        run: |
+          # Exact version, and the registry's integrity hash for it pinned too.
+          test "$(npm view @anthropic-ai/claude-code@2.1.316 dist.integrity)" = "sha512-i3BpzyDkcCPnsa0CSkWgxGPs7WMsyqDkxkqT0SDxyEC5XMIxEmcUmluWRHG9VSeBY8Vyv+l9X34JvJ/Bj54nBQ=="
+          npm install --global @anthropic-ai/claude-code@2.1.316
+          claude --version
       - name: Compile
         run: |
           "$PYTHON" -V

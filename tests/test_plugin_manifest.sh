@@ -143,7 +143,8 @@ ok "five registered commands: exit 0 without python3; SessionStart prints its co
 echo
 echo "TEST 7: claude plugin validate passes (runs when claude is installed; skips only without claude and without CI)"
 if command -v claude >/dev/null 2>&1; then
-  out=$(cd "$ROOT" && claude plugin validate . 2>&1) || fail "claude plugin validate failed: $out"
+  # Needs no login. Its own throwaway home: validate writes ~/.claude and ~/.claude.json, which must never be the caller's.
+  out=$(cd "$ROOT" && HOME="$T/home" CLAUDE_CONFIG_DIR="$T/home/.claude" claude plugin validate . 2>&1) || fail "claude plugin validate failed: $out"
   grep -qF "Validation passed" <<<"$out" || fail "claude plugin validate did not say Validation passed: $out"
   ok "claude plugin validate ."
 elif [ -n "${CI:-}" ]; then

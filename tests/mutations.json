@@ -237,7 +237,7 @@
     "name": "PreToolUse nudges about an unclaimed path every time",
     "file": "bin/agentbus",
     "find": "if own or not peers or not isinstance\\(payload.get\\(\"session_id\"\\), str\\) or not hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\):",
-    "replace": "if own:",
+    "replace": "if own or not peers:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "second unclaimed nudge for the same path"
@@ -258,7 +258,7 @@
     "replace": "HOOK_BUSY_S = 5.0",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "a held bus made a hook wait more than 1 s"
+    "expect": "a held bus made a hook wait longer than its bound"
   },
   {
     "name": "setup claude records a PATH lookup instead of the tool's absolute path",
@@ -303,7 +303,7 @@
     "replace": "if True:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "the hook text does not name agentbus"
+    "expect": "SessionStart text differs"
   },
   {
     "name": "Stop reminds on every turn",
@@ -366,6 +366,6 @@
     "replace": "return claude_plugin_from_files()",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "a project-scope plugin install did not stop setup adding its own hooks"
+    "expect": "missing line:   = hooks   provided by the agentbus plugin; not added"
   }
 ]

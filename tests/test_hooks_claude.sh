@@ -7,7 +7,10 @@ set -euo pipefail
 # reads, prints text a peer wrote, or acts under a name that belongs to another live session.
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); trap 'if [ -n "${HOLD:-}" ]; then kill "$HOLD" 2>/dev/null || true; fi; rm -rf "$T"' EXIT
-case "$T" in /Users/nate/src*) fail "the test folder $T is under ~/src; set TMPDIR elsewhere" ;; esac
+# The hooks write bus files and per-session memory: never under the checkout under test, nor under AGENTBUS_TEST_FORBIDDEN_ROOT.
+TREAL=$(cd "$T" && pwd -P); CHECKOUT=$(cd "$TESTS_DIR/.." && pwd -P)
+case "$TREAL/" in "$CHECKOUT"/*) fail "the test folder $T is inside the checkout; set TMPDIR elsewhere" ;; esac
+case "$TREAL/" in "${AGENTBUS_TEST_FORBIDDEN_ROOT:-/nonexistent-root}"/*) fail "the test folder $T is under AGENTBUS_TEST_FORBIDDEN_ROOT; set TMPDIR elsewhere" ;; esac
 export HOME="$T/home"; mkdir -p "$HOME"
 unset AGENTBUS_HOOKS AGENTBUS_HOOK_DEBUG CLAUDE_ENV_FILE CLAUDE_CONFIG_DIR CLAUDE_PID CLAUDE_PLUGIN_ROOT   # a test that wants one sets it
 FIX="$TESTS_DIR/fixtures/claude_hooks"

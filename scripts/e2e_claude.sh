@@ -10,7 +10,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v claude >/dev/null 2>&1 || { echo "FAIL: claude is not on PATH"; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "FAIL: git is not on PATH"; exit 2; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-case "$(cd "$T" && pwd -P)" in "$HOME/src"*|/Users/*/src*) echo "FAIL: the scratch folder $T is under ~/src; set TMPDIR elsewhere"; exit 2 ;; esac
+TREAL=$(cd "$T" && pwd -P)
+case "$TREAL/" in "$ROOT"/*|"${AGENTBUS_TEST_FORBIDDEN_ROOT:-/nonexistent-root}"/*) echo "FAIL: the scratch folder $T is inside the checkout or AGENTBUS_TEST_FORBIDDEN_ROOT; set TMPDIR elsewhere"; exit 2 ;; esac
 unset AGENTBUS_DB AGENTBUS_AGENT AGENTBUS_HOOKS
 P="$T/proj"; mkdir -p "$P"
 git -C "$P" init -q
