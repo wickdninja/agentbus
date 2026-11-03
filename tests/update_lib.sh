@@ -26,15 +26,23 @@ EOF
   openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1/key.pem" -out "$1/cert.pem" -days 2 -config "$1/ssl.cnf" >/dev/null 2>&1 \
     || fail "openssl could not mint the test certificate"
 }
-# start_server DIR: the fixture server, in the background; DIR/port holds its port when it is up.
+# start_server DIR: the fixture server, in the background. It writes its port to the named pipe DIR/ready when it is
+# listening, and this blocks on that one read (an event, not a poll); a server that dies first is noticed within a second.
 SERVER_PIDS=()
 start_server() {
   mint_cert "$1"
+  rm -f "$1/ready"; mkfifo "$1/ready"
+  exec 7<>"$1/ready"   # read and write end held here, so neither side blocks on opening the pipe
   "$PY" "$SERVER_PY" "$1" >"$1/server.out" 2>&1 &
-  SERVER_PIDS+=($!)
-  local w=0; while [ ! -s "$1/port" ]; do sleep 0.05; w=$((w+1)); [ $w -lt 200 ] || { cat "$1/server.out" >&2; fail "the fixture server did not start"; }; done
+  local pid=$! line="" waited=0
+  SERVER_PIDS+=($pid)
+  until read -r -t 1 -u 7 line; do
+    kill -0 "$pid" 2>/dev/null || { exec 7<&-; cat "$1/server.out" >&2; fail "the fixture server exited before it was listening"; }
+    waited=$((waited+1)); [ $waited -lt 120 ] || { exec 7<&-; cat "$1/server.out" >&2; fail "the fixture server did not start"; }
+  done
+  exec 7<&-
   : >"$1/requests.log"
-  SERVER="$1"; PORT=$(cat "$1/port")
+  SERVER="$1"; PORT=$line
 }
 stop_servers() { local p; for p in ${SERVER_PIDS[@]+"${SERVER_PIDS[@]}"}; do kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true; done; SERVER_PIDS=(); }
 # answer JSON: what the server says to the next requests; reqs: how many it has logged; the log's last line.
