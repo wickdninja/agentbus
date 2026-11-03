@@ -339,7 +339,7 @@
     "replace": "    if False:\n        if not a.no_buses:",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "no exact would run line"
+    "expect": "dry run failed"
   },
   {
     "name": "update: an installer that changed nothing is accepted",
@@ -348,7 +348,7 @@
     "replace": "if False:",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "unchanged:"
+    "expect": "an installer that changed nothing exited 0"
   },
   {
     "name": "update: a hung installer is killed without SIGTERM",
