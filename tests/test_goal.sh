@@ -7,10 +7,10 @@ export HOME="$T/home"; mkdir -p "$HOME"
 export AGENTBUS_DB="$T/bus/bus.db"; mkdir -p "$T/bus"
 cd "$T"
 
-echo "TEST 1: no goal yet says how to set one; JSON is null"
+echo "TEST 1: no goal yet says how to set one; JSON is the object with null values"
 o=$(outof agentbus goal)
 grep -qF 'no goal yet. Set one with: agentbus --as NAME goal "what we are shipping"' <<<"$o" || fail "no-goal hint: $o"
-[ "$(json_ok agentbus --json goal)" = "null" ] || fail "no goal is not JSON null"
+[ "$(json_ok agentbus --json goal)" = '{"contract":1,"goal":null,"set_by":null,"set_at":null}' ] || fail "no goal is not the null-valued goal object"
 ok "an unset goal explains itself"
 
 echo "TEST 2: set, show, JSON, history, and who set it"

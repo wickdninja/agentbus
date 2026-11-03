@@ -103,10 +103,13 @@ q9 = post(db, "scout", "Direct to nobody here", to="ghost", kind="question")    
 check(open_ids(db, "worker") == [q1, q3, q6], "worker's open questions: %s" % open_ids(db, "worker"))
 check(open_ids(db, "scout") == [q1, q3, q5, q6], "scout's open questions: %s" % open_ids(db, "scout"))
 check(open_ids(db) == [q1, q3, q6], "without a name only questions to everyone are open: %s" % open_ids(db))
-out = ok(db, "--as", "worker", "brief")
+whole = ok(db, "--as", "worker", "brief")
+out, others = whole.split("pending between others")   # the open questions are above this line; what waits between others is below it
 check("open questions" in out and "#%d" % q1 in out and "#%d" % q2 not in out and "#%d" % q4 not in out
       and "#%d" % q5 not in out and "#%d" % q9 not in out, "text lists the wrong questions: %r" % out)
 check(out.index("#%d" % q1) < out.index("#%d" % q3) < out.index("#%d" % q6), "questions are not oldest first: %r" % out)
+# a question to another agent by name (q5, and q9 to a name that is not here) waits between others; an answered one does not
+check("#%d" % q5 in others and "#%d" % q9 in others and "#%d" % q2 not in others and "#%d" % q4 not in others, "pending between others is wrong: %r" % others)
 # a reply cycle planted in the table cannot hang or crash the walk
 x = post(db, "lead", "loop a", kind="question")
 y = post(db, "lead", "loop b", kind="question")

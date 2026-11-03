@@ -370,7 +370,7 @@ run_setup claude --json --dry-run
 "$PY" -I - "$OUT" <<'PY'
 import json, sys
 d = json.loads(sys.argv[1])
-assert set(d) == {'target', 'scope', 'dry_run', 'changes'}, d
+assert set(d) == {'contract', 'target', 'scope', 'dry_run', 'changes'} and d['contract'] == 1, d
 assert d['target'] == 'claude' and d['scope'] == 'user' and d['dry_run'] is True, d
 (c,) = d['changes']
 assert set(c) == {'path', 'action', 'detail'} and c['path'].endswith('/.claude/skills/agentbus/SKILL.md') and c['action'] == 'installed', c

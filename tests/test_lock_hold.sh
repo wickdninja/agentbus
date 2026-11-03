@@ -283,7 +283,7 @@ for args in (["--json", "who"], ["who"], ["--json", "status"], ["status"], ["--a
         bad.append((args, e[-300:]))
 # The post notice must use the same deferred stderr path as listing notices.
 o, e = run("--as", "a", "post", "queued handoff", "--to", "absent", "--kind", "handoff")
-if "to absent [handoff]" not in o or e != "agentbus: absent is not on the roster; the message waits for that name.\n":
+if "to absent [handoff]" not in o or not e.startswith("agentbus: absent is not on the roster; the message waits for that name. On the roster: ") or not e.endswith(" more: agentbus who).\n"):
     bad.append(("off-roster post output", o, e))
 for b in bad[:10]:
     print(b)

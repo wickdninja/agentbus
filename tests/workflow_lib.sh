@@ -102,7 +102,7 @@ jcall() {
   cat "$T/replies/$n"
 }
 # jis NAME EXPR: the JSON on stdin, as `r`, must satisfy the python expression EXPR. Listings are the envelope
-# `{"v":1,"items":[...],"has_more":...,"next":...}`, so list expressions read r["items"].
+# `{"contract":1,"items":[...],"has_more":...,"next":...}`, so list expressions read r["items"].
 jis() {
   python3 -c '
 import json, sys
