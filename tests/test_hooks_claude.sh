@@ -718,12 +718,12 @@ PY
 UPS; [ -n "$OUT" ] || fail "a cached answer was not used: an unchanged-identity index was read again"
 mkgenindex "$P/.git/index" 2000 .agentbus/bus.db      # the same file (opened for writing, so the same inode), now longer: a new size and time
 UPS
-# The silence must be the tracked answer, not just silence: the stored answer for this index now says tracked, under the new stamp.
+# The silence must be the tracked answer, not just silence: the stored candidates for this index now hold the bus folder, under the new stamp.
 "$PY" -I - "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)" "$P/.git/index" <<'PY' || fail "a changed index that now tracks the bus was served from the cache (no stored tracked answer for its new stamp, or the hook spoke): out $OUT"
 import glob, json, os, sys
 st = os.lstat(sys.argv[2]); stamp = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
 answers = [json.load(open(f)) for f in glob.glob(sys.argv[1] + "/idx-*.json")]
-assert any(a["stamp"] == stamp and a["tracked"] is True for a in answers), answers
+assert any(a["stamp"] == stamp and b".agentbus".hex() in a["cands"] for a in answers), answers
 PY
 [ -z "$OUT" ] || fail "a changed index that now tracks the bus was served from the cache: out $OUT"
 mkgenindex "$P/.git/index" 2000
@@ -795,6 +795,17 @@ cp "$P/.agentbus/bus.db" "$P/.agentbus/bus.db.new" && mv "$P/.agentbus/bus.db.ne
 printf garbage >"$P/.git/index"
 END other
 [[ " $(roster) " == *" $N "* ]] || fail "SessionEnd trusted a recreated bus.db (a new inode at the same path)"
+# a recorded creation time that differs means another file with a reused inode number (forced here on any system: where the
+# system records no creation time the live value is None, which differs from the recorded one just the same)
+newbus p35g; SS; STATE35="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"
+"$PY" -I - "$STATE35/$(printf '%s' "$SID1" | tr -c 'A-Za-z0-9_-' '_').bus" <<'PY' || fail "could not edit the recorded bus identity"
+import json, sys
+d = json.load(open(sys.argv[1])); assert len(d) == 3, d
+d[2] = 1
+json.dump(d, open(sys.argv[1], "w"))
+PY
+printf garbage >"$P/.git/index"; END other
+[[ " $(roster) " == *" $N "* ]] || fail "SessionEnd trusted a bus.db whose recorded creation time differs (a reused inode number)"
 # the very same file reached through another spelling of the directory still counts, and then needs no index at all
 newbus p35f; PF35="$P"; SS; ln -s "$PF35" "$T/p35-link"
 printf garbage >"$PF35/.git/index"
@@ -819,6 +830,98 @@ PY
   ! ls "$P"/*.reached "$P"/rel/*.reached >/dev/null 2>&1 || fail "a pause spec '$spec' wrote a .reached file into the project"
 done
 ok "empty, relative and missing folders: the hook runs on, nothing is written into the project"
+
+echo
+echo "TEST 37: a bus tracked under another spelling of its name (case- and normalization-insensitive file systems) is refused"
+# Probe the file system, never the platform: does it find "ProbeDir" as "probedir"?
+mkdir -p "$T/ProbeCase"; CI_FS=0; [ -d "$T/probecase" ] && CI_FS=1
+LONGS=$(printf '.agentbu\xc5\xbf'); mkdir -p "$T/lsprobe/$LONGS"; LS_FS=0; [ -d "$T/lsprobe/.agentbus" ] && LS_FS=1
+if [ "$LS_FS" = 1 ]; then
+  # the repo commits ".agentbu<U+017F>/" (long s); on this file system ".agentbus" resolves to it
+  mkdir -p "$T/p37-src"; P="$T/p37-src"; git -C "$P" init -q; (cd "$P" && "${AB[@]}" init . >/dev/null && "${AB[@]}" who >/dev/null && "${AB[@]}" --as peer join --tool t >/dev/null)
+  mkdir -p "$T/p37-o/$LONGS"; git -C "$T/p37-o" init -q; cp -R "$P/.agentbus/." "$T/p37-o/$LONGS/"; gitq "$T/p37-o" add -f "$LONGS"; gitq "$T/p37-o" commit -qm bus
+  git clone -q "$T/p37-o" "$T/p37-c"; P="$T/p37-c"
+  [ -d "$P/.agentbus" ] || fail "the long-s clone does not resolve .agentbus on this file system"
+  before=$(sha "$P/.agentbus/bus.db"); SS; quiet || fail "a bus tracked as .agentbu<long s> was used: rc $RC out $OUT"
+  [ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a bus tracked as .agentbu<long s>"
+  [ -z "$(git -C "$P" status --short | grep -v '^??')" ] || fail "the long-s bus shows modified in git status"
+else
+  echo "this file system does not fold the long s to s; the identity comparison is exercised by the plain cases above"
+fi
+if [ "$CI_FS" = 1 ]; then
+  # the index records "<a umlaut>/.agentbus/..." while the folder on disk is "<A umlaut>"
+  UP=$(printf '\xc3\x84'); LO=$(printf '\xc3\xa4')
+  mkdir -p "$T/p37u-x"; P="$T/p37u-x"; git -C "$P" init -q; (cd "$P" && "${AB[@]}" init . >/dev/null && "${AB[@]}" who >/dev/null && "${AB[@]}" --as peer join --tool t >/dev/null)
+  mkdir -p "$T/p37u-o"; git -C "$T/p37u-o" init -q; printf hi >"$T/p37u-readme"
+  gitq "$T/p37u-o" update-index --add --cacheinfo "100644,$(git -C "$T/p37u-o" hash-object -w "$T/p37u-readme"),$UP/readme"
+  for f in VERSION bin/agentbus bus.db; do m=100644; [ "$f" = bin/agentbus ] && m=100755
+    gitq "$T/p37u-o" update-index --add --cacheinfo "$m,$(git -C "$T/p37u-o" hash-object -w "$P/.agentbus/$f"),$LO/.agentbus/$f"; done
+  gitq "$T/p37u-o" commit -qm bus; git clone -q "$T/p37u-o" "$T/p37u-c" 2>/dev/null || true
+  P="$T/p37u-c/$UP"; [ -d "$P/.agentbus" ] || fail "the umlaut clone has no .agentbus on this file system"
+  before=$(sha "$P/.agentbus/bus.db"); SS; quiet || fail "a bus tracked under a differently cased parent folder was used: rc $RC out $OUT"
+  [ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a bus tracked under a differently cased parent folder"
+else
+  echo "this file system is case-sensitive; the differently cased parent folder cannot occur here"
+fi
+# controls: a plain tracked .agentbus is refused, an untracked one works (any file system)
+newbus p37plain; gitq "$P" add -f .agentbus; before=$(sha "$P/.agentbus/bus.db"); SS; quiet || fail "a plain tracked .agentbus was used: out $OUT"
+[ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a plain tracked .agentbus"
+newbus p37free; SS; [ -n "$OUT" ] || fail "an untracked .agentbus was refused: rc $RC err $ERR"
+# a bus folder under any other spelling of the name is foreign, even untracked (init always makes the exact name)
+if [ "$CI_FS" = 1 ]; then
+  newbus p37spell; mv "$P/.agentbus" "$P/.AgentBus"
+  [ -d "$P/.agentbus" ] || fail "setup: the renamed folder does not resolve as .agentbus on this file system"
+  SS; quiet || fail "a bus folder spelled .AgentBus on disk was used: rc $RC out $OUT"
+fi
+ok "tracked or foreign spellings are refused whatever the file system folds; a plain tracked bus is refused; an untracked one works"
+
+echo
+echo "TEST 38: a hard link to the joined bus.db in another project does not pass for the joined bus"
+newbus p38a; PA38="$P"; N=$(dname "$SID1"); SS
+[[ " $(roster) " == *" $N "* ]] || fail "setup: SessionStart did not join $N"
+newbus p38b; PB38="$P"; rm -f "$PB38/.agentbus/bus.db" "$PB38/.agentbus/bus.db-wal" "$PB38/.agentbus/bus.db-shm"
+ln "$PA38/.agentbus/bus.db" "$PB38/.agentbus/bus.db"; gitq "$PB38" add -f .agentbus
+before=$(sha "$PA38/.agentbus/bus.db")
+HCWD="$PB38" END other
+unset HCWD; rm -f "$PB38/.agentbus/bus.db"          # A's own link count is back to 1, so A's bus can be read again
+P="$PA38"; [ "$(sha "$PA38/.agentbus/bus.db")" = "$before" ] || fail "SessionEnd wrote through a hard link into a tracked project"
+[[ " $(roster) " == *" $N "* ]] || fail "SessionEnd left through a hard link (the inode matched, nothing else stopped it)"
+ok "a hard-linked bus.db is refused by the link count even though its inode matches"
+
+echo
+echo "TEST 39: the name and identity rules, shown directly (they do not depend on the file system folding names)"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T" <<'PY' || fail "the name and identity rules"
+import os, runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_names")
+cands = m["hook_index_candidate_paths"]
+long_s, up, lo = "ſ".encode(), "Ä".encode(), "ä".encode()
+got = cands([(b".agentbu" + long_s + b"/bus.db", 0o100644), (lo + b"/.agentbus/bus.db", 0o100644), (b"x/.AgentBus/y", 0o100644),
+             (b"src/main.c", 0o100644), (b"docs/agentbus.md", 0o100644), (b"sparse/", 0o040000), (up + b"/readme", 0o100644)])
+assert b".agentbu" + long_s in got, got                  # folds to .agentbus
+assert lo + b"/.agentbus" in got and b"x/.AgentBus" in got and b"sparse" in got, got
+assert not any(g in got for g in (b"src/main.c", b"docs/agentbus.md", up + b"/readme")), got
+# a bus folder whose entry name on disk is not exactly .agentbus is foreign
+d = sys.argv[2] + "/names"; os.makedirs(d + "/.agentbus")
+real = os.listdir
+os.listdir = lambda p: [os.fsencode(".AgentBu") + long_s] if os.fsdecode(p) == os.path.realpath(d) else real(p)
+assert m["hook_untracked"](d) is False
+os.listdir = real
+assert m["hook_untracked"](d) is True
+PY
+# the shortcut for a plain index must not say "nothing here" for a name that only folds to .agentbus
+mkdir -p "$T/quick/.git"; mkgenindex "$T/quick/.git/index" 3 "$(printf '.agentbu\xc5\xbf/bus.db')"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index shortcut said nothing was there for a long-s bus folder name"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_quick")
+assert m["hook_index_quick"]({"gitdir": sys.argv[2] + "/.git"}) is None
+PY
+mkgenindex "$T/quick/.git/index" 3
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/quick" <<'PY' || fail "the index shortcut did not clear an index with no bus folder name in it"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_quick")
+assert m["hook_index_quick"]({"gitdir": sys.argv[2] + "/.git"}) is False
+PY
+ok "folded spellings are candidates; look-alikes are not; a foreign spelling of the folder is refused; the shortcut keeps long-s names"
 
 echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"

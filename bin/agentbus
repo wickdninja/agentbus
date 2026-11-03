@@ -6024,9 +6024,9 @@ def hook_index_stamp(path):
     return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
 
 
-def hook_index_quick(repo, want):
-    """False when a plain index (version 2 or 3, not split, not sparse) cannot hold `want` at all: its paths are stored
-    whole, so the folder's name appearing nowhere in the lower-cased file proves nothing under it is tracked, without parsing
+def hook_index_quick(repo):
+    """False when a plain index (version 2 or 3, not split, not sparse) cannot hold a bus folder at all: its paths are stored
+    whole, so ".agentbu" appearing nowhere in the lower-cased file proves no entry is in one, without parsing
     a million entries. None when this shortcut does not apply (it appears, or the index is version 4, split or sparse) and
     the entries must be read. A file that is not an index at all raises, like the full read."""
     data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
@@ -6037,7 +6037,9 @@ def hook_index_quick(repo, want):
             return None
         raise ValueError("signature or version")
     low = data[:-size].lower()
-    if b"link" in low or b"sdir" in low or want[:-1] in low:
+    # A component that folds to .agentbus is ASCII except possibly the last letter (U+017F, long s, is the only other
+    # character whose Unicode case folding is a letter of that name), so ".agentbu" appears in every candidate.
+    if b"link" in low or b"sdir" in low or b".agentbu" in low:
         return None
     return False
 
@@ -6066,46 +6068,88 @@ def hook_index_entries(repo):
     return names, shared_stamp
 
 
-def hook_index_tracks(repo, prefix):
-    """True when the repository's index lists anything under `prefix` (bytes, ending in /), a file or link named like
-    the folder, or a collapsed folder (sparse index) holding it. A split index is read with its shared index.
-    The index file being absent means nothing is tracked yet; any other trouble raises. The answer is remembered
-    (hook_index_cached) while the index file is unchanged, so a big index is not read again by every event."""
+def hook_fold(name):
+    """A path component as a case-insensitive, normalization-insensitive file system sees it."""
+    return unicodedata.normalize("NFC", os.fsdecode(name)).casefold()
+
+
+HOOK_CANDIDATES_MAX = 2000  # more bus-looking index entries than this and the answer is "tracked"
+
+
+def hook_index_candidate_paths(names):
+    """The stored paths an index could hold a bus folder under, picked loosely (by folded name, not exact bytes): for each
+    entry the path up to its first component that folds to .agentbus, and every collapsed folder of a sparse index. The
+    file system decides afterwards which of them is the bus folder (hook_tracks_by_identity)."""
+    found = set()
+    for name, mode in names:
+        if mode == 0o040000:
+            found.add(name.rstrip(b"/"))
+            continue
+        if b"agentbu" not in name.lower():
+            continue      # a component that folds to .agentbus has ASCII ".agentbu" in it
+        parts = name.split(b"/")
+        for i, part in enumerate(parts):
+            if hook_fold(part) == ".agentbus":
+                found.add(b"/".join(parts[:i + 1]))
+                break
+        if len(found) > HOOK_CANDIDATES_MAX:
+            break
+    return sorted(found)
+
+
+def hook_index_tracks(repo, folder):
+    """True when the repository's index lists the bus folder `folder` (its realpath) or anything in or above it that the
+    index collapses (sparse index): decided by what the file system says each stored path is, not by how the name is
+    spelled, because case- and normalization-insensitive file systems (APFS, NTFS) resolve other spellings to the same
+    folder. A split index is read with its shared index. The index file being absent means nothing is tracked yet; any
+    other trouble raises. The candidate list is remembered while the index file is unchanged, so a big index is not read
+    again by every event; the file system questions are asked afresh."""
     index = os.path.join(repo["gitdir"], "index")
     try:
         stamp = hook_index_stamp(index)
     except FileNotFoundError:
         return False
-    cache = "idx-" + hashlib.sha256(b"\0".join((os.fsencode(repo["gitdir"]), prefix))).hexdigest()[:20] + ".json"
+    cache = "idx-" + hashlib.sha256(os.fsencode(repo["gitdir"])).hexdigest()[:20] + ".json"
     cached = hook_state_get(cache)
+    cands = None
     try:
         saved = json.loads(cached) if cached else None
-        if (isinstance(saved, dict) and saved.get("stamp") == stamp and isinstance(saved.get("tracked"), bool)
+        if (isinstance(saved, dict) and saved.get("stamp") == stamp and isinstance(saved.get("cands"), list)
                 and (saved.get("shared") is None or (isinstance(saved["shared"], list) and len(saved["shared"]) == 5
                                                      and hook_index_stamp(saved["shared"][0]) == saved["shared"][1:]))):
-            return saved["tracked"]
+            cands = [bytes.fromhex(x) for x in saved["cands"]]
     except (ValueError, OSError, TypeError):
-        pass
-    want = prefix.lower()
-    shared_stamp = None
-    quick = hook_index_quick(repo, want)
-    if quick is not None:
-        names = []
-        tracked = quick
-    else:
-        names, shared_stamp = hook_index_entries(repo)
-        tracked = False
-    for name, mode in names:
-        n = name.lower()
-        if n.startswith(want) or n == want[:-1] or (mode == 0o040000 and n.endswith(b"/") and want.startswith(n)):
-            tracked = True
+        cands = None
+    if cands is None:
+        shared_stamp = None
+        if hook_index_quick(repo) is False:
+            cands = []
+        else:
+            names, shared_stamp = hook_index_entries(repo)
+            cands = hook_index_candidate_paths(names)
+        if hook_index_stamp(index) == stamp:  # unchanged while we read it
+            try:
+                hook_state_put(cache, json.dumps({"stamp": stamp, "shared": shared_stamp, "cands": [c.hex() for c in cands]}))
+            except (OSError, SystemExit):
+                pass
+    if len(cands) > HOOK_CANDIDATES_MAX:
+        return True
+    ids, here, top = set(), os.path.realpath(folder), repo["top"]
+    while True:
+        st = os.lstat(here)
+        ids.add((st.st_dev, st.st_ino))
+        if here == top or os.path.dirname(here) == here:
             break
-    if hook_index_stamp(index) == stamp:  # unchanged while we read it
+        here = os.path.dirname(here)
+    base = os.fsencode(top)
+    for cand in cands:
         try:
-            hook_state_put(cache, json.dumps({"stamp": stamp, "shared": shared_stamp, "tracked": tracked}))
-        except (OSError, SystemExit):
-            pass
-    return tracked
+            st = os.lstat(os.path.join(base, cand))
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) in ids:
+            return True
+    return False
 
 
 def hook_read_file_exact(path):
@@ -6131,19 +6175,32 @@ def hook_read_file_exact(path):
 
 def hook_untracked(directory):
     """True when the .agentbus under `directory` is not something git tracks. A clone can commit a whole bus, so a
-    tracked one is not the user's. The index decides (an exclude rule proves nothing: every command writes it);
-    when the index cannot be read the answer is no. Nothing here runs git."""
+    tracked one is not the user's. The index decides, by file identity (an exclude rule proves nothing: every command
+    writes it); when the index cannot be read the answer is no. A bus folder whose name on disk is not exactly .agentbus
+    (the file system found it under another spelling) is foreign: `agentbus init` always makes that exact name.
+    Nothing here runs git."""
+    folder = os.path.join(os.path.realpath(directory), ".agentbus")
+    try:
+        if b".agentbus" not in os.listdir(os.fsencode(os.path.dirname(folder))):
+            return False
+    except OSError:
+        return False
     repo = hook_git_layout(directory)
     if repo is None:
         return True  # not in a repository: nothing can be tracked
     if repo is False:
         return False
-    rel = os.path.relpath(os.path.realpath(directory), repo["top"])
-    prefix = os.fsencode(("" if rel == "." else rel.replace(os.sep, "/") + "/") + ".agentbus/")
     try:
-        return not hook_index_tracks(repo, prefix)
+        return not hook_index_tracks(repo, folder)
     except (OSError, ValueError, MemoryError):
         return False
+
+
+def hook_birth(st):
+    """When the file was created, in ns, where the system records it (macOS, the BSDs), else None: with the inode it tells a
+    file from a later one that reused its number."""
+    born = getattr(st, "st_birthtime", None)
+    return None if born is None else int(born * 1e9)
 
 
 def hook_find_bus(payload, joined_id=None):
@@ -6167,7 +6224,8 @@ def hook_find_bus(payload, joined_id=None):
         # session whose working directory moved to another project, a bus.db recreated or a link planted gets the full check.
         try:
             st = os.lstat(path)
-            same = joined_id is not None and (st.st_dev, st.st_ino) == tuple(joined_id)
+            same = (joined_id is not None and (st.st_dev, st.st_ino) == tuple(joined_id[:2])
+                    and (joined_id[2] is None or joined_id[2] == hook_birth(st)))
         except OSError:
             same = False
         if not (same or hook_untracked(directory)):
@@ -6304,7 +6362,7 @@ def hook_session_start(payload):
         hook_state_prune()
         hook_state_put(hook_state_key(sid, ".name"), name)
         st = os.lstat(db)
-        hook_state_put(hook_state_key(sid, ".bus"), json.dumps([st.st_dev, st.st_ino]))
+        hook_state_put(hook_state_key(sid, ".bus"), json.dumps([st.st_dev, st.st_ino, hook_birth(st)]))
         pid = hook_process_id()
         if pid and (payload.get("source") not in ("clear", "fork", "compact") or hook_state_get(f"proc-{pid}.name") is None):
             hook_state_put(f"proc-{pid}.name", name)
@@ -6465,7 +6523,8 @@ def hook_session_end(payload):
         return None  # /clear starts a new session in this process, which keeps the name, its claims and its mail
     try:
         joined_id = json.loads(hook_state_get(hook_state_key(sid, ".bus")) or "null")
-        joined_id = tuple(joined_id) if isinstance(joined_id, list) and len(joined_id) == 2 and all(isinstance(x, int) for x in joined_id) else None
+        joined_id = tuple(joined_id) if (isinstance(joined_id, list) and len(joined_id) == 3 and all(isinstance(x, int) for x in joined_id[:2])
+                                         and (joined_id[2] is None or isinstance(joined_id[2], int))) else None
     except ValueError:
         joined_id = None
     found = hook_find_bus(payload, joined_id=joined_id)

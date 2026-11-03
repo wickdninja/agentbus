@@ -601,5 +601,59 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "a hook accepts a bus folder under any spelling of its name",
+    "file": "bin/agentbus",
+    "find": "if b\"\\.agentbus\" not in os\\.listdir\\(os\\.fsencode\\(os\\.path\\.dirname\\(folder\\)\\)\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the name and identity rules"
+  },
+  {
+    "name": "the index candidates are picked by exact bytes",
+    "file": "bin/agentbus",
+    "find": "if hook_fold\\(part\\) == \"\\.agentbus\":",
+    "replace": "if part == b\".agentbus\":",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the name and identity rules"
+  },
+  {
+    "name": "a bus is tracked only when an index name matches by identity... never",
+    "file": "bin/agentbus",
+    "find": "        if \\(st\\.st_dev, st\\.st_ino\\) in ids:\\n            return True",
+    "replace": "        if False:\n            return True",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "the index shortcut misses a bus folder spelled with a long s",
+    "file": "bin/agentbus",
+    "find": "b\"\\.agentbu\" in low",
+    "replace": "b\".agentbus\" in low",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the index shortcut said nothing was there"
+  },
+  {
+    "name": "SessionEnd ignores a creation time that differs from the recorded one",
+    "file": "bin/agentbus",
+    "find": "and \\(joined_id\\[2\\] is None or joined_id\\[2\\] == hook_birth\\(st\\)\\)\\)",
+    "replace": "and True)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "recorded creation time differs"
+  },
+  {
+    "name": "a hard-linked bus.db is opened (the link count check is dropped)",
+    "file": "bin/agentbus",
+    "find": "    if kind == \"file\" and st\\.st_nlink != 1:\\n        die\\(f\"refusing \\{path\\}: it has \\{st\\.st_nlink\\} hard links\"[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "hard link"
   }
 ]
