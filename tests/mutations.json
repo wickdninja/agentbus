@@ -223,5 +223,23 @@
     "count": 1,
     "run": "tests/test_planted.sh",
     "expect": "database disk image is malformed"
+  },
+  {
+    "name": "wait_exit never gives up on a stalled command",
+    "file": "tests/lib.sh",
+    "find": "if \\[ \"\\$SECONDS\" -ge \"\\$end\" \\]; then kill_tree \"\\$pid\"; fail \"\\$what: still running",
+    "replace": "if [ \"$SECONDS\" -ge 999999999 ]; then kill_tree \"$pid\"; fail \"$what: still running",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "hung to the cap with a command that never finishes"
+  },
+  {
+    "name": "wait_marker keeps waiting on a command that already exited",
+    "file": "tests/lib.sh",
+    "find": "    if ! kill -0 \"\\$pid\" 2>/dev/null; then\\n      WAIT_RC=0; wait \"\\$pid\" \\|\\| WAIT_RC=\\$\\?\\n      \\[ -e \"\\$file\" \\]",
+    "replace": "    if false; then\\n      WAIT_RC=0; wait \"$pid\" || WAIT_RC=$?\\n      [ -e \"$file\" ]",
+    "count": 1,
+    "run": "tests/test_lock_hold_stall.sh",
+    "expect": "the early exit was not named"
   }
 ]

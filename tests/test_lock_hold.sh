@@ -10,18 +10,18 @@ export AGENTBUS_DB="$T/bus.db"
 agentbus --as a join --tool t >/dev/null
 agentbus --as b join --tool t >/dev/null
 
-# other_post_while ALIVE_PID: a second agent's post must land while ALIVE_PID is still blocked.
+# Every wait below ends at a deadline (HOLD_TEST_WAIT_S, default 120 s, well past the bus's own 15 s busy limit and its
+# 8 s hold limit) and a failure names the step, so a stall fails in seconds rather than at run_all's 600 s cap (issue #17).
+W=${HOLD_TEST_WAIT_S:-120}
+
+# other_post_while ALIVE_PID WHAT: a second agent's post must land while ALIVE_PID is still blocked. If the blocked
+# command held the bus the post would fail busy after 15 s, which is the failure this reports.
 other_post_while() {
   local blocked=$1 what=$2
   agentbus --as b post "other agent during $what" >"$T/o2" 2>"$T/e2" & local p2=$!
-  local w=0
-  while kill -0 "$p2" 2>/dev/null; do
-    sleep 0.05; w=$((w+1)); [ $w -lt 200 ] || break   # 10 s, well inside the 15 s busy limit
-  done
+  wait_exit "$p2" "$W" "$what: another agent's post"
   kill -0 "$blocked" 2>/dev/null || fail "$what: the blocked command finished early; the test proved nothing"
-  local rc=0; kill -0 "$p2" 2>/dev/null && { kill "$p2"; rc=124; }
-  wait "$p2" || rc=$?
-  [ "$rc" = 0 ] || fail "$what: another agent's post failed while it was blocked (rc $rc): $(cat "$T/e2")"
+  [ "$WAIT_RC" = 0 ] || fail "$what: another agent's post failed while it was blocked (rc $WAIT_RC): $(cat "$T/e2")"
 }
 
 echo "TEST 1: post - reading a stalled FIFO does not hold the bus"
@@ -30,12 +30,15 @@ for cmd in "post -" "ctx set k -" "log add note -"; do
   rm -f "$T/in"; mkfifo "$T/in"
   n=$((n+1)); P="$T/pause1-$n"; mkdir -p "$P"; touch "$P/before-stdin-read.go"   # mark, never stop
   AGENTBUS_TEST_PAUSE="before-stdin-read=$P" agentbus --as a $cmd <"$T/in" >"$T/o1" 2>"$T/e1" & P1=$!
-  exec 3>"$T/in"          # a writer that has sent nothing yet
+  # A writer that has sent nothing yet. Read-write, so the open never waits for a reader: a command that died
+  # before opening its stdin can no longer leave this open blocked forever (wait_marker below reports it).
+  exec 3<>"$T/in"
   # Proof the command is at its stdin read: anything it opened before reading is open now.
-  wait_for "$P/before-stdin-read.reached"
+  wait_marker "$P/before-stdin-read.reached" "$P1" "$W" "$cmd reaching its stdin read" "$T/e1"
   other_post_while $P1 "$cmd from a stalled stdin"
   printf 'late input for %s\n' "$cmd" >&3; exec 3>&-
-  wait $P1 || fail "$cmd failed after its input arrived: $(cat "$T/e1")"
+  wait_exit "$P1" "$W" "$cmd after its input arrived"
+  [ "$WAIT_RC" = 0 ] || fail "$cmd failed after its input arrived: $(cat "$T/e1")"
 done
 [ "$(outof agentbus --json read | python3 -c 'import json,sys; print(sum(r["body"]=="late input for post -" for r in json.load(sys.stdin)["items"]))')" = 1 ] || fail "stdin body not posted"
 [ "$(outof agentbus --json ctx get k | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')" = "late input for ctx set k -" ] || fail "stdin ctx value not set"
