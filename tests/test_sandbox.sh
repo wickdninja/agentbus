@@ -6,7 +6,42 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 [ "$(uname)" = Darwin ] || skip_platform not-macos "sandbox-exec is macOS only"
 [ -x /usr/bin/sandbox-exec ] || skip_platform no-sandbox-exec "/usr/bin/sandbox-exec is missing"
-T=$(mktemp -d); T=$(cd "$T" && pwd -P); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
+# A short private root, whatever TMPDIR is: a unix socket's path must fit in 104 bytes, and macOS's own TMPDIR
+# (/var/folders/.../T/, nested further by the runner) made every bind here fail with "AF_UNIX path too long".
+T=$(command mktemp -d /tmp/abs.XXXXXX); T=$(cd "$T" && pwd -P); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
+# sockop bind|connect PATH [TEXT]: exit 0 when it worked, 1 when the sandbox refused it (EPERM or EACCES),
+# 2 for any other error. A probe counts as denied only on 1, so a path that is too long fails the test
+# instead of passing it as a denial.
+cat > "$T/sockop.py" <<'PY'
+import socket, sys
+op, path = sys.argv[1], sys.argv[2]
+if len(path.encode()) >= 104:
+    sys.stderr.write("sockop: socket path too long (%d bytes): %s\n" % (len(path.encode()), path)); sys.exit(2)
+try:
+    c = socket.socket(socket.AF_UNIX); c.settimeout(3)
+    if op == "bind":
+        c.bind(path)
+    else:
+        c.connect(path)
+        if len(sys.argv) > 3:
+            c.sendall(sys.argv[3].encode())
+except PermissionError:
+    sys.exit(1)
+except OSError as e:
+    sys.stderr.write("sockop: %s %s: %s\n" % (op, path, e)); sys.exit(2)
+PY
+# sock_denied PROFILE OP PATH [TEXT]: true when the sandbox refused the socket op; fails the test on any
+# other error.
+sock_denied() {
+  local rc=0; /usr/bin/sandbox-exec -f "$1" "$PY" "$T/sockop.py" "${@:2}" 2>"$T/sockop.err" || rc=$?
+  [ "$rc" != 2 ] || fail "socket probe broke, not refused: $(cat "$T/sockop.err")"
+  [ "$rc" = 1 ]
+}
+# The probe itself: a path too long for a socket is an error (2), never a refusal (1). Bug it catches: under a
+# long TMPDIR every socket probe failed on the path, and a denial check would have passed on that failure.
+long="$T/$(printf 'x%.0s' $(seq 120))"; rc=0; "$PY" "$T/sockop.py" bind "$long" 2>/dev/null || rc=$?
+[ "$rc" = 2 ] || fail "sockop: a too-long socket path gave $rc, not 2"
+[ "${#T}" -lt 40 ] || fail "the test root $T is too long for socket paths under it"
 R="$T/repo"; mkrepo "$R"; agentbus init "$R" >/dev/null
 B="$R/.agentbus"; echo keep > "$T/victim"
 LT="$T/lanetmp"; mkdir -p "$LT"   # a real lane always has some writable dir outside the bus
@@ -124,11 +159,11 @@ ok "RENAME_SWAP and rename of a pre-existing symlink into the bus folder denied;
 echo "TEST: no FIFO, socket or device node can be made anywhere, or moved into the bus folder"
 # Bug it catches: the profile allowed mkfifo, and a lane looping mkfifo/rm at bus.db-journal made
 # SQLite's own open of a hot journal block forever with the bus locked (10 of 30 commands hung).
-mksock() { "$PY" -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$1"; }
+mksock() { "$PY" "$T/sockop.py" bind "$1" || fail "could not make the test's own socket $1"; }
 for d in "$B" "$LT"; do
   if lane mkfifo "$d/bus.db-journal" 2>/dev/null; then fail "FIFO created in $d"; fi
   [ ! -e "$d/bus.db-journal" ] || fail "$d/bus.db-journal exists after a refused mkfifo"
-  if lane "$PY" -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$d/sock" 2>/dev/null; then fail "socket created in $d"; fi
+  sock_denied "$T/lane.sb" bind "$d/sock" || fail "socket created in $d"
   [ ! -e "$d/sock" ] || fail "$d/sock exists after a refused bind"
 done
 # Device nodes need root before any sandbox rule is reached, so only the rule's presence is
@@ -333,23 +368,17 @@ while time.time() < end:
         f.write(data + b"\n")
     c.close()
 PY
-cat > "$T/conn.py" <<'PY'
-import socket, sys
-c = socket.socket(socket.AF_UNIX); c.settimeout(3); c.connect(sys.argv[1])
-if len(sys.argv) > 2:
-    c.sendall(sys.argv[2].encode())
-PY
 "$PY" "$T/listen.py" "$T/out/sock" "$T/out/got" & LISTENER=$!
 for _ in $(seq 100); do [ -S "$T/out/sock" ] && break; sleep 0.05; done
 [ -S "$T/out/sock" ] || fail "the test's listener did not start"
-if nl "$PY" "$T/conn.py" "$T/out/sock" from-lane 2>/dev/null; then fail "a lane connected to a unix socket outside the grant"; fi
-/usr/bin/sandbox-exec -f "$T/narrow-no-socket-rule.sb" "$PY" "$T/conn.py" "$T/out/sock" from-control || fail "control: no connect even without the socket rule"
+sock_denied "$T/narrow.sb" connect "$T/out/sock" from-lane || fail "a lane connected to a unix socket outside the grant"
+/usr/bin/sandbox-exec -f "$T/narrow-no-socket-rule.sb" "$PY" "$T/sockop.py" connect "$T/out/sock" from-control || fail "control: no connect even without the socket rule"
 for _ in $(seq 60); do grep -q from-control "$T/out/got" 2>/dev/null && break; sleep 0.05; done
 kill "$LISTENER" 2>/dev/null || true; wait "$LISTENER" 2>/dev/null || true
 grep -q from-control "$T/out/got" || fail "control: the listener got nothing"
 ! grep -q from-lane "$T/out/got" || fail "the listener got the lane's message"
 # DNS on macOS goes through mDNSResponder's socket: the profile keeps it, and without the allow it is refused.
-nl "$PY" "$T/conn.py" /private/var/run/mDNSResponder || fail "the profile refuses mDNSResponder's socket (DNS)"
-if /usr/bin/sandbox-exec -f "$T/narrow-no-dns-allow.sb" "$PY" "$T/conn.py" /private/var/run/mDNSResponder 2>/dev/null; then fail "control: mDNSResponder reachable without the allow"; fi
+nl "$PY" "$T/sockop.py" connect /private/var/run/mDNSResponder || fail "the profile refuses mDNSResponder's socket (DNS)"
+sock_denied "$T/narrow-no-dns-allow.sb" connect /private/var/run/mDNSResponder || fail "control: mDNSResponder reachable without the allow"
 nl "${AB[@]}" --as worker post "after the socket probes" >/dev/null || fail "narrow: post after the socket probes"
 ok "unix-socket connect outside the grant denied, mDNSResponder allowed; without the rule the connect works"
