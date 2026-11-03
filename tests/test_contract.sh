@@ -431,6 +431,8 @@ step("upgrade", "upgrade", "--dry-run", repo)
 step("demo", "demo")
 step("skill", "skill")
 step("skill", "skill", "--agents-md")
+step("help", "help", "ctx", "set")
+step("completion", "completion", "bash")
 # a dry run writes nothing; the config folders point into this test's own temp folder all the same
 step("setup", "setup", "claude", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("setup", "setup", "codex", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})

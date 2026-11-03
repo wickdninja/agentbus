@@ -17,7 +17,9 @@ is_equal "init output after the version line" "added .agentbus/ to <REPO>/app/.g
 optional: add \`.agentbus/\` to .gitignore to share that rule
 outer bus: <REPO>
 next: cd <REPO>/app
-next: .agentbus/bin/agentbus --as YOUR_NAME join" "$(sed 1d <<<"$got")"
+next: .agentbus/bin/agentbus --as YOUR_NAME join
+next: agentbus setup claude (teaches Claude Code the protocol)
+next: agentbus setup codex (teaches Codex the protocol)" "$(sed 1d <<<"$got")"
 grep -Eq '^installed agentbus .+ into <REPO>/app/\.agentbus/$' <<<"$(sed -n 1p <<<"$got")" || fail "first init line: $(sed -n 1p <<<"$got")"
 APP_DB="$R/app/.agentbus/bus.db"
 mkdir -p "$R/app/src"; cd "$R/app/src"
@@ -45,7 +47,7 @@ assert [c["resource"] for c in json.load(sys.stdin)["items"]] == ["y.txt"]' || f
 say "#1 a -> everyone [note] · <time>
   workspace news" agentbus --up 1 read
 # A missing outer bus is "bus unavailable": exit 3 (see `agentbus schema --json`, exit_codes).
-refuse 3 "agentbus: no bus at --up 2; no such outer bus" agentbus --up 2 who
+refuse 3 "agentbus: no bus at --up 2; no such outer bus. See: agentbus buses" agentbus --up 2 who
 ok "claims and messages never cross buses"
 
 echo "STEP 3: a linked worktree of the repo, inside and outside the workspace, shares the repo's bus"

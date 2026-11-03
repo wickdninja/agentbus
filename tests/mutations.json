@@ -1852,5 +1852,194 @@
     "count": 1,
     "run": "tests/test_example.sh",
     "expect": "the relative AGENTBUS form failed"
+  },
+  {
+    "name": "help CMD prints the root help instead of the command's",
+    "file": "bin/agentbus",
+    "find": "text,\\ label\\ =\\ node\\.format_help\\(\\),\\ \"\\ \"\\.join\\(path\\)\\ or\\ None",
+    "replace": "text, label = build_parser().format_help(), \" \".join(path) or None",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "differs from"
+  },
+  {
+    "name": "a usage error points at agentbus --help, not the command's",
+    "file": "bin/agentbus",
+    "find": "f\"See:\\ \\{see\\ or\\ '\\ '\\.join\\(cmd_words\\(self\\)\\)\\ \\+\\ '\\ \\-\\-help'\\}\"\\)",
+    "replace": "\"See: agentbus --help\")",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "not scoped to its command"
+  },
+  {
+    "name": "hook is listed among the commands",
+    "file": "bin/agentbus",
+    "find": "return\\ \\[n\\ for\\ n\\ in\\ sp\\.choices\\ if\\ n\\ not\\ in\\ hidden_commands\\(\\)\\]\\ if\\ sp\\ else\\ \\[\\]",
+    "replace": "return list(sp.choices) if sp else []",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "help ['hook']"
+  },
+  {
+    "name": "an unknown command is matched against hook too",
+    "file": "bin/agentbus",
+    "find": "unknown_command\\(value,\\ visible_choices\\(self\\),\\ self\\.cmd_path\\)",
+    "replace": "unknown_command(value, list(action.choices), self.cmd_path)",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "an unknown command suggests hook"
+  },
+  {
+    "name": "completion drops the fixed values of a flag (the kinds)",
+    "file": "bin/agentbus",
+    "find": "return\\ list\\(action\\.choices\\ or\\ notes\\.get\\(\"choices\"\\)\\ or\\ \\[\\]\\)\\ or\\ None",
+    "replace": "return list(action.choices or []) or None",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks the kind"
+  },
+  {
+    "name": "bare agentbus is an error, not the guide",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ return\\ GUIDE\\ \\+\\ \"\\\\n\\\\nSee:\\ agentbus\\ \\-\\-help\\\\n\",\\ None",
+    "replace": "        return None",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "bare agentbus: rc"
+  },
+  {
+    "name": "bare ctx and log print nothing",
+    "file": "bin/agentbus",
+    "find": "if\\ subparsers_of\\(group\\)\\ is\\ not\\ None\\ and\\ getattr\\(a,\\ \"action\",\\ None\\)\\ is\\ None:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "bare ctx: rc"
+  },
+  {
+    "name": "a plural count always says claims",
+    "file": "bin/agentbus",
+    "find": "return\\ f\"\\{n\\}\\ \\{word\\}\"\\ \\+\\ \\(\"\"\\ if\\ n\\ ==\\ 1\\ else\\ \"s\"\\)",
+    "replace": "return f\"{n} {word}s\"",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "release --all with one claim"
+  },
+  {
+    "name": "log show prints a join as its stored JSON",
+    "file": "bin/agentbus",
+    "find": "return\\ \"\\ \"\\.join\\(f\"\\{k\\}=\\{v\\}\"\\ for\\ k,\\ v\\ in\\ fields\\.items\\(\\)\\ if\\ v\\ not\\ in\\ \\(None,\\ \"\"\\)\\)\\ or\\ \"\\(no\\ details\\)\"",
+    "replace": "return text",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "log show: join is not readable"
+  },
+  {
+    "name": "log show keeps a dangling colon",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ text\\.endswith\\(\":\"\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ text\\[:\\-1\\]\\.rstrip\\(\\)\\\n",
+    "replace": "    pass\n",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "dangling colon"
+  },
+  {
+    "name": "a claim without a purpose is logged with a trailing colon",
+    "file": "bin/agentbus",
+    "find": "log\\(con,\\ name,\\ \"claim\",\\ f\"\\{res\\}\\ until\\ \\{exp\\}\"\\ \\+\\ \\(f\":\\ \\{purpose\\}\"\\ if\\ purpose\\ else\\ \"\"\\)\\)",
+    "replace": "log(con, name, \"claim\", f\"{res} until {exp}: {purpose or ''}\")",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "stores a dangling colon"
+  },
+  {
+    "name": "the identity error has no example",
+    "file": "bin/agentbus",
+    "find": "die\\(\"say\\ who\\ you\\ are\\ with\\ \\-\\-as\\ NAME\\ or\\ AGENTBUS_AGENT=NAME\\.\\ For\\ example:\\ \"\\ \\+\\ identity_example\\(args\\),\\ \"bad_input\"\\)",
+    "replace": "die(\"say who you are with --as NAME or AGENTBUS_AGENT=NAME\", \"bad_input\")",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks its next step"
+  },
+  {
+    "name": "release without a resource does not point at claims",
+    "file": "bin/agentbus",
+    "find": "see=\"agentbus\\ \\-\\-as\\ NAME\\ claims\"\\)",
+    "replace": "see=None)",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks its next step"
+  },
+  {
+    "name": "init does not suggest setup",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ not\\ setup_detected\\(\\):",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "init does not suggest setup"
+  },
+  {
+    "name": "ctx set takes --limit again",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ else:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ act\\.add_argument\\(\"\\-\\-limit\",\\ type=integer,\\ default=argparse\\.SUPPRESS,\\ metavar=\"N\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ help=\"Maximum\\ facts",
+    "replace": "        if True:\n            act.add_argument(\"--limit\", type=integer, default=argparse.SUPPRESS, metavar=\"N\",\n                             help=\"Maximum facts",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "still takes --limit"
+  },
+  {
+    "name": "a claim conflict shows its purpose bare",
+    "file": "bin/agentbus",
+    "find": "why\\ =\\ f'purpose:\\ \"\\{r\\[\"purpose\"\\]\\}\"'\\ if\\ r\\[\"purpose\"\\]\\ else\\ \"no\\ purpose\\ given\"",
+    "replace": "why = r[\"purpose\"] or \"no purpose given\"",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "does not show purpose"
+  },
+  {
+    "name": "a missing fact is a context key",
+    "file": "bin/agentbus",
+    "find": "f\"no\\ fact\\ named\\ \\{a\\.key\\}\\.\\ List\\ facts\\ with:\\ agentbus\\ ctx\\ get\"",
+    "replace": "f\"no context key {a.key}. List keys with: agentbus ctx get\"",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks its next step"
+  },
+  {
+    "name": "the inherited flags print twice",
+    "file": "bin/agentbus",
+    "find": "blocks\\.append\\(\"INHERITED\\ FLAGS\\\\n\"\\ \\+\\ help_table\\(list\\(INHERITED_FLAGS\\),\\ width\\)\\)",
+    "replace": "blocks.extend([\"INHERITED FLAGS\\\\n\" + help_table(list(INHERITED_FLAGS), width)] * 2)",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "inherited flags are not one short block"
+  },
+  {
+    "name": "an example no longer parses",
+    "file": "bin/agentbus",
+    "find": "\\(\"Claim\\ an\\ issue\",\\ \"agentbus\\ \\-\\-as\\ alice\\ claim\\ issue:42\"\\)",
+    "replace": "(\"Claim an issue\", \"agentbus --as alice claimm issue:42\")",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "example does not parse"
+  },
+  {
+    "name": "a message kind has no meaning",
+    "file": "bin/agentbus",
+    "find": "\"alert\":\\ \"Something\\ needs\\ attention\\ now\",",
+    "replace": "\"alert\": \"\",",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "gives kind alert no meaning"
+  },
+  {
+    "name": "a bad cursor does not say how to get one",
+    "file": "bin/agentbus",
+    "find": "f\"Get\\ one\\ with:\\ \\{first\\},\\ and\\ pass\\ the\\ next\\ it\\ prints\"",
+    "replace": "\"pass the next value\"",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "lacks its next step"
   }
 ]

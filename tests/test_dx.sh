@@ -47,8 +47,8 @@ ok "identity and bus level before and after commands, including ctx/log actions"
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as claude claim src/api/ --purpose review >/dev/null
 exp=$(agentbus --json claims | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["expires_at"])')
-expect_fail "src/api/ is claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
-expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
+expect_fail "src/api/ is claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
+expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"
 
 "$PY" - <<'PY'

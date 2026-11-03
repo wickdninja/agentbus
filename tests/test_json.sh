@@ -112,6 +112,11 @@ shape(j('schema', 'post'), contract=int, agentbus=str, commands=dict, global_arg
 listing(j('buses'), level=int, directory=str, exists=bool, copy_version=(str, null), stale=bool)
 assert shape(j('skill'), text=str)['text'].startswith('---\nname: agentbus\n')
 assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbus\n')
+helped = shape(j('help', 'ctx', 'set'), command=str, text=str)
+assert helped['command'] == 'ctx set' and helped['text'].startswith('usage: agentbus ctx set KEY VALUE'), helped
+assert shape(j('help'), command=null, text=str)['command'] is None
+done = shape(j('completion', 'bash'), shell=str, text=str)
+assert done['shell'] == 'bash' and '_agentbus()' in done['text'], done
 setup = shape(j('setup', 'claude', '--dry-run'), target=str, scope=str, dry_run=bool, changes=list)
 array(setup['changes'], path=str, action=str, detail=str)
 doctor = shape(j('doctor'), agentbus=str, path=str, contract=int, checks=list, fail=int, warn=int)

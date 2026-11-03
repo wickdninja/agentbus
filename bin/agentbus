@@ -32,6 +32,7 @@ import sqlite3  # noqa: E402
 import stat  # noqa: E402
 import struct  # noqa: E402
 import subprocess  # noqa: E402
+import textwrap  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 import unicodedata  # noqa: E402
@@ -524,7 +525,7 @@ CONTRACT = {
         "no_message": {"exit": 1, "retryable": False, "fields": ["id"],
                        "meaning": "There is no message with that id.", "action": "Check the id with read."},
         "no_context_key": {"exit": 1, "retryable": False, "fields": ["key"],
-                           "meaning": "There is no fact with that key.", "action": "List keys with ctx get."},
+                           "meaning": "There is no fact with that key.", "action": "List facts with ctx get."},
         "not_on_roster": {"exit": 1, "retryable": False, "fields": ["agent"],
                           "meaning": "That name has not joined.", "action": "Join first."},
         "name_active": {"exit": 1, "retryable": False, "fields": ["agent", "last_seen_min", "suggested_name"],
@@ -548,7 +549,7 @@ CONTRACT = {
         "schema_newer": {"exit": 3, "retryable": False, "fields": ["bus", "bus_schema", "tool_schema"],
                          "meaning": "The bus is newer than this copy of the tool.", "action": "Use a newer agentbus."},
         "schema_corrupt": {"exit": 3, "retryable": False, "fields": ["bus", "bus_schema"],
-                           "meaning": "bus.db records a schema version no agentbus writes; another tool or a lane changed it.",
+                           "meaning": "bus.db records a schema version no agentbus writes; another tool or an agent changed it.",
                            "action": "Stop and tell the user; restore a backup (docs/how-to/upgrade.md)."},
         "backup_failed": {"exit": 3, "retryable": False, "fields": ["bus", "reason"],
                           "meaning": "The backup before a migration could not be made.", "action": "Free disk space or move the bus."},
@@ -743,6 +744,8 @@ CONTRACT = {
                        _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"}, "objects": {"type": "object"},
                            "error_fields": {"type": "object"}, "errors": {"type": "object"}, "warnings": {"type": "object"}, "exit_codes": {"type": "object"}, "env": {"type": "object"}}), base=_PLAIN_ERRORS),
         "skill": _cmd("Print the bundled skill, or with --agents-md the AGENTS.md block", _o({"text": _STR}), base=_PLAIN_ERRORS),
+        "help": _cmd("Show help for a command, the same text as COMMAND --help", _o({"command": _NSTR, "text": _STR}), base=_PLAIN_ERRORS),
+        "completion": _cmd("Print a tab-completion script for bash, zsh or fish", _o({"shell": _STR, "text": _STR}), base=_PLAIN_ERRORS),
         "setup": _cmd("Install the skill for Claude Code or the AGENTS.md block for Codex",
                       _o({"target": _STR, "scope": _STR, "dry_run": _BOOL,
                           "changes": _list(_o({"path": _STR, "detail": _STR, "action": {"type": "string", "enum": [
@@ -1579,12 +1582,12 @@ def make_target(root):
     if os.path.isdir(root):
         return []
     if os.path.lexists(root):
-        die(f"not a directory: {root}", "bad_input")
+        die(f"not a directory: {root}. Pick a folder: agentbus init DIR", "bad_input")
     near = os.path.dirname(root)
     while not os.path.lexists(near) and near != os.path.dirname(near):
         near = os.path.dirname(near)
     if not os.path.isdir(near):
-        die(f"cannot create {root}: {near} is not a directory", "bad_input")
+        die(f"cannot create {root}: {near} is not a directory. Pick another path: agentbus init DIR", "bad_input")
     if not os.access(near, os.W_OK | os.X_OK):
         die(f"cannot create {root}: {near} is not writable. Create the folder yourself, or pick a path you can write to", "bad_input")
     missing = []
@@ -1603,9 +1606,22 @@ def make_target(root):
     return list(reversed(missing))
 
 
+def setup_detected():
+    """True when this machine's Claude Code or Codex already has agentbus set up (the skill or the AGENTS.md block, in
+    your own config or the current project's). Anything unreadable counts as not detected."""
+    for target in sorted(SETUP_TARGETS):
+        for scope in ("user", "project"):
+            try:
+                if any(code in ("ok", "stale") for _id, code, _detail, _fix in SETUP_TARGETS[target][0].check(scope)):
+                    return True
+            except (OSError, ValueError, KeyError):
+                continue
+    return False
+
+
 def cmd_init(a):
     if is_repo_local_copy():
-        die("init runs from the installed agentbus or a clone of its repo, not a project copy", "bad_input")
+        die("init runs from the installed agentbus or a clone of its repo, not a project copy. Run: agentbus init DIR", "bad_input")
     root = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo or os.getcwd())))
     made = make_target(root)
     info = repo_info(root)
@@ -1642,6 +1658,9 @@ def cmd_init(a):
         say("outer bus: {}", outer)
     say("next: cd {}", root)
     say("next: .agentbus/bin/agentbus --as YOUR_NAME join")
+    if not setup_detected():
+        say("next: agentbus setup claude (teaches Claude Code the protocol)")
+        say("next: agentbus setup codex (teaches Codex the protocol)")
     if a.json:
         print_json({"directory": root, "copy": os.path.join(folder, "bin", "agentbus"), "old": old, "new": new,
                     "exclude_added": added, "gitignore_rule": shared, "outer": outer})
@@ -1690,15 +1709,15 @@ def cmd_upgrade(a):
 
 def _cmd_upgrade(a):
     if is_repo_local_copy():
-        die("upgrade runs from the installed agentbus or a clone of its repo; this is a project copy", "bad_input")
+        die("upgrade runs from the installed agentbus or a clone of its repo; this is a project copy. Run: agentbus upgrade DIR", "bad_input")
     if a.depth < 0:
-        die("--depth must be 0 or more", "bad_input")
+        die("--depth must be 0 or more. For example: agentbus upgrade --all DIR --depth 3", "bad_input")
     if a.all:
         if not a.repo:
             die("upgrade --all needs a directory: agentbus upgrade --all DIR", "bad_input")
         top = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo)))
         if not os.path.isdir(top):
-            die(f"not a directory: {top}", "bad_input")
+            die(f"not a directory: {top}. Pass a folder: agentbus upgrade --all DIR", "bad_input")
         rows = [upgrade_one(d, a.dry_run, top) for d in find_bus_dirs(top, a.depth)]
         if not a.dry_run:
             record_buses(buses=[r["directory"] for r in rows if r["status"] in ("upgraded", "current")])
@@ -2055,7 +2074,7 @@ def selected_bus(up):
         if level == up:
             return directory
     if up:
-        die(f"no bus at --up {up}; no such outer bus", "no_bus")
+        die(f"no bus at --up {up}; no such outer bus. See: agentbus buses", "no_bus")
     die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus")
 
 
@@ -2096,7 +2115,7 @@ def cmd_buses(a):
         if not paths:
             die("no bus here or in any parent folder. Run: agentbus init <dir>", "no_bus")
         if a.up >= len(paths):
-            die(f"no bus at --up {a.up}; no such outer bus", "no_bus")
+            die(f"no bus at --up {a.up}; no such outer bus. See: agentbus buses", "no_bus")
     rows = []
     for level, (directory, db) in enumerate(paths):
         exists = bool(check_node(db, "file"))
@@ -2212,14 +2231,14 @@ def held_too_long_message(path, hold=None, committing=False):
     if committing:
         return (held + " while saving a write, so that write may or may not have been saved. Check the bus before "
                 "repeating the command, or repeat it only with its --request-id. Something slow made the save last "
-                "(a stalled disk, or rows a lane wrote)")
+                "(a stalled disk, or rows an agent wrote)")
     return (held + "; a write still in progress was not saved. Something "
-            "in the bus makes this command slow (a lane can write any rows); check the bus")
+            "in the bus makes this command slow (an agent can write any rows); check the bus")
 
 
 def timed_out_message():
     return (f"a bus query ran for more than {query_budget():g} s and was stopped (a write it was part of "
-            "was rolled back). Something in the bus makes queries this slow; a lane can write any rows")
+            "was rolled back). Something in the bus makes queries this slow; an agent can write any rows")
 
 
 class Bus(sqlite3.Connection):
@@ -2417,7 +2436,7 @@ def schema_state(con):
     check_objects(con)
     have = user_version(con)
     if have < 0 or have > MAX_SCHEMA_VERSION:
-        die(f"bus.db records schema version {have}, which no agentbus writes: another tool or a lane changed it. "
+        die(f"bus.db records schema version {have}, which no agentbus writes: another tool or an agent changed it. "
             "Check the bus, or restore a backup (docs/how-to/upgrade.md)", "schema_corrupt", bus=getattr(con, "shown", con.path),
             bus_schema=have)
     if have > SCHEMA_VERSION:
@@ -3138,7 +3157,7 @@ def check_schema(con, before_setup=False):
     missing = [t for t in TABLES if shapes[t] is None]
     if missing and (not before_setup or len(missing) < len(TABLES)):
         die(f"bus schema is not agentbus's: {'table' if len(missing) == 1 else 'tables'} "
-            f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing. A lane (or another tool) "
+            f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} missing. Another agent (or tool) "
             f"dropped {'it' if len(missing) == 1 else 'them'}; restore the bus from a copy, or move it aside to start a new one", "schema_refused")
     for t in TABLES:
         have = shapes[t]
@@ -3160,7 +3179,7 @@ def check_schema(con, before_setup=False):
 
 
 def unexpected(typ, name):
-    die(f"bus schema is not agentbus's: unexpected {typ} {name}. A lane (or another tool) added it; "
+    die(f"bus schema is not agentbus's: unexpected {typ} {name}. Another agent (or tool) added it; "
         "agentbus does not run schema objects it did not create. Check what it is, then drop it", "schema_refused")
 
 
@@ -3309,7 +3328,7 @@ def id_exhausted(con):
     if not full:
         return None
     return (f"cannot add a row: {'table' if len(full) == 1 else 'tables'} {', '.join(full)} {'has' if len(full) == 1 else 'have'} reached id {MAX_ID} (2**63-1), the largest SQLite "
-            "allows, so every insert into it fails (\"database or disk is full\"). Only a lane writing rows "
+            "allows, so every insert into it fails (\"database or disk is full\"). Only an agent writing rows "
             "directly can get there: check that row, delete it and lower its sqlite_sequence entry"
             + (f". Not an integer in sqlite_sequence, read as one: {', '.join(odd)}" if odd else ""))
 
@@ -3344,12 +3363,12 @@ def norm_resource(resource, strict=True):
     must name the same thing in every worktree). With strict=False (rows planted directly)
     a bad path comes back unchanged instead of exiting."""
     if strict and len(resource) > RESOURCE_MAX:
-        die(f"cannot claim a resource of {len(resource)} characters: at most {RESOURCE_MAX}", "bad_input")
+        die(f"cannot claim a resource of {len(resource)} characters: at most {RESOURCE_MAX}. Claim the folder above it, or use area:NAME", "bad_input")
     if not is_path(resource):
         return resource
     def bad(why):
         if strict:
-            die(f"cannot claim '{resource}': {why}", "bad_input")
+            die(f"cannot claim '{resource}': {why}. For example: agentbus --as NAME claim src/app/ --purpose WHY", "bad_input")
         return resource
     if resource.startswith("/"):
         return bad("use a bus-relative path, not an absolute one")
@@ -3493,7 +3512,7 @@ def ident(args):
 def me(args):
     name = ident(args)
     if not name:
-        die("say who you are with --as NAME or AGENTBUS_AGENT=NAME", "bad_input")
+        die("say who you are with --as NAME or AGENTBUS_AGENT=NAME. For example: " + identity_example(args), "bad_input")
     return name
 
 
@@ -3536,6 +3555,11 @@ def request_reused(token, name, original_id, original, what, same):
 def touch(con, name):
     with immediate(con, record=False):
         con.execute("UPDATE agents SET last_seen=? WHERE name=?", (now(), name))
+
+
+def plural(n, word):
+    """1 claim, 0 claims, 5 claims."""
+    return f"{n} {word}" + ("" if n == 1 else "s")
 
 
 def log(con, agent, action, detail=""):
@@ -3644,7 +3668,10 @@ def make_cursor_text(body):
 def read_cursor(a, text, flag):
     """The row id inside a cursor, refusing (bad_input) any that is not from this command with these filters."""
     def refuse(why):
-        die(f"{flag} needs the next value from a previous page of this same command and filters ({why})", "bad_input")
+        first = {"read": "agentbus --json read", "inbox": "agentbus --as NAME --json inbox --peek",
+                 "ctx history": "agentbus --json ctx history KEY", "log show": "agentbus --json log show"}.get(cursor_command(a), "agentbus --json")
+        die(f"{flag} needs the next value from a previous page of this same command and filters ({why}). "
+            f"Get one with: {first}, and pass the next it prints", "bad_input")
     if not text.startswith(CURSOR_PREFIX):
         refuse("not a cursor")
     payload = text[len(CURSOR_PREFIX):]
@@ -3689,7 +3716,7 @@ def out(args, rows, fmt, more=0, empty=None, earlier=False, unread=False, cursor
             show("... {} more (use --limit)", more, row=True)
 
 
-def read_body(parts, command):
+def read_body(parts, command, empty=None):
     """The body from the arguments, or from stdin when it is exactly `-`. Only `-` reads stdin: an
     agent passing an empty variable gets an empty-body error, never a command waiting on its stdin. Stdin
     is read as bytes; bytes that are not UTF-8 become U+FFFD."""
@@ -3697,10 +3724,10 @@ def read_body(parts, command):
     if body == "-":
         _test_pause("before-stdin-read")
         if sys.stdin is None:
-            die("body is `-` but stdin is closed", "bad_input")
+            die(f'stdin is closed, so there is nothing to read for `-`. Pass the text instead: {command} "text"', "bad_input")
         body = sys.stdin.buffer.read().decode("utf-8", "replace").strip()
     if not body:
-        die(f'empty message. Use {command} "text", or pipe text to {command} -.', "bad_input")
+        die(empty or f'empty message. Use {command} "text", or pipe text to {command} -.', "bad_input")
     return body
 
 
@@ -3831,11 +3858,11 @@ def cmd_leave(con, a):
         paths, total = release_all(con, name)
         gone = con.execute("DELETE FROM agents WHERE name=?", (name,)).rowcount
         if total or gone:  # a second leave changes nothing and writes nothing
-            log(con, name, "leave", f"released {total} claims: {claims_text(paths, total)}")
+            log(con, name, "leave", f"released {plural(total, 'claim')}: {claims_text(paths, total)}")
     if not gone:
         note(f"{name} was not on the roster, so there was nothing to leave.")
     emit(a, {"left": name, "was_joined": bool(gone), "released": paths, "released_count": total},
-         "left as {}, released {} claims", name, total)
+         "left as {}, released {}", name, plural(total, "claim"))
     show_released(a, paths, total)
 
 
@@ -3901,18 +3928,20 @@ def read_inputs(a):
     a._before_id = a._after_id = None
     if getattr(a, "before", None) is not None:
         if a.cmd == "read" and a.since is not None:
-            die("--before and --since cannot be combined: --since pages forward from an id, --before pages back", "bad_input")
+            die("--before and --since cannot be combined: --since pages forward from an id, --before pages back. "
+                "Use one: agentbus read --since ID, or agentbus read --before NEXT", "bad_input")
         a._before_id = read_cursor(a, a.before, "--before")
     if getattr(a, "after", None) is not None:
         if not a.peek:
-            die("--after needs --peek: a consuming inbox continues by running inbox again", "bad_input")
+            die("--after needs --peek: a consuming inbox continues by running inbox again. "
+                "To page without reading: agentbus --as NAME inbox --peek --after NEXT", "bad_input")
         a._after_id = read_cursor(a, a.after, "--after")
     if a.cmd == "ctx" and a.key == "":
-        die("KEY must not be empty. Omit KEY to list facts.", "bad_input")
+        die("KEY must not be empty. List facts with: agentbus ctx get", "bad_input")
     if a.cmd == "ctx" and a.action == "set" and a.key == GOAL_KEY:
         die(f"{GOAL_KEY} is reserved; use: agentbus goal TEXT", "bad_input", field="key")
     if a.cmd == "join" and not HOOK_NAME_RE.fullmatch(me(a)):
-        die(f"'{me(a)}' is not a valid name. Use 1 to 40 letters, digits, dots, underscores or hyphens ([A-Za-z0-9._-]).",
+        die(f"'{me(a)}' is not a valid name. Use 1 to 40 letters, digits, dots, underscores or hyphens ([A-Za-z0-9._-]). Then run: agentbus --as NAME join",
             "bad_input", field="name")
     if a.cmd == "post":
         me(a)
@@ -3921,13 +3950,15 @@ def read_inputs(a):
         a._body = read_body(a.body, "post")
     elif a.cmd == "ctx" and a.action == "set":
         me(a)
-        a._body = read_body(a.value, "ctx set KEY")
+        a._body = read_body(a.value, "ctx set KEY",
+                            'ctx set KEY needs a value. Use: agentbus --as NAME ctx set KEY "VALUE", or pipe text to ctx set KEY -.')
     elif a.cmd == "log" and a.action == "add":
         me(a)
-        a._body = read_body(a.detail, "log add ACTION")
+        a._body = read_body(a.detail, "log add ACTION",
+                            'log add ACTION needs a detail. Use: agentbus --as NAME log add ACTION "DETAIL", or pipe text to log add ACTION -.')
     elif a.cmd == "goal" and a.text:
         me(a)
-        a._body = read_body(a.text, "goal")
+        a._body = read_body(a.text, "goal", 'the goal is empty. Use: agentbus --as NAME goal "TEXT", or pipe text to goal -.')
 
 
 def cmd_post(con, a):
@@ -4087,7 +4118,7 @@ def cmd_ctx(con, a):
         if a.key is not None:
             r = con.execute("SELECT * FROM context WHERE key=?", (a.key,)).fetchone()
             if not r:
-                die(f"no context key {a.key}. List keys with: agentbus ctx get", "no_context_key", key=a.key)
+                die(f"no fact named {a.key}. List facts with: agentbus ctx get", "no_context_key", key=a.key)
             if a.json:
                 print_json(dict(r))
             else:
@@ -4145,7 +4176,7 @@ def cmd_goal(con, a):
 def cmd_claim(con, a):
     name = me(a)
     if a.ttl_min < 1 or a.ttl_min > MAX_TTL_MIN:
-        die(f"--ttl-min must be at least 1 and at most {MAX_TTL_MIN} (a week)", "bad_input")
+        die(f"--ttl-min must be at least 1 and at most {MAX_TTL_MIN} (a week). For example: agentbus --as NAME claim PATH --ttl-min 120", "bad_input")
     res = norm_resource(a.resource)
     exp = datetime.fromtimestamp(time.time() + a.ttl_min * 60, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     released, n_released = [], 0
@@ -4161,7 +4192,7 @@ def cmd_claim(con, a):
                             f"{cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
                             f"WHERE ({where}) AND {live} AND {on_roster} LIMIT 1", [res] + params + [name, t]).fetchone()
             if r:
-                why = r["purpose"] or "no purpose given"
+                why = f'purpose: "{r["purpose"]}"' if r["purpose"] else "no purpose given"
                 next_step = (f" Do not edit it yet. Ask {r['agent']} with post --to {r['agent']} "
                              "--kind question, or choose another resource.")
                 if not r["same"]:
@@ -4174,7 +4205,7 @@ def cmd_claim(con, a):
             if con.execute("SELECT 1 FROM agents WHERE name=(SELECT agent FROM claims WHERE resource=CAST(? AS TEXT))",
                            (raw,)).fetchone():
                 die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {r['expires_at']} "
-                    f"({r['purpose'] or 'no purpose given'}). Do not edit it yet. "
+                    f"({'purpose: ' + chr(34) + r['purpose'] + chr(34) if r['purpose'] else 'no purpose given'}). Do not edit it yet. "
                     f"Ask {r['agent']} with post --to {r['agent']} --kind question, or choose another resource.",
                     "claim_conflict", resource=res, holder=r['agent'], expires_at=r['expires_at'], purpose=r['purpose'])
         for raw, r in odd:
@@ -4209,7 +4240,7 @@ def cmd_claim(con, a):
             "claimed_at=excluded.claimed_at, expires_at=excluded.expires_at",
             (res, name, purpose, claimed_at, exp))
         if not own or own["purpose"] != purpose:  # a renewal that changes nothing is not news
-            log(con, name, "claim", f"{res} until {exp}: {purpose or ''}")
+            log(con, name, "claim", f"{res} until {exp}" + (f": {purpose}" if purpose else ""))
     emit(a, {"resource": res, "agent": name, "purpose": purpose, "claimed_at": claimed_at,
              "expires_at": exp, "auto_released": released,
              "auto_released_count": n_released}, "claimed {} until {}", res, exp)
@@ -4221,8 +4252,8 @@ def cmd_release(con, a):
         with immediate(con):
             paths, total = release_all(con, name)
             if total:  # releasing nothing writes nothing
-                log(con, name, "release", f"all {total} claims: {claims_text(paths, total)}")
-        emit(a, {"released": paths, "released_count": total}, "released {} claims", total)
+                log(con, name, "release", f"all {plural(total, 'claim')}: {claims_text(paths, total)}")
+        emit(a, {"released": paths, "released_count": total}, "released {}", plural(total, "claim"))
         show_released(a, paths, total)
         return
     res = norm_resource(a.resource)
@@ -4231,7 +4262,7 @@ def cmd_release(con, a):
         paths = [r[0] for r in con.execute(
             f"SELECT resource FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)]
         if not paths and a.if_held:  # cleanup: not holding it is the state asked for
-            emit(a, {"released": [], "released_count": 0}, "released {} claims", 0)
+            emit(a, {"released": [], "released_count": 0}, "released {}", plural(0, "claim"))
             return
         if not paths:
             die(f"you do not hold {a.resource}. See your claims with: agentbus claims", "not_held", resource=a.resource)
@@ -4263,6 +4294,24 @@ def cmd_claims(con, a):
     out(a, rows, fmt_claim, more, empty="no claims")
 
 
+def log_detail(action, detail):
+    """A log entry's detail as a person reads it. join stores its fields as JSON: shown as tool=claude branch=main with the
+    empty ones left out; a claim entry from before the purpose was optional ends in a bare ': '; `1 claims` reads `1 claim`.
+    The stored text is unchanged."""
+    text = "" if detail is None else str(detail)
+    if action == "join":
+        try:
+            fields = json.loads(text)
+        except ValueError:
+            fields = None
+        if isinstance(fields, dict):
+            return " ".join(f"{k}={v}" for k, v in fields.items() if v not in (None, "")) or "(no details)"
+    text = text.rstrip()
+    if text.endswith(":"):
+        text = text[:-1].rstrip()
+    return re.sub(r"(?<![\d.])1 claims\b", "1 claim", text)
+
+
 def cmd_log(con, a):
     if a.action == "add":
         name = me(a)
@@ -4276,7 +4325,7 @@ def cmd_log(con, a):
         rows, more = capped(con, "SELECT * FROM log WHERE id<? ORDER BY id DESC", (before,), a.limit)
         rows = list(reversed(rows))
         nxt = make_cursor(a, rows[0]["id"] if rows else before) if more else None
-        out(a, rows, lambda r: INDENT + col0(f"{r['ts']} {r['agent']:<22} {r['action']:<10} {r['detail'] or ''}"),
+        out(a, rows, lambda r: INDENT + col0(f"{r['ts']} {r['agent']:<22} {r['action']:<10} {log_detail(r['action'], r['detail'])}".rstrip()),
             more, empty="log is empty", earlier=True, cursor=nxt)
 
 
@@ -4298,11 +4347,11 @@ def cmd_status(con, a):
     later(print)
     show("== agents")
     out(a, agents, fmt_who, m1, empty="no agents. Join with: agentbus --as NAME join")
-    for title, rows, fmt, more in (("context", ctx, fmt_ctx, m2), ("claims", claims, fmt_claim, m3),
+    for title, rows, fmt, more in (("facts", ctx, fmt_ctx, m2), ("claims", claims, fmt_claim, m3),
                                    ("last 10 messages", msgs, fmt_msg, 0)):
         later(print)  # a blank line between sections
         show("== {}", title)
-        out(a, rows, fmt, more, empty={"context": "no facts", "claims": "no claims", "last 10 messages": "no messages"}[title])
+        out(a, rows, fmt, more, empty={"facts": "no facts", "claims": "no claims", "last 10 messages": "no messages"}[title])
 
 
 def cmd_schema(a):
@@ -4364,10 +4413,242 @@ def interval(text):
 
 # ==== discoverability ====
 
+# Help is built here, not by argparse's defaults, in the style of gh and uv: usage, ARGUMENTS, FLAGS, the
+# INHERITED FLAGS once, EXAMPLES, and the JSON result line last. A command's text comes from its parser plus
+# three tables: COMMAND_SUMMARY (the line in the command list and in completions), HELP_EXAMPLES (real lines,
+# every one parsed by tests/test_help.sh) and KIND_MEANINGS (what each message kind is for).
+
+COMMAND_GROUPS = (
+    ("Work together", ("join", "leave", "who", "post", "inbox", "read", "claim", "release", "claims", "status", "goal", "ctx", "log")),
+    ("For people", ("watch",)),
+    ("Set up", ("init", "upgrade", "setup", "doctor", "skill", "buses")),
+    ("Learn", ("help", "completion", "schema")),
+)
+COMMAND_SUMMARY = {
+    "join": "Join the roster and see the shared goal",
+    "leave": "Leave the roster and release your claims",
+    "who": "List the agents on the bus",
+    "post": "Send a message to one agent or to everyone",
+    "inbox": "Read your unread messages, then mark them read",
+    "read": "Read recent messages, anyone's",
+    "claim": "Claim a file or resource before you edit it",
+    "release": "Release a claim",
+    "claims": "List claims",
+    "status": "The goal, agents, facts, claims and recent messages",
+    "goal": "Show or set the shared goal",
+    "ctx": "Shared facts (key/value)",
+    "log": "Activity log",
+    "watch": "A live view for people (read-only)",
+    "init": "Add a bus to a folder",
+    "upgrade": "Update a folder's bus copy and database",
+    "setup": "Teach Claude Code or Codex the protocol",
+    "doctor": "Check the install and each agent's setup",
+    "skill": "Print the agent protocol",
+    "buses": "List buses from nearest to outermost",
+    "help": "Show help for a command",
+    "completion": "Print a tab-completion script (bash, zsh, fish)",
+    "schema": "Result shapes, errors and retry rules, for tools",
+}
+KIND_MEANINGS = {
+    "note": "General update (the default)",
+    "question": "Ask someone; they answer with --reply-to ID",
+    "answer": "Reply to a question",
+    "handoff": "Pass work on: branch, state, next step, checks",
+    "decision": "Record a choice others should follow",
+    "alert": "Something needs attention now",
+    "done": "Report finished work",
+}
+# Real command lines per command, as (what it does, the line). The first line that carries --as is what the
+# "say who you are" error shows. Names are alice and bob; paths are ~/src/app style.
+HELP_EXAMPLES = {
+    "join": [("Join under your own name", 'agentbus --as alice join --role "api work"'),
+             ("Say which tool and branch", "agentbus --as alice join --tool claude --branch feat/api")],
+    "leave": [("Leave and release everything you hold", "agentbus --as alice leave"),
+              ("As JSON, for a script", "agentbus --as alice --json leave")],
+    "who": [("See who is on the bus", "agentbus who"),
+            ("As JSON, five at most", "agentbus --json who --limit 5")],
+    "post": [("Hand work to bob", 'agentbus --as alice post "schema is ready; tests pass" --to bob --kind handoff'),
+             ("Ask everyone a question", 'agentbus --as alice post "who owns the migration?" --kind question'),
+             ("Read a long body from a file", "agentbus --as alice post - --kind done < summary.txt")],
+    "inbox": [("Read and mark read", "agentbus --as alice inbox"),
+              ("Look without marking read", "agentbus --as alice inbox --peek --limit 5")],
+    "read": [("The latest messages", "agentbus read --limit 10"),
+             ("Everything after message 42", "agentbus read --since 42"),
+             ("One topic", "agentbus read --topic release")],
+    "claim": [("Claim a folder before editing it", 'agentbus --as alice claim src/api/ --purpose "rate limiting"'),
+              ("Claim an issue", "agentbus --as alice claim issue:42")],
+    "release": [("Release one claim", "agentbus --as alice release src/api/"),
+                ("Release everything you hold", "agentbus --as alice release --all")],
+    "claims": [("Who holds what", "agentbus claims"),
+               ("Claims held by agents that are gone", "agentbus claims --stale")],
+    "status": [("The whole picture", "agentbus status"),
+               ("Keep each section short", "agentbus status --limit 5")],
+    "goal": [("Set the shared goal", 'agentbus --as alice goal "ship the importer"'),
+             ("Show it", "agentbus goal")],
+    "ctx": [("Save a fact", 'agentbus --as alice ctx set test-command "npm test"'),
+            ("Read one back", "agentbus ctx get test-command")],
+    "ctx set": [("Save a fact", 'agentbus --as alice ctx set test-command "npm test"'),
+                ("Read the value from a file", "agentbus --as alice ctx set notes - < notes.txt")],
+    "ctx get": [("List every fact", "agentbus ctx get"),
+                ("One fact", "agentbus ctx get test-command")],
+    "ctx history": [("Every value a fact has had", "agentbus ctx history test-command"),
+                    ("As JSON", "agentbus --json ctx history test-command")],
+    "log": [("Record what you did", 'agentbus --as alice log add test "unit suite green"'),
+            ("See the latest entries", "agentbus log show --limit 10")],
+    "log add": [("Record what you did", 'agentbus --as alice log add test "unit suite green"'),
+                ("Another entry", 'agentbus --as alice log add deploy "staging is live"')],
+    "log show": [("The latest entries", "agentbus log show"),
+                 ("Only a few", "agentbus log show --limit 5")],
+    "watch": [("Open the live view", "agentbus watch"),
+              ("Print one frame and exit", "agentbus watch --once")],
+    "buses": [("Which buses this folder can reach", "agentbus buses"),
+              ("As JSON", "agentbus --json buses")],
+    "init": [("Add a bus to your project", "agentbus init ~/src/app"),
+             ("Add one to the current folder", "agentbus init")],
+    "upgrade": [("Update one project", "agentbus upgrade ~/src/app"),
+                ("See what would change under a folder", "agentbus upgrade --all ~/src --dry-run")],
+    "schema": [("The shape of one command's result", "agentbus schema post"),
+               ("Everything, for tools", "agentbus --json schema")],
+    "skill": [("Print the protocol agents follow", "agentbus skill"),
+              ("The block for a Codex AGENTS.md", "agentbus skill --agents-md")],
+    "setup": [("Teach Claude Code", "agentbus setup claude"),
+              ("See what would change first", "agentbus setup codex --dry-run")],
+    "doctor": [("Check everything", "agentbus doctor"),
+               ("Only your own config", "agentbus doctor --scope user")],
+    "help": [("Help for one command", "agentbus help post"),
+             ("A subcommand", "agentbus help ctx set")],
+    "completion": [("Zsh, for this shell", "source <(agentbus completion zsh)"),
+                   ("Bash, for this shell", 'eval "$(agentbus completion bash)"'),
+                   ("Fish, for every shell", "agentbus completion fish > ~/.config/fish/completions/agentbus.fish")],
+}
+# What agentbus prints with no command, and what the end of `agentbus --help` repeats.
+GUIDE = ("Start:  agentbus --as NAME join\n"
+         "Loop:   inbox; claim PATH --purpose WHY; post RESULT --to NAME --kind handoff\n"
+         "Finish: post RESULT --kind done; leave\n"
+         "Humans: agentbus watch\n"
+         "Env:    AGENTBUS_AGENT (default --as), AGENTBUS_DB (bus path)")
+# The flags every command takes, as a command's help shows them: once, one line each.
+INHERITED_FLAGS = (("--as NAME", "Your agent identity (or AGENTBUS_AGENT)"),
+                   ("--json", "Print the result as JSON"),
+                   ("--up N", "Use the Nth outer bus (default 0)"))
+
+
+def hidden_commands():
+    return set(CONTRACT["hidden"])
+
+
+def cmd_words(parser):
+    """The command as typed: agentbus post, agentbus ctx set."""
+    return ("agentbus",) + tuple(parser.cmd_path)
+
+
+def subparsers_of(parser):
+    return next((x for x in parser._actions if isinstance(x, argparse._SubParsersAction)), None)
+
+
+def visible_choices(parser):
+    """The subcommands a parser lists: not the hidden ones (hook), whatever the Python version prints for them."""
+    sp = subparsers_of(parser)
+    return [n for n in sp.choices if n not in hidden_commands()] if sp else []
+
+
+def own_actions(parser):
+    """What a command's help lists as its own: not help, version, the inherited flags or a subcommand list."""
+    return [x for x in parser._actions
+            if not isinstance(x, (argparse._HelpAction, argparse._VersionAction, argparse._SubParsersAction))
+            and x.dest not in GLOBAL_DESTS]
+
+
+def positional_name(action, command, bracket=True):
+    """How a positional shows: NAME, or [NAME] (unless bracket is False) when it may be left out."""
+    name = "{" + ",".join(map(str, action.choices)) + "}" if action.choices else (action.metavar if isinstance(action.metavar, str) else action.dest).upper()
+    required = action.nargs is None or bool(CONTRACT["arg_notes"].get(command, {}).get(name.lower(), {}).get("required"))
+    return name if required or not bracket else "[" + name + "]"
+
+
+def flag_text(action):
+    """--to NAME, --once, --scope user|project: one flag as usage shows it."""
+    flag = max(action.option_strings, key=len)
+    if action.nargs == 0:
+        return flag
+    if action.choices:
+        return flag + " {" + ",".join(map(str, action.choices)) + "}"
+    return flag + " " + (action.metavar if isinstance(action.metavar, str) else action.dest.upper())
+
+
+def usage_text(parser):
+    """agentbus post BODY [--to NAME] ...: the command's own arguments, positionals first. For agentbus itself
+    and for a group such as ctx, the choice of subcommand."""
+    words = list(cmd_words(parser))
+    if subparsers_of(parser) is not None:
+        if not parser.cmd_path:
+            words += ["[--as NAME]", "[--json]", "[--up N]"]
+        return " ".join(words + ["{" + ",".join(visible_choices(parser)) + "}", "..."])
+    command = " ".join(parser.cmd_path)
+    acts = sorted(own_actions(parser), key=lambda x: bool(x.option_strings))
+    exclusive = {id(x): g for g in parser._mutually_exclusive_groups for x in g._group_actions}
+    done = set()
+    for x in acts:
+        if id(x) in exclusive:
+            g = exclusive[id(x)]
+            if id(g) not in done:
+                done.add(id(g))
+                words.append("[" + " | ".join(flag_text(m) if m.option_strings else positional_name(m, command, False)
+                                              for m in g._group_actions) + "]")
+        elif x.option_strings:
+            words.append("[" + flag_text(x) + "]")
+        else:
+            words.append(positional_name(x, command))
+    return " ".join(words)
+
+
+def own_flag_names(parser):
+    """The long flags a usage error lists. agentbus itself lists the ones that come before a command."""
+    if not parser.cmd_path:
+        return ["--as", "--json", "--up", "--version"]
+    return [max(x.option_strings, key=len) for x in own_actions(parser) if x.option_strings]
+
+
+def wrap_text(text, width, hang=""):
+    return textwrap.fill(text, width=width, subsequent_indent=hang, break_long_words=False, break_on_hyphens=False)
+
+
+def help_table(rows, width, indent="  ", pad=None):
+    """Two columns: the left padded to the widest name (at most 26), the right wrapped under itself."""
+    pad = pad or min(max(len(left) for left, _ in rows), 26) + 2
+    lines = []
+    for left, right in rows:
+        head = indent + left.ljust(pad)
+        if len(left) > pad - 2:
+            lines.append(indent + left)
+            head = indent + " " * pad
+        wrapped = textwrap.wrap(right, width=max(width - len(head), 20), break_long_words=False, break_on_hyphens=False) or [""]
+        lines.append(head + wrapped[0])
+        lines.extend(" " * len(head) + w for w in wrapped[1:])
+    return "\n".join(lines)
+
+
+def example_block(command):
+    items = HELP_EXAMPLES.get(command)
+    return "\n".join(f"  # {what}\n  {line}" for what, line in items) if items else None
+
+
+def identity_example(a):
+    """The first example of the command that carries --as: what the "say who you are" error shows."""
+    command = a.cmd + (" " + a.action if getattr(a, "action", None) else "")
+    for key in (command, a.cmd):
+        for _what, line in HELP_EXAMPLES.get(key, []):
+            if "--as " in line:
+                return line
+    return "agentbus --as alice " + command
+
 
 class Parser(argparse.ArgumentParser):
     """argparse, with its errors written as agentbus diagnostics (`agentbus: ` and wrapped, every
-    continuation row indented) instead of a usage block the terminal may wrap at column 0."""
+    continuation row indented) instead of a usage block the terminal may wrap at column 0, scoped to the
+    command that was being parsed, and with its help written by format_help."""
+
+    cmd_path = ()  # ("post",), ("ctx", "set"); () for agentbus itself. Set once the tree is built.
 
     def __init__(self, *args, **kwargs):
         # No option abbreviations: --js would mean --json to argparse, but whether errors print as JSON
@@ -4378,18 +4659,41 @@ class Parser(argparse.ArgumentParser):
             if action.dest == "help":
                 action.help = "Show this help message and exit."
 
-    def error(self, message):
+    def parse_args(self, args=None, namespace=None):
+        """Arguments nothing took are reported by the command being parsed, not by agentbus as a whole."""
+        ns, extras = self.parse_known_args(args, namespace)
+        if extras:
+            words = list(sys.argv[1:] if args is None else args)
+            leaf = self.leaf_for(ns)
+            if getattr(ns, "cmd", None) in words and extras[0] in words[:words.index(ns.cmd)]:
+                leaf = self  # a flag typed before the command belongs to agentbus, not to the command
+            leaf.error("unrecognized arguments: " + " ".join(extras))
+        return ns
+
+    def leaf_for(self, ns):
+        """The parser of the command ns names (post, ctx set); the group when only the group is named; else self."""
+        found = self
+        for dest in ("cmd", "action"):
+            word = getattr(ns, dest, None)
+            sp = subparsers_of(found)
+            if word and sp is not None and word in sp.choices:
+                found = sp.choices[word]
+        return found
+
+    def error(self, message, see=None):
+        """This command's usage error: what is wrong, its usage and flags, and the command that explains it
+        (see: another command that does, when there is one)."""
+        flags = own_flag_names(self)
+        text = (f"{message}. Usage: {usage_text(self)}. " + (f"Flags: {', '.join(flags)}. " if flags else "")
+                + f"See: {see or ' '.join(cmd_words(self)) + ' --help'}")
         if _JSON_ERRORS:
-            die(message, "bad_input")
-        note(f"error: {message} ({' '.join(self.format_usage().split())})")
+            die(text, "bad_input")
+        note(text)
         raise SystemExit(2)
 
     def _check_value(self, action, value):
         if isinstance(action, argparse._SubParsersAction) and value not in action.choices:
-            matches = difflib.get_close_matches(value, action.choices, n=1)
-            hint = f" (did you mean {matches[0]}?)" if matches else ""
-            message = f"unknown command '{value}'{hint}. See: agentbus --help"
-            die(message, "bad_input")
+            unknown_command(value, visible_choices(self), self.cmd_path)
         super()._check_value(action, value)
 
     def _print_message(self, message, file=None):
@@ -4400,6 +4704,58 @@ class Parser(argparse.ArgumentParser):
             _HELP_TEXT.append(message)
         else:
             super()._print_message(message, file)
+
+    def format_help(self):
+        width = max(term_width() - 2, 40)
+        command = " ".join(self.cmd_path)
+        sp = subparsers_of(self)
+        blocks = [wrap_text("usage: " + usage_text(self), width, hang="    ")]
+        if self.description:
+            blocks.append(wrap_text(self.description, width))
+        own = own_actions(self)
+        if sp is not None and not self.cmd_path:
+            rows = ["COMMANDS"]
+            for title, names in COMMAND_GROUPS:
+                rows.append("  " + title)
+                rows.append(help_table([(n, COMMAND_SUMMARY[n]) for n in names], width, indent="    ", pad=12))
+            blocks.append("\n".join(rows))
+        elif sp is not None:
+            rows = [(" ".join([n] + [positional_name(x, f"{command} {n}") for x in own_actions(sp.choices[n]) if not x.option_strings]),
+                     sp.choices[n].description or "") for n in visible_choices(self)]
+            blocks.append("ACTIONS\n" + help_table(rows, width))
+        positionals = [x for x in own if not x.option_strings and x.help]
+        if positionals:
+            blocks.append("ARGUMENTS\n" + help_table([(positional_name(x, command, False), x.help) for x in positionals], width))
+        if self.cmd_path == ("post",):
+            blocks.append("KINDS (--kind)\n" + help_table([(k, KIND_MEANINGS[k]) for k in KINDS], width))
+        helpers = [x for x in self._actions if isinstance(x, (argparse._HelpAction, argparse._VersionAction))]
+        shown = helpers[:1] + [x for x in own if x.option_strings] + helpers[1:]
+        if not self.cmd_path:
+            shown = helpers[:1] + [x for x in self._actions if x.dest in GLOBAL_DESTS] + helpers[1:]
+        rows = [(", ".join(x.option_strings) + ("" if x.nargs == 0 else " " + ("{" + ",".join(map(str, x.choices)) + "}" if x.choices else
+                 (x.metavar if isinstance(x.metavar, str) else x.dest.upper()))), x.help or "") for x in shown]
+        blocks.append("FLAGS\n" + help_table(rows, width))
+        if self.cmd_path:
+            blocks.append("INHERITED FLAGS\n" + help_table(list(INHERITED_FLAGS), width))
+        examples = example_block(command)
+        if examples:
+            blocks.append("EXAMPLES\n" + examples)
+        if not self.cmd_path:
+            blocks.append("GETTING STARTED\n" + "\n".join("  " + line for line in GUIDE.split("\n")))
+            blocks.append("LEARN MORE\n" + help_table([("agentbus help COMMAND", "Help and examples for one command"),
+                                                       ("agentbus completion zsh", "Tab completion for bash, zsh or fish")], width))
+        elif sp is not None:
+            blocks.append(f"See: agentbus help {command} ACTION")
+        if self.epilog:
+            blocks.append(self.epilog)
+        return "\n\n".join(blocks) + "\n"
+
+
+def unknown_command(word, choices, path=()):
+    matches = difflib.get_close_matches(word, choices, n=1)
+    hint = f" (did you mean {matches[0]}?)" if matches else ""
+    see = "agentbus help" + (" " + " ".join(path) if path else "")
+    die(f"unknown command '{word}'{hint}. See: " + ("agentbus --help" if not path else see), "bad_input")
 
 
 _HELP_TEXT = []
@@ -4433,7 +4789,8 @@ class OneName(argparse.Action):
 
 
 def limit_arg(parser, default=DEFAULT_LIMIT, what="rows"):
-    parser.add_argument("--limit", type=limit_count, default=default, help=f"At most this many {what} (default {default}). Use -1 for all.")
+    parser.add_argument("--limit", type=limit_count, default=default, metavar="N",
+                        help=f"At most this many {what} (default {default}). Use -1 for all.")
 
 
 def register_join(sub):
@@ -4458,7 +4815,7 @@ def register_who(sub):
 
 def register_post(sub):
     po = sub("post", help="Send a message (body '-' reads stdin)")
-    po.add_argument("body", nargs="*")
+    po.add_argument("body", nargs="*", help="The message. Several words are joined; - reads it from stdin.")
     po.add_argument("--to", default="*", metavar="NAME", action=OneName,
                     help="Deliver to this one agent name; omitted means broadcast. A name not on the roster still gets the message, with a warning.")
     po.add_argument("--kind", default="note",
@@ -4479,36 +4836,38 @@ def register_inbox(sub):
 
 def register_read(sub):
     rd = sub("read", help="Recent messages, anyone's")
-    rd.add_argument("--since", type=integer, default=None, help="The messages after this id, oldest first")
-    rd.add_argument("--topic")
+    rd.add_argument("--since", type=integer, default=None, metavar="ID", help="The messages after this id, oldest first")
+    rd.add_argument("--topic", metavar="TOPIC", help="Only messages with this topic label.")
     rd.add_argument("--before", metavar="NEXT", help="Older messages than the previous page (its next value).")
-    rd.add_argument("--limit", type=integer, default=30, help="Maximum messages; default 30. Use -1 for all.")
+    rd.add_argument("--limit", type=integer, default=30, metavar="N", help="Maximum messages; default 30. Use -1 for all.")
 
 
 def register_ctx(sub):
-    c = sub("ctx", help="Shared key/value facts")
-    limit_arg(c, what="keys (get) or values (history)")
-    actions = c.add_subparsers(dest="action", required=True)
+    c = sub("ctx", help="Shared facts (key/value): lasting notes every agent can read")
+    limit_arg(c, what="facts (get) or values (history)")
+    actions = c.add_subparsers(dest="action", required=False, metavar="ACTION")
     for action, usage in (("set", "KEY VALUE"), ("get", "[KEY]"), ("history", "KEY")):
         description = {"set": "Set a shared fact and record its history.",
                        "get": "Get a fact, or list all facts.", "history": "Show the history of a fact."}[action]
-        act = actions.add_parser(action, parents=[sub.common], help=description, description=description,
-                                 usage=f"agentbus ctx {action} {usage} [options]")
-        act.add_argument("key", nargs="?" if action == "get" else None, metavar="KEY")
+        act = actions.add_parser(action, parents=[sub.common], help=description, description=description)
+        act.add_argument("key", nargs="?" if action == "get" else None, metavar="KEY",
+                         help="The fact's name, for example test-command." if action != "get" else "The fact's name; omit to list all facts.")
         if action == "set":
-            act.add_argument("value", nargs="*", metavar="VALUE")
+            act.add_argument("value", nargs="*", metavar="VALUE", help="The fact's value. Several words are joined; - reads it from stdin.")
             request_id_arg(act)
-        act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
-                         help="Maximum keys (get) or values (history); default 500. Use -1 for all.")
+        else:
+            act.add_argument("--limit", type=integer, default=argparse.SUPPRESS, metavar="N",
+                             help="Maximum facts (get) or values (history); default 500. Use -1 for all.")
         if action == "history":
             act.add_argument("--before", metavar="NEXT", help="Older values than the previous page (its next value).")
 
 
 def register_claim(sub):
     cl = sub("claim", help="Claim a resource (bus-relative path, or issue:N, table:x, area:y)")
-    cl.add_argument("resource"); cl.add_argument("--purpose")
+    cl.add_argument("resource", help="What to claim: a path relative to the bus folder (a folder covers what is under it), or issue:N, table:NAME, area:NAME.")
+    cl.add_argument("--purpose", metavar="TEXT", help="Why you hold it; shown to anyone who runs into the claim.")
     request_id_arg(cl)
-    cl.add_argument("--ttl-min", type=integer, default=120, help=f"Claim lifetime in minutes: 1-{MAX_TTL_MIN}; default 120. Claim again to renew.")
+    cl.add_argument("--ttl-min", type=integer, default=120, metavar="MIN", help=f"Claim lifetime in minutes: 1-{MAX_TTL_MIN}; default 120. Claim again to renew.")
 
 
 def register_release(sub):
@@ -4529,22 +4888,19 @@ def register_claims(sub):
 def register_log(sub):
     lg = sub("log", help="Append to or show the activity log")
     limit_arg(lg, 40, "entries (show)")
-    actions = lg.add_subparsers(dest="action", required=True)
-    add = actions.add_parser("add", parents=[sub.common], usage="agentbus log add ACTION DETAIL [options]",
-                             help="Append an activity log entry.", description="Append an activity log entry.")
-    add.add_argument("what", nargs="?", default="note", metavar="ACTION")
-    add.add_argument("detail", nargs="*", metavar="DETAIL")
-    show_log = actions.add_parser("show", parents=[sub.common], usage="agentbus log show [options]",
-                                  help="Show recent activity log entries.", description="Show recent activity log entries.")
-    for act in (add, show_log):
-        act.add_argument("--limit", type=integer, default=argparse.SUPPRESS,
-                         help="Maximum entries (show); default 40. Use -1 for all.")
+    actions = lg.add_subparsers(dest="action", required=False, metavar="ACTION")
+    add = actions.add_parser("add", parents=[sub.common], help="Append an activity log entry.", description="Append an activity log entry.")
+    add.add_argument("what", metavar="ACTION", help="What kind of entry: one word, for example test or deploy.")
+    add.add_argument("detail", nargs="*", metavar="DETAIL", help="What happened. Several words are joined; - reads it from stdin.")
+    show_log = actions.add_parser("show", parents=[sub.common], help="Show recent activity log entries.", description="Show recent activity log entries.")
+    show_log.add_argument("--limit", type=integer, default=argparse.SUPPRESS, metavar="N",
+                          help="Maximum entries; default 40. Use -1 for all.")
     show_log.add_argument("--before", metavar="NEXT", help="Older entries than the previous page (its next value).")
 
 
 def register_status(sub):
-    st = sub("status", help="Agents, context, claims, recent messages")
-    st.add_argument("--limit", type=integer, default=DEFAULT_LIMIT,
+    st = sub("status", help="Agents, facts, claims, recent messages")
+    st.add_argument("--limit", type=integer, default=DEFAULT_LIMIT, metavar="N",
                     help="Limit agents, facts, and claims per section; default 500. Use -1 for all. Recent messages always shows the latest 10.")
 
 
@@ -4560,7 +4916,7 @@ def register_watch(sub):
                         "Keys: j/k move, Tab section, Enter open, / filter, p pause, y copy, ? help, q quit. Read-only. "
                         "Esc and q go back; q quits from the main view, Esc never quits. "
                         "--once prints one frame (so do a pipe and TERM=dumb); --json prints one snapshot.")
-    w.add_argument("--interval", type=interval, default=1.0, help="Seconds between refreshes, 0.2 to 60; default 1.")
+    w.add_argument("--interval", type=interval, default=1.0, metavar="SECONDS", help="Seconds between refreshes, 0.2 to 60; default 1.")
     w.add_argument("--once", action="store_true", help="Print one frame and exit (what it does anyway when stdout is not a terminal).")
 
 
@@ -4575,7 +4931,7 @@ def register_init(sub):
 
 def register_upgrade(sub):
     upg = sub("upgrade", help="Replace a repo's .agentbus/bin/agentbus with this copy and migrate its bus (installed tool or clone only)")
-    upg.add_argument("repo", nargs="?", metavar="DIR")
+    upg.add_argument("repo", nargs="?", metavar="DIR", help="The folder whose bus to upgrade; default the nearest bus. With --all, the folder to search under.")
     upg.add_argument("--all", action="store_true", help="Upgrade every bus folder under DIR")
     upg.add_argument("--depth", type=integer, default=5, metavar="N", help="With --all: how many levels below DIR to look (default 5)")
     upg.add_argument("--dry-run", action="store_true", help="Change nothing; report what would change")
@@ -4584,6 +4940,19 @@ def register_upgrade(sub):
 def register_schema(sub):
     sc = sub("schema", help="Result shapes, errors, exit codes and retry rules of every command")
     sc.add_argument("command", nargs="*", metavar="COMMAND", help="One command (for example post, or ctx get); omit for all.")
+
+
+def register_help(sub):
+    h = sub("help", help="Show help for a command (the same text as COMMAND --help)")
+    h.add_argument("command", nargs="*", metavar="COMMAND", help="The command, for example post or ctx set; omit for the list of commands.")
+
+
+COMPLETION_SHELLS = ("bash", "zsh", "fish")
+
+
+def register_completion(sub):
+    c = sub("completion", help="Print a tab-completion script for your shell")
+    c.add_argument("shell", choices=COMPLETION_SHELLS, help="The shell to print it for.")
 
 
 REGISTER_COMMANDS = [
@@ -4605,17 +4974,13 @@ REGISTER_COMMANDS = [
     register_init,
     register_upgrade,
     register_schema,
+    register_help,
+    register_completion,
 ]
 
 
 def build_parser():
-    p = Parser(prog="agentbus", description="Coordinate agents in one local workspace: messages, file claims, and shared facts.",
-               formatter_class=argparse.RawDescriptionHelpFormatter,
-               epilog="Start:  agentbus --as NAME join\n"
-                      "Loop:   inbox; claim PATH --purpose WHY; post RESULT --to NAME --kind handoff\n"
-                      "Finish: post RESULT --kind done; leave\n"
-                      "Humans: agentbus watch\n"
-                      "Env:    AGENTBUS_AGENT (default --as), AGENTBUS_DB (bus path)")
+    p = Parser(prog="agentbus", description="Coordinate agents in one local workspace: messages, file claims, and shared facts.")
     common = Parser(add_help=False)
     # SUPPRESS: a subcommand must not reset an option set before it.
     for parser, default in ((p, None), (common, argparse.SUPPRESS)):
@@ -4628,7 +4993,7 @@ def build_parser():
         parser.add_argument("--up", metavar="N", type=bus_level, default=0 if parser is p else default,
                             help="Select the Nth outer bus (default 0). AGENTBUS_DB takes precedence.")
     p.add_argument("--version", action="version", version=f"agentbus {__version__}", help="Show program version and exit.")
-    s = p.add_subparsers(dest="cmd", required=True)
+    s = p.add_subparsers(dest="cmd", required=False, metavar="COMMAND")
 
     def sub(name, **k):
         if "help" in k:
@@ -4639,7 +5004,313 @@ def build_parser():
     for register in REGISTER_COMMANDS:
         register(sub)
     apply_contract_help(p)
+    assign_paths(p)
     return p
+
+
+def assign_paths(parser, path=()):
+    """Tell every parser in the tree its command path (ctx set -> ("ctx", "set")): usage and errors name it."""
+    parser.cmd_path = path
+    sp = subparsers_of(parser)
+    for name, child in (sp.choices.items() if sp else ()):
+        assign_paths(child, path + (name,))
+
+
+def bare_help(p, a):
+    """(text, command) for `agentbus` with no command (the short guide) or a group with no action (agentbus ctx):
+    what to print instead of an error. None for every other command line."""
+    if a.cmd is None:
+        return GUIDE + "\n\nSee: agentbus --help\n", None
+    group = p.leaf_for(a)
+    if subparsers_of(group) is not None and getattr(a, "action", None) is None:
+        return group.format_help(), " ".join(group.cmd_path)
+    return None
+
+
+def cmd_help(a):
+    """Print help for a command: the same text as COMMAND --help. Needs no bus."""
+    if hasattr(a, "_help"):
+        text, label = a._help
+    else:
+        node, path = build_parser(), []
+        for word in a.command:
+            names = visible_choices(node)
+            if word not in names:
+                unknown_command(word, names, tuple(path))
+            node = subparsers_of(node).choices[word]
+            path.append(word)
+        text, label = node.format_help(), " ".join(path) or None
+    if a.json:
+        print_json({"command": label, "text": text})
+        return
+    write_out(text)
+
+
+def cmd_completion(a):
+    """Print the tab-completion script for a shell, generated from the parser. Needs no bus."""
+    text = completion_script(a.shell, build_parser())
+    if a.json:
+        print_json({"shell": a.shell, "text": text})
+        return
+    write_out(text)
+
+
+# ---- tab completion: `agentbus completion bash|zsh|fish`, written from the parser ----
+# Nothing here is a second list: the commands, flags, choices and descriptions come from the parser and the tables
+# above, so a new command or flag completes the day it exists. tests/test_help.sh loads each script in its shell.
+
+
+def completion_nodes(parser):
+    """Every visible command, outermost first, as the parsers that define them."""
+    found = []
+    for name in visible_choices(parser):
+        child = subparsers_of(parser).choices[name]
+        found.append(child)
+        found.extend(completion_nodes(child))
+    return found
+
+
+def first_sentence(text):
+    return (text or "").split(". ")[0].rstrip(".")
+
+
+def flag_choices(node, action):
+    """The values a flag takes when there is a fixed list (--kind, --scope), else None."""
+    notes = CONTRACT["arg_notes"].get(" ".join(node.cmd_path), {}).get(max(action.option_strings, key=len), {})
+    return list(action.choices or notes.get("choices") or []) or None
+
+
+def completion_model(parser):
+    """The facts all three scripts are written from."""
+    nodes = completion_nodes(parser)
+    commands, valued = {}, {"--as", "--up"}
+    for n in nodes:
+        flags = []
+        for x in own_actions(n):
+            if not x.option_strings:
+                continue
+            flag = max(x.option_strings, key=len)
+            takes = x.nargs != 0
+            if takes:
+                valued.add(flag)
+            flags.append({"name": flag, "value": takes, "choices": flag_choices(n, x), "help": first_sentence(x.help)})
+        positional = [x for x in own_actions(n) if not x.option_strings]
+        path = " ".join(n.cmd_path)
+        kind = None
+        if any(x.metavar == "DIR" for x in positional):
+            kind = "dir"
+        elif any(x.choices for x in positional):
+            kind = "choice"
+        elif n.cmd_path in (("help",), ("schema",)):
+            kind = "command"
+        commands[path] = {"summary": COMMAND_SUMMARY.get(path) or n.description or "", "flags": flags,
+                          "subcommands": [(c, subparsers_of(n).choices[c].description or "") for c in visible_choices(n)],
+                          "positional": kind,
+                          "choices": next((list(x.choices) for x in positional if x.choices), [])}
+    groups = {p: [c for c, _ in v["subcommands"]] for p, v in commands.items() if v["subcommands"]}
+    return {"top": visible_choices(parser), "commands": commands, "valued": sorted(valued), "groups": groups}
+
+
+def sh_words(words):
+    return " ".join(words)
+
+
+def completion_bash(m):
+    v = "|".join(m["valued"])
+    lines = ["# bash completion for agentbus, written by: agentbus completion bash",
+             '# Load it for this shell: eval "$(agentbus completion bash)"',
+             "_agentbus() {",
+             '    local cur prev cmd="" sub="" key i w flags="" words="" mode=""',
+             "    cur=${COMP_WORDS[COMP_CWORD]}",
+             "    prev=${COMP_WORDS[COMP_CWORD-1]}",
+             "    for ((i = 1; i < COMP_CWORD; i++)); do",
+             "        w=${COMP_WORDS[i]}",
+             "        case $w in",
+             f"            {v}) i=$((i + 1)) ;;",
+             "            -*) ;;",
+             '            *) if [ -z "$cmd" ]; then cmd=$w; elif [ -z "$sub" ]; then sub=$w; fi ;;',
+             "        esac",
+             "    done",
+             "    case $cmd in",
+             '        ' + "|".join(m["groups"]) + ') key=$cmd${sub:+ $sub} ;;',
+             "        *) key=$cmd ;;",
+             "    esac",
+             '    case "$key $prev" in']
+    for path, info in m["commands"].items():
+        for f in info["flags"]:
+            if f["choices"]:
+                lines.append(f'        "{path} {f["name"]}") COMPREPLY=($(compgen -W "{sh_words(f["choices"])}" -- "$cur")); return ;;')
+    lines += ["    esac",
+              "    case $prev in",
+              f"        {v}) return ;;",
+              "    esac",
+              '    case "$key" in',
+              f'        "") flags="--as --json --up --version --help"; words="{sh_words(m["top"])}" ;;']
+    for path, info in m["commands"].items():
+        flags = sh_words([f["name"] for f in info["flags"]])
+        words = sh_words(c for c, _ in info["subcommands"]) if info["subcommands"] else sh_words(info["choices"]) if info["positional"] == "choice" else ""
+        body = [f'flags="{flags}"']
+        if words:
+            body.append(f'words="{words}"')
+        if info["positional"] == "dir":
+            body.append('mode="dir"')
+        if info["positional"] == "command":
+            body.append(f'words="{sh_words(m["top"])}"')
+            body.append('case $prev in ' + " ".join(f'{g}) words="{sh_words(a)}" ;;' for g, a in m["groups"].items()) + ' esac')
+        lines.append(f'        "{path}") ' + "; ".join(body) + " ;;")
+    lines += ["    esac",
+              '    flags="$flags --as --json --up --help"',
+              "    if [[ $cur == -* ]]; then",
+              '        COMPREPLY=($(compgen -W "$flags" -- "$cur"))',
+              '    elif [ "$mode" = dir ]; then',
+              '        COMPREPLY=($(compgen -d -- "$cur"))',
+              "        compopt -o filenames 2>/dev/null",
+              "    else",
+              '        COMPREPLY=($(compgen -W "$words" -- "$cur"))',
+              "    fi",
+              "}",
+              "complete -F _agentbus agentbus"]
+    return "\n".join(lines) + "\n"
+
+
+def zsh_text(text):
+    """Description text safe inside a single-quoted _arguments or _describe entry."""
+    return (text or "").replace("\\", "").replace("'", "'\\''").replace("[", "(").replace("]", ")").replace(":", " -")
+
+
+def zsh_flag(f):
+    flag = f["name"]
+    if not f["value"]:
+        return f"'{flag}[{zsh_text(f['help'])}]'"
+    action = f"({sh_words(f['choices'])})" if f["choices"] else ""
+    return f"'{flag}=[{zsh_text(f['help'])}]:value:{action}'"
+
+
+def completion_zsh(m):
+    glob = ["'--as=[Your agent identity]:name:'", "'--json[Print the result as JSON]'", "'--up=[Use the Nth outer bus]:level:'"]
+    lines = ["#compdef agentbus",
+             "# zsh completion for agentbus, written by: agentbus completion zsh",
+             "# Load it for this shell (after compinit): source <(agentbus completion zsh)",
+             "_agentbus() {",
+             '    local curcontext="$curcontext" state line ret=1',
+             "    typeset -A opt_args",
+             "    local -a global=("] + ["        " + g for g in glob] + [
+             "    )",
+             '    _arguments -C "${global[@]}" \\',
+             "        '(- *)--help[Show help]' '(- *)--version[Show the version]' \\",
+             "        '1: :->command' '*:: :->args' && ret=0",
+             "    case $state in",
+             "        command)",
+             "            local -a commands=("] + [f"                '{c}:{zsh_text(m['commands'][c]['summary'])}'" for c in m["top"]] + [
+             "            )",
+             "            _describe -t commands 'agentbus command' commands && ret=0 ;;",
+             "        args)",
+             "            case $line[1] in"]
+    for path, info in m["commands"].items():
+        if " " in path:
+            continue
+        flags = " ".join(zsh_flag(f) for f in info["flags"])
+        if info["subcommands"]:
+            lines.append(f"                {path})")
+            lines.append("                    if (( CURRENT == 2 )); then")
+            lines.append("                        local -a actions=(" + " ".join(f"'{c}:{zsh_text(d)}'" for c, d in info["subcommands"]) + ")")
+            lines.append(f"                        _describe -t actions '{path} action' actions && ret=0")
+            lines.append("                    else")
+            lines.append("                        case $words[2] in")
+            for c, _ in info["subcommands"]:
+                sub = m["commands"][path + " " + c]
+                sflags = " ".join(zsh_flag(f) for f in sub["flags"])
+                lines.append(f'                            {c}) _arguments "${{global[@]}}" {sflags} \'*:value:\' && ret=0 ;;')
+            lines.append("                        esac")
+            lines.append("                    fi ;;")
+            continue
+        if info["positional"] == "dir":
+            tail = "'1:directory:_files -/'"
+        elif info["positional"] == "choice":
+            tail = f"'1:value:({sh_words(info['choices'])})'"
+        elif info["positional"] == "command":
+            tail = f"'*:command:({sh_words(m['top'])})'"
+        else:
+            tail = "'*:value:'"
+        lines.append(f'                {path}) _arguments "${{global[@]}}" {flags} {tail} && ret=0 ;;')
+    lines += ["            esac ;;",
+              "    esac",
+              "    return ret",
+              "}",
+              'if [ "$funcstack[1]" = "_agentbus" ]; then',
+              '    _agentbus "$@"',
+              "else",
+              "    compdef _agentbus agentbus",
+              "fi"]
+    return "\n".join(lines) + "\n"
+
+
+def fish_text(text):
+    return (text or "").replace("\\", "").replace("'", "\\'")
+
+
+def completion_fish(m):
+    v = " ".join(m["valued"])
+    lines = ["# fish completion for agentbus, written by: agentbus completion fish",
+             "# Load it for every shell: agentbus completion fish > ~/.config/fish/completions/agentbus.fish",
+             "function __agentbus_word",
+             "    set -l tokens (commandline -opc)",
+             "    set -e tokens[1]",
+             "    set -l skip 0",
+             "    set -l seen 0",
+             "    for t in $tokens",
+             "        if test $skip -eq 1",
+             "            set skip 0",
+             "            continue",
+             "        end",
+             "        switch $t",
+             f"            case {v}",
+             "                set skip 1",
+             "            case '-*'",
+             "            case '*'",
+             "                set seen (math $seen + 1)",
+             "                if test $seen -eq $argv[1]",
+             "                    echo $t",
+             "                    return",
+             "                end",
+             "        end",
+             "    end",
+             "end",
+             "complete -c agentbus -f",
+             "complete -c agentbus -l as -x -d 'Your agent identity'",
+             "complete -c agentbus -l json -d 'Print the result as JSON'",
+             "complete -c agentbus -l up -x -d 'Use the Nth outer bus'",
+             "complete -c agentbus -s h -l help -d 'Show help'"]
+    none = "test (count (__agentbus_word 1)) -eq 0"
+    for c in m["top"]:
+        lines.append(f"complete -c agentbus -n '{none}' -a {c} -d '{fish_text(m['commands'][c]['summary'])}'")
+    lines.append(f"complete -c agentbus -n '{none}' -l version -d 'Show the version'")
+    for path, info in m["commands"].items():
+        words = path.split()
+        if len(words) == 1:
+            cond = f"__fish_seen_subcommand_from {words[0]}"
+            if info["subcommands"]:
+                subs = " ".join(c for c, _ in info["subcommands"])
+                for c, d in info["subcommands"]:
+                    lines.append(f"complete -c agentbus -n '{cond}; and not __fish_seen_subcommand_from {subs}' -a {c} -d '{fish_text(d)}'")
+        else:
+            cond = f"__fish_seen_subcommand_from {words[0]}; and __fish_seen_subcommand_from {words[1]}"
+        for f in info["flags"]:
+            opt = f"complete -c agentbus -n '{cond}' -l {f['name'][2:]}"
+            if f["value"]:
+                opt += " -x" + (f" -a '{sh_words(f['choices'])}'" if f["choices"] else "")
+            lines.append(opt + f" -d '{fish_text(f['help'])}'")
+        if info["positional"] == "dir":
+            lines.append(f"complete -c agentbus -n '{cond}' -a '(__fish_complete_directories)'")
+        elif info["positional"] == "choice":
+            lines.append(f"complete -c agentbus -n '{cond}' -a '{sh_words(info['choices'])}'")
+        elif info["positional"] == "command":
+            lines.append(f"complete -c agentbus -n '{cond}' -a '{sh_words(m['top'])}'")
+    return "\n".join(lines) + "\n"
+
+
+def completion_script(shell, parser):
+    return {"bash": completion_bash, "zsh": completion_zsh, "fish": completion_fish}[shell](completion_model(parser))
 
 
 POSITIONALS = ("cmd", "body", "action", "key", "value", "resource", "what", "detail", "repo", "text", "dirs")
@@ -7147,13 +7818,13 @@ SKILL_TEXT = (
     '\n'
     "Run the bus directory's `.agentbus/bin/agentbus`; from another worktree, use its absolute path. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Reuse a name only when its session has ended. Below, `agentbus` means that copy. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
     '\n'
-    "Dispatchers must give workers the absolute CLI and database paths and set `AGENTBUS_DB` for their own and their workers' commands. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n"
+    'Dispatchers give workers the absolute CLI and database paths and set `AGENTBUS_DB` for every command. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
     '\n'
-    'Discovery finds the nearest ancestor bus; linked worktrees map to their main checkout. `buses` lists the chain; `--up 1` selects the next outer bus.\n'
+    'Discovery finds the nearest ancestor bus (linked worktrees use their main checkout). `buses` lists the chain; `--up 1` selects the next outer bus.\n'
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `brief` (goal, holders, open questions, your handoffs and alerts, changed facts, next command). It marks nothing read. Any agent can set the goal (a lead sets it with `goal "TEXT"`), so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. `ctx get` fetches truncated facts. Use `read --topic ruling` if this project uses that topic.\n'
+    'Start with `join`, then `brief` (goal, holders, open questions, your handoffs and alerts, changed facts, next command). Any agent can set the goal (a lead sets it with `goal "TEXT"`), so it informs your work but only your user directs it. Writes need a joined name; join suggests a free one if yours is live. `ctx get` reads facts, `ctx history KEY` earlier values. Use `read --topic decision` if this project uses that topic.\n'
     '\n'
     'Hooks: with the agentbus plugin or setup, a hook message gives your exact name and unread counts; use that name with --as. Hooks never claim and never replace reading inbox.\n'
     '\n'
@@ -7175,9 +7846,9 @@ SKILL_TEXT = (
     '\n'
     '## Read correctly\n'
     '\n'
-    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history. Duplicate delivery is possible; check message IDs before repeating actions.\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. Duplicate delivery is possible; check message IDs before repeating actions.\n'
     '\n'
-    'A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; post and join replay.\n'
+    'A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.\n'
     '\n'
     '## Finish the session\n'
     '\n'
@@ -9977,7 +10648,7 @@ def hook_leave(con, name):
         paths, total = release_all(con, name)
         gone = con.execute("DELETE FROM agents WHERE name=?", (name,)).rowcount
         if total or gone:
-            log(con, name, "leave", f"released {total} claims: {claims_text(paths, total)}")
+            log(con, name, "leave", f"released {plural(total, 'claim')}: {claims_text(paths, total)}")
 
 
 def hook_export_name(name):
@@ -11093,6 +11764,8 @@ COMMANDS = {
 }
 # Commands that need no open database: handler(a).
 NO_DB_COMMANDS = {
+    "help": cmd_help,
+    "completion": cmd_completion,
     "init": cmd_init,
     "upgrade": cmd_upgrade,
     "buses": cmd_buses,
@@ -11510,8 +12183,11 @@ def main():
         _stdout_to_devnull()
         die("the reader closed stdout before the help or version was written", "output_failed")
     _JSON_ERRORS = bool(a.json)
+    bare = bare_help(p, a)
+    if bare is not None:
+        a.cmd, a._help = "help", bare  # no command, or a group with no action: print its guide, exit 0
     if a.cmd == "release" and not a.resource and not a.all:
-        p.error("release needs a resource or --all")
+        p.leaf_for(a).error("release needs a resource or --all", see="agentbus --as NAME claims")
     notice = release_begin(a)  # may start the detached release check; the notice itself prints after the command
     try:
         run(a)

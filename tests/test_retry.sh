@@ -177,6 +177,8 @@ OBSERVED = {
     "buses": observe((), ("buses",), EVERYTHING),
     "schema": observe((), ("schema",), EVERYTHING),
     "skill": observe((), ("skill",), EVERYTHING),
+    "help": observe((), ("help", "ctx", "set"), EVERYTHING),
+    "completion": observe((), ("completion", "zsh"), EVERYTHING),
     "doctor": observe((), ("doctor",), EVERYTHING),
 }
 # init and upgrade write files, not rows: a second run leaves the folder as the first did
