@@ -27,10 +27,11 @@ done
 grep -qF -- "ARGV: pip install --upgrade $(cache_path)/$wheel_rel" "$STUB_LOG" || fail "pip: $(cat "$STUB_LOG")"
 ok "uv, pipx and pip: the verified release wheel, run from the cache folder, no source build, the download removed"
 
-echo "TEST 2: a pip/ planted in the working folder does not run under -I -m pip (the control without -I does)"
+echo "TEST 2: a pip/ planted in the installer's working folder does not run under -I -m pip (the control without -I does)"
 new_case plant pip
-mkdir -p "$HOME/pip"; : >"$HOME/pip/__init__.py"; printf 'open(%s, "w").write("planted")\n' "'$C/marker'" >"$HOME/pip/__main__.py"
-(cd "$HOME" && "$PREFIX/bin/python" -m pip control >/dev/null 2>&1) || true
+CACHE=$(cache_path); mkdir -p "$CACHE"; chmod 700 "$CACHE"   # the installer runs from here
+mkdir -p "$CACHE/pip"; : >"$CACHE/pip/__init__.py"; printf 'open(%s, "w").write("planted")\n' "'$C/marker'" >"$CACHE/pip/__main__.py"
+(cd "$CACHE" && "$PREFIX/bin/python" -m pip control >/dev/null 2>&1) || true
 [ -f "$C/marker" ] || fail "the control (no -I) did not run the planted pip: the test proves nothing"
 rm -f "$C/marker"
 ab update --no-buses --no-setup >/dev/null 2>&1 || true
@@ -440,9 +441,10 @@ rel_latest 0.3.0
 new_case dns uv
 printf 'import zz_slowdns\n' >"$SITE/zz_slowdns.pth"
 cat >"$SITE/zz_slowdns.py" <<'PY2'
-import socket, time
-_real = socket.getaddrinfo
+import signal, socket, time
 def slow(*a, **k):
+    # like the C call it stands for, no signal interrupts it (a SIGALRM handler would wait until it returned)
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
     time.sleep(120)
     raise OSError("no network in tests")
 socket.getaddrinfo = slow

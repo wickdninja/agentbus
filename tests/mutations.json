@@ -857,8 +857,8 @@
   {
     "name": "update: the release check follows a redirect",
     "file": "bin/agentbus",
-    "find": "            def redirect_request\\(self, \\*args, \\*\\*kwargs\\):\\n                return None",
-    "replace": "            def redirect_request(self, *args, **kwargs):\n                return super().redirect_request(*args, **kwargs)",
+    "find": "                if not redirects or u\\.scheme != \"https\" or not _host_ok\\(u\\.hostname, first\\):",
+    "replace": "                if False:",
     "count": 1,
     "run": "tests/test_update_notice.sh",
     "expect": "redirect: asked more than once"
@@ -920,8 +920,8 @@
   {
     "name": "update: a second update runs beside the lock",
     "file": "bin/agentbus",
-    "find": "    if folder and not lock:",
-    "replace": "    if False:",
+    "find": "        lock = _FileLock\\(folder, \"update\\.lock\"\\)\\n        if not lock:",
+    "replace": "        lock = _FileLock(folder, \"update.lock\")\n        if False:",
     "count": 1,
     "run": "tests/test_update.sh",
     "expect": "ran beside the lock"
@@ -969,7 +969,7 @@
     "replace": "    if editable or (False and",
     "count": 1,
     "run": "tests/test_update_detect.sh",
-    "expect": "clone:"
+    "expect": "clone commands are not quoted"
   },
   {
     "name": "update: a RECORD that does not list this file still counts",
@@ -1104,7 +1104,7 @@
     "replace": "    if False:",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "nowheel: manual_step with the exact command"
+    "expect": "nowheel: update installed a release without a wheel or checksums"
   },
   {
     "name": "update: the wheel size limit is 50 MiB",
@@ -1131,7 +1131,7 @@
     "replace": "    t.join(600)",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "the lookup was not bounded"
+    "expect": "dns hang:"
   },
   {
     "name": "update: the bus list is not checked again on read",
@@ -1140,7 +1140,7 @@
     "replace": " and os.path.isabs(p)))",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "the list entries were not re-checked"
+    "expect": "update with a poisoned list failed"
   },
   {
     "name": "update: the lock does not fall back to the cache folder",
