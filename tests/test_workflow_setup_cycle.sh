@@ -27,7 +27,9 @@ PY
 }
 # The hooks piece saves settings.json as it was before every change (settings.json.agentbus-<UTC stamp>.bak): the stamp is not part of the transcript.
 eval "$(declare -f norm | sed '1s/^norm /norm_base /')"
-norm() { norm_base | sed -E 's/\.agentbus-[0-9]{8}T[0-9]{6}\.[0-9]{6}Z\.bak/.agentbus-<stamp>.bak/g'; }
+# The trust line names the installed tool by absolute path, which differs per machine; setup also looks at the login shell once.
+export SHELL=/bin/sh
+norm() { norm_base | sed -E -e 's/\.agentbus-[0-9]{8}T[0-9]{6}\.[0-9]{6}Z\.bak/.agentbus-<stamp>.bak/g' -e 's/command starts .* hook codex and ends/command starts TOOL hook codex and ends/'; }
 # settings_ok: settings.json keeps the user's keys and carries the five tagged hook entries (or, with "bare", only the user's keys).
 settings_ok() { python3 - "$C/settings.json" "$1" <<'PY'
 import json, sys
@@ -85,7 +87,9 @@ ok "rerun wrote nothing"
 echo "STEP 5: the Codex block is added after the user's text, and the user's later edit outside it survives a rerun"
 say "agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
-done. Start a new Codex session to load it.
+  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
+  = /bin/sh   prints nothing at startup (started once as \$SHELL -lc)
+done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts TOOL hook codex and ends # agentbus:managed.
 next: cd your-repo && agentbus init ." agentbus setup codex
 head -c "$(wc -c <"$T/agents.orig")" "$X/AGENTS.md" | cmp -s - "$T/agents.orig" || fail "the user's AGENTS.md text was changed"
 [ "$(grep -c '^<!-- agentbus:begin -->$' "$X/AGENTS.md")" = 1 ] && [ "$(grep -c '^<!-- agentbus:end -->$' "$X/AGENTS.md")" = 1 ] || fail "markers: $(cat "$X/AGENTS.md")"

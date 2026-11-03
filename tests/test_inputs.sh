@@ -30,7 +30,7 @@ before = snapshot()
 for args in [('ctx', 'set', '', 'value'), ('ctx', 'get', ''), ('ctx', 'history', '')]:
     p = run('--as', 'a', *args)
     assert p.returncode == 2 and p.stdout == '', (args, p)  # a usage error: exit 2
-    assert p.stderr == 'agentbus: KEY must not be empty. Omit KEY to list facts.\n', p.stderr
+    assert p.stderr == 'agentbus: KEY must not be empty. List facts with: agentbus ctx get\n', p.stderr
     assert snapshot() == before, (args, 'changed bus')
     # A missing bus must not be created by an invalid key either.
     with tempfile.TemporaryDirectory() as d:
@@ -44,7 +44,7 @@ assert p.returncode == 0, p.stderr
 rows = json.loads(p.stdout)['items']
 assert len(rows) == 1 and rows[0]['key'] == 'key' and rows[0]['value'] == 'value', rows
 for args, message in [
-    (('ctx', 'get', 'missing'), 'no context key missing. List keys with: agentbus ctx get'),
+    (('ctx', 'get', 'missing'), 'no fact named missing. List facts with: agentbus ctx get'),
     (('post', 'reply', '--reply-to', '99999'), 'no message #99999 to reply to. See recent ids with: agentbus read'),
     (('release', 'missing'), 'you do not hold missing. See your claims with: agentbus claims'),
 ]:
@@ -103,10 +103,11 @@ for args in 'post ""' 'post' 'ctx set ek ""' 'log add w ""' 'post "   "'; do
   echo "from stdin" > "$T/in"
   case "$1" in
     post) usage='post "text", or pipe text to post -.' ;;
-    ctx) usage='ctx set KEY "text", or pipe text to ctx set KEY -.' ;;
-    log) usage='log add ACTION "text", or pipe text to log add ACTION -.' ;;
+    ctx) usage='ctx set KEY needs a value. Use: agentbus --as NAME ctx set KEY "VALUE", or pipe text to ctx set KEY -.' ;;
+    log) usage='log add ACTION needs a detail. Use: agentbus --as NAME log add ACTION "DETAIL", or pipe text to log add ACTION -.' ;;
   esac
-  expect_fail "empty message. Use $usage" agentbus --as a "$@" < "$T/in"
+  case "$1" in post) usage="empty message. Use $usage" ;; esac
+  expect_fail "$usage" agentbus --as a "$@" < "$T/in"
 done
 [ "$(count "select count(*) from messages where body like '%from stdin%'")" = 0 ] || fail "an empty body posted stdin"
 [ "$(count "select count(*) from context where key='ek'")" = 0 ] || fail "an empty ctx value read stdin"
@@ -205,7 +206,8 @@ for j in "" --json; do
   rm -f "$errf"
   outof env AGENTBUS_DB="$D8/b.db" "${AB[@]}" read | grep -qF "posted with stdout closed$j" || fail "the post itself did not run"
 done
-python3 -c 'print("y" * 300000)' | AGENTBUS_DB="$D8/b.db" agentbus --as s8 post - >/dev/null
+# A listing cuts each body at 2 KB, so it takes 60 long messages (more than 120 KB) to fill a pipe.
+for i in $(seq 1 60); do python3 -c 'print("y" * 3000)' | AGENTBUS_DB="$D8/b.db" agentbus --as s8 post - >/dev/null; done
 errf=$(mktemp)
 { AGENTBUS_DB="$D8/b.db" "${AB[@]}" read 2>"$errf" || true; } | head -c 10 >/dev/null
 grep -q Traceback "$errf" && { cat "$errf" >&2; fail "traceback when the reader closed the pipe"; }

@@ -77,6 +77,35 @@ njson() { local o; o=$("$@") || fail "command failed: $*"; printf '%s' "$o" | py
 outof() { local o; o=$("$@") || fail "command failed: $*"; printf '%s\n' "$o"; }
 # wait_for FILE: until FILE exists (a test pause point was reached), at most 20 s.
 wait_for() { local w=0; while [ ! -e "$1" ]; do sleep 0.05; w=$((w+1)); [ $w -lt 400 ] || fail "never reached: $1"; done; }
+# Every wait on a process or a marker below ends at a deadline and fails naming what it waited for, so a stall
+# fails in seconds with a reason, never at run_all's 600 s cap (issue #17). The deadline is a backstop for a
+# machine too loaded to finish, never the thing a test waits on: the wait ends as soon as the event happens.
+# kill_tree PID: PID and its children (a function run with & leaves its command as a child), by PID only.
+kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill "$c" 2>/dev/null || true; done; kill "$1" 2>/dev/null || true; }
+# wait_exit PID SECONDS WHAT: until the background job PID has exited, then its status is in WAIT_RC. At the deadline
+# the job is killed and the test fails: "WHAT: still running after N s".
+wait_exit() {
+  local pid=$1 limit=$2 what=$3 end=$((SECONDS + $2))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$SECONDS" -ge "$end" ]; then kill_tree "$pid"; fail "$what: still running after $limit s"; fi
+    sleep 0.05
+  done
+  WAIT_RC=0; wait "$pid" || WAIT_RC=$?
+}
+# wait_marker FILE PID SECONDS WHAT [STDERR_FILE]: until FILE exists (a test pause point was reached). Fails at once,
+# with the job's stderr, when the job PID exits first (it can never get there), and at the deadline otherwise.
+wait_marker() {
+  local file=$1 pid=$2 limit=$3 what=$4 errf=${5:-/dev/null} end=$((SECONDS + $3))
+  while [ ! -e "$file" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      WAIT_RC=0; wait "$pid" || WAIT_RC=$?
+      [ -e "$file" ] && return 0   # it got there and then finished
+      fail "$what: the command exited (rc $WAIT_RC) before getting there: $(cat "$errf" 2>/dev/null)"
+    fi
+    if [ "$SECONDS" -ge "$end" ]; then kill_tree "$pid"; fail "$what: not reached after $limit s"; fi
+    sleep 0.05
+  done
+}
 mkrepo() { mkdir -p "$1"; git -C "$1" init -q; git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init; }
 
 # expect_fail "text stderr must contain" cmd args...

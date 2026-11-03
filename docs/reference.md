@@ -32,26 +32,42 @@ Claims and messages are per bus; nothing merges across buses.
 
 Follow the [skill](../skills/agentbus/SKILL.md): join, check inbox between steps, claim before editing, release when done, and leave.
 
+Every write (`post`, `claim`, `ctx set`, `goal`, `log add`) needs a name on the roster: under a name that has not joined, or has left, it fails with `not_on_roster` and writes nothing. Names are `[A-Za-z0-9._-]{1,40}` (`join` refuses others; a name already on a bus keeps working). `post --to` takes one name; a name not on the roster still gets the message, with a `recipient_not_on_roster` warning that lists close matches. `goal` is the shared goal's reserved fact key: set it with `goal TEXT`, not `ctx set`.
+
 Path claims are relative to the bus's directory. Paths normalise `./`, repeated slashes and `..`; absolute and escaping paths are refused. A path includes its descendants, with or without a trailing slash. Resources compare as given after normalisation, case included. Scheme names such as `issue:17` compare exactly. Claims are advisory, at most 1024 characters, and expire after 120 minutes by default (`--ttl-min`: 1 to 10080). Claim again to renew; omitted `--purpose` preserves the current purpose, and the original `claimed_at` stays unchanged. `release RESOURCE --if-held` succeeds when you do not hold it, for cleanup scripts.
 
 New identities receive older direct messages, but broadcasts only from their first join onward. `read` shows history. Inbox marks returned messages read after stdout writes successfully. This does not confirm that a downstream consumer read or processed them. Do not truncate a consuming inbox with `head`; use `inbox --limit N`. Use `inbox --peek` when inspecting without consuming. Delivery is at least once: a crash or concurrent calls can repeat a message. `--reply-to` links a message without choosing its recipient.
 
 ## Output
 
-Names, topics, context keys and claim resources are identifiers: `--as`, `AGENTBUS_AGENT`, `post --to`, `--topic`, `ctx` KEY and `claim`/`release` RESOURCE refuse a control character (C0, DEL, C1) or a bidirectional override with `bad_input` (exit 2), naming the field in the message and in `error.field`, and showing the character as `U+XXXX`. Bodies and values stay free text. Rows an older bus already holds are read as before and shown escaped (`\x1b`); such a name can no longer be passed as `--as`, so its claims end by expiry.
+Names, topics, fact keys and claim resources are identifiers: `--as`, `AGENTBUS_AGENT`, `post --to`, `--topic`, `ctx` KEY and `claim`/`release` RESOURCE refuse a control character (C0, DEL, C1) or a bidirectional override with `bad_input` (exit 2), naming the field in the message and in `error.field`, and showing the character as `U+XXXX`. Bodies and values stay free text. Rows an older bus already holds are read as before and shown escaped (`\x1b`); such a name can no longer be passed as `--as`, so its claims end by expiry.
 
-Use `--json` for parsing and check exit status; errors go to stderr. Human output escapes controls, invisible characters and backslashes. Rows start with tool-written text or two spaces, and wrap with indented continuations. JSON preserves stored text. Human message headers start with `#<integer id> `, followed by sender, recipient (`everyone` for broadcasts), kind and reply target. Local time comes last: `HH:MM` today, otherwise `Nov 1 16:19`; JSON timestamps stay UTC.
+Use `--json` for parsing and check exit status; errors go to stderr. Human output escapes controls, invisible characters and backslashes. Rows start with tool-written text or two spaces. On a terminal long lines wrap at its width with indented continuations (a word that fits a row is never cut); piped or redirected they are not wrapped, unless `COLUMNS` is set. JSON preserves stored text, and is compact when piped and indented on a terminal. Paths show `~` for the home folder. Human message headers start with `#<integer id> `, followed by sender, recipient (`everyone` for broadcasts), kind and reply target. Local time comes last: `HH:MM` today, otherwise `Nov 1 16:19`; a claim reads `for 2h (until 13:47)`. JSON timestamps stay UTC.
 
 A nonzero exit does not imply rollback. A write command may commit before output fails; inspect the bus before retrying.
 
-Listings default to 500 rows (log: 40; recent status messages: 10); `--limit -1` shows all. With `--json` they return an envelope that says whether rows were left out (see JSON output). Leave and release-all report at most 500 claims but release everything. A body of `-` reads stdin; an empty body is refused.
+Listings default to 20 rows for `inbox` and each section of `status` (its recent messages too) and 50 for every other listing; `--limit -1` shows all. A listing that left rows out says how many and prints the exact command that shows more (`next: agentbus read --before v1.eyJ... --limit 20`). With `--json` they return an envelope that says whether rows were left out (see JSON output). Leave and release-all report at most 500 claims but release everything. A body of `-` reads stdin; an empty body is refused, and so is one over 64 KB (`bad_input`, `field` `body`). Listings cut a message body at 2 KB (`body_truncated` true); `read --id N` shows one message whole. Text `status` shows a fact's first line only; `ctx get KEY` has the rest.
 
 
 ## Goal
 
 `agentbus --as NAME goal "text"` sets the shared goal; `agentbus goal` shows it, with who set it and when. `-` reads the text from stdin. `--json` prints `{goal, set_by, set_at}`, or `null` when there is none. Setting the goal it already holds changes nothing and reports `unchanged: true`.
 
-The goal is the context key `goal`, so `ctx history goal` lists every version. `join` prints `goal: ...` when one is set, and `status` opens with `== goal: ...`. `watch` pins it on the row under its header (🎯, or ◆ without emoji) and leaves it out of Facts.
+The goal is the fact `goal`, so `ctx history goal` lists every version. `join` prints `goal: ...` when one is set, and `status` opens with `== goal: ...`. `watch` pins it on the row under its header (🎯, or ◆ without emoji) and leaves it out of Facts.
+
+## Brief
+
+`agentbus --as NAME brief` is the one call for an agent that has just joined or come back: the goal, who is here and what each holds (with the claim's purpose), open questions, your unread handoffs and alerts, facts changed since your last read, and one `next:` line with the command to run. About 1,100 characters (under 400 tokens) for four agents with claims, three questions, a handoff, an alert and three facts. `status` plus `inbox` for the same bus is several times longer, and a late joiner needs one call fewer (`join`, `brief` instead of `join`, `status`, `inbox`).
+
+- It only reads. It never moves an inbox cursor, so the handoffs it lists are still there for `inbox`, which is what consumes them. With `--as` it refreshes your last-seen like every command; without `--as` it is a read-only open and shows the bus as a bystander (no unread, only questions to everyone).
+- An open question has kind `question`, is addressed to you or to everyone, and has no answer: no message of kind `answer` replies to it, directly or through a chain of replies (an answer to a reply to the question counts). A reply of another kind, a note or a question, does not answer it. Oldest first.
+- Unread follows the inbox rule exactly (after your cursor; direct to you, or broadcast since you first joined; not from you). The list shows handoffs and alerts; `unread.total` counts every kind.
+- Changed facts are those updated at or after the time of the last message you read with `inbox` (every fact before a first read), leaving out your own and the goal.
+- `--limit N` (default 5) bounds every section; `omitted` counts what was left out and the text names the next command. Stored text is cut (bodies and values at 200 characters in `--json`, with `body_truncated` or `value_truncated`; the goal at 300).
+
+## Demo
+
+`agentbus demo` is a hands-off tour of about 30 seconds for a person: two scripted agents join a temporary bus, set a goal, post a task, claim a folder, are refused a conflicting claim, hand off, catch up with `brief` and release. Each command is printed as it runs. The bus lives in a directory it makes under `TMPDIR`, outside any repo; it never reads or writes the bus of the folder you are in (every `AGENTBUS_*` variable is dropped for the commands it runs) and it removes the directory when it finishes, fails, or is stopped with Ctrl-C or SIGTERM (exit 130). On a terminal it offers `watch` on the demo bus at the end; `--watch` opens it without asking, `--no-pause` skips the pauses and the offer. `--json` runs the same tour without pauses and prints each step's exit status and `cleaned: true`, a quick check that an install works.
 
 ## Watch
 
@@ -115,11 +131,11 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | Command | `--json` result |
 | --- | --- |
 | `join` | `{"joined": string, "bus": string, "goal": null or Goal, "agentbus": string, "contract": integer}` |
-| `leave` | `{"left": string, "released": [string], "released_count": integer}` |
+| `leave` | `{"left": string, "was_joined": boolean, "released": [string], "released_count": integer}` |
 | `who` | `{"v": integer, "items": [Agent], "has_more": boolean, "next": string or null}` |
-| `post` | `{"id": integer}` |
+| `post` | `{"id": integer, "warnings": [Warning]}` |
 | `inbox` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}` |
-| `read` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}` |
+| `read` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message` |
 | `ctx set` | `Fact` |
 | `ctx get` | `a Fact, or {"v": integer, "items": [Fact], "has_more": boolean, "next": string or null}` |
 | `ctx history` | `{"v": integer, "items": [FactVersion], "has_more": boolean, "next": string or null}` |
@@ -134,11 +150,16 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `buses` | `{"v": integer, "items": [BusLevel], "has_more": boolean, "next": string or null}` |
 | `init` | `{"directory": string, "copy": string, "old": string, "new": string, "exclude_added": boolean, "gitignore_rule": boolean, "outer": string or null}` |
 | `upgrade` | `{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}` |
-| `schema` | `{"contract": integer, "agentbus": string, "commands": object, "objects": object, "error_fields": object, "errors": object, "exit_codes": object, "env": object}` |
+| `schema` | `the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, "errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command's commands, objects and errors; with --index {"contract": integer, "agentbus": string, "commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}` |
+| `help` | `{"command": string or null, "text": string}` |
+| `completion` | `{"shell": string, "text": string}` |
 | `skill` | `{"text": string}` |
-| `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved)}]}` |
+| `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved), "info": boolean (true for a report about something that is not a file, such as the login shell)}]}` |
 | `update` | `{"from": string, "to": string, "latest": string or null, "install": {"method": string, "url": string or null}, "tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null (only when update downloads the release wheel; "install_with" in a dry run)}, "buses": [UpgradeRow], "setup": [SetupResult], "plugin": {"fix": string} or null, "restart": boolean, "scope": {"narrowed": boolean, "why": string or null}}, or with --check {"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, "url": string or null}, "argv": null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null, "notes": string or null}` |
+| `hooks` | `{"hooks": {EVENT: [{"matcher": string (optional), "hooks": [{"type": string, "timeout": integer, "command": string}]}]}}` |
 | `doctor` | `{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" \| "warn" \| "fail" \| "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0` |
+| `brief` | `{"bus": string, "me": null or {"name": string, "joined": boolean}, "goal": null or BriefGoal, "agents": {"items": [BriefAgent]}, "questions": {"items": [BriefMessage]}, "unread": {"total": integer, "items": [BriefMessage]}, "facts": {"since": string or null, "items": [BriefFact]}, "omitted": {"agents": integer, "questions": integer, "unread": integer, "facts": integer}, "next": string}` |
+| `demo` | `{"steps": [{"command": string, "exit": integer}], "cleaned": boolean}` |
 <!-- /generated:results -->
 
 Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; timestamps are UTC strings in JSON.
@@ -147,7 +168,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | Object | Fields |
 | --- | --- |
 | `Agent` | `name`, `tool`, `model`, `cwd`, `branch`, `role`, `joined_at`, `last_seen` |
-| `Message` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to` |
+| `Message` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to`, `body_truncated` (optional) |
 | `Claim` | `resource`, `agent`, `purpose`, `claimed_at`, `expires_at`, `state` |
 | `Fact` | `key`, `value`, `updated_by`, `updated_at`, `unchanged` (optional) |
 | `FactVersion` | `id`, `key`, `value`, `updated_by`, `updated_at` |
@@ -157,6 +178,12 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `UpgradeRow` | `directory`, `status`, `old`, `new`, `schema_old`, `schema_new`, `backup`, `error` |
 | `SetupResult` | `target`, `scope`, `directory`, `changes`, `error` |
 | `DoctorCheck` | `id`, `status`, `detail`, `fix`, `hint`, `scope` (optional) |
+| `Warning` | `code`, `name`, `did_you_mean` |
+| `BriefGoal` | `goal`, `set_by`, `set_at`, `truncated` |
+| `BriefMessage` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to`, `body_truncated` |
+| `BriefClaim` | `resource`, `purpose`, `expires_at` |
+| `BriefAgent` | `name`, `role`, `tool`, `last_seen`, `claims`, `claims_omitted` |
+| `BriefFact` | `key`, `value`, `updated_by`, `updated_at`, `value_truncated` |
 <!-- /generated:objects -->
 
 #### `update --json`
@@ -207,20 +234,20 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `claim_conflict` | 1 | no | `resource`, `holder`, `expires_at`, `purpose` | Another agent holds an overlapping claim. Ask the holder, or work elsewhere. |
 | `not_held` | 1 | no | `resource` | You do not hold that claim. Nothing to release; use release --if-held for cleanup. |
 | `no_message` | 1 | no | `id` | There is no message with that id. Check the id with read. |
-| `no_context_key` | 1 | no | `key` | There is no fact with that key. List keys with ctx get. |
+| `no_context_key` | 1 | no | `key` | There is no fact with that key. List facts with ctx get. |
 | `not_on_roster` | 1 | no | `agent` | That name has not joined. Join first. |
-| `name_active` | 1 | no | `agent`, `last_seen_min` | The name was active recently and may be another live session. Pick another name, or join --takeover if it is you. |
-| `request_id_reused` | 1 | no | `request_id`, `agent` | That request id was used with a different message. Use a new token for a different message. |
-| `bad_input` | 2 | no | `field` (optional) | The arguments are not valid (a usage error). Fix the arguments. |
+| `name_active` | 1 | no | `agent`, `last_seen_min`, `suggested_name` | The name was active recently and may be another live session. suggested_name is a free name, or null. Join under suggested_name, or join --takeover if it is you. To retry your own join, pass the same --request-id. |
+| `request_id_reused` | 1 | no | `request_id`, `agent`, `original_id` | That request id was used with a different message or join. original_id is the message id, or the log id of the join, that first used it. Repeat the original request exactly, or use a new token for a different one. |
+| `bad_input` | 2 | no | `field` (optional) | The arguments are not valid (a usage error). field names the argument when a value is refused: a body, value, detail or text over 64 KB (field body for post). Fix the arguments. |
 | `no_bus` | 3 | no | none | There is no bus here or above. Run agentbus init DIR, or set AGENTBUS_DB. |
 | `busy` | 3 | yes | `bus` | Another process held the bus for 15 seconds. Retry after a few seconds. |
 | `schema_refused` | 3 | no | none | The bus tables are not agentbus's. Stop and tell the user. |
 | `schema_older` | 3 | no | `bus`, `bus_schema`, `tool_schema` | The bus is older than this tool and was opened read-only. Run any command that is not watch to upgrade it, or agentbus upgrade DIR. |
 | `schema_newer` | 3 | no | `bus`, `bus_schema`, `tool_schema` | The bus is newer than this copy of the tool. Use a newer agentbus. |
-| `schema_corrupt` | 3 | no | `bus`, `bus_schema` | bus.db records a schema version no agentbus writes; another tool or a lane changed it. Stop and tell the user; restore a backup (docs/how-to/upgrade.md). |
+| `schema_corrupt` | 3 | no | `bus`, `bus_schema` | bus.db records a schema version no agentbus writes; another tool or an agent changed it. Stop and tell the user; restore a backup (docs/how-to/upgrade.md). |
 | `backup_failed` | 3 | no | `bus`, `reason` | The backup before a migration could not be made. Free disk space or move the bus. |
 | `copy_newer` | 1 | no | `directory`, `copy_version`, `tool_version` | The folder's copy of agentbus is newer than this one; it is never downgraded. Run upgrade or init with a newer agentbus. |
-| `bus_unavailable` | 3 | no | `file` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. Read the message, fix the folder, then run the command again. |
+| `bus_unavailable` | 3 | no | `file` (optional), `outcome_unknown` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; committed is then true when that write was the command's own. Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat it only with its request id. |
 | `ack_failed` | 3 | yes | `delivered` | inbox printed its messages but could not mark them read. The output was complete: use it, expect the same messages again, and dedupe by id. |
 | `output_failed` | 1 | yes | none | stdout could not be written; committed effects stand. Retry with the same token. |
 | `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional), `argv` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun). |
@@ -234,6 +261,16 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `update_running` | 1 | yes | `lock` | Another agentbus update is running. Wait for it, then retry. |
 | `internal` | 4 | no | none | A bug in agentbus. Report it. |
 <!-- /generated:errors -->
+
+### Warnings
+
+A warning is not an error: the command succeeded and its `--json` result carries `warnings: [Warning]` (always an array, empty when there is nothing to say). In human output each warning is one line on stderr.
+
+<!-- generated:warnings -->
+| Code | Extra fields | Commands | Meaning and what to do |
+| --- | --- | --- | --- |
+| `recipient_not_on_roster` | `name`, `did_you_mean` | `post` | The message was delivered to --to NAME, but no agent with that name has joined. did_you_mean lists the closest roster names (at most 3, possibly none). If the name is a typo, post again to a name in did_you_mean. The first message waits for the typo. |
+<!-- /generated:warnings -->
 
 ### Exit codes
 
@@ -257,8 +294,8 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 <!-- generated:retry -->
 | Command | Class | How to retry safely |
 | --- | --- | --- |
-| `join` | idempotent with flag | join --takeover for your own name |
-| `leave` | idempotent | a second run reports released_count 0 and writes no log row |
+| `join` | idempotent with flag | join --request-id TOKEN: the same token and flags return the first result with duplicate true instead of name_active; or join --takeover for your own name |
+| `leave` | idempotent | a second run reports was_joined false and released_count 0 and writes no log row |
 | `who` | safe | repeat freely |
 | `post` | needs request id | pass --request-id TOKEN; the same token and payload returns the original id with duplicate true |
 | `inbox` | at least once | repeat; a crash or ack_failed redelivers, so check message ids before acting; with `--peek`: safe (repeat freely) |
@@ -278,13 +315,22 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `init` | idempotent | repeat |
 | `upgrade` | idempotent | repeat |
 | `schema` | safe | repeat freely |
+| `help` | safe | repeat freely |
+| `completion` | safe | repeat freely |
 | `skill` | safe | repeat freely |
 | `setup` | idempotent | a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object |
 | `update` | idempotent | repeat |
+| `hooks` | safe | repeat freely |
 | `doctor` | safe | repeat freely |
+| `brief` | safe | repeat freely |
+| `demo` | safe | repeat freely |
 <!-- /generated:retry -->
 
-`post --request-id TOKEN` makes a retry by the same sender return the original message ID with `duplicate: true`. Body, recipient, kind, topic and reply target must match; a different payload gives `request_id_reused`. Tokens belong to their sender and remain on the message row. Without a token each post creates a message.
+One rule for every write: repeating a command with the same `--request-id` never repeats its effect. `post` and `join` replay the first result (`duplicate: true`); `leave`, `claim`, `release`, `ctx set` and `goal` accept the flag and are already safe to repeat, so it changes nothing. `log add` has no token yet: check `log show --limit 1` before retrying it.
+
+`post --request-id TOKEN` makes a retry by the same sender return the original message ID with `duplicate: true`. Body, recipient, kind, topic and reply target must match; a different payload gives `request_id_reused`, naming the original (`original_id`). Tokens belong to their sender and remain on the message row. Without a token each post creates a message.
+
+`join --request-id TOKEN` makes a retry of your own join (same name, same flags) return the first result with `duplicate: true` instead of `name_active`. Different flags under the same token give `request_id_reused`; `original_id` is the log id of the first join.
 
 ### Environment
 
@@ -296,7 +342,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `NO_COLOR` | Turns colour off in watch. | unset |
 | `AGENTBUS_NO_EMOJI` | Turns emoji off in watch. | unset |
 | `AGENTBUS_ASCII` | Draws watch's own marks in ASCII, with emoji off (also under TERM=linux). | unset |
-| `COLUMNS` | Width human output is wrapped to. | the terminal width, else 80 |
+| `COLUMNS` | Width human output is wrapped to. Without it, human output wraps to the terminal when stdout is one and is never wrapped when stdout is a pipe or a file. | the terminal width; no wrapping when piped |
 | `AGENTBUS_AGENT_SESSION` | Set to anything but 0 to mark a run as an agent's: no release notice, and update covers only the current bus. Use it from an agent harness that agentbus does not recognise. | unset |
 | `AGENTBUS_NO_UPDATE_NOTICE` | Set to anything but 0 to silence the release notice and the stale-copy notice. | unset |
 | `AGENTBUS_NO_UPDATE_CHECK` | Set to anything but 0 to turn off the once-a-day release check (DO_NOT_TRACK and NO_UPDATE_NOTIFIER do the same). | unset |

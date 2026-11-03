@@ -215,7 +215,7 @@ assert activity in skill and activity in ' '.join(top.split())
 assert 'Omit --as to look without counting as present.' in skill
 assert 'Omit --as to look without counting as present.' in ' '.join(top.split())
 start = skill.split('## Start\n', 1)[1].split('\n## ', 1)[0]
-assert re.search(r'`join`, then `status --limit 20` and `inbox --limit 20`', start), start
+assert re.search(r'`join`, then `brief`', start) and '`inbox --limit 20`' in start and 'status --limit 20' not in start, start
 assert 'run `claims`, then' not in skill
 assert 'claim itself is the check' in skill
 assert len(skill.split()) < 720, 'keep the protocol short (the byte cap, 4800, is pinned in tests/test_skill.sh)'
@@ -335,7 +335,7 @@ non_commands = {
     'pipx install git+https://github.com/wickdninja/agentbus@v0.1.0',
     'examples/two-agent-handoff.sh',
     'mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus',
-    'AGENTS.md', '.agentbus/bin/agentbus', '/path/to/agentbus/skill/SKILL.md',
+    'AGENTS.md', '.agentbus/bin/agentbus', '/path/to/agentbus/skill/SKILL.md', '/hooks',
     'issue:17', '.git', 'AGENTBUS_DB', '.agentbus/bin/',
 }
 for snippet in re.findall(r'`([^`]+)`', inline):

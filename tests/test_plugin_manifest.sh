@@ -69,7 +69,7 @@ PY
 ok "github source with a ref that exists; ./, no ref, a branch, a non-git source and main in a release are rejected"
 
 echo
-echo "TEST 3: every command in hooks.json runs the plugin's own executable and ends with || true"
+echo "TEST 3: every command in hooks.json runs the plugin's own launcher and ends with || true"
 "$PY" -I - "$ROOT" <<'PY' || fail "a hooks.json command is not the plugin-root form"
 import json, re, sys
 doc = json.load(open(sys.argv[1] + "/hooks/hooks.json"))
@@ -80,13 +80,13 @@ for event, groups in hooks.items():
     h = groups[0]["hooks"][0]
     # SessionEnd hooks share a 1.5 s budget that no plugin timeout raises (docs/design/claude-hook-contract.md, section 6)
     assert h["type"] == "command" and h["timeout"] == (2 if event == "SessionEnd" else 5), h
-    want = 'python3 "${CLAUDE_PLUGIN_ROOT}/bin/agentbus" hook claude %s 2>/dev/null || true' % event
+    want = 'python3 "${CLAUDE_PLUGIN_ROOT}/hooks/launch.py" hook claude %s 2>/dev/null || true' % event
     assert h["command"] == want, (event, h["command"])
 assert hooks["SessionStart"][0]["matcher"] == "startup|resume|clear|compact|fork"  # the matcher values the contract lists
 assert hooks["PreToolUse"][0]["matcher"] == "Edit|Write|MultiEdit|NotebookEdit"
 assert all("matcher" not in hooks[e][0] for e in ("UserPromptSubmit", "Stop", "SessionEnd"))
 PY
-ok "five events, each: python3 \"\${CLAUDE_PLUGIN_ROOT}/bin/agentbus\" hook claude EVENT 2>/dev/null || true"
+ok "five events, each: python3 \"\${CLAUDE_PLUGIN_ROOT}/hooks/launch.py\" hook claude EVENT 2>/dev/null || true"
 
 echo
 echo "TEST 4: the hooks.json event names are in the verified list of the contract document, and no subagent event is registered"
@@ -109,10 +109,11 @@ echo
 echo "TEST 5: the skill is in the plugin root, and the package ships the plugin files"
 [ -s "$ROOT/skills/agentbus/SKILL.md" ] || fail "skills/agentbus/SKILL.md is missing from the plugin root"
 [ -f "$ROOT/bin/agentbus" ] || fail "bin/agentbus is missing from the plugin root"
+[ -f "$ROOT/hooks/launch.py" ] || fail "hooks/launch.py is missing from the plugin root"
 for part in '".claude-plugin/"' '"hooks/"' '"skills/"'; do
   grep -qF "$part" "$ROOT/pyproject.toml" || fail "the sdist does not include $part"
 done
-ok "SKILL.md, bin/agentbus; the sdist includes .claude-plugin/, hooks/ and skills/"
+ok "SKILL.md, bin/agentbus, hooks/launch.py; the sdist includes .claude-plugin/, hooks/ and skills/"
 
 echo
 echo "TEST 6: the registered commands run the hook, and exit 0 when python3 is not on PATH"

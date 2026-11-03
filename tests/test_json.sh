@@ -59,9 +59,9 @@ claim = dict(resource=str, agent=str, purpose=(str, null), claimed_at=str, expir
 for name in ('a', 'b'):
     joined = shape(j('--as', name, 'join', '--tool', 't'), joined=str, bus=str, goal=(dict, null), agentbus=str, contract=int)
     assert joined['contract'] == 1
-shape(j('--as', 'a', 'post', 'hello'), id=int)
-qid = shape(j('--as', 'a', 'post', 'q', '--to', 'b', '--kind', 'question'), id=int)['id']
-shape(j('--as', 'b', 'post', 'ans', '--to', 'a', '--reply-to', str(qid), '--kind', 'answer'), id=int)
+shape(j('--as', 'a', 'post', 'hello'), id=int, warnings=list)
+qid = shape(j('--as', 'a', 'post', 'q', '--to', 'b', '--kind', 'question'), id=int, warnings=list)['id']
+shape(j('--as', 'b', 'post', 'ans', '--to', 'a', '--reply-to', str(qid), '--kind', 'answer'), id=int, warnings=list)
 listing(j('--as', 'b', 'inbox'), **message)
 assert j('--as', 'b', 'inbox')['items'] == []
 listing(j('who'), **agent)
@@ -94,7 +94,7 @@ entry = shape(j('--as', 'a', 'log', 'add', 'note', 'detail'), id=int, logged=boo
 assert entry['logged'] is True and entry['id'] > 0
 logs = listing(j('log', 'show'), id=int, ts=str, agent=str, action=str, detail=(str, null))
 assert [(r['agent'], r['action'], r['detail']) for r in logs if r['id'] == entry['id']] == [('a', 'note', 'detail')]
-shape(j('--as', 'a', 'leave'), left=str, released=list, released_count=int)
+shape(j('--as', 'a', 'leave'), left=str, was_joined=bool, released=list, released_count=int)
 repo = pathlib.Path(tmp)/'install'; repo.mkdir()
 shape(j('init', str(repo)), directory=str, copy=str, old=str, new=str, exclude_added=bool, gitignore_rule=bool, outer=null)
 shape(j('upgrade', str(repo)), directory=str, old=str, new=str, schema_old=(int, type(None)), schema_new=(int, type(None)), backup=(str, type(None)))
@@ -106,18 +106,36 @@ ucache.mkdir(parents=True, mode=0o700)
 (ucache/'release-check.json').chmod(0o600)
 upd = shape(j('update', '--check'), running=str, latest=(str, null), update_available=bool, install=dict, argv=null, commands=list, download=(dict, null), notes=(str, null))
 assert upd['update_available'] is True and upd['latest'] == '0.9.0' and set(upd['install']) == {'method', 'url'}, upd   # a clone here, another method when run installed
-schema = shape(j('schema'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, exit_codes=dict, env=dict)
+schema = shape(j('schema'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 assert schema['contract'] == 1 and 'post' in schema['commands']
-shape(j('schema', 'post'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, exit_codes=dict, env=dict)
+shape(j('schema', 'post'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 listing(j('buses'), level=int, directory=str, exists=bool, copy_version=(str, null), stale=bool)
 assert shape(j('skill'), text=str)['text'].startswith('---\nname: agentbus\n')
 assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbus\n')
+helped = shape(j('help', 'ctx', 'set'), command=str, text=str)
+assert helped['command'] == 'ctx set' and helped['text'].startswith('usage: agentbus ctx set KEY VALUE'), helped
+assert shape(j('help'), command=null, text=str)['command'] is None
+done = shape(j('completion', 'bash'), shell=str, text=str)
+assert done['shell'] == 'bash' and '_agentbus()' in done['text'], done
 setup = shape(j('setup', 'claude', '--dry-run'), target=str, scope=str, dry_run=bool, changes=list)
 array(setup['changes'], path=str, action=str, detail=str)
+assert set(shape(j('hooks', 'codex'), hooks=dict)['hooks']) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'}
 doctor = shape(j('doctor'), agentbus=str, path=str, contract=int, checks=list, fail=int, warn=int)
 assert doctor['checks'], doctor
 for check in doctor['checks']:   # scope is there for the checks of a user or project file
     shape(check, id=str, status=str, detail=str, fix=(str, null), hint=(str, null), **({'scope': str} if 'scope' in check else {}))
+brief = shape(j('--as', 'b', 'brief'), bus=str, me=dict, goal=dict, agents=dict, questions=dict, unread=dict, facts=dict, omitted=dict, next=str)
+shape(brief['me'], name=str, joined=bool)
+shape(brief['goal'], goal=str, set_by=str, set_at=str, truncated=bool)
+shape(brief['agents'], items=list); shape(brief['questions'], items=list)
+shape(brief['unread'], total=int, items=list); shape(brief['facts'], since=(str, null), items=list)
+shape(brief['omitted'], agents=int, questions=int, unread=int, facts=int)
+array(brief['agents']['items'], name=str, role=(str, null), tool=(str, null), last_seen=str, claims=list, claims_omitted=int)
+for row in brief['questions']['items'] + brief['unread']['items']:
+    shape(row, id=int, ts=str, sender=str, recipient=str, kind=str, topic=(str, null), body=str, reply_to=(int, null), body_truncated=bool)
+demo = shape(j('demo'), steps=list, cleaned=bool)
+array(demo['steps'], command=str, exit=int)
+assert demo['cleaned'] is True and sorted({s['exit'] for s in demo['steps']}) == [0, 1], demo
 j('--as', 'b', 'claim', 'watch-fixture')
 for after in (False, True):
     for once in ((), ('--once',)):

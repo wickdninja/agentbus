@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/agentbus\" hook claude SessionStart 2>/dev/null || true",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/launch.py\" hook claude SessionStart 2>/dev/null || true",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/agentbus\" hook claude UserPromptSubmit 2>/dev/null || true",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/launch.py\" hook claude UserPromptSubmit 2>/dev/null || true",
             "timeout": 5
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/agentbus\" hook claude PreToolUse 2>/dev/null || true",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/launch.py\" hook claude PreToolUse 2>/dev/null || true",
             "timeout": 5
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/agentbus\" hook claude Stop 2>/dev/null || true",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/launch.py\" hook claude Stop 2>/dev/null || true",
             "timeout": 5
           }
         ]
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/agentbus\" hook claude SessionEnd 2>/dev/null || true",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/launch.py\" hook claude SessionEnd 2>/dev/null || true",
             "timeout": 2
           }
         ]

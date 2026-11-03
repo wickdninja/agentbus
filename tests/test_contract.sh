@@ -19,7 +19,7 @@ BASE = {k: v for k, v in os.environ.items() if not k.startswith("AGENTBUS_")}
 BASE.update(COLUMNS="4096", PYTHONDONTWRITEBYTECODE="1")
 count = [0]
 
-def run(*args, db=None, env=None, cwd=None, closed=False, home=None):
+def run(*args, db=None, env=None, cwd=None, closed=False, home=None, stdin=None):
     count[0] += 1
     e = dict(BASE, **(env or {}))
     home = home or os.path.join(tmp, "h%d" % count[0]); os.makedirs(home, exist_ok=True)
@@ -30,7 +30,7 @@ def run(*args, db=None, env=None, cwd=None, closed=False, home=None):
     if closed:  # the child's stdout is closed (>&-), not redirected
         kw["preexec_fn"] = lambda: os.close(1)
         kw["stdout"] = None
-    return subprocess.run([*agentbus_argv(), *args], cwd=cwd or home, env=e, text=True, timeout=60, **kw)
+    return subprocess.run([*agentbus_argv(), *args], cwd=cwd or home, env=e, text=True, timeout=60, input=stdin, **kw)
 
 def fresh(name):
     d = os.path.join(tmp, name); os.makedirs(d)
@@ -76,8 +76,8 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
     "no_message": (1, False, ["id"]),
     "no_context_key": (1, False, ["key"]),
     "not_on_roster": (1, False, ["agent"]),
-    "name_active": (1, False, ["agent", "last_seen_min"]),
-    "request_id_reused": (1, False, ["request_id", "agent"]),
+    "name_active": (1, False, ["agent", "last_seen_min", "suggested_name"]),
+    "request_id_reused": (1, False, ["request_id", "agent", "original_id"]),
     "bad_input": (2, False, []),
     "no_bus": (3, False, []),
     "busy": (3, True, ["bus"]),
@@ -103,7 +103,8 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
 }
 assert set(doc["errors"]) == set(EXPECTED_ERRORS), sorted(set(doc["errors"]) ^ set(EXPECTED_ERRORS))
 # fields every error of the code may carry, when they apply (a refused bus file names itself)
-EXPECTED_OPTIONAL = {"bus_unavailable": ["file"],
+# outcome_unknown: the hold watchdog stopped the command during a COMMIT, so the write may or may not have been saved
+EXPECTED_OPTIONAL = {"bus_unavailable": ["file", "outcome_unknown"],
                      # an identifier with a control character: the argument that held it
                      "bad_input": ["field"],
                      # upgrade stopped once a migration committed: what was migrated, its backup, how to finish
@@ -139,13 +140,30 @@ assert args["body"]["positional"] is True and args["--to"]["default"] == "*", ar
 assert args["--kind"]["choices"] == ["note", "question", "answer", "handoff", "decision", "alert", "done"], args["--kind"]
 assert args["--request-id"]["type"] == "string" and "default" not in args["--request-id"], args["--request-id"]
 assert commands["who"]["args"][-1]["name"] == "--limit" and commands["who"]["args"][-1]["type"] == "integer"
+# the output-discipline additions (WS L-out): written out here, independently of the registry
+assert [g["name"] for g in doc["global_args"]] == ["--as", "--json", "--up"], doc["global_args"]
+assert "global_args" in commands["schema"]["result"]["anyOf"][0]["required"], "schema's own result must list global_args"
+assert objects["Message"]["properties"]["body_truncated"] == {"type": "boolean"} and "body_truncated" not in objects["Message"]["required"]
+read_args = {a["name"]: a for a in commands["read"]["args"]}
+assert read_args["--id"]["type"] == "integer" and read_args["--limit"]["default"] == 50, read_args
+assert "no_message" in commands["read"]["errors"] and len(commands["read"]["result"]["anyOf"]) == 2, commands["read"]
+assert {a["name"]: a for a in commands["schema"]["args"]}["--index"]["type"] == "boolean"
+assert {a["name"]: a for a in commands["inbox"]["args"]}["--limit"]["default"] == 20
+assert {a["name"]: a for a in commands["status"]["args"]}["--limit"]["default"] == 20
+for name in ("who", "claims"):
+    assert {a["name"]: a for a in commands[name]["args"]}["--limit"]["default"] == 50, name
+assert doc["errors"]["bad_input"]["optional_fields"] == ["field"] and "64 KB" in doc["errors"]["bad_input"]["meaning"]
+assert "pipe" in doc["env"]["COLUMNS"]["meaning"]
+trim = ok("schema", "post")
+assert set(trim["objects"]) == {"Warning"} and set(trim["errors"]) <= set(doc["errors"]) and "claim_conflict" not in trim["errors"], trim.keys()
+assert set(ok("schema", "ctx")["objects"]) == {"Fact", "FactVersion"}
 print("PASS: schema COMMAND prints one command's entry, with arguments read from the parser")
 
 # ---- the human table: one line per command ----
 p = run("schema")
 assert p.returncode == 0 and p.stdout, p
-assert re.search(r"^  post +\{id\} +retry: only with --request-id$", p.stdout, re.M), p.stdout
-assert len(p.stdout.splitlines()) <= 30, "one screen"
+assert re.search(r"^  post +\{id, warnings\} +retry: only with --request-id$", p.stdout, re.M), p.stdout
+assert len(p.stdout.splitlines()) <= 34, "one screen"   # 29 commands plus the header and the details line; was 30 before help, completion, brief, demo, update and doctor joined the table
 for name in commands:
     assert re.search(r"^  " + re.escape(name) + r"  ", p.stdout, re.M), (name, p.stdout)
 print("PASS: schema prints a one-screen table: command, result, retry")
@@ -157,7 +175,7 @@ for name, c in commands.items():
     last = [l for l in h.stdout.splitlines() if l.strip()][-1]
     assert last == c["help"], (name, last, c["help"])
     assert re.fullmatch(r"JSON result: .+\. Retry: .+\.", c["help"]), c["help"]
-assert commands["post"]["help"] == 'JSON result: {"id": integer}. Retry: only with --request-id.'
+assert commands["post"]["help"] == 'JSON result: {"id": integer, "warnings": [Warning]}. Retry: only with --request-id.'
 print("PASS: help text for each subcommand ends with its JSON result line")
 
 # ---- every die() carries a code (static check over the source) ----
@@ -220,9 +238,10 @@ expect("no_message", "--as", "a", "post", "hi", "--reply-to", "99", db=db)
 expect("no_context_key", "ctx", "get", "nope", db=db)
 expect("not_on_roster", "--as", "ghost", "claim", "x", db=db)
 e = expect("name_active", "--as", "a", "join", db=db)
-assert e["agent"] == "a" and isinstance(e["last_seen_min"], int), e
-ok("--as", "a", "post", "one", "--request-id", "tok", db=db)
-expect("request_id_reused", "--as", "a", "post", "two", "--request-id", "tok", db=db)
+assert e["agent"] == "a" and isinstance(e["last_seen_min"], int) and e["suggested_name"] == "a-2", e
+first = ok("--as", "a", "post", "one", "--request-id", "tok", db=db)
+e = expect("request_id_reused", "--as", "a", "post", "two", "--request-id", "tok", db=db)
+assert e["original_id"] == first["id"] and "Original: #%d" % first["id"] in e["message"], e
 expect("bad_input", "--as", "a", "post", "hi", "--kind", "fyi", db=db)
 expect("no_bus", "who")
 expect("internal", "who", db=db, env={"AGENTBUS_TEST_FAIL": "internal"})
@@ -371,9 +390,9 @@ ok("--as", "a", "ctx", "set", "k1", "v", db=wdb); ok("--as", "a", "ctx", "set", 
 for i in range(12):
     ok("--as", "a", "post", "m%d" % i, db=wdb)
 st = ok("status", "--limit", "1", db=wdb)
-# 3 agents and claims, 2 facts, 12 messages: one of each is shown by --limit 1, and messages always show the latest 10
-assert st["omitted"] == {"agents": 2, "context": 1, "claims": 2, "messages": 2}, st["omitted"]
-assert ok("status", db=wdb)["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 2}
+# 3 agents and claims, 2 facts, 12 messages: one of each is shown by --limit 1 (messages too), and all of them by default
+assert st["omitted"] == {"agents": 2, "context": 1, "claims": 2, "messages": 11}, st["omitted"]
+assert ok("status", db=wdb)["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 0}
 w = ok("watch", db=wdb)
 assert w["omitted"] == {"agents": 0, "context": 0, "claims": 0, "messages": 0}, w["omitted"]
 print("PASS: status and watch --json carry omitted counts")
@@ -394,6 +413,7 @@ q = step("post", "--as", "a", "post", "q", "--to", "b", "--kind", "question")
 step("post", "--as", "a", "post", "q", "--to", "b", "--kind", "question", "--request-id", "r1")
 step("post", "--as", "a", "post", "q", "--to", "b", "--kind", "question", "--request-id", "r1")
 step("post", "--as", "b", "post", "ans", "--to", "a", "--reply-to", str(q["id"]), "--kind", "answer")
+long_post = step("post", "--as", "a", "post", "-", stdin="long body " * 400)   # 4 KB: a listing cuts it
 step("ctx set", "--as", "a", "ctx", "set", "k", "v1")
 step("ctx get", "ctx", "get", "k")
 step("goal", "--as", "a", "goal", "ship it")
@@ -406,8 +426,11 @@ step("log add", "--as", "a", "log", "add", "note", "detail")
 step("status", "status")
 step("watch", "watch")
 step("watch", "watch", "--once")
+step("brief", "brief")
+step("brief", "--as", "b", "brief")
 step("schema", "schema")
 step("schema", "schema", "post")
+step("schema", "schema", "--index")
 # update --check from the checkout (a clone) answers from a good cache entry: no request is made. (The full update
 # result is validated in tests/test_update.sh.)
 uhome = os.path.join(tmp, "uhome")
@@ -424,11 +447,15 @@ step("init", "init", repo)
 step("upgrade", "upgrade", repo)
 step("upgrade", "upgrade", "--all", repo)
 step("upgrade", "upgrade", "--dry-run", repo)
+step("demo", "demo")
 step("skill", "skill")
 step("skill", "skill", "--agents-md")
+step("help", "help", "ctx", "set")
+step("completion", "completion", "bash")
 # a dry run writes nothing; the config folders point into this test's own temp folder all the same
 step("setup", "setup", "claude", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("setup", "setup", "codex", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
+step("hooks", "hooks", "codex")
 # doctor reads only; its config folders point into this test's own temp folder too
 step("doctor", "doctor", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("doctor", "doctor", "--scope", "project", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
@@ -437,6 +464,10 @@ if NEEDS_ENVELOPE:
     step("who", "who")
     step("inbox", "--as", "b", "inbox")
     step("read", "read")
+    cut = [m for m in RESULTS["read"][-1]["items"] if m["id"] == long_post["id"]][0]
+    assert cut["body_truncated"] is True and len(cut["body"].encode()) == 2048, cut
+    whole = step("read", "read", "--id", str(long_post["id"]))   # one Message, whole: not a listing
+    assert len(whole["body"]) == 4000 - 1 and "body_truncated" not in whole, whole
     step("claims", "claims")
     step("ctx get", "ctx", "get")
     step("ctx history", "ctx", "history", "k")
@@ -455,7 +486,7 @@ assert covered == set(commands), ("commands the workflow never ran", sorted(set(
 # a wrong result must fail validation: the validator is not vacuous
 assert validate({"id": "1"}, commands["post"]["result"], objects), "a string id passed"
 assert validate({}, commands["post"]["result"], objects), "a missing id passed"
-assert RESULTS["post"][3] == {"id": RESULTS["post"][2]["id"], "duplicate": True}, RESULTS["post"]
+assert RESULTS["post"][3] == {"id": RESULTS["post"][2]["id"], "duplicate": True, "warnings": []}, RESULTS["post"]
 print("PASS: every --json result of a scripted workflow of all commands validates against its schema")
 # ---- the tables of docs/reference.md are generated from the registry, and --check notices when they are not ----
 root = os.path.dirname(os.path.dirname(os.path.abspath(bin_)))

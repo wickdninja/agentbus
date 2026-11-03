@@ -70,7 +70,7 @@ try:
     ids = {str(r[0]) for r in sqlite3.connect(db).execute("SELECT id FROM messages")}
 except sqlite3.Error:
     ids = set()
-section = re.compile(r"== (bus .*|goal: .*|no goal yet .*|agents|context|claims|last 10 messages)")
+section = re.compile(r"== (bus .*|goal: .*|no goal yet .*|agents|facts|claims|recent messages)")
 CONFIRM = ("joined as ", "left as ", "posted #", "inbox empty", "set ", "claimed ", "released ", "logged")
 # init and upgrade: their lines start with the repo path the caller named, or fixed text.
 if os.environ.get("ORACLE_REPO"):
@@ -240,7 +240,7 @@ out, cols, db, cmd = open(sys.argv[1], encoding="utf-8").read(), int(sys.argv[2]
 from presence import require_records
 require_records(out, db, cmd)
 ids = {str(r[0]) for r in sqlite3.connect(db).execute("SELECT id FROM messages")}
-section = re.compile(r"== (bus .*|goal: .*|no goal yet .*|agents|context|claims|last 10 messages)$")
+section = re.compile(r"== (bus .*|goal: .*|no goal yet .*|agents|facts|claims|recent messages)$")
 bad = []
 for n, line in enumerate(out.split("\n")):
     for k, row in enumerate(rows(line, cols)):
@@ -295,7 +295,7 @@ for i, b in enumerate(bodies):
 c.commit()
 PY
 for w in $WIDTHS; do
-  for cmd in "read --limit 1000" "--as seed inbox --peek" "ctx get" status; do
+  for cmd in "read --limit 1000" "--as seed inbox --peek --limit 1000" "ctx get" status; do
     # shellcheck disable=SC2086
     render "$SW" "$w" $cmd
   done
@@ -340,9 +340,10 @@ done
 AGENTBUS_DB="$CZ" agentbus --json ctx get k0 | python3 -c 'import json,sys; assert json.load(sys.stdin)["value"].startswith("#424242 ")' || fail "--json value changed"
 ok "a leading # or = in a lane field is \\x23 / \\x3d, on an indented row, at every width; --json unchanged"
 
-echo "TEST 5: with stdout a pipe, the width comes from /dev/tty, else stderr's terminal, else 80"
-# Bug it catches: `agentbus read | cat` (or | less) in a 30-column terminal wrapped to 80, because
-# stdout was not a terminal, so the terminal wrapped every long row itself, at column 0.
+echo "TEST 5: with stdout a pipe, text is not wrapped at all, whatever terminal is behind it"
+# Rule (clig.dev, 2026-11-03): output to a pipe or a file is never hard-wrapped; `less` or the reader wraps it. Before, the
+# width came from /dev/tty, else stderr's terminal, else 80, so an agent reading `agentbus read` got sentences cut at 80.
+# Bug it catches: a pipe wrapped at a terminal's width, or at 80.
 PW="$T/pipe.db"
 AGENTBUS_DB="$PW" agentbus --as seed join --tool t >/dev/null
 AGENTBUS_DB="$PW" agentbus --as seed post "$(printf 'y%.0s' $(seq 1 300))" >/dev/null
@@ -372,9 +373,9 @@ def widest(mode):
     return max(len(l) for l in p.stdout.decode().split("\n"))
 got = {m: widest(m) for m in ("tty", "stderr", "none")}
 print(got)
-sys.exit(0 if got == {"tty": 30, "stderr": 30, "none": 80} else 1)
+sys.exit(0 if got == {"tty": 302, "stderr": 302, "none": 302} else 1)
 PY
-ok "a 30-column terminal behind a pipe wraps at 30 (from /dev/tty, or stderr); no terminal: 80"
+ok "a pipe is never wrapped: not at a controlling terminal's 30 columns, not at stderr's, not at 80"
 
 echo "TEST 6: init and upgrade keep the row rule, and print no VERSION agentbus did not write"
 # Bug it catches: init and upgrade printed their lines unwrapped, with the old VERSION (a file a
