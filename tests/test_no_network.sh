@@ -73,8 +73,13 @@ for pipe in in out err; do
   [ -e "$CANARY_LOAD" ] || fail "piped $pipe: the canary was not loaded"
   silent "piped $pipe"
 done
-for cmd in "watch --once" "schema" "skill"; do quiet "$cmd" "" $cmd; done
-ok "--json, CI, BUILD_NUMBER, RUN_ID, CLAUDECODE, each Codex marker, each switch, each non-terminal stream and the quiet commands send nothing"
+for cmd in "watch --once" "schema" "skill" "doctor"; do quiet "$cmd" "" $cmd; done
+# hook reads its event from stdin, so its stdin is not a terminal here; it is answered before the release check could start
+rm -rf "$(cache_path)" "$CANARY_TRIP"; rm -f "$CANARY_LOAD"
+(cd "$CWD" && "$PY" "$TESTS_DIR/pty_run.py" --tty out,err -- "$ENTRY" hook claude SessionStart) >/dev/null || true
+[ -e "$CANARY_LOAD" ] || fail "hook claude SessionStart: the canary was not loaded"
+silent "hook claude SessionStart"
+ok "--json, CI, BUILD_NUMBER, RUN_ID, CLAUDECODE, each Codex marker, each switch, each non-terminal stream and the quiet commands (watch, schema, skill, doctor, hook) send nothing"
 
 echo "TEST 3: a project copy, a clone and a fork never check"
 new_case other uv; setup_canary; new_bus "$CWD"

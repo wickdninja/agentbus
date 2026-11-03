@@ -7024,6 +7024,7 @@ class Change:
         self.path, self.action, self.detail = path, action, detail
         self.line, self.would, self.write = line, would, write
         self.backup = None  # the basename of the copy write() saved; {backup} in line shows it
+        self.edited = False  # an update that would replace text the user edited (it saves a backup first)
         self.backup_hint = backup_hint  # what a dry run says: <file>.agentbus-<date and time>.bak
 
     def text(self, dry_run):
@@ -7297,6 +7298,7 @@ class SkillFilePiece:
         change = Change(skill, "updated", f"{len(want)} bytes", line=f"{{path}}   updated, {size}{note}",
                         would=f"would update {{path}} ({size}){note}", write=write,
                         backup_hint="SKILL.md.agentbus-<date and time>.bak")
+        change.edited = backup
         return change
 
     def _remove(self, folder, skill):
@@ -7460,6 +7462,7 @@ class TextBlockPiece:
                         would=f"would {'add' if verb == 'added' else 'update'} the agentbus block "
                               + ("to" if verb == "added" else "in") + f" {{path}} ({lines_n} lines){note}", write=write,
                         backup_hint=self.filename + ".agentbus-<date and time>.bak")
+        change.edited = backup
         return change
 
     def apply(self, change):
@@ -7704,7 +7707,7 @@ def setup_report(a, target, scope, changes, dry_run, uninstall, failure=None):
         return
     show("agentbus setup {}{} ({})", target, " --uninstall" if uninstall else "", scope)
     for c in changes:
-        setup_line(SETUP_GLYPH[c.action], c.text(dry_run))
+        setup_line("=" if c.action == "skipped" and c.detail.startswith("kept") else SETUP_GLYPH[c.action], c.text(dry_run))
     if failure:
         show("! {}", failure, row=True)
 
@@ -7713,15 +7716,41 @@ def setup_report(a, target, scope, changes, dry_run, uninstall, failure=None):
 SETUP_WRITES = ("installed", "updated", "replaced_link", "removed")
 
 
+def refresh_changes(changes, target, scope):
+    """setup --refresh: what setup already installed is brought up to date, and nothing else is touched. A piece
+    that is not there is not added, text the user edited is kept as it is (nothing is replaced, nothing backed
+    up), a link or a file agentbus did not write is left alone, and a refusal is a kept piece, not a failure."""
+    fix = f"agentbus setup {target}" + (" --scope project" if scope == "project" else "")
+    out = []
+    for c in changes:
+        if c.action == "installed":
+            out.append(Change(c.path, "unchanged", "not installed; --refresh adds nothing", line="{path}   not installed"))
+        elif c.action == "updated" and c.edited:
+            out.append(Change(c.path, "skipped", f"kept (edited). To replace it: {fix}",
+                              line="{path}   kept (edited). To replace it: " + fix))
+        elif c.action == "replaced_link":
+            out.append(Change(c.path, "skipped", f"kept (a link). To replace it: {fix}", line="{path}   kept (a link). To replace it: " + fix))
+        elif c.action == "refused":
+            out.append(Change(c.path, "skipped", f"kept (not changed: {c.detail.rstrip('.')}). To replace it: {fix}",
+                              line="{path}   kept (not written by agentbus, or unreadable). To replace it: " + fix))
+        else:
+            out.append(c)
+    return out
+
+
 def cmd_setup(a):
     if is_repo_local_copy():
         die("setup runs from the installed agentbus, not a project copy. "
             f"Run: agentbus setup {a.target}", "bad_input")
     target, scope, uninstall, dry_run = a.target, a.scope, a.uninstall, a.dry_run
+    if a.refresh and uninstall:
+        die("--refresh and --uninstall do not go together", "bad_input")
     global _RERUN
-    _RERUN = f"agentbus setup {target}" + (" --scope project" if scope == "project" else "") + (" --uninstall" if uninstall else "")
+    _RERUN = f"agentbus setup {target}" + (" --scope project" if scope == "project" else "") + (" --uninstall" if uninstall else "") + (" --refresh" if a.refresh else "")
     pieces = list(SETUP_TARGETS[target]) + (_test_json_piece() if target == "claude" else [])
     planned = [piece.plan(scope, uninstall) for piece in pieces]
+    if a.refresh:
+        planned = [refresh_changes(chs, target, scope) for chs in planned]
     flat = [c for chs in planned for c in chs]
     if any(c.action == "refused" for c in flat):
         refused = [c for c in flat if c.action == "refused"]
@@ -7775,7 +7804,7 @@ def cmd_setup(a):
         return
     if uninstall:
         show("done.")
-    elif all(c.action == "unchanged" for c in done):
+    elif all(c.action == "unchanged" or (a.refresh and c.action == "skipped") for c in done):
         show("done. Nothing to change.")
     else:
         show("done. Start a new {} session to load {}.", SETUP_NAMES[target], "them" if target == "claude" else "it")
@@ -7789,6 +7818,8 @@ def register_setup(sub):
                    help="user: your own config (default); project: files under the current directory")
     s.add_argument("--dry-run", action="store_true", help="Show what would change; write nothing")
     s.add_argument("--uninstall", action="store_true", help="Remove what setup added; edited files stay")
+    s.add_argument("--refresh", action="store_true",
+                   help="Bring what setup installed up to date; add nothing, and keep anything you edited (what agentbus update runs)")
 
 
 REGISTER_COMMANDS.append(register_setup)
@@ -8503,19 +8534,19 @@ def release_lookup(cached_ok):
 
 
 def plugin_fix():
-    """The line for a Claude Code plugin install of agentbus, or None. Reads Claude Code's own record of
-    installed plugins (read-only); the plugin's state is never written and `claude` never run."""
-    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-    o = read_private_json(os.path.join(base, "plugins"), "installed_plugins.json", limit=1 << 20)
-    plugins = o.get("plugins") if isinstance(o, dict) else None
-    if not isinstance(plugins, dict):
+    """The line for a Claude Code plugin install of agentbus, or None. The plugin stream's own detection answers
+    (claude_plugin_provides_hooks, files only: update never starts claude, and the plugin's state is never written);
+    the marketplace name comes from Claude Code's record of installed plugins when it names one."""
+    if not claude_plugin_provides_hooks(ask=False):
         return None
-    for key in plugins:
-        if isinstance(key, str) and key.startswith("agentbus@"):
+    market = "agentbus"
+    base = setup_config_dir("claude", "user")
+    o = read_private_json(os.path.join(base, "plugins"), "installed_plugins.json", limit=1 << 20)
+    for key in (o.get("plugins") if isinstance(o, dict) and isinstance(o.get("plugins"), dict) else {}):
+        if isinstance(key, str) and key.startswith("agentbus@") and re.fullmatch(r"[A-Za-z0-9._-]{1,60}", key.split("@", 1)[1]):
             market = key.split("@", 1)[1]
-            market = market if re.fullmatch(r"[A-Za-z0-9._-]{1,60}", market) else "agentbus"
-            return f"Claude Code updates it. In Claude Code: /plugin marketplace update {market}, then /reload-plugins"
-    return None
+            break
+    return f"Claude Code updates it. In Claude Code: /plugin marketplace update {market}, then /reload-plugins"
 
 
 def new_exe(inst):
@@ -10077,13 +10108,35 @@ class DoctorContext:
 
 # ---- the tool ----
 
+def doctor_release_note(ctx):
+    """(note, newer) from the release cache the update story keeps: a note such as `latest 0.3.0, checked 2026-11-02
+    (3 days ago)` when the cache holds a good answer under a week old, and the newer version when it is above ctx.version.
+    Reads read_release_cache() and nothing else; it never refreshes the cache and makes no network call."""
+    cache = read_release_cache()
+    if not cache or cache["ok"] is not True:
+        return "", None
+    age = time.time() - cache["checked_at"]
+    if not 0 <= age < 7 * 86400:
+        return "", None
+    latest = newest_release(cache, running_prerelease())
+    if not latest:
+        return "", None
+    days = int(age // 86400)
+    when = datetime.fromtimestamp(cache["checked_at"], timezone.utc).strftime("%Y-%m-%d")
+    ago = "today" if days == 0 else "1 day ago" if days == 1 else f"{days} days ago"
+    return f"latest {latest}, checked {when} ({ago})", (latest if release_newer(latest) else None)
+
+
 def doctor_check_tool(ctx):
-    # DOCTOR_UPDATE_CHECK_SLOT: the release-cache check of the update story (issue 16) goes here, comparing
-    # ctx.version with a cached latest release. Doctor makes no network call.
+    # DOCTOR_UPDATE_CHECK_SLOT: the release-cache check of the update story (issue 16): ctx.version beside the cached
+    # latest release. Doctor makes no network call and never refreshes the cache.
     if is_repo_local_copy():
         return [doctor_result("tool", "warn", f"this is the folder's own copy at {ctx.path}, not the installed agentbus, so it cannot be compared with itself",
                               "agentbus doctor")]
-    return [doctor_result("tool", "ok", f"{ctx.version} at {ctx.path}")]
+    note, newer = doctor_release_note(ctx)
+    if newer:
+        return [doctor_result("tool", "warn", f"{ctx.version} at {ctx.path}; a newer release is available: {note}", "agentbus update")]
+    return [doctor_result("tool", "ok", f"{ctx.version} at {ctx.path}" + (f"; {note}" if note else ""))]
 
 
 # ---- the bus and its copy ----

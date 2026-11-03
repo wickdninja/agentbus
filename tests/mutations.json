@@ -1006,5 +1006,59 @@
     "count": 1,
     "run": "tests/test_release_check.sh",
     "expect": "a final tag below the highest"
+  },
+  {
+    "name": "setup --refresh adds a piece that is not there",
+    "file": "bin/agentbus",
+    "find": "    for c in changes:\n        if c\\.action == \"installed\":",
+    "replace": "    for c in changes:\n        if False:",
+    "count": 1,
+    "run": "tests/test_setup_refresh.sh",
+    "expect": "refresh of nothing wrote something for claude"
+  },
+  {
+    "name": "setup --refresh replaces text the user edited",
+    "file": "bin/agentbus",
+    "find": "        elif c\\.action == \"updated\" and c\\.edited:",
+    "replace": "        elif False:",
+    "count": 1,
+    "run": "tests/test_setup_refresh.sh",
+    "expect": "the kept skill line is not the exact text"
+  },
+  {
+    "name": "setup --refresh fails on a file agentbus did not write",
+    "file": "bin/agentbus",
+    "find": "        elif c\\.action == \"refused\":\n            out\\.append\\(Change\\(c\\.path, \"skipped\"",
+    "replace": "        elif False:\n            out.append(Change(c.path, \"skipped\"",
+    "count": 1,
+    "run": "tests/test_setup_refresh.sh",
+    "expect": "a foreign skill file was not kept by refresh"
+  },
+  {
+    "name": "doctor shows a cached release more than a week old",
+    "file": "bin/agentbus",
+    "find": "    if not 0 <= age < 7 \\* 86400:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor showed a cached answer more than a week old"
+  },
+  {
+    "name": "doctor does not warn about a newer cached release",
+    "file": "bin/agentbus",
+    "find": "\\(latest if release_newer\\(latest\\) else None\\)\\n",
+    "replace": "None\n",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "row tool: status warn"
+  },
+  {
+    "name": "run_all does not check for a leaked update cache",
+    "file": "tests/run_all.sh",
+    "find": "    \\[ ! -e \"\\$iso/h/\\$u\" \\] \\|\\| leaks\\+=\\(\"it wrote the caller's update cache or bus list \\(\\$u\\)\"\\)",
+    "replace": "    true",
+    "count": 1,
+    "run": "tests/test_isolation.sh",
+    "expect": "a write to .cache/agentbus passed"
   }
 ]

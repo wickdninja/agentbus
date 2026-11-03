@@ -15,6 +15,10 @@ unset CODEX_HOME CLAUDE_CONFIG_DIR
 CODEX_MARKER_VARS="CODEX_THREAD_ID CODEX_SANDBOX CODEX_SANDBOX_NETWORK_DISABLED"
 unset CLAUDECODE BUILD_NUMBER RUN_ID NO_UPDATE_NOTIFIER DO_NOT_TRACK AGENTBUS_NO_UPDATE_CHECK AGENTBUS_NO_UPDATE_NOTICE GH_TOKEN GITHUB_TOKEN
 for _v in $CODEX_MARKER_VARS; do unset "$_v"; done
+# The update cache and the list of known bus folders follow HOME, which every test sets to its own folder: a caller's
+# (or tests/run_all.sh's) XDG_CACHE_HOME / XDG_STATE_HOME must not send them somewhere else. run_all.sh pins both under
+# its scratch HOME and fails a file that leaves a cache or bus list there, i.e. one that never set a HOME of its own.
+unset XDG_CACHE_HOME XDG_STATE_HOME
 # Setup asks `claude plugin list --json` whether the plugin is installed. A test never starts the real claude: this names
 # no executable (setup then reads the plugin files), and a test that wants an answer points it at a stub it wrote.
 export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
