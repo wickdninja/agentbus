@@ -497,13 +497,14 @@ def raw_controls(buf):
 
 @case
 def hostile():
-    """H1: hostile bytes in every field the CLI takes (agent names and roles, recipients, ctx keys and values,
+    """H1: hostile bytes in every field a bus can hold (planted into bus.db, since the CLI refuses control characters
+    in identifiers: agent names and roles, recipients, ctx keys and values,
     claim resources and purposes, topics, bodies, the goal), walked through every view (the overview, every
     detail kind, a nested detail, help to its last page, the filter input, a kept filter, the copied footer):
     no raw control, C1 or format character reaches the terminal."""
     db = os.path.join(os.path.dirname(ROOT), "hostile", ".agentbus", "bus.db")
     os.makedirs(os.path.dirname(db), exist_ok=True)
-    H = HOSTILE
+    H = "HOSTILEPLACEHOLDER"   # the CLI refuses control characters in identifiers (#20); planted into bus.db below
     e = env(AGENTBUS_DB=db)
 
     def cli(*args):
@@ -519,6 +520,17 @@ def hostile():
     cli("--as", evil, "post", "body" + H + "\nline two" + H, "--to", bob, "--kind", "question", "--topic", "t" + H)
     cli("--as", bob, "post", "names src/" + H + " and " + evil, "--to", evil, "--kind", "answer", "--reply-to", "1")
     cli("--as", bob, "post", "to a ghost", "--to", "ghost" + H)
+    # Plant the hostile text the way an older release left it: the rows above were made by the CLI with a plain
+    # placeholder, so their shape is exactly the CLI's; swap the placeholder for the hostile bytes in every text column.
+    con = sqlite3.connect(db)
+    for table in ("agents", "messages", "cursors", "context", "context_history", "claims", "log"):
+        for col in [r[1] for r in con.execute(f"PRAGMA table_info({table})") if r[2].upper() == "TEXT"]:
+            con.execute(f"UPDATE {table} SET {col} = REPLACE({col}, ?, ?) WHERE {col} LIKE ?", (H, HOSTILE, "%" + H + "%"))
+    con.commit()
+    con.close()
+    assert sqlite3.connect(db).execute("SELECT count(*) FROM agents WHERE name LIKE ?", ("%" + HOSTILE,)).fetchone()[0] == 1
+    H = HOSTILE
+    evil = "ev" + H
     for emoji in (False, True):
         ee = dict(e)
         if emoji:
