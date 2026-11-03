@@ -1393,5 +1393,68 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "must be removed with it"
+  },
+  {
+    "name": "check treats a forged hook entry as another install",
+    "file": "bin/agentbus",
+    "find": "            if kind == \"forged\":\\n                forged\\.append\\(command\\)",
+    "replace": "            if kind == \"forged\":\n                stale.append(command)",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check of a hostile settings file"
+  },
+  {
+    "name": "check accepts a relative tool path",
+    "file": "bin/agentbus",
+    "find": "        if not all\\(os\\.path\\.isabs\\(w\\) for w in words\\):",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with a forged entry ('../planted"
+  },
+  {
+    "name": "check accepts a tool that is not named agentbus",
+    "file": "bin/agentbus",
+    "find": "        if not \\(name\\.startswith\\(\"agentbus\"\\) or \\(name == \"launch\\.py\"",
+    "replace": "        if False and not (name.startswith(\"agentbus\") or (name == \"launch.py\"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with a forged entry ('/bin/sh'"
+  },
+  {
+    "name": "check accepts a hook tool inside the project",
+    "file": "bin/agentbus",
+    "find": "            if inside:\\n                return \"forged\", script, None",
+    "replace": "            if False:\n                return \"forged\", script, None",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with a forged entry ('"
+  },
+  {
+    "name": "doctor flags the running tool when it sits under the working directory",
+    "file": "bin/agentbus",
+    "find": "        if not \\(here and command\\.startswith\\(here \\+ \" hook \"\\)\\):\\n            try:",
+    "replace": "        if True:\n            try:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "AGENTBUS_DB run failed"
+  },
+  {
+    "name": "a forged entry gets the plain setup fix, not the uninstall",
+    "file": "bin/agentbus",
+    "find": "f\"agentbus setup \\{self\\.dialect\\} --uninstall\\{scope_flag\\}, then agentbus setup \\{self\\.dialect\\}\\{scope_flag\\}\"",
+    "replace": "fix",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a forged Claude entry"
+  },
+  {
+    "name": "setup --json hides that the login shell is a report",
+    "file": "bin/agentbus",
+    "find": "        if getattr\\(self, \"info\", False\\):\\n            out\\[\"info\"\\] = True[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "does not report the noisy login shell as skipped"
   }
 ]

@@ -136,7 +136,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `upgrade` | `{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}` |
 | `schema` | `{"contract": integer, "agentbus": string, "commands": object, "objects": object, "error_fields": object, "errors": object, "exit_codes": object, "env": object}` |
 | `skill` | `{"text": string}` |
-| `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved)}]}` |
+| `setup` | `{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved), "info": boolean (true for a report about something that is not a file, such as the login shell)}]}` |
 | `hooks` | `{"hooks": {EVENT: [{"matcher": string (optional), "hooks": [{"type": string, "timeout": integer, "command": string}]}]}}` |
 | `doctor` | `{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" \| "warn" \| "fail" \| "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0` |
 <!-- /generated:results -->

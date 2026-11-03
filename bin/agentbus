@@ -681,9 +681,9 @@ CONTRACT = {
                       _o({"target": _STR, "scope": _STR, "dry_run": _BOOL,
                           "changes": _list(_o({"path": _STR, "detail": _STR, "action": {"type": "string", "enum": [
                               "installed", "updated", "replaced_link", "unchanged", "removed", "skipped", "refused"]},
-                              "backup": _STR}, optional=("backup",)))}),
+                              "backup": _STR, "info": _BOOL}, optional=("backup", "info")))}),
                       ["items_failed"], text='{"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, '
-                      '"detail": string, "action": string, "backup": string (only when a backup was saved)}]}',
+                      '"detail": string, "action": string, "backup": string (only when a backup was saved), "info": boolean (true for a report about something that is not a file, such as the login shell)}]}',
                       retry={"class": "idempotent", "short": "safe to repeat",
                              "how": "a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object"},
                       base=_PLAIN_ERRORS),
@@ -7042,6 +7042,8 @@ class Change:
         out = {"path": self.path, "action": self.action, "detail": self.detail}
         if self.backup:
             out["backup"] = os.path.join(os.path.dirname(self.path), self.backup)
+        if getattr(self, "info", False):
+            out["info"] = True  # a report about something else (the login shell), not a change to a file
         return out
 
 
@@ -9015,6 +9017,17 @@ def hook_tool_word():
     return word(argv0 or self_path())
 
 
+_QUOTED = r"'(?:[^']|'\\'')*'"
+# The line `setup` writes for a hook: one or two quoted words (the tool, or its interpreter and script), `hook DIALECT EVENT`,
+# the stderr and exit-status guard, and the tag. Nothing else is accepted as one of ours.
+HOOK_COMMAND_RE = re.compile(r"(" + _QUOTED + r"(?: " + _QUOTED + r")?) hook ([a-z]+) ([A-Za-z]+) 2>/dev/null \|\| true # agentbus:managed")
+
+
+def script_of(command):
+    import shlex
+    return shlex.split(HOOK_COMMAND_RE.fullmatch(command).group(1))[-1]
+
+
 class HooksPiece(JsonEntriesPiece):
     """The hooks of one harness, as tagged entries in its JSON hooks file: each runs `agentbus hook DIALECT EVENT`
     with the installed tool's absolute path. A harness is a subclass with its events and file; the rest (the
@@ -9072,29 +9085,63 @@ class HooksPiece(JsonEntriesPiece):
         fix = f"agentbus setup {self.dialect}" + (" --scope project" if scope == "project" else "")
         if not commands:
             return rows
-        import shlex
         here = None if is_repo_local_copy() else hook_tool_word()  # a project's own copy is no reference for what the hooks should run
-        seen, bad = None, []
+        forged, gone, stale, seen = [], [], [], None
         for command in commands:
-            try:
-                words = shlex.split(command)
-                script = words[:words.index("hook")][-1]
-            except (ValueError, IndexError):
-                return rows + [(f"{self.id}_tool", "problem", "a hook command is not in the form setup writes", fix)]
-            text = setup_read(script, follow=True)
-            if text is None or not os.access(script, os.R_OK) or not os.path.basename(script).startswith("agentbus"):
-                return rows + [(f"{self.id}_tool", "problem", f"the hooks run {script}, which is not an agentbus executable", fix)]
-            if here and not command.startswith(here + " hook "):
-                bad.append(script)  # a tagged entry is only vouched for when it runs the tool this agentbus is
-            seen = seen or text
-        if bad:
-            # stale, not problem: a newer or older agentbus than the one that wrote the hooks is an ordinary state (doctor warns,
-            # setup rewrites them); what matters is that the entry is not vouched for
-            rows.append((f"{self.id}_tool", "stale", f"{len(bad)} of {len(commands)} hook commands run {bad[0]}, not this agentbus ({here})", fix))
+            kind, script, text = self.judge(command, here)
+            if kind == "forged":
+                forged.append(command)
+            elif kind == "gone":
+                gone.append(script)
+            else:
+                seen = seen or text
+                if here and not command.startswith(here + " hook "):
+                    stale.append(script)
+        scope_flag = f" --scope {scope}"
+        if forged:  # anything but the line setup writes, around a plausible agentbus: not written by setup, so not vouched for
+            return rows + [(f"{self.id}_tool", "problem",
+                            f"{len(forged)} of {len(commands)} hook entries tagged agentbus were not written by agentbus setup (for example: {forged[0][:120]})",
+                            f"agentbus setup {self.dialect} --uninstall{scope_flag}, then agentbus setup {self.dialect}{scope_flag}")]
+        if gone:
+            return rows + [(f"{self.id}_tool", "problem", f"the hooks run {gone[0]}, which is not an agentbus executable", fix)]
+        if stale:
+            # stale, not problem: another agentbus install than this one (an upgrade moved it) is an ordinary state; doctor
+            # warns, setup rewrites the entries. The entry is still the line setup writes, around an agentbus script.
+            rows.append((f"{self.id}_tool", "stale", f"{len(stale)} of {len(commands)} hook commands run {stale[0]}, not this agentbus ({here})", fix))
         else:
             version = re.search(rb'(?m)^__version__ = "([^"]+)"', seen)
-            rows.append((f"{self.id}_tool", "ok", f"the hooks run {script}" + (f" ({version.group(1).decode()})" if version else ""), fix))
+            rows.append((f"{self.id}_tool", "ok", f"the hooks run {script_of(commands[0])}" + (f" ({version.group(1).decode()})" if version else ""), fix))
         return rows + self.check_more(scope, commands)
+
+    def judge(self, command, here=None):
+        """(kind, script, text) for one tagged command, from its text alone (nothing it names is run). forged: not exactly the
+        line setup writes (`TOOL hook DIALECT EVENT 2>/dev/null || true # agentbus:managed`, TOOL one or two quoted absolute paths),
+        or a tool that is not plausibly agentbus (the script is not named agentbus*, or the plugin's hooks/launch.py), or one
+        inside the project or a .agentbus folder (the running tool itself, `here`, is exempt from that last test). gone: such an
+        agentbus that cannot be read. Else ok."""
+        import shlex
+        m = HOOK_COMMAND_RE.fullmatch(command)
+        if not m or m.group(2) != self.dialect or m.group(3) not in [e for e, _ in self.events]:
+            return "forged", None, None
+        words = shlex.split(m.group(1))
+        script = words[-1]
+        if not all(os.path.isabs(w) for w in words):
+            return "forged", script, None
+        name = os.path.basename(script)
+        if not (name.startswith("agentbus") or (name == "launch.py" and os.path.basename(os.path.dirname(script)) == "hooks")):
+            return "forged", script, None
+        real, cwd, home = os.path.realpath(script), os.path.realpath(os.getcwd()), os.path.realpath(os.path.expanduser("~"))
+        if not (here and command.startswith(here + " hook ")):
+            try:
+                inside = any(claude_in_project(os.path.realpath(w), cwd, home) for w in words)
+            except SystemExit:  # a bus folder above the working directory that discovery refuses: fall back to the plain test
+                inside = any(os.path.realpath(w).startswith(cwd.rstrip(os.sep) + os.sep) or ".agentbus" in os.path.realpath(w).split(os.sep) for w in words)
+            if inside:
+                return "forged", script, None
+        text = setup_read(script, follow=True)
+        if text is None or not os.access(script, os.R_OK):
+            return "gone", script, None
+        return "ok", script, text
 
 
 class ClaudeHooksPiece(HooksPiece):

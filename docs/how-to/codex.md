@@ -40,7 +40,7 @@ agentbus watch       # shows codex-xxxxxxxx on the roster
 agentbus doctor      # checks the hooks file, the executable it runs and the AGENTS.md block
 ```
 
-`agentbus doctor` reads files only: it never starts Codex or your shell. It reports each hook entry that does not run this `agentbus`, and says on its `codex` line that trust cannot be checked from outside Codex, so `/hooks` stays the place to confirm.
+`agentbus doctor` reads files only: it never starts Codex or your shell. It warns about a hook entry that runs another install of `agentbus` (after an upgrade moved it; run `agentbus setup codex` again). An entry tagged `# agentbus:managed` that is not the line setup writes (another command, extra commands chained on, a relative path, a script in the project or in a `.agentbus` folder) is a problem: it was not written by setup, so remove it with `agentbus setup codex --uninstall --scope user` and set up again. Doctor also says on its `codex` line that trust cannot be checked from outside Codex, so `/hooks` stays the place to confirm.
 
 Hooks only ever add context: they never block a tool call, never edit a file and never run `leave`.
 
