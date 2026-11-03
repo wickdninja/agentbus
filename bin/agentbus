@@ -5975,9 +5975,10 @@ def _direct_url(me):
 
 
 def externally_managed(prefix):
-    """PEP 668: the marker beside the standard library, or in the install folder itself."""
-    import sysconfig
-    return any(os.path.lexists(os.path.join(d, "EXTERNALLY-MANAGED")) for d in (prefix, sysconfig.get_path("stdlib")) if d)
+    """PEP 668 for a pip install: the marker in the install's own folder. (The marker beside the standard
+    library governs the base interpreter; pip ignores it inside a virtual environment, which is the only place
+    this row applies, so a Homebrew or distro python's marker is not consulted.)"""
+    return os.path.lexists(os.path.join(prefix, "EXTERNALLY-MANAGED"))
 
 
 def detect_install():

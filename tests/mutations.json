@@ -267,7 +267,7 @@
     "replace": "            def redirect_request(self, *args, **kwargs):\n                return super().redirect_request(*args, **kwargs)",
     "count": 1,
     "run": "tests/test_update_notice.sh",
-    "expect": "the redirect target was fetched"
+    "expect": "redirect: asked more than once"
   },
   {
     "name": "update: the answer's media type is not checked",
@@ -389,7 +389,7 @@
   {
     "name": "update: a fork is treated as the canonical repository",
     "file": "bin/agentbus",
-    "find": "    fork = url != REPO_URL",
+    "find": "    fork = stripped != REPO_URL",
     "replace": "    fork = False",
     "count": 1,
     "run": "tests/test_update_detect.sh",

@@ -29,17 +29,17 @@ notice_in "$out" && fail "a third run printed the notice again within a day: $ou
 [ "$(reqs)" = 1 ] || fail "later runs asked again: $(reqs)"
 ok "one attempt, one request, the exact notice once, then silence"
 
-echo "TEST 2: a slow server does not slow the command, and nothing is asked again within a day"
-setup_case t2 uv 0.2.0
-answer '{"delay": 2, "body": "{\"tag_name\": \"v0.3.0\"}"}'
-start=$("$PY" -c 'import time; print(time.time())')
-out=$(tty_run buses)
-took=$("$PY" -c 'import sys,time; print(time.time()-float(sys.argv[1]))' "$start")
-"$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$took" || fail "the command waited for the 2 s server ($took s): $out"
+echo "TEST 2: a slow server does not hold the command, and nothing is asked again within a day"
+setup_case t2 uv
+answer "{\"wait_for\": \"$SERVER/go\", \"body\": \"{\\\"tag_name\\\": \\\"v0.3.0\\\"}\"}"
+rm -f "$SERVER/go"
+out=$(tty_run buses)   # returns while the server is still holding its answer: the check is detached
+[ ! -e "$SERVER/go" ] && [ "$(cache_get ok)" = "" ] || fail "the command waited for the server: $out"
 tty_run buses >/dev/null
-sleep 3
+: >"$SERVER/go"
+wait_cache
 [ "$(reqs)" = 1 ] || fail "a second run within a day made another request: $(reqs)"
-ok "run 1 ends well under the server's 2 s, run 2 sends nothing"
+ok "run 1 ends before the server answers, run 2 sends nothing"
 
 echo "TEST 3: answers that cannot be used give no notice and are cached as failures; the controls notify"
 check_bad() {  # NAME ANSWER REASON

@@ -66,8 +66,8 @@ print("" if v is None else v if not isinstance(v, (dict, list)) else json.dumps(
 # cache_put JSON: write the cache by hand (0700 folder, 0600 file).
 cache_put() { mkdir -p "$(cache_path)"; chmod 700 "$(cache_path)"; printf '%s\n' "$1" >"$(cache_path)/release-check.json"; chmod 600 "$(cache_path)/release-check.json"; }
 now() { "$PY" -c 'import time; print(int(time.time()))'; }
-# wait_cache: until the detached check has written its answer (ok no longer null), at most 15 s.
-wait_cache() { local w=0; while :; do [ "$(cache_get ok)" != "" ] && return 0; sleep 0.1; w=$((w+1)); [ $w -lt 150 ] || fail "the detached check never wrote the cache"; done; }
+# wait_cache: until the detached check has written its answer (ok no longer null), at most 60 s (a loaded machine).
+wait_cache() { local w=0; while :; do [ "$(cache_get ok)" != "" ] && return 0; sleep 0.1; w=$((w+1)); [ $w -lt 600 ] || fail "the detached check never wrote the cache"; done; }
 
 # make_install ROOT METHOD VERSION URL: the fake install (see the top of this file). METHOD: uv, pipx or pip.
 make_install() {

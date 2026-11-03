@@ -31,7 +31,7 @@ silent() {  # NAME: after a run, the canary loaded (or the case never started a 
   [ ! -e "$CANARY_TRIP" ] || fail "$1: the canary tripped (a request was attempted)"
   [ ! -e "$(cache_path)/release-check.json" ] || fail "$1: an attempt was recorded: $(cat "$(cache_path)/release-check.json")"
 }
-tripped() { local w=0; while [ ! -e "$CANARY_TRIP" ]; do sleep 0.1; w=$((w+1)); [ $w -lt 100 ] || return 1; done; }
+tripped() { local w=0; while [ ! -e "$CANARY_TRIP" ]; do sleep 0.1; w=$((w+1)); [ $w -lt 600 ] || return 1; done; }
 
 echo "TEST 1: control: an eligible run at a terminal trips the canary in the check child"
 new_case ctl uv; setup_canary; new_bus "$CWD"

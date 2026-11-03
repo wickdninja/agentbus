@@ -9,9 +9,10 @@ every request appends one JSON line to DIR/requests.log: {"path", "headers"}. It
 (re-read on every request, so a test swaps the answer between runs):
 
   {"status": 200, "type": "application/json", "body": "{...}", "headers": {"Name": "value"},
-   "delay": 0.0, "repeat": ["[", 200000], "location": "/trap"}
+   "delay": 0.0, "wait_for": "/path/to/file", "repeat": ["[", 200000], "location": "/trap"}
 
-body is sent as given; repeat sends string*count instead (a huge or deeply nested body). Anything not set
+wait_for holds the answer back until that file exists (at most 60 s): a test proves a command does not wait for
+the server without measuring time. body is sent as given; repeat sends string*count instead (a huge or deeply nested body). Anything not set
 defaults to status 200, type application/json, body "{}". Nothing here reaches a network beyond loopback.
 """
 import json
@@ -40,6 +41,10 @@ def main():
                 a = {}
             if a.get("delay"):
                 time.sleep(float(a["delay"]))
+            if a.get("wait_for"):
+                end = time.time() + 60
+                while not os.path.exists(a["wait_for"]) and time.time() < end:
+                    time.sleep(0.05)
             body = a["repeat"][0] * int(a["repeat"][1]) if a.get("repeat") else a.get("body", "{}")
             data = body.encode("utf-8")
             self.send_response(int(a.get("status", 200)))
