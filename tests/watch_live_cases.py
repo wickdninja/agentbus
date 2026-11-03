@@ -160,21 +160,27 @@ def keys():
 
 @case
 def pause():
+    # A frame drawn while another process holds the bus (a post) adds `waiting · Ns old` to the header for a
+    # moment: that is the busy state, not the view changing. Such frames are left out of the comparison.
+    busy = lambda f: "waiting" in f[0]
+    view = lambda f: [r for r in f if not r.startswith("Messages")]
     s = start()
     try:
-        f = key(s, b"p", lambda f: any(r.startswith("Messages") and "paused at" in r for r in f), "p pauses")
-        frozen = [r for r in f if not r.startswith("Messages")]
+        f = key(s, b"p", lambda f: any(r.startswith("Messages") and "paused at" in r for r in f) and not busy(f), "p pauses")
+        frozen = view(f)
         post("--as", "codex", "post", "posted while paused", "--to", "claude")
-        f = s.frame_after(s.mark(), lambda f: any("+1 new" in r for r in f), DEADLINE, "+1 new while paused")
-        assert [r for r in f if not r.startswith("Messages")] == frozen, "the view changed while paused"
+        f = s.frame_after(s.mark(), lambda f: any("+1 new" in r for r in f) and not busy(f), DEADLINE, "+1 new while paused")
+        assert view(f) == frozen, ("the view changed while paused", f)
         # pause-freezes-display: more posts over several ticks change no row but the Messages title
         for i in range(3):
             post("--as", "codex", "post", f"more {i}")
         m = s.mark()
-        s.frame_after(m, lambda f: any("+4 new" in r for r in f), DEADLINE, "+4 new")
-        later = s.frame_after(s.mark(), lambda f: True, DEADLINE, "two ticks later")
-        for f in s.frames(m) + [later]:
-            assert [r for r in f if not r.startswith("Messages")] == frozen, ("a row changed while paused", f)
+        s.frame_after(m, lambda f: any("+4 new" in r for r in f) and not busy(f), DEADLINE, "+4 new")
+        later = s.frame_after(s.mark(), lambda f: not busy(f), DEADLINE, "a later frame")
+        compared = [f for f in s.frames(m) + [later] if not busy(f)]
+        assert compared, "no frame to compare"
+        for f in compared:
+            assert view(f) == frozen, ("a row changed while paused", f)
         f = key(s, b"p", lambda f: any("posted while paused" in r for r in f), "p follows and shows the message")
         assert not any("new" in r and "+" in r for r in f if r.startswith("Messages")), f
         s.send(b"q")
