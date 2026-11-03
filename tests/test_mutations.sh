@@ -95,6 +95,26 @@ PY
 [ "$(status harmless)" = 1 ] && grep -q '^SURVIVED harmless' "$T/out" || fail "a harmless change did not survive tests/test_init.sh: $(cat "$T/out")"
 ok "tests/test_init.sh passes on a copy with a comment added"
 
+echo "TEST 7b: two mutations run at once with -j 2 and still print in file order, one killed and one survived"
+# The first entry's test sleeps before it fails, so it finishes after the second: the lines must stay in file order.
+printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then sleep 3; echo "FAIL: marker seen"; exit 1; fi\n' > "$T/slowkill.sh"
+"$PY" - "$T/m2.json" "$T/slowkill.sh" "$T/passes.sh" "$F" "$VER" <<'PY'
+import json, sys
+path, slow, fast, find, ver = sys.argv[1:6]
+rep = '__version__ = "%s"  # MUTATION-MARKER' % ver
+json.dump([{"name": "first-killed", "file": "bin/agentbus", "find": find, "replace": rep, "count": 1, "run": slow, "expect": "marker seen"},
+           {"name": "second-survives", "file": "bin/agentbus", "find": find, "replace": rep, "count": 1, "run": fast, "expect": "x"}], open(path, "w"))
+PY
+rc=0; MUTATE_TIMEOUT=60 AGENTBUS_MUTATION_JOBS=1 $M --mutations "$T/m2.json" -j 2 --all >"$T/par.out" 2>&1 || rc=$?
+[ "$rc" = 1 ] || fail "-j 2 with a survivor did not exit 1 (rc $rc): $(cat "$T/par.out")"
+[ "$(cut -d: -f1 "$T/par.out" | head -n 2 | tr '\n' ' ')" = "KILLED first-killed SURVIVED second-survives " ] || fail "-j 2 lines are not in file order with their verdicts: $(cat "$T/par.out")"
+[ "$(tail -n 1 "$T/par.out")" = "1 killed, 1 survived, 0 wrong reason, 0 timed out, 0 crashed, 0 stale, 0 broken, 0 skipped" ] || fail "the -j 2 summary line changed: $(cat "$T/par.out")"
+rc=0; $M --mutations "$T/m2.json" -j 0 --all >"$T/par.out" 2>&1 || rc=$?
+[ "$rc" = 2 ] || fail "-j 0 was accepted"
+rc=0; AGENTBUS_MUTATION_JOBS=abc $M --mutations "$T/m2.json" --all >"$T/par.out" 2>&1 || rc=$?
+[ "$rc" = 2 ] && grep -q 'AGENTBUS_MUTATION_JOBS must be' "$T/par.out" || fail "a bad AGENTBUS_MUTATION_JOBS was accepted: $(cat "$T/par.out")"
+ok "-j 2: file order, same summary line; bad job counts refused"
+
 echo "TEST 8: every mutation in tests/mutations.json is killed"
 rc=0; MUTATE_TIMEOUT=400 $M --all >"$T/all.out" 2>&1 || rc=$?
 cat "$T/all.out"
