@@ -295,5 +295,14 @@
     "count": 1,
     "run": "tests/test_doctor.sh",
     "expect": "stdout is not the full result"
+  },
+  {
+    "name": "doctor writes the git exclude rule",
+    "file": "bin/agentbus",
+    "find": "        ctx\\.db, ctx\\.strict = find_bus_path\\(up\\)\\n",
+    "replace": "        ctx.db, ctx.strict = find_bus_path(up)\\n        _i = repo_info(os.path.dirname(os.path.dirname(ctx.db)))\\n        _i and keep_excluded(*_i)\\n",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor changed a file under HOME or the project"
   }
 ]

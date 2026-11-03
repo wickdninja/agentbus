@@ -5879,9 +5879,12 @@ def doctor_check_bus(ctx):
         ctx.bus_state = "refused" if code == "schema_refused" else "unavailable"
         return [doctor_result("bus", "fail", f"{where}: {r['message']}",
                               hint=restore if code == "schema_refused" else "Fix the file or folder the message names, then run agentbus doctor again.")]
-    except (sqlite3.Error, OSError) as e:
+    except sqlite3.Error as e:   # SQLite itself refused the file ("file is not a database", a corrupt page)
         ctx.bus_state = "unavailable"
-        return [doctor_result("bus", "fail", f"{where} could not be read ({getattr(e, 'strerror', None) or e})",
+        return [doctor_result("bus", "fail", f"{where}: SQLite cannot use {ctx.db} ({e})", hint=restore)]
+    except OSError as e:
+        ctx.bus_state = "unavailable"
+        return [doctor_result("bus", "fail", f"{where} could not be read ({e.strerror or e})",
                               hint="Check the permissions of " + ctx.db + " and its folder, then run agentbus doctor again.")]
     try:
         have = user_version(con)

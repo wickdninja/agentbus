@@ -41,7 +41,7 @@ A status is `ok`, `warn`, `fail` or `n/a` (nothing to check on this machine). A 
 
 ## What doctor does and does not do
 
-It reads and prints. It fixes nothing, installs nothing and prints the fix instead of running it. It makes no network call, so it cannot tell you a newer release exists. It runs no program it finds: not a hook, not the bus folder's copy of agentbus (it reads that file as bytes to compare it). The only program it starts is `git`, with the same read-only lookups every agentbus command makes, because it finds the bus the way they do.
+It reads and prints. It fixes nothing, installs nothing and prints the fix instead of running it. It makes no network call, so it cannot tell you a newer release exists. It runs no program it finds: not a hook, not the bus folder's copy of agentbus (it reads that file as bytes to compare it). The only program it starts is `git`, found on your `PATH` like every agentbus command, with the same read-only lookups they make, because it finds the bus the way they do.
 
 The bus is opened read-only and waits 0.3 seconds, so a bus another program holds shows as `busy` rather than hanging. That open can have two small effects, the same as `watch` and the other read commands: SQLite may create an empty `bus.db-wal` file beside the bus, and if a program crashed while writing, SQLite may finish recovering its journal, which folds rows that were already committed into `bus.db`. No row, table or version changes. The open needs write access to the bus folder for this, so in a read-only sandbox `bus` reports the permission error.
 

@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 # agentbus doctor: what is installed, which version each piece is, what is wrong and the command that fixes
-# it. It reads and never writes, executes nothing it finds, and starts no subprocess. Everything runs in a
-# temp HOME and a temp workspace; output lines are asserted with grep -F or compared whole.
+# it. It writes no data, executes nothing it finds, and starts no process but git (read-only lookups, like every
+# command). Everything runs in a temp HOME and a temp workspace; output lines are asserted with grep -F or compared whole.
 . "$(dirname "$0")/lib.sh"
 SELF="$TESTS_DIR/$(basename "$0")"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -148,6 +148,8 @@ for state in "${states[@]}"; do
     no-codex-dir) rm -rf "$HOME/.codex" ;;
     bare-home) rm -rf "$HOME"; mkdir -p "$HOME" ;;
   esac
+  # a git repository whose exclude file lacks the rule: the commands add it, doctor must not (and .git is in the snapshot)
+  mkrepo "$W/app"; : > "$W/app/.git/info/exclude"
   before=$(snap "$HOME" "$W")
   for dir in "$W/app" "$W/none"; do
     for args in "" "--json" "--scope user" "--scope project" "--json --scope all"; do
@@ -365,6 +367,13 @@ doc doctor --json
 [ "$RC" = 1 ] || fail "a bus with another shape must exit 1, got $RC"
 row bus fail "$W/app" "" "" "Restore a backup"
 ok "refused: fail, with a hint and no fix"
+# garbage: not an SQLite file at all; the hint names that, not permissions
+"$PY" -c 'import sys; open(sys.argv[1], "wb").write(b"not a database " * 40)' "$W/app/.agentbus/bus.db"; rm -f "$W/app/.agentbus/bus.db-wal" "$W/app/.agentbus/bus.db-shm"
+doc doctor --json
+[ "$RC" = 1 ] || fail "a bus.db that is not a database must exit 1, got $RC"
+row bus fail "SQLite cannot use $W/app/.agentbus/bus.db (file is not a database)" "" "" "Restore a backup"
+! grep -q permissions "$T/out" || fail "a garbage bus.db was blamed on permissions"
+ok "garbage: fail, SQLite's reason, a restore hint (not permissions)"
 
 echo "TEST 7: a bus held by a sqlite3 shell: bus is warn busy within 1 s"
 world
