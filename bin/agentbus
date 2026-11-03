@@ -9599,12 +9599,17 @@ def _brief_show(r, limit):
 
     f = r["facts"]
     if f["items"]:
-        show("facts changed since your last read ({}):" if f["since"] else "facts ({}):", len(f["items"]) + omitted["facts"])
+        if f["since"]:
+            show("facts changed since your last read ({}):", len(f["items"]) + omitted["facts"])
+        else:
+            show("facts ({}):", len(f["items"]) + omitted["facts"])
         for x in f["items"]:
             show("{} = {} ({})", _brief_line(x["key"], 40), _brief_line(x["value"], BRIEF_BODY_TEXT), _brief_line(x["updated_by"], 40), row=True)
         more(omitted["facts"])
+    elif f["since"]:
+        show("facts: none changed")
     else:
-        show("facts: none changed" if f["since"] else "facts: none")
+        show("facts: none")
     show("next: {}", r["next"])
 
 
