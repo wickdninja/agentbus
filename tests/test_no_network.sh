@@ -37,6 +37,7 @@ echo "TEST 1: control: an eligible run at a terminal trips the canary in the che
 new_case ctl uv; setup_canary; new_bus "$CWD"
 tty_run buses >/dev/null
 tripped || fail "the eligible control never reached the network layer: the canary proves nothing"
+wait_cache   # the child ends by writing its answer; leave nothing running when the folder is removed
 [ -e "$CANARY_LOAD" ] || fail "the canary was not loaded"
 ok "the canary trips"
 
