@@ -83,21 +83,93 @@ finished() { [ "$STOPPED" = 0 ]; }
 # of one byte past the first page fails the command, whatever the size.
 chains() {
   python3 - "$1" "$1.chains" "$2" <<'PY'
-import json, os, sqlite3, struct, sys
+import json, mmap, os, sqlite3, struct, sys
 db, saved, what = sys.argv[1:]
+# The overflow pages are found by walking the b-trees in the file itself (the file format, sqlite.org/fileformat.html),
+# not through dbstat, which some SQLite builds leave out (setup-python's 3.15 on macOS).
 c = sqlite3.connect(db)
-size = c.execute("PRAGMA page_size").fetchone()[0]
-if what == "break":
-    pages = [r[0] for r in c.execute("SELECT pageno FROM dbstat WHERE name IN ('claims', 'sqlite_autoindex_claims_1') "
-                                     "AND pagetype='overflow'")]
+roots = dict(c.execute("SELECT name, rootpage FROM sqlite_master WHERE name IN ('claims', 'sqlite_autoindex_claims_1')"))
+planted, known = None, None
+if what == "break":  # read while the chains are whole
+    planted = c.execute("SELECT COUNT(*) FROM claims WHERE length(resource) > 1048576").fetchone()[0]
+    try:  # where the build has dbstat, a second opinion on which pages are overflow pages
+        known = {r[0] for r in c.execute("SELECT pageno FROM dbstat WHERE name IN ('claims', 'sqlite_autoindex_claims_1') "
+                                         "AND pagetype='overflow'")}
+    except sqlite3.OperationalError:
+        pass
+    assert set(roots) == {"claims", "sqlite_autoindex_claims_1"} and planted > 0, (roots, planted)
 c.close()  # bus.db-wal is empty (plant checkpointed it); every byte below is in bus.db itself
+fd = open(db, "rb")
+data = mmap.mmap(fd.fileno(), 0, access=mmap.ACCESS_READ)  # shared: sees the writes below
+size = struct.unpack(">H", data[16:18])[0] or 65536
+usable = size - data[20]
+
+def varint(b, i):
+    v = 0
+    for k in range(9):
+        x = b[i + k]
+        if k == 8:
+            return (v << 8) | x, i + 9
+        v = (v << 7) | (x & 0x7F)
+        if x < 0x80:
+            return v, i + k + 1
+
+def first_overflow(b, i, table):
+    """The first overflow page of the cell whose payload size varint starts at i, or None (sqlite.org/fileformat.html,
+    'Cell Payload Overflow Pages')."""
+    n, i = varint(b, i)
+    if table:
+        _, i = varint(b, i)  # the rowid
+    x = usable - 35 if table else (usable - 12) * 64 // 255 - 23
+    if n <= x:
+        return None
+    m = (usable - 12) * 32 // 255 - 23
+    k = m + (n - m) % (usable - 4)
+    local = k if k <= x else m
+    return struct.unpack(">I", b[i + local:i + local + 4])[0]
+
+def heads(root):
+    """The first overflow page of every cell in the b-tree at root."""
+    out, todo = [], [root]
+    while todo:
+        pg = todo.pop()
+        b = data[(pg - 1) * size:pg * size]
+        h = 100 if pg == 1 else 0
+        kind, cells = b[h], struct.unpack(">H", b[h + 3:h + 5])[0]
+        interior = kind in (2, 5)
+        assert kind in (2, 5, 10, 13), "page %d is not a b-tree page (type %d)" % (pg, kind)
+        if interior:
+            todo.append(struct.unpack(">I", b[h + 8:h + 12])[0])
+        ptrs = h + (12 if interior else 8)
+        for n in range(cells):
+            at = struct.unpack(">H", b[ptrs + 2 * n:ptrs + 2 * n + 2])[0]
+            if interior:
+                todo.append(struct.unpack(">I", b[at:at + 4])[0])
+                if kind == 5:
+                    continue  # a table interior cell is a child and a rowid, no payload
+                at += 4
+            ov = first_overflow(b, at, table=kind in (5, 13))
+            if ov:
+                out.append(ov)
+    return out
+
 with open(db, "r+b") as f:
     if what == "break":
         old = {}
-        for p in pages:
-            f.seek((p - 1) * size); old[p] = f.read(4).hex()
-            f.seek((p - 1) * size); f.write(struct.pack(">I", 0x7FFFFFFF))  # the next page: past the end of the file
+        for tree in ("claims", "sqlite_autoindex_claims_1"):
+            firsts = heads(roots[tree])
+            # Self-check: one chain per planted name in each b-tree, or the walk read the file wrong.
+            assert len(firsts) == planted, "%s: %d overflow chains found for %d planted names" % (tree, len(firsts), planted)
+            for p in firsts:
+                while p:
+                    assert p not in old and 0 < p <= len(data) // size, "overflow page %d: a bad chain" % p
+                    nxt = data[(p - 1) * size:(p - 1) * size + 4]
+                    old[p] = nxt.hex()
+                    f.seek((p - 1) * size); f.write(struct.pack(">I", 0x7FFFFFFF))  # next page: past the end of the file
+                    p = struct.unpack(">I", nxt)[0]
+        assert known is None or known == set(old), "the walk and dbstat disagree on the overflow pages"
         json.dump(old, open(saved, "w"))
+        print("broke %d overflow pages of %d planted names" % (len(old), planted), file=sys.stderr)
     else:
         for p, b in json.load(open(saved)).items():
             f.seek((int(p) - 1) * size); f.write(bytes.fromhex(b))
