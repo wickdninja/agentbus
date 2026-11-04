@@ -872,7 +872,7 @@ mkdir -p "$W/outside"; RC=0; (cd "$W/outside" && AGENTBUS_DB="$W/app/.agentbus/b
 "$PY" -c 'import json,sys; assert not [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "bus-env"]' "$T/out" || fail "a folder outside any checkout got a bus-env row"
 ok "bus-env names both buses and the fix; silent for the same file, no variable and no checkout"
 
-echo "TEST 24: a bus folder directly above a repo's linked worktrees is a two-buses warning naming the bus to keep; nesting is not"
+echo "TEST 24: a bus folder directly above a repo's linked worktrees is a two-buses warning naming the bus they use and how to look, never a delete; nesting is not"
 world
 mkrepo "$W/main"; "${DOC[@]}" init "$W/main" >/dev/null 2>&1
 mkdir -p "$W/lanes"; git -C "$W/main" worktree add -q "$W/lanes/a" -b tb-a; git -C "$W/main" worktree add -q "$W/lanes/b" -b tb-b
@@ -880,17 +880,37 @@ doc "$W/lanes/a" doctor --json
 "$PY" -c 'import json,sys; assert not [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "two-buses"]' "$T/out" || fail "a repo with one bus got a two-buses row"
 "${DOC[@]}" init "$W/lanes" --second-bus >/dev/null 2>&1
 doc "$W/lanes/a" doctor --json
-row two-buses warn "$W/lanes/.agentbus sits directly above this repo's worktrees, but they use $W/main/.agentbus" "" "" "Keep $W/main/.agentbus"
-"$PY" - "$T/out" "$W" <<'PY' || fail "two-buses hint does not give the exact removal command"
+row two-buses warn "$W/lanes/.agentbus sits directly above this repo's worktrees, but they use $W/main/.agentbus" "" "" "The other bus may serve other repos"
+two_buses_looks() {  # BUS-FOLDER: exactly one row, how to look at that bus, no delete command anywhere in it
+  "$PY" - "$T/out" "$1" <<'PY' || fail "the two-buses row is not one row that says how to look and leaves the decision to the person"
 import json, sys
 c = [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "two-buses"]
-assert len(c) == 1 and ("rm -r " + sys.argv[2] + "/lanes/.agentbus") in c[0]["hint"], c
+assert len(c) == 1, c
+text = c[0]["detail"] + " " + c[0]["hint"]
+assert "agentbus buses" in text and "AGENTBUS_DB=" + sys.argv[2] + "/bus.db agentbus read" in text and "your call" in text, c
+assert not c[0]["fix"], c
+for word in ("rm ", "rm -", "remove it", "delete", "Keep "):
+    assert word not in text, (word, c)
 PY
-doc "$W/main" doctor --json; row two-buses warn "$W/lanes/.agentbus" "" "" "Keep $W/main/.agentbus"
+}
+two_buses_looks "$W/lanes/.agentbus"
+doc "$W/main" doctor --json; row two-buses warn "$W/lanes/.agentbus sits directly above this repo's worktrees, but they use $W/main/.agentbus" "" "" "The other bus may serve other repos"
 mkdir -p "$W/nest"; mkrepo "$W/nest/repo"; "${DOC[@]}" init "$W/nest" >/dev/null 2>&1; "${DOC[@]}" init "$W/nest/repo" >/dev/null 2>&1
 git -C "$W/nest/repo" worktree add -q "$W/nest/repo-wt" -b tb-n
 doc "$W/nest/repo-wt" doctor --json
 "$PY" -c 'import json,sys; assert not [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "two-buses"]' "$T/out" || fail "a workspace bus above the repo and its worktree (nesting) got a two-buses row"
-ok "two-buses fires from a worktree and the main checkout, names the bus to keep and the exact command; a workspace's outer bus does not fire it"
+# The mixed workspace: the folder's bus serves an independent repo beside the worktree, so a delete would take that repo's bus.
+world
+mkrepo "$W/elsewhere/app"; "${DOC[@]}" init "$W/elsewhere/app" >/dev/null 2>&1
+mkdir -p "$W/ws"; mkrepo "$W/ws/other"; "${DOC[@]}" init "$W/ws" >/dev/null 2>&1
+git -C "$W/elsewhere/app" worktree add -q "$W/ws/app-feature" -b tb-mixed
+doc "$W/ws/app-feature" doctor --json
+row two-buses warn "$W/ws/.agentbus sits directly above this repo's worktrees, but they use $W/elsewhere/app/.agentbus" "" "" "The other bus may serve other repos"
+two_buses_looks "$W/ws/.agentbus"
+ok "two-buses fires from a worktree and the main checkout, names the bus in use and how to look, and never prints a delete; a workspace's outer bus does not fire it"
+
+echo "TEST 25: bus-env and two-buses have rows in docs/how-to/doctor.md"
+for id in bus-env two-buses; do grep -qE "^\| \`$id\` \|" "$(cd "$TESTS_DIR/.." && pwd)/docs/how-to/doctor.md" || fail "docs/how-to/doctor.md has no row for $id"; done
+ok "bus-env and two-buses are in the checks table"
 
 all_passed "All doctor tests passed"

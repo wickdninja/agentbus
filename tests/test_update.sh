@@ -57,6 +57,18 @@ ab update --no-buses --no-setup >/dev/null || fail "the clean stub dir (control)
 [ -s "$STUB_LOG" ] || fail "the control installer left no log"
 ok "relative, in-repo and group-writable are skipped; the clean one (control) runs"
 
+echo "TEST 3a: an installer in the linked worktree you are standing in is skipped, like one in the main checkout"
+# Bug it catches: the check used repo_root, which is the main checkout from a linked worktree, so a tracked bin/uv there ran.
+new_case wtpath uv
+WM="$C/wt-main"; WL="$C/wt-lane"; mkrepo "$WM"; git -C "$WM" worktree add -q "$WL" -b wt-lane
+mkdir -p "$WL/bin" "$WL/sub"; cp "$C/stubs/uv" "$WL/bin/uv"; chmod 755 "$WL/bin"; git -C "$WL" add bin/uv; git -C "$WL" -c user.email=t@t -c user.name=t commit -q -m uv
+for here in "$WL" "$WL/sub"; do
+  (cd "$here" && PATH="$WL/bin:/usr/bin:/bin" "$ENTRY" update --no-buses --no-setup --json 2>"$C/err" >/dev/null) && fail "an installer in the current linked worktree was used, from $here"
+  [ "$(errof <"$C/err")" = manual_step ] || fail "linked-worktree entry, from $here: $(cat "$C/err")"
+done
+[ ! -s "$STUB_LOG" ] || fail "the installer in the current linked worktree ran: $(cat "$STUB_LOG")"
+ok "skipped from the worktree's top and from a subfolder"
+
 echo "TEST 3b: a group-writable installer folder is trusted only for the admin group (owner the caller or root); world-writable, another group and a group-writable installer file stay refused"
 new_case admin uv
 chmod 775 "$C/stubs"   # like /opt/homebrew/bin: drwxrwxr-x, owned by the caller, in a group that is not the admin group here

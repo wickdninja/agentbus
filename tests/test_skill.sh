@@ -79,7 +79,7 @@ for action in parser._actions:
     if hasattr(action, 'choices') and isinstance(action.choices, dict):
         commands |= set(action.choices)
 INSTALLED = {'init', 'upgrade', 'setup', 'doctor', 'skill', 'watch', 'schema'}  # the installed tool's own
-skip = {'agentbus', 'AGENTBUS_DB', '.agentbus/bin/agentbus', 'git ls-files .agentbus'}   # the last gates running the project copy
+skip = {'agentbus', 'AGENTBUS_DB'}
 for snippet in re.findall(r'`([^`]+)`', skill):
     if snippet in skip:
         continue
@@ -88,9 +88,9 @@ for snippet in re.findall(r'`([^`]+)`', skill):
         tokens = tokens[2:] if tokens[0] in ('--as', '--up') else tokens[1:]
     if tokens and not tokens[0].startswith('-') and tokens[0].isalpha():
         assert tokens[0] in commands, ('the skill names a command that does not exist', snippet)
-# A hostile clone can ship .agentbus/bin/agentbus: the skill names it alone, as the gated fallback, and never with a command.
-for m in re.finditer(r'\.agentbus/bin/agentbus[ ]+([a-z][a-z-]*)', skill):
-    assert m.group(1) not in commands, ('the project copy is told to run a command', m.group(0))
+# A hostile clone can ship .agentbus/bin/agentbus, and a gate on git ls-files is bypassed by a differently cased tracked
+# folder, a subfolder or an archive with no .git: the skill does not name it at all.
+assert '.agentbus/bin/agentbus' not in skill, 'the skill names the project copy'
 print(f'{len(commands)} commands in the parser')
 PY
 ok "commands named by the skill exist; none is run through the project copy"
@@ -104,6 +104,10 @@ n=$(wc -c <"$T/skill.out" | tr -d ' ')
 [ "$n" -le 4800 ] || fail "agentbus skill printed $n bytes, the cap is 4800"
 ok "agentbus skill prints $n bytes ending with the marker"
 grep -qF 'Delivery can repeat; dedupe by message ID.' "$T/skill.out" || fail "the printed skill lost the sentence that duplicate delivery is possible (inbox is at least once)"
+grep -qF 'Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it.' "$T/skill.out" || fail "the skill lacks the PATH rule and its refusal wording"
+grep -qF 'If a dispatcher assigned an absolute CLI path too, use it.' "$T/skill.out" || fail "the skill lost the sandbox case: a dispatcher that assigns the CLI by absolute path"
+grep -qF 'this copy' "$T/skill.out" && fail "the skill says 'this copy', which assumes the project copy"
+grep -qF '.agentbus/bin/agentbus' "$T/skill.out" && fail "the skill names the project copy"
 ok "the printed skill says delivery can repeat"
 
 echo "TEST: docs/how-to/setup.md's dry-run example is what setup claude --dry-run prints, byte count included"
@@ -125,30 +129,33 @@ $want"
 ok "the setup how-to's dry-run example matches the real output"
 
 echo
-echo "TEST: agentbus skill --agents-md prints the 4-line AGENTS.md block, at most 700 bytes, running the installed agentbus and gating the project copy"
+echo "TEST: agentbus skill --agents-md prints the 4-line AGENTS.md block, at most 700 bytes, running the installed agentbus and never the project copy"
 agentbus skill --agents-md >"$T/agents.out"
 [ "$(wc -l <"$T/agents.out" | tr -d ' ')" = 4 ] || fail "the AGENTS.md block is not 4 lines: $(cat "$T/agents.out")"
 [ "$(wc -c <"$T/agents.out" | tr -d ' ')" -le 700 ] || fail "the AGENTS.md block is over 700 bytes"
 head -n 1 "$T/agents.out" | grep -qx '## agentbus' || fail "first line is not '## agentbus'"
 grep -qF 'Run `agentbus skill` for the full protocol' "$T/agents.out" || fail "the block does not send the agent to agentbus skill from PATH"
-grep -qF 'exists in this folder or a parent' "$T/agents.out" || fail "the block's condition is wrong for a repo inside a workspace whose bus is in a parent folder"
-grep -qF 'Use `agentbus` from PATH; use `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing, otherwise stop and tell the user.' "$T/agents.out" || fail "the block lacks the gated fallback and its refusal wording"
-grep -qF '`.agentbus/bin/agentbus skill`' "$T/agents.out" && fail "the block still tells the agent to run the project copy unconditionally"
-grep -qF "if it says \`unknown command 'skill'\`, the copy is 0.1.x" "$T/agents.out" || fail "the block lacks the stale-copy rule"
-grep -qF '`.agentbus/bin/agentbus --as' "$T/agents.out" && fail "a coordination command in the block runs the project copy"
+grep -qF 'exists in this folder or a parent' "$T/agents.out" && fail "the block's condition tells an agent in a linked worktree elsewhere to ignore a bus that discovery finds"
+grep -qF 'If `agentbus buses` says there is no bus here, ignore this section' "$T/agents.out" || fail "the block does not let discovery decide whether it applies"
+grep -qF 'Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it.' "$T/agents.out" || fail "the block lacks the PATH rule and its refusal wording"
+grep -qF '.agentbus/bin/agentbus' "$T/agents.out" && fail "the block names the project copy"
+grep -qF "if it says \`unknown command 'skill'\`, that agentbus is 0.1.x" "$T/agents.out" || fail "the block lacks the stale-install rule"
 grep -qF '`agentbus --as NAME join`' "$T/agents.out" || fail "the block lacks the installed-agentbus join command"
-grep -qF 'Use `agentbus` from PATH. Use the bus directory'"'"'s `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing; otherwise stop and tell the user.' "$SKILL" || fail "the skill lacks the PATH rule and its refusal wording"
 grep -qF 'One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` and ask; do not create another.' "$SKILL" || fail "the skill lacks the one-repo-one-bus rule"
 grep -qF 'Set `AGENTBUS_DB` only when a worker cannot discover the bus' "$SKILL" || fail "the skill lacks the AGENTBUS_DB rule"
 agentbus --json skill --agents-md | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["text"].startswith("## agentbus\n"), d' || fail "--json skill --agents-md"
 ok "AGENTS.md block: 4 lines, $(wc -c <"$T/agents.out" | tr -d ' ') bytes"
-# After the text checks, so a mutation of the embedded text fails for what it lost, not only because the copy went stale.
-if [ "${AGENTBUS_EMBED_CHECK:-}" = 1 ]; then
-  cmp -s "$T/skill.out" "$SKILL" || fail "agentbus skill differs from skills/agentbus/SKILL.md; run python3 scripts/embed_skill.py"
-  python3 "$ROOT/scripts/embed_skill.py" --check >"$T/embed.out" 2>&1 || fail "embed_skill.py --check: $(cat "$T/embed.out")"
-  grep -qx 'embedded skill is current' "$T/embed.out" || fail "embed_skill.py --check said: $(cat "$T/embed.out")"
-  ok "the embedded skill and block match their sources"
-fi
+
+echo "TEST: what the block tells an agent to run decides right, from a linked worktree outside the repo and from a folder with no bus"
+# Bug it catches: "if .agentbus/ exists in this folder or a parent (otherwise ignore this section)" told an agent in a linked
+# worktree elsewhere to ignore a bus that discovery finds.
+CB="$T/c-repo"; mkrepo "$CB"; agentbus init "$CB" >/dev/null; CW="$T/c-elsewhere/lane"; mkdir -p "$T/c-elsewhere"; git -C "$CB" worktree add -q "$CW" -b c-lane
+[ ! -e "$CW/.agentbus" ] && [ ! -e "$T/c-elsewhere/.agentbus" ] || fail "the worktree has a .agentbus of its own: the case proves nothing"
+out=$(cd "$CW" && agentbus buses) || fail "buses from a linked worktree elsewhere failed: $out"
+grep -qF "$(cd "$CB" && pwd -P)" <<<"$out" || fail "buses from a linked worktree elsewhere did not find the repo's bus: $out"
+mkdir -p "$T/c-none"; rc=0; out=$(cd "$T/c-none" && agentbus buses 2>&1) || rc=$?
+[ "$rc" = 3 ] && grep -qF 'no bus here' <<<"$out" || fail "buses in a folder with no bus does not say what the block tells an agent to look for: rc $rc: $out"
+ok "buses finds the bus from a linked worktree elsewhere and says no bus here where there is none"
 
 echo
 echo "TEST: embed_skill.py --check fails after the skill file is edited and passes after the script runs"
@@ -163,6 +170,14 @@ python3 "$T/tree/scripts/embed_skill.py" >"$T/e.out" 2>&1 || fail "embed_skill.p
 python3 "$T/tree/scripts/embed_skill.py" --check >"$T/e.out" 2>&1 || fail "--check failed after the script ran: $(cat "$T/e.out")"
 "$PY" "$T/tree/bin/agentbus" skill | grep -qx '# agentbus protocol (edited)' || fail "the rewritten copy does not print the edited skill"
 ok "--check: stale after an edit, current after the script ran"
+
+# After the text checks, so a mutation of the embedded text fails for what it lost, not only because the copy went stale.
+if [ "${AGENTBUS_EMBED_CHECK:-}" = 1 ]; then
+  cmp -s "$T/skill.out" "$SKILL" || fail "agentbus skill differs from skills/agentbus/SKILL.md; run python3 scripts/embed_skill.py"
+  python3 "$ROOT/scripts/embed_skill.py" --check >"$T/embed.out" 2>&1 || fail "embed_skill.py --check: $(cat "$T/embed.out")"
+  grep -qx 'embedded skill is current' "$T/embed.out" || fail "embed_skill.py --check said: $(cat "$T/embed.out")"
+  ok "the embedded skill and block match their sources"
+fi
 
 echo
 echo "TEST: embed_skill.py --release records the hash and --check still says current (the release-prep order)"

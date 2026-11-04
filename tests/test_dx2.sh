@@ -40,7 +40,7 @@ has "an answered, read pair is still pending" "pending between others: none" "$T
 # capped, with the count of the rest and the command that shows more
 for i in 1 2 3 4 5 6 7; do agentbus --as beta post "q$i" --to alpha --kind question >/dev/null; done
 agentbus --as gamma brief >"$T/o" 2>&1
-has "pending between others is not capped" "... 2 more (brief --limit 20)" "$T/o"
+has "pending between others is not capped" "... 2 more (agentbus --as gamma brief --limit 20)" "$T/o"
 ok "brief lists what waits between other agents, capped, with a next"
 
 echo "TEST 2: did-you-mean for flags, commands and names"

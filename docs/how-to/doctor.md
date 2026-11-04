@@ -30,6 +30,8 @@ Run it from the folder you work in. Every line that is not `ok` ends with the co
 | `copy` | the bus folder's own copy of agentbus (`.agentbus/bin/agentbus`) against the one you installed: its version, and its contents (an empty or edited file with the right version number is flagged) | `agentbus upgrade DIR` |
 | `skill` | the Claude Code skill: missing, current, older, edited, not written by agentbus, or the old install-line link | `agentbus setup claude` |
 | `agents-md` | the agentbus block in Codex's `AGENTS.md`: missing, current, older, edited, or damaged markers | `agentbus setup codex` |
+| `bus-env` | `AGENTBUS_DB` against the bus this folder finds. Shown only when the variable names another bus | `unset AGENTBUS_DB` |
+| `two-buses` | bus folders directly above this repo's linked worktrees that are not the bus the worktrees use. Says which bus they use and how to look at the other. That one may serve other repos, so doctor names no command: what to do with it is your call | none |
 | `hooks` | the hook entries `agentbus setup claude` wrote, and the agentbus they run (its path and version). With the Claude Code plugin installed, it says the plugin provides the hooks. Says so when there are none to check | `agentbus setup claude` |
 
 A status is `ok`, `warn`, `fail` or `n/a` (nothing to check on this machine). A warning is something to tidy; a `fail` is something that stops agents from working. The last line counts both. The exit status is 0 unless a check failed, then 1.

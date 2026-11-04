@@ -27,13 +27,14 @@ SNIPPET_CAP = 700
 # sha256 of skill/SKILL.md at v0.1.0, the first released skill.
 SEED_HISTORY = ["2af5e4efedd84d7da42da6c4c5ddd02f230cc002e05b733741557dfd38b06156"]
 
-# The Codex AGENTS.md block body. It names the installed `agentbus` from PATH; the bus copy is a gated fallback (version policy rule 1).
+# The Codex AGENTS.md block body. It names the installed `agentbus` from PATH, never a bus copy (version policy rule 1). The block can
+# sit in a user-wide AGENTS.md, so what decides whether it applies is discovery (`buses`), which a linked worktree reaches too.
 AGENTS_SNIPPET = (
     "## agentbus\n"
-    "If `.agentbus/` exists in this folder or a parent (otherwise ignore this section): this workspace has a shared agentbus. "
-    "Use `agentbus` from PATH; use `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing, otherwise stop and tell the user. "
+    "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. "
+    "If `agentbus buses` says there is no bus here, ignore this section; otherwise this workspace has a shared agentbus. "
     "Run `agentbus skill` for the full protocol; if it says "
-    "`unknown command 'skill'`, the copy is 0.1.x: stop and tell the user to run `agentbus upgrade --all PARENT_DIR`.\n"
+    "`unknown command 'skill'`, that agentbus is 0.1.x: stop and tell the user to install the current release and run `agentbus upgrade --all PARENT_DIR`.\n"
     "Join: `agentbus --as NAME join`. "
     "Before editing: `agentbus --as NAME claim PATH --purpose WHY`.\n"
     "Between steps: `agentbus --as NAME inbox`. "

@@ -272,8 +272,9 @@ for part in ("goal:", "lead", "tests", "token refactor", "next:"):
     check(part in out, "a realistic brief lost %r:\n%s" % (part, out))
 print("PASS: a realistic bus briefs in %d characters (budget 1,600)" % len(out))
 
-# a fuller bus: 6 agents and 8 open questions (more than the default 5 rows show) with every section populated stays bounded; the
-# CHANGELOG claims exactly the two numbers this file enforces (a small bus under 1,600 characters, any bus under 4,000), not "400 tokens"
+# a fuller bus: 6 agents and 8 open questions (more than the default 5 rows show) with every section populated stays bounded at
+# this size. It is a check on this bus, not a bound on every bus (7 agents with long claims measure over it), so the CHANGELOG
+# claims only the realistic bus above, and neither "400 tokens" nor an "any bus" number.
 sdb = bus("six")
 for n, role, tool in (("lead", "planner", "claude"), ("api", "implementer", "codex"), ("web", "implementer", "claude"),
                       ("tests", "reviewer", "codex"), ("docs", "writer", "claude"), ("ops", "release", "codex")):
@@ -289,13 +290,14 @@ post(sdb, "tests", "CI is red on main: the migration test needs the new column",
 for i in range(6):
     ok(sdb, "--as", "lead", "ctx", "set", "fact_%d" % i, "a shared value for the whole team, number %d, until Friday" % i)
 full = ok(sdb, "--as", "api", "brief")
-check(len(full) < 4000, "a bus with 6 agents and 8 open questions briefs in %d characters, over the 4,000 the CHANGELOG promises" % len(full))
+check(len(full) < 4000, "a bus with 6 agents and 8 open questions briefs in %d characters, over this bus's 4,000" % len(full))
 check("3 more" in full, "the 8 questions were not bounded at the default 5 rows:\n%s" % full)
-changelog = open(os.path.join(os.environ["TESTS_DIR"], "..", "CHANGELOG.md")).read()
+changelog = open(os.path.normpath(os.path.join(os.environ["TESTS_DIR"], "..", "CHANGELOG.md"))).read()
 claim = next(l for l in changelog.splitlines() if l.startswith("- `agentbus brief`"))
 check("under 400 tokens" not in claim, "the CHANGELOG still promises brief in under 400 tokens; a bus with 6 agents and 8 open questions measures %d characters" % len(full))
-check("1,600 characters" in claim and "4,000 characters" in claim, "the CHANGELOG's brief size claim does not name the two bounds this file enforces (1,600 and 4,000 characters)")
-print("PASS: 6 agents and 8 open questions brief in %d characters (bound 4,000); the CHANGELOG claims 1,600 for a small bus and 4,000 for any" % len(full))
+check("four-agent bus" in claim and "under 1,600 characters" in claim, "the CHANGELOG's brief size claim is not the one this file enforces (a realistic four-agent bus under 1,600 characters)")
+check("any bus" not in claim and "4,000" not in claim, "the CHANGELOG promises a bound on any bus, which no test holds and a 7-agent bus exceeds")
+print("PASS: 6 agents and 8 open questions brief in %d characters (under 4,000 for this bus); the CHANGELOG claims 1,600 for the realistic bus only" % len(full))
 
 # the output rules apply to brief: it wraps to an explicit COLUMNS (no line over it, no word broken) and a pipe with no COLUMNS stays whole
 narrow = ok(db, "--as", "api", "brief", env={"COLUMNS": "60"})

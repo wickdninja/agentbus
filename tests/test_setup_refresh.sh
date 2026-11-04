@@ -50,6 +50,15 @@ done
 [ "$(tree_sum)" = "$before" ] || fail "a refresh of current files changed the tree"
 ok "all unchanged"
 
+echo "TEST 2b: the help and the upgrade page state the true rule: an edited skill or block is kept, tagged hooks are rewritten with a backup"
+# Bug it catches: both promised that anything edited is kept, while setup.md and the code rewrite tagged hooks.
+h=$(cd "$W" && "${AB[@]}" setup --help | tr -s ' \n' '  ')
+grep -qF "keep a skill or AGENTS.md block you edited, and rewrite hooks tagged agentbus:managed, with a backup" <<<"$h" || fail "setup --help does not state the refresh rule: $h"
+! grep -qF "keep anything you edited" <<<"$h" || fail "setup --help still promises to keep anything edited"
+grep -qF "older and unedited" "$(cd "$TESTS_DIR/.." && pwd)/docs/how-to/upgrade.md" && fail "upgrade.md still promises a refresh only when unedited"
+grep -qF "tagged \`agentbus:managed\` are rewritten" "$(cd "$TESTS_DIR/.." && pwd)/docs/how-to/upgrade.md" || fail "upgrade.md does not state the rule for tagged hooks"
+ok "help and upgrade page match setup.md"
+
 echo "TEST 3: an older, unedited skill and block are updated in place, with no backup; text outside the block stays"
 reset; mkdir -p "$(dirname "$SK")" "$(dirname "$AG")"
 printf '%s' "$OLD_SKILL" >"$SK"

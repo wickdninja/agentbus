@@ -26,8 +26,9 @@ your setup; this page does not cover them.
 - **Dispatcher:** whatever starts a lane: a script, a harness, or the brain itself.
 - **Grant:** the paths a lane's sandbox lets it write.
 - **Bus folder:** `.agentbus/` in a repo or workspace. `agentbus init` makes it.
-- **Bus copy:** `.agentbus/bin/agentbus`, the copy of the tool `init` puts there. Agents can run it
-  without installing anything, and the brain runs it unsandboxed.
+- **Bus copy:** `.agentbus/bin/agentbus`, the copy of the tool `init` puts there. An agent never picks
+  it for itself. A dispatcher can assign it to a lane along with `AGENTBUS_DB`, by absolute path or, as
+  in step 4, by putting its folder on the lane's `PATH`.
 
 ## Quick recipe (macOS, sandbox-exec)
 

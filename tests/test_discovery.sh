@@ -264,4 +264,35 @@ for c in "who" "status" "read" "inbox" "claims" "post hello" "ctx set k v" "buse
   [ ! -s "$T/mm-err" ] || fail "$c warned about a mismatched AGENTBUS_DB: $(cat "$T/mm-err")"
 done
 ok "join and brief warn once (text and --json); same file, symlink, no checkout and other commands are silent"
+
+echo "TEST: join and brief with AGENTBUS_DB from a deleted working folder stay quiet and exit 0"
+# Bug it catches: the mismatch check asked for the working folder, and only SystemExit was caught: exit 3, where it exited 0 before.
+GB="$T/gone-bus"; mkdir -p "$GB"; agentbus init "$GB" >/dev/null
+for c in join brief; do
+  GD="$T/gone-$c"; mkdir -p "$GD"
+  rc=0; ( cd "$GD" && rmdir "$GD" && AGENTBUS_DB="$GB/.agentbus/bus.db" agentbus --as gone $c >"$T/gone-out" 2>"$T/gone-err" ) || rc=$?
+  [ "$rc" = 0 ] || fail "$c with AGENTBUS_DB from a deleted folder exited $rc: $(cat "$T/gone-err")"
+  [ ! -s "$T/gone-err" ] || fail "$c with AGENTBUS_DB from a deleted folder said something on stderr: $(cat "$T/gone-err")"
+done
+ok "the deleted folder is not an error when the bus is named"
+
+echo "TEST: what a command tells you to run next keeps --up"
+# Bug it catches: commands printed by these messages ran against the nearest bus, not the outer one the person was on.
+UW="$T/up-ws"; mkdir -p "$UW"; mkrepo "$UW/repo"; agentbus init "$UW" >/dev/null; agentbus init "$UW/repo" >/dev/null
+upcmd() { (cd "$UW/repo" && agentbus --up 1 "$@"); }
+for c in who status; do
+  o=$(upcmd $c 2>&1) || fail "--up 1 $c failed: $o"
+  grep -qF "no agents. Join with: agentbus --up 1 --as NAME join" <<<"$o" || fail "$c's empty hint lost --up: $o"
+done
+upcmd --as ua join >/dev/null
+e=$(upcmd --as ua ctx set goal x 2>&1) && fail "ctx set goal under --up 1 was not refused"
+grep -qF "goal is reserved; use: agentbus --up 1 goal TEXT" <<<"$e" || fail "the reserved-goal hint lost --up: $e"
+e=$(upcmd --as ua claim /abs/path 2>&1) && fail "an absolute claim under --up 1 was not refused"
+grep -qF "For example: agentbus --up 1 --as NAME claim src/app/ --purpose WHY" <<<"$e" || fail "the bad-path hint lost --up: $e"
+upcmd --as ub join >/dev/null
+for i in 1 2 3 4 5 6 7; do upcmd --as ua post "q$i" --kind question >/dev/null; upcmd --as ua post "n$i" --to ub >/dev/null; done
+o=$(upcmd --as ub brief 2>&1) || fail "--up 1 brief failed: $o"
+grep -qF "2 more (agentbus --as ub --up 1 brief --limit 20)" <<<"$o" || fail "brief's more hint lost --up: $o"
+grep -qF "(agentbus --as ub --up 1 inbox)" <<<"$o" || fail "brief's inbox hint lost --up: $o"
+ok "the hints keep --up"
 echo "All discovery tests passed"

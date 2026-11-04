@@ -6,9 +6,9 @@ One command takes you from one release to the next, everywhere:
 agentbus update
 ```
 
-It reinstalls agentbus from the new release, upgrades every bus folder it knows, and refreshes the
-skill, the `AGENTS.md` block and the hooks that setup installed, when they are older and unedited. Nothing else
-is touched. Releases come from GitHub Releases only.
+It reinstalls agentbus from the new release, upgrades every bus folder it knows, and brings up to date what setup
+installed, when it is older. A skill or `AGENTS.md` block you edited is kept. Hooks tagged `agentbus:managed` are rewritten
+even if you changed them, with a backup of the file beside it. Nothing else is touched. Releases come from GitHub Releases only.
 
 **`pip install agentbus` and `uv tool install agentbus` install a different project.** The name `agentbus` on PyPI
 belongs to an unrelated package, and agentbus is never published there. Install and update only with the lines in

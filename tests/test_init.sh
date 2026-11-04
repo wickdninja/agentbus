@@ -65,7 +65,7 @@ grep -qxF "outer bus: $(cd "$WS" && pwd -P)" "$T/nested" || fail "nested init di
 grep -qxF '.agentbus/' "$N/.git/info/exclude" || fail "nested repo exclude missing"
 mkdir "$N/sub"
 before=$(cat "$N/.git/info/exclude")
-agentbus init "$N/sub" > "$T/sub-init"
+agentbus init "$N/sub" > "$T/sub-init" || fail "a subfolder of a main checkout was refused"
 [ -x "$N/sub/.agentbus/bin/agentbus" ] || fail "subdirectory init did not target DIR"
 [ "$(cat "$N/.git/info/exclude")" = "$before" ] || fail "subdirectory init wrote an exclude"
 grep -qxF "outer bus: $(cd "$N" && pwd -P)" "$T/sub-init" || fail "subdirectory init did not name nearest outer bus"
@@ -137,15 +137,41 @@ expect_fail "holds worktrees of $(rl "$OS/app"), whose bus is $(rl "$OS")/.agent
 [ ! -e "$M" ] || fail "init ran a program the repository's config names"
 [ ! -e "$OSW/.agentbus" ] || fail "the workspace-bus refusal made a bus"
 ok "worktrees of a repo covered by a workspace bus are refused too; the repo's config programs are never run"
-echo "TEST 20: init's join step is the command that works: agentbus for a tool install, the copy it just made for a clone"
-# Bug it catches: init always said .agentbus/bin/agentbus, the project copy the skill allows only when agentbus is not on PATH.
+echo "TEST 20: init's join step is the installed agentbus; from a clone it says to install it first and never names the copy"
+# Bug it catches: init said .agentbus/bin/agentbus, the project copy an agent must never pick for itself.
 nj() { git init -q "$1"; }
-nj "$T/j1"; out=$(cd "$T" && "$PY" "$BIN" init "$T/j1")
-grep -qx 'next: .agentbus/bin/agentbus --as YOUR_NAME join' <<<"$out" || fail "a run from a clone should name the copy it made: $out"
+nj "$T/j1"; out=$(cd "$T" && "${AB[@]}" init "$T/j1")
+if [ -n "${AGENTBUS_CMD:-}" ]; then   # an installed command is the tool-install branch; the fake install below proves it for a source run
+  grep -qx 'next: agentbus --as YOUR_NAME join' <<<"$out" || fail "an installed command should name agentbus on PATH: $out"
+else
+  grep -qx 'next: install agentbus so your agents have it on PATH (see the README), then agentbus --as YOUR_NAME join' <<<"$out" || fail "a run from a clone should say to install agentbus, then join: $out"
+fi
+! grep -q 'next: .agentbus/bin/agentbus' <<<"$out" || fail "a run from a clone still names the project copy: $out"
 FE="$T/fakeenv"; mkdir -p "$FE/bin"; printf '#!%s\nraise SystemExit(0)\n' "$(command -v "$PY")" >"$FE/bin/agentbus"; chmod 755 "$FE/bin/agentbus"
 nj "$T/j2"; out=$(cd "$T" && "$PY" -c 'import runpy, sys; sys.prefix = sys.argv[1]; sys.argv = [sys.argv[2], "init", sys.argv[3]]; runpy.run_path(sys.argv[0], run_name="__main__")' "$FE" "$BIN" "$T/j2")
 grep -qx 'next: agentbus --as YOUR_NAME join' <<<"$out" || fail "a tool install should name agentbus on PATH: $out"
 ! grep -q 'next: .agentbus/bin/agentbus' <<<"$out" || fail "a tool install still names the project copy: $out"
-ok "init names agentbus for a tool install and the copy for a clone"
+ok "init names agentbus for a tool install, and says to install it first from a clone"
+
+echo "TEST 21: init inside a subfolder of a linked worktree is refused: discovery never reaches a bus made there"
+# Bug it catches: only the worktree's top was refused; a bus in wt/sub is one nothing finds, since discovery starts from main/sub.
+FM="$T/f-main"; mkrepo "$FM"; FW="$T/f-wt"; git -C "$FM" worktree add -q "$FW" -b f-wt; mkdir -p "$FW/sub/deep"
+expect_fail "is inside a linked worktree of $(rl "$FM"); its commands use the main checkout's bus" agentbus init "$FW/sub"
+[ ! -e "$FW/sub/.agentbus" ] || fail "the refusal with no repo bus made a bus"
+agentbus init "$FM" >/dev/null
+expect_fail "is inside a linked worktree of $(rl "$FM"), whose bus is $(rl "$FM")/.agentbus; agents there use that bus, not one here" agentbus init "$FW/sub"
+[ ! -e "$FW/sub/.agentbus" ] || fail "the refusal made a bus"
+expect_fail "is inside a linked worktree" agentbus init "$FW/sub/deep"
+expect_fail "is inside a linked worktree" agentbus init "$FW/new/folder"
+[ ! -e "$FW/new" ] || fail "the refusal made the folder it refused"
+(cd "$FW/sub" && expect_fail "agentbus init $(rl "$FW")/sub --second-bus" agentbus init .)
+(cd "$FW/sub" && agentbus --json init . >"$T/f-json" 2>"$T/f-err") && fail "init --json in a worktree subfolder was not refused"
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["code"]=="bad_input" and e["next"]=="agentbus buses", e' "$T/f-err" || fail "the refusal's JSON is not bad_input naming agentbus buses: $(cat "$T/f-err")"
+expect_fail "is a linked worktree" agentbus init "$FW"
+agentbus init "$FW/sub" --second-bus >/dev/null || fail "--second-bus did not make the bus"
+[ -d "$FW/sub/.agentbus" ] || fail "--second-bus made no bus"
+agentbus init "$FW/sub" >/dev/null || fail "re-running init on a worktree subfolder that has a bus was refused"
+mkdir -p "$FM/sub"; agentbus init "$FM/sub" >/dev/null || fail "with worktrees, a subfolder of the main checkout was refused: discovery does find a bus there"
+ok "refused with the repo's bus named, or the checkout to init when it has none; nothing made; --second-bus and a re-run work; the main checkout's subfolder stays allowed"
 
 echo "All init tests passed"

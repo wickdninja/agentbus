@@ -64,15 +64,13 @@ AGENT = {"join", "leave", "who", "post", "inbox", "read", "ctx", "claim", "relea
 
 def agent_text_problems(text):
     """Commands in agent-facing text that run something other than the installed `agentbus` (a hostile clone can ship
-    .agentbus/bin/agentbus): any path-named agentbus, and the project copy with arguments. The bare copy path is allowed
-    only as the one gated fallback (named alone, never with a command)."""
+    .agentbus/bin/agentbus): any path-named agentbus, the project copy included, with or without arguments."""
     import re
     bad = []
     for span in re.findall(r"`([^`\n]+)`", text):
         words = span.split()
         if words[0].endswith("agentbus") and words[0] != "agentbus":
-            if not (words[0] == ".agentbus/bin/agentbus" and len(words) == 1):
-                bad.append(span)
+            bad.append(span)
     return bad
 
 def agents_block(path):
@@ -149,8 +147,8 @@ ROWS=(
 "8|new|new|current|current|plugin and setup duplicates|doctor fails hooks on a duplicate and names setup claude --uninstall"
 "9|0.1.0|0.1.0|synthetic schema 2|n/a|n/a|the 0.1.0 copy answers schema_refused, bytes equal; upgrade from a project copy is refused"
 "10|new|new|needs migration|current|current|watch and doctor write nothing; a non-hook command migrates with one backup"
-"11|new|0.1.0|any|AGENTS.md block|n/a|the 0.1.0 copy has no skill command; the block names the upgrade --all fallback"
-"12|new|new|current|current|templates|every agent-facing command is the installed agentbus from PATH; the bus copy is named once, as a gated fallback, never with a command"
+"11|new|0.1.0|any|AGENTS.md block|n/a|the 0.1.0 tool has no skill command; the block names the install and upgrade --all"
+"12|new|new|current|current|templates|every agent-facing command is the installed agentbus from PATH; the bus copy is not named"
 "13|new|new|current|current|Codex hook|tripwire: the Codex hook cells are added the day a Codex hook piece exists"
 )
 
@@ -248,7 +246,7 @@ row_5() {
   skill=$(cat "$T/skill.out")
   has "row 5: the skill names the envelope an agent should see" 'Listings return {items, has_more, next}; if has_more, call again or raise --limit.' "$skill"
   has "row 5: the skill tells an agent to hand the stale-copy fix to the user" 'tell the user to run agentbus upgrade DIR; never edit the bus.' "$skill"
-  has "row 5: the skill says the user runs it from the installed agentbus" 'They run it from the installed agentbus, not this copy; on schema_newer, this copy is older than the bus.' "$skill"
+  has "row 5: the skill says the user runs it from an up-to-date install" 'They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus.' "$skill"
 }
 
 row_6() {
@@ -380,7 +378,7 @@ row_11() {
   is "row 11: the 0.1.0 copy has no skill command (exit 1)" 1 "$RC"
   is "row 11: ...and says so in the words the AGENTS.md block quotes" "agentbus: unknown command 'skill'. See: agentbus --help" "$ERR"
   block=$("${NEW[@]}" skill --agents-md)
-  has "row 11: the block quotes that message and names the fix" "if it says \`unknown command 'skill'\`, the copy is 0.1.x: stop and tell the user to run \`agentbus upgrade --all PARENT_DIR\`." "$block"
+  has "row 11: the block quotes that message and names the fix" "if it says \`unknown command 'skill'\`, that agentbus is 0.1.x: stop and tell the user to install the current release and run \`agentbus upgrade --all PARENT_DIR\`." "$block"
   is "row 11: setup codex wrote the block agentbus skill --agents-md prints" "$block" "$("$PY" -c 'import sys, h; print(h.agents_block(sys.argv[1]), end="")' "$HOME/.codex/AGENTS.md" | sed 's/$//')"
   doctor_row "$W/r11" agents-md ok "has the current block" ""
   doctor_row "$W/r11" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade $W/r11"
@@ -397,16 +395,16 @@ skill, block = (open(p).read() for p in sys.argv[1:3])
 assert not h.agent_text_problems(skill), h.agent_text_problems(skill)
 assert not h.agent_text_problems(block), h.agent_text_problems(block)
 for text in (skill, block):
-    assert "Use `agentbus` from PATH" in text or "Use `agentbus` from PATH;" in text, text
-    assert "only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing" in text, text
-    assert "otherwise stop and tell the user" in text, text
+    assert "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it." in text, text
+    assert ".agentbus/bin/agentbus" not in text and "git ls-files .agentbus" not in text, text
 assert block.count("`agentbus --as NAME ") >= 4, block
 assert "agentbus upgrade DIR" in skill and "`agentbus upgrade --all PARENT_DIR`" in block
 # the detector itself: each bad shape is caught, the good ones pass
 assert h.agent_text_problems("`.agentbus/bin/agentbus --as a join`")
 assert h.agent_text_problems("`/w/app/.agentbus/bin/agentbus --as a join`")
 assert h.agent_text_problems("`/usr/local/bin/agentbus --as a join`")
-assert not h.agent_text_problems("`agentbus --as a join` and `.agentbus/bin/agentbus` and `agentbus upgrade DIR`")
+assert h.agent_text_problems("`.agentbus/bin/agentbus`")
+assert not h.agent_text_problems("`agentbus --as a join` and `agentbus` and `agentbus upgrade DIR`")
 PY
 }
 

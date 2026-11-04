@@ -374,12 +374,12 @@ ok "log show is readable and the counts read right"
 echo "TEST 12: init prints the next step, and the setup commands when nothing is set up"
 mkdir "$T/p1" "$T/p2"
 o=$(outof agentbus init "$T/p1")
-grep -Eq '^next: (agentbus|\.agentbus/bin/agentbus) --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step: $o"
+grep -Eq '^next: (install agentbus so your agents have it on PATH \(see the README\), then )?agentbus --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step: $o"
 grep -q '^next: agentbus setup claude' <<<"$o" && grep -q '^next: agentbus setup codex' <<<"$o" || fail "init does not suggest setup when none is detected: $o"
 agentbus setup claude >/dev/null
 o=$(outof agentbus init "$T/p2")
 grep -q 'agentbus setup' <<<"$o" && fail "init still suggests setup after setup claude: $o"
-grep -Eq '^next: (agentbus|\.agentbus/bin/agentbus) --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step after setup: $o"
+grep -Eq '^next: (install agentbus so your agents have it on PATH \(see the README\), then )?agentbus --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step after setup: $o"
 ok "init says what to do next"
 
 all_passed "All help tests passed"

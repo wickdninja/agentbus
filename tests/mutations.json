@@ -965,7 +965,7 @@
   {
     "name": "AGENTBUS_DB warning fires outside any checkout",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ except\\ SystemExit:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ \\[\\]\\\n\\ \\ \\ \\ if\\ os\\.path\\.realpath\\(env\\)",
+    "find": "\\ \\ \\ \\ except\\ \\(SystemExit,\\ OSError\\):[^\\n]*\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ \\[\\]\\n\\ \\ \\ \\ if\\ os\\.path\\.realpath\\(env\\)",
     "replace": "    except SystemExit:\n        found = os.path.join(os.getcwd(), \".agentbus\", \"bus.db\")\n    if os.path.realpath(env)",
     "count": 1,
     "run": "tests/test_discovery.sh",
@@ -1019,11 +1019,11 @@
   {
     "name": "the AGENTS.md block loses the refusal wording",
     "file": "bin/agentbus",
-    "find": "lists\\ nothing,\\ otherwise\\ stop\\ and\\ tell\\ the\\ user\\.\\ ",
-    "replace": "lists nothing. ",
+    "find": "if it is not on PATH, stop and tell the user to install it\\. If `agentbus buses`",
+    "replace": "If `agentbus buses`",
     "count": 1,
     "run": "tests/test_skill.sh",
-    "expect": "the block lacks the gated fallback and its refusal wording"
+    "expect": "the block lacks the PATH rule and its refusal wording"
   },
   {
     "name": "worktrees grader ignores a second bus",
@@ -2882,11 +2882,11 @@
   {
     "name": "the AGENTS.md block does not lead with the condition",
     "file": "bin/agentbus",
-    "find": "If `\\.agentbus/` exists in this folder or a parent \\(otherwise ignore this section\\): this workspace",
+    "find": "If `agentbus buses` says there is no bus here, ignore this section; otherwise this workspace",
     "replace": "This workspace",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
-    "expect": "does not lead with the condition"
+    "expect": "does not lead with the PATH rule and discovery as its condition"
   },
   {
     "name": "the trust line does not name the command to approve",
@@ -3584,8 +3584,8 @@
   {
     "name": "hook: a file in a linked worktree is not mapped to the main checkout",
     "file": "bin/agentbus",
-    "find": "            rel = os\\.path\\.relpath\\(hook_main_checkout_path\\(target\\), base\\)",
-    "replace": "            pass",
+    "find": "        mapped = os\\.path\\.relpath\\(hook_main_checkout_path\\(target\\), base\\)",
+    "replace": "        mapped = rel",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "a worktree file held in the main checkout was silent"
@@ -3602,8 +3602,8 @@
   {
     "name": "hook: a patch to a linked worktree's file is not mapped to the main checkout",
     "file": "bin/agentbus",
-    "find": "            rel = os\\.path\\.relpath\\(hook_main_checkout_path\\(target\\), base\\)",
-    "replace": "            pass",
+    "find": "        mapped = os\\.path\\.relpath\\(hook_main_checkout_path\\(target\\), base\\)",
+    "replace": "        mapped = rel",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
     "expect": "a patch to a worktree file held in the main checkout was silent"
@@ -3627,15 +3627,6 @@
     "expect": "a fresh copy of the tree is not current"
   },
   {
-    "name": "init always names the project copy in its join step",
-    "file": "bin/agentbus",
-    "find": "\"agentbus\" if install_entry_script\\(\\) else \"\\.agentbus/bin/agentbus\"",
-    "replace": "\".agentbus/bin/agentbus\"",
-    "count": 1,
-    "run": "tests/test_init.sh",
-    "expect": "a tool install should name agentbus on PATH"
-  },
-  {
     "name": "join NAME gets no hint naming --as",
     "file": "bin/agentbus",
     "find": "            if leaf\\.cmd_path == \\(\\\"join\\\",\\) and len\\(bare\\) == 1:",
@@ -3643,5 +3634,320 @@
     "count": 1,
     "run": "tests/test_help.sh",
     "expect": "join NAME:"
+  },
+  {
+    "name": "init from a clone does not say to install agentbus first",
+    "file": "bin/agentbus",
+    "find": "\"\" if install_entry_script\\(\\) else \"install agentbus so your agents have it on PATH \\(see the README\\), then \"",
+    "replace": "\"\"",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "a run from a clone should say to install agentbus"
+  },
+  {
+    "name": "init tells a tool install to install agentbus",
+    "file": "bin/agentbus",
+    "find": "\"\" if install_entry_script\\(\\) else \"install agentbus so your agents",
+    "replace": "\"install agentbus so your agents",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "a tool install should name agentbus on PATH"
+  },
+  {
+    "name": "hook maps only paths outside the bus folder (Claude)",
+    "file": "bin/agentbus",
+    "find": "        if mapped != \"\\.\\.\" and not mapped\\.startswith\\(\"\\.\\./\"\\):",
+    "replace": "        if rel.startswith(\"../\"):",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a claim was missed for a worktree under the checkout"
+  },
+  {
+    "name": "hook maps only paths outside the bus folder (Codex)",
+    "file": "bin/agentbus",
+    "find": "        if mapped != \"\\.\\.\" and not mapped\\.startswith\\(\"\\.\\./\"\\):",
+    "replace": "        if rel.startswith(\"../\"):",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a claim was missed for a patch in a worktree under the checkout"
+  },
+  {
+    "name": "hook drops a worktree whose main checkout the bus does not cover",
+    "file": "bin/agentbus",
+    "find": "        if mapped != \"\\.\\.\" and not mapped\\.startswith\\(\"\\.\\./\"\\):",
+    "replace": "        if True:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a worktree whose main checkout the bus does not cover lost its path"
+  },
+  {
+    "name": "the skill loses the PATH rule",
+    "file": "bin/agentbus",
+    "find": "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it\\. Pass",
+    "replace": "Use `agentbus` from PATH. Pass",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the skill lacks the PATH rule and its refusal wording"
+  },
+  {
+    "name": "the skill loses the dispatcher's assigned CLI path",
+    "file": "bin/agentbus",
+    "find": "If a dispatcher assigned an absolute CLI path too, use it\\. ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the skill lost the sandbox case"
+  },
+  {
+    "name": "the skill says this copy again",
+    "file": "bin/agentbus",
+    "find": "the agentbus you ran is older than the bus",
+    "replace": "this copy is older than the bus",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the skill says 'this copy'"
+  },
+  {
+    "name": "the skill offers the project copy again",
+    "file": "bin/agentbus",
+    "find": "stop and tell the user to install it\\. Pass",
+    "replace": "stop and tell the user to install it. Use `.agentbus/bin/agentbus` when `git ls-files .agentbus` lists nothing. Pass",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the skill names the project copy"
+  },
+  {
+    "name": "the AGENTS.md block offers the project copy again",
+    "file": "bin/agentbus",
+    "find": "(stop and tell the user to install it\\.) If `agentbus buses`",
+    "replace": "\\1 Or `.agentbus/bin/agentbus`. If `agentbus buses`",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the block names the project copy"
+  },
+  {
+    "name": "the AGENTS.md block goes back to the folder condition",
+    "file": "bin/agentbus",
+    "find": "If `agentbus buses` says there is no bus here, ignore this section; otherwise this workspace",
+    "replace": "If `.agentbus/` exists in this folder or a parent (otherwise ignore this section): this workspace",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the block's condition tells an agent in a linked worktree elsewhere"
+  },
+  {
+    "name": "buses in a folder with no bus stops saying so",
+    "file": "bin/agentbus",
+    "find": "die\\(\"no bus here or in any parent folder\\. Run",
+    "replace": "die(\"nothing found. Run",
+    "count": 2,
+    "run": "tests/test_skill.sh",
+    "expect": "buses in a folder with no bus does not say what the block tells"
+  },
+  {
+    "name": "doctor prints a delete command for the second bus",
+    "file": "bin/agentbus",
+    "find": "What to do with it is your call\\. ",
+    "replace": "Then remove it: rm -r it. ",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "the two-buses row is not one row that says how to look"
+  },
+  {
+    "name": "doctor stops saying how to read the second bus",
+    "file": "bin/agentbus",
+    "find": "To look: agentbus buses, \"",
+    "replace": "See the docs, \"",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "the two-buses row is not one row that says how to look"
+  },
+  {
+    "name": "update runs an installer from the current linked worktree",
+    "file": "bin/agentbus",
+    "find": "        trees\\.add\\(os\\.path\\.realpath\\(top\\.stdout\\.strip\\(\\)\\)\\)",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "an installer in the current linked worktree was used"
+  },
+  {
+    "name": "init makes a bus inside a linked worktree's subfolder",
+    "file": "bin/agentbus",
+    "find": "    if not getattr\\(a, \"second_bus\", False\\):\\n        refuse_inside_linked_worktree\\(root\\)\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "expected failure but succeeded: agentbus init"
+  },
+  {
+    "name": "init inside a linked worktree ignores --second-bus",
+    "file": "bin/agentbus",
+    "find": "    if not getattr\\(a, \"second_bus\", False\\):\\n        refuse_inside_linked_worktree\\(root\\)\\n",
+    "replace": "    refuse_inside_linked_worktree(root)\n",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "--second-bus did not make the bus"
+  },
+  {
+    "name": "init judges a missing folder in a linked worktree by itself, not its parent",
+    "file": "bin/agentbus",
+    "find": "    here = root\\n    while not os\\.path\\.isdir\\(here\\) and os\\.path\\.dirname\\(here\\) != here:\\n        here = os\\.path\\.dirname\\(here\\)\\n    if os\\.path\\.lexists\\(os\\.path\\.join\\(root, \"\\.agentbus\"\\)\\):",
+    "replace": "    here = root\n    if os.path.lexists(os.path.join(root, \".agentbus\")):",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "new/folder"
+  },
+  {
+    "name": "init refuses a subfolder of the main checkout",
+    "file": "bin/agentbus",
+    "find": "    if top == root or top == os\\.path\\.realpath\\(info\\[0\\]\\):",
+    "replace": "    if top == root:",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "a subfolder of a main checkout was refused"
+  },
+  {
+    "name": "init refuses a re-run in a worktree subfolder with a bus",
+    "file": "bin/agentbus",
+    "find": "        here = os\\.path\\.dirname\\(here\\)\\n    if os\\.path\\.lexists\\(os\\.path\\.join\\(root, \"\\.agentbus\"\\)\\):\\n        return\\n",
+    "replace": "        here = os.path.dirname(here)\n",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "re-running init on a worktree subfolder"
+  },
+  {
+    "name": "the hook says this folder's bus with AGENTBUS_DB set (Claude)",
+    "file": "bin/agentbus",
+    "find": "where = \"AGENTBUS_DB\\'s bus\" if explicit_db\\(\\) else \"this folder\\'s bus\"",
+    "replace": "where = \"this folder's bus\"",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionStart with AGENTBUS_DB does not say the variable chose the bus"
+  },
+  {
+    "name": "the hook says this folder's bus with AGENTBUS_DB set (Codex)",
+    "file": "bin/agentbus",
+    "find": "where = \"AGENTBUS_DB\\'s bus\" if explicit_db\\(\\) else \"this folder\\'s bus\"",
+    "replace": "where = \"this folder's bus\"",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "SessionStart with AGENTBUS_DB does not say the variable chose the bus"
+  },
+  {
+    "name": "join and brief fail on AGENTBUS_DB from a deleted folder",
+    "file": "bin/agentbus",
+    "find": "    except \\(SystemExit, OSError\\):[^\\n]*\\n        return \\[\\]\\n    if os\\.path\\.realpath\\(env\\)",
+    "replace": "    except SystemExit:\n        return []\n    if os.path.realpath(env)",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "with AGENTBUS_DB from a deleted folder exited 3"
+  },
+  {
+    "name": "brief's more hint loses --up",
+    "file": "bin/agentbus",
+    "find": "more_hint = f\"\\(\\{next_command\\(a, 'brief', '--limit', max\\(limit \\* 4, 20\\)\\)\\}\\)\"",
+    "replace": "more_hint = f\"(agentbus brief --limit {max(limit * 4, 20)})\"",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "brief's more hint lost --up"
+  },
+  {
+    "name": "brief's inbox hint loses --up",
+    "file": "bin/agentbus",
+    "find": "next_command\\(a, \"inbox\"\\), row=bool\\(listed\\)",
+    "replace": "\"inbox\", row=bool(listed)",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "brief's inbox hint lost --up"
+  },
+  {
+    "name": "the reserved-goal hint loses --up",
+    "file": "bin/agentbus",
+    "find": "goal_cmd = next_command\\(a, \"goal\", \"TEXT\", as_=False\\)",
+    "replace": "goal_cmd = \"agentbus goal TEXT\"",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "the reserved-goal hint lost --up"
+  },
+  {
+    "name": "who's empty hint loses --up",
+    "file": "bin/agentbus",
+    "find": "out\\(a, rows, fmt_who, more, empty=f\"no agents\\. Join with: \\{next_command\\(a, '--as', 'NAME', 'join', as_=False\\)\\}\"",
+    "replace": "out(a, rows, fmt_who, more, empty=\"no agents. Join with: agentbus --as NAME join\"",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "who's empty hint lost --up"
+  },
+  {
+    "name": "status's empty hint loses --up",
+    "file": "bin/agentbus",
+    "find": "out\\(a, agents, fmt_who, m1, empty=f\"no agents\\. Join with: \\{next_command\\(a, '--as', 'NAME', 'join', as_=False\\)\\}\"",
+    "replace": "out(a, agents, fmt_who, m1, empty=\"no agents. Join with: agentbus --as NAME join\"",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "status's empty hint lost --up"
+  },
+  {
+    "name": "the bad-path hint loses --up",
+    "file": "bin/agentbus",
+    "find": "res = norm_resource\\(a\\.resource, a=a\\)",
+    "replace": "res = norm_resource(a.resource)",
+    "count": 2,
+    "run": "tests/test_discovery.sh",
+    "expect": "the bad-path hint lost --up"
+  },
+  {
+    "name": "setup --help promises to keep anything edited",
+    "file": "bin/agentbus",
+    "find": "keep a skill or AGENTS\\.md block you edited, \"\\n\\s+\"and rewrite hooks tagged agentbus:managed, with a backup",
+    "replace": "keep anything you edited",
+    "count": 1,
+    "run": "tests/test_setup_refresh.sh",
+    "expect": "setup --help does not state the refresh rule"
+  },
+  {
+    "name": "upgrade.md promises a refresh only when unedited",
+    "file": "docs/how-to/upgrade.md",
+    "find": "installed, when it is older\\.",
+    "replace": "installed, when it is older and unedited.",
+    "count": 1,
+    "run": "tests/test_setup_refresh.sh",
+    "expect": "upgrade.md still promises a refresh only when unedited"
+  },
+  {
+    "name": "doctor.md has no bus-env row",
+    "file": "docs/how-to/doctor.md",
+    "find": "^\\| `bus-env` \\|[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "docs/how-to/doctor.md has no row for bus-env"
+  },
+  {
+    "name": "doctor.md has no two-buses row",
+    "file": "docs/how-to/doctor.md",
+    "find": "^\\| `two-buses` \\|[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "docs/how-to/doctor.md has no row for two-buses"
+  },
+  {
+    "name": "the CHANGELOG promises a brief bound on any bus",
+    "file": "CHANGELOG.md",
+    "find": "A realistic four-agent bus fits in under 1,600 characters\\.",
+    "replace": "A realistic four-agent bus fits in under 1,600 characters and any bus in under 4,000 characters.",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "the CHANGELOG promises a bound on any bus"
+  },
+  {
+    "name": "join fails when its working folder was deleted",
+    "file": "bin/agentbus",
+    "find": "    try:\\n        return os\\.getcwd\\(\\)\\.encode\\(\"utf-8\", \"surrogateescape\"\\)\\.decode\\(\"utf-8\", \"replace\"\\)\\n    except OSError:\\n        return None\\n",
+    "replace": "    return os.getcwd().encode(\"utf-8\", \"surrogateescape\").decode(\"utf-8\", \"replace\")\n",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "join with AGENTBUS_DB from a deleted folder exited 3"
   }
 ]

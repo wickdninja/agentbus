@@ -6,7 +6,8 @@
 # tool as the method, the git+file URL as a fork (so nothing is run) and tool.status manual whose commands hold the
 # --force line for that URL at v9.1.0. For uv it also checks the premise the design rests on: `uv tool upgrade` leaves a
 # tag-pinned install where it is, while `install --force` at the new tag moves it. Needs network for the build backend
-# only, like the rest of the package job. Last line: update layout verified: uv|pipx
+# only, like the rest of the package job. It also installs a wheel from a URL with the real tool and checks what the tool
+# recorded, which is what update's release-wheel recognition reads. Last line: update layout verified: uv|pipx
 set -euo pipefail
 tool=${1:?usage: verify_update_layout.sh uv|pipx}
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -91,6 +92,34 @@ import json, sys
 d = json.load(sys.stdin)
 assert d["install"]["method"] == "unknown" and d["tool"]["status"] == "manual", d
 ' || { echo "FAIL: update would replace a wheel that was installed from outside its downloads folder: $out" >&2; exit 1; }
+# The premise of release_wheel_install, which only ever sees direct_url.json: the real tool records a wheel URL as it was
+# given (PEP 610), with archive_info. The README's first install is an https URL at github.com; this one is plain HTTP on
+# 127.0.0.1, because what is under test is the recording, not the host check.
+mkdir "$W/http"; cp "$WHEEL" "$W/http/"
+"$PY" -I -c '
+import http.server, os, sys
+os.chdir(sys.argv[1])
+s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
+with open(sys.argv[2] + ".tmp", "w") as f:
+    f.write(str(s.server_address[1]))
+os.rename(sys.argv[2] + ".tmp", sys.argv[2])
+s.serve_forever()
+' "$W/http" "$W/http.port" >/dev/null 2>&1 &
+SERVER_PIDS+=($!)
+for _ in $(seq 1 600); do [ -s "$W/http.port" ] && break; sleep 0.1; done
+[ -s "$W/http.port" ] || { echo "FAIL: the wheel's HTTP server did not start" >&2; exit 1; }
+WHEEL_URL="http://127.0.0.1:$(cat "$W/http.port")/$(basename "$WHEEL")"
+install_wheel "$WHEEL_URL"
+case "$tool" in uv) TOOL_ENV="$UV_TOOL_DIR/agentbus" ;; pipx) TOOL_ENV="$PIPX_HOME/venvs/agentbus" ;; esac
+DIRECT=$(find "$TOOL_ENV" -path '*/agentbus-9.0.0.dist-info/direct_url.json')
+[ -n "$DIRECT" ] && [ "$(printf '%s\n' "$DIRECT" | wc -l | tr -d ' ')" = 1 ] || { echo "FAIL: $tool left no single direct_url.json under $TOOL_ENV: $DIRECT" >&2; exit 1; }
+"$PY" -I - "$DIRECT" "$WHEEL_URL" <<'CHECK' || { echo "FAIL: $tool did not record the wheel URL as given, with archive_info: $(cat "$DIRECT")" >&2; exit 1; }
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["url"] == sys.argv[2], d
+assert isinstance(d.get("archive_info"), dict), d
+CHECK
+[ "$(agentbus --version)" = "agentbus 9.0.0" ] || { echo "FAIL: the wheel URL installed $(agentbus --version)" >&2; exit 1; }
 if [ "$tool" = uv ]; then
   uv tool install -q --force "git+$URL@v9.1.0"
   [ "$(agentbus --version)" = "agentbus 9.1.0" ] || { echo "FAIL: install --force at the new tag did not move it" >&2; exit 1; }

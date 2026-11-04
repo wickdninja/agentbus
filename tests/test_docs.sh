@@ -243,7 +243,7 @@ for cell in re.findall(r'^\| ([^|]+) \|', table, re.M):
         documented.update(tokens[:i] for i in range(1, len(tokens) + 1))
 assert inventory(parser) - {(h,) for h in docs_module['CONTRACT']['hidden']} <= documented, ('missing JSON table commands', inventory(parser) - documented)  # hidden commands (hook) are not documented
 for snippet in re.findall(r'`([^`]+)`', skill):
-    if snippet in ('agentbus', 'AGENTBUS_DB', '.agentbus/bin/agentbus', 'git ls-files .agentbus'):   # the last is the gate on running the project copy
+    if snippet in ('agentbus', 'AGENTBUS_DB'):
         continue
     check(shlex.split(snippet), ('skill', snippet))
 

@@ -12,12 +12,12 @@ wf_setup      # R is the workspace, with its own bus
 WS_DB="$DB"
 mkrepo "$R/app"
 echo "STEP 1: init in the repo inside the workspace names the outer bus"
-got=$(agentbus init "$R/app" | norm | sed "s#^next: agentbus --as YOUR_NAME join#next: .agentbus/bin/agentbus --as YOUR_NAME join#")   # an installed tool says agentbus, a clone the copy: tests/test_init.sh pins each
+got=$(agentbus init "$R/app" | norm | sed "s#^next: install agentbus so your agents have it on PATH (see the README), then agentbus#next: agentbus#")   # a clone says to install it first: tests/test_init.sh pins each
 is_equal "init output after the version line" "added .agentbus/ to <REPO>/app/.git/info/exclude (local only; the repo stays clean)
 optional: add \`.agentbus/\` to .gitignore to share that rule
 outer bus: <REPO>
 next: cd <REPO>/app
-next: .agentbus/bin/agentbus --as YOUR_NAME join
+next: agentbus --as YOUR_NAME join
 next: agentbus setup claude (teaches Claude Code the protocol)
 next: agentbus setup codex (teaches Codex the protocol)" "$(sed 1d <<<"$got")"
 grep -Eq '^installed agentbus .+ into <REPO>/app/\.agentbus/$' <<<"$(sed -n 1p <<<"$got")" || fail "first init line: $(sed -n 1p <<<"$got")"

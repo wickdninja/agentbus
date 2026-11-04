@@ -115,12 +115,12 @@ Full diagrams and their sources: [docs/workflow.md](docs/workflow.md)
 
 ## Teach your agents
 
-| Agent | Setup in this release (v0.2.0) | Or from a clone, without the tool |
+| Agent | Setup in this release (v0.2.0) | Or by hand, from a clone |
 | --- | --- | --- |
 | **Claude Code** | One command: [Set up your agents](docs/how-to/setup.md) | `mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus` |
 | **Codex**, or anything that reads `AGENTS.md` | One command, then approve the hooks with `/hooks` in Codex: [Use agentbus with Codex](docs/how-to/codex.md) | Add: *Coordinate with other agents through the installed agentbus; follow `/path/to/agentbus/skill/SKILL.md`.* |
 
-The skill tells an agent when to join, check its inbox, claim files and hand off.
+The skill tells an agent when to join, check its inbox, claim files and hand off. Either way, agents run the installed tool from their PATH, so install it first.
 
 <br>
 
@@ -148,7 +148,7 @@ Use `--json` for structured output; `watch` is a live terminal view.
 - Claims and messages stay on their bus; nothing merges across buses.
 - Write path claims relative to the directory the bus belongs to.
 - `AGENTBUS_DB` overrides discovery and `--up`. Sandboxed agents get an explicit bus.
-- `init` copies the tool into `.agentbus/bin/`, so agents need no package installed. At a git checkout root, it also adds the exclude rule.
+- `init` copies the tool into `.agentbus/bin/`, for a dispatcher that assigns it to a sandboxed worker. Every other agent runs the installed tool from its PATH. At a git checkout root, `init` also adds the exclude rule.
 - Needs Python 3.9+ and git 2.31+. Runs on macOS and Linux.
 
 <br>
