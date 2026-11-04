@@ -3229,5 +3229,95 @@
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "the claim says"
+  },
+  {
+    "name": "update: the README's first install (the release page URL) is not a release install",
+    "file": "bin/agentbus",
+    "find": "        return bool\\(m and guarded\\(m\\.group\\(1\\)\\) and m\\.group\\(1\\) == m\\.group\\(2\\)\\)",
+    "replace": "        return False",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "release URL by uv"
+  },
+  {
+    "name": "update: a release URL counts whatever tag its wheel name carries",
+    "file": "bin/agentbus",
+    "find": " and m\\.group\\(1\\) == m\\.group\\(2\\)\\)",
+    "replace": ")",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "a tag that is not the wheel's version"
+  },
+  {
+    "name": "update: a release URL may carry a query string or a path after the wheel",
+    "file": "bin/agentbus",
+    "find": "m = re\\.fullmatch\\(r\"\\(\\[\\^/\\?#\\]\\{1,40\\}\\)/agentbus-",
+    "replace": "m = re.match(r\"([^/?#]{1,40})/agentbus-",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "a query string"
+  },
+  {
+    "name": "update: a release URL without archive_info counts",
+    "file": "bin/agentbus",
+    "find": "    if not isinstance\\(info, dict\\) or not isinstance\\(url, str\\):\\n        return False",
+    "replace": "    if not isinstance(url, str):\n        return False",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "the release URL without archive_info"
+  },
+  {
+    "name": "brief: the next command drops --up",
+    "file": "bin/agentbus",
+    "find": "        return next_command\\(a, \\\"--as\\\", me_name or \\\"NAME\\\", \\*words, as_=False\\)",
+    "replace": "        return next_command(None, \"--as\", me_name or \"NAME\", *words, as_=False)",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "--up 1 brief next lost --up"
+  },
+  {
+    "name": "errors: the join command for a name not on the roster drops --up",
+    "file": "bin/agentbus",
+    "find": "    join = next_command\\(a, \"--as\", name, \"join\", as_=False\\)",
+    "replace": "    join = next_command(None, \"--as\", name, \"join\", as_=False)",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "not_on_roster hint lost --up"
+  },
+  {
+    "name": "errors: the question to a claim holder drops --up",
+    "file": "bin/agentbus",
+    "find": "ask = next_command\\(a, \"--as\", name, \"post\", \"QUESTION\"",
+    "replace": "ask = next_command(None, \"--as\", name, \"post\", \"QUESTION\"",
+    "count": 2,
+    "run": "tests/test_brief.sh",
+    "expect": "claim_conflict next lost --up"
+  },
+  {
+    "name": "hook: a file in a linked worktree is not mapped to the main checkout",
+    "file": "bin/agentbus",
+    "find": "            rel = os\\.path\\.relpath\\(hook_main_checkout_path\\(target\\), base\\)",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a worktree file held in the main checkout was silent"
+  },
+  {
+    "name": "update --check sends every install to agentbus update",
+    "file": "bin/agentbus",
+    "find": "        if plan\\[\\\"argv\\\"\\]:\\n            tell\\(\\\"Run: agentbus update\\\"\\)\\n        else:  #",
+    "replace": "        if True:\n            tell(\"Run: agentbus update\")\n        else:  #",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "update --check sent a nodirect install to agentbus update"
+  },
+  {
+    "name": "hook: a patch to a linked worktree's file is not mapped to the main checkout",
+    "file": "bin/agentbus",
+    "find": "            rel = os\\.path\\.relpath\\(hook_main_checkout_path\\(target\\), base\\)",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a patch to a worktree file held in the main checkout was silent"
   }
 ]

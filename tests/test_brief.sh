@@ -341,5 +341,40 @@ b = jok(db, "--as", "ghost", "brief")
 check(b["me"] == {"name": "ghost", "joined": False} and [m["kind"] for m in b["unread"]["items"]] == ["handoff"], "unjoined: %s" % b)
 check(b["next"] == "agentbus --as ghost join", "unjoined next: %s" % b["next"])
 print("PASS: a name that has not joined sees what waits for it and is told to join")
+
+# ---- --up N: every suggested command addresses the bus the brief read, not the inner one ----
+nest = os.path.join(tmp, "nest")
+os.makedirs(os.path.join(nest, "inner"))
+NB = {k: v for k, v in BASE.items() if k != "AGENTBUS_DB"}
+
+
+def nab(*args):
+    return subprocess.run([*agentbus_argv(), *args], cwd=os.path.join(nest, "inner"), env=NB, capture_output=True, text=True, timeout=60)
+
+
+for d in (nest, os.path.join(nest, "inner")):
+    p = nab("init", d)
+    check(p.returncode == 0, "init %s: %s" % (d, p.stderr.strip()))
+for who in ("w", "x"):
+    p = nab("--up", "1", "--as", who, "join")
+    check(p.returncode == 0, "join %s on the outer bus: %s" % (who, p.stderr.strip()))
+p = nab("--up", "1", "--as", "x", "post", "--to", "w", "--kind", "question", "q?")
+check(p.returncode == 0, "post: %s" % p.stderr.strip())
+b = json.loads(nab("--json", "--up", "1", "--as", "w", "brief").stdout)
+check(b["next"] == "agentbus --as w inbox".replace("agentbus", "agentbus --up 1"), "--up 1 brief next lost --up: %s" % b["next"])
+human = nab("--up", "1", "--as", "w", "brief").stdout
+check("next: agentbus --up 1 --as w inbox" in human.splitlines(), "--up 1 brief (text) next lost --up: %s" % human)
+inner = nab("--as", "w", "brief").stdout   # the inner bus has nobody: the unchanged shape without --up
+check("next: agentbus --as w join" in inner.splitlines(), "brief without --up changed its next: %s" % inner)
+# a name that never joined: the join command carries --up too (error hints and brief alike)
+p = nab("--up", "1", "--as", "ghost", "claim", "src/a.py")
+check(p.returncode != 0 and "agentbus --up 1 --as ghost join" in p.stderr, "not_on_roster hint lost --up: %s" % p.stderr)
+p = nab("--json", "--up", "1", "--as", "ghost", "claim", "src/a.py")
+check(json.loads(p.stderr)["error"]["next"] == "agentbus --up 1 --as ghost join", "not_on_roster next lost --up: %s" % p.stderr)
+# a conflicting claim: the question to the holder is posted on the same bus
+check(nab("--up", "1", "--as", "x", "claim", "src/a.py", "--purpose", "t").returncode == 0, "claim")
+p = nab("--json", "--up", "1", "--as", "w", "claim", "src/a.py")
+check(json.loads(p.stderr)["error"]["next"].startswith("agentbus --up 1 --as w post QUESTION --to x"), "claim_conflict next lost --up: %s" % p.stderr)
+print("PASS: with --up N the suggested next commands keep --up N")
 PY
 echo "All brief tests passed"

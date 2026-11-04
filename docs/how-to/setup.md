@@ -76,10 +76,14 @@ agentbus setup codex --refresh
 
 `--refresh` is what `agentbus update` runs for you. It rewrites only what setup itself installed, when the
 text it wrote is older: the skill file, the `agentbus` block of `AGENTS.md`, and the hooks tagged
-`agentbus:managed` in Claude Code's `settings.json` (your own hooks and settings stay as they are). It adds
-nothing that is not there and removes nothing. Anything you edited is kept exactly as it is, with no backup, and
-named: `kept (edited). To replace it: agentbus setup claude`. A file agentbus did not write, or a link, is kept
-the same way. When everything is current it says `done. Nothing to change.` and exits 0. `--scope project`
+`agentbus:managed` in Claude Code's `settings.json`. It adds nothing that is not there and removes nothing.
+
+Two rules decide what an edit survives:
+
+- The skill file and the `AGENTS.md` block are kept exactly as you left them, with no backup, when you edited them. They are named: `kept (edited). To replace it: agentbus setup claude`. A file agentbus did not write, or a link, is kept the same way.
+- Hook entries tagged `agentbus:managed` belong to agentbus. Refresh rewrites them to the current text even if you changed them, and saves the file as it was beside it (`settings.json.agentbus-TIMESTAMP.bak`). To change what a hook does, add your own entry without the tag; setup never touches it.
+
+When everything is current it says `done. Nothing to change.` and exits 0. `--scope project`
 refreshes the project's own files; it cannot be combined with `--uninstall`.
 
 ## Remove it

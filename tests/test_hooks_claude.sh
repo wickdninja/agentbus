@@ -330,6 +330,23 @@ grep -qE 'permissionDecision|"decision"|"deny"|"ask"' <<<"$OUT" && fail "PreTool
 ok "held files say so each time, as context only"
 
 echo
+echo "TEST 12b: PreToolUse from a linked worktree maps its files to the main checkout's paths, so a claim on src/app.py covers them"
+newbus p12b; N=$(dname "$SID1"); MAIN=$P; WT="$T/p12b-wt"
+git -C "$MAIN" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base; git -C "$MAIN" worktree add -q "$WT" -b p12b-wt
+mkdir -p "$WT/src"; : >"$WT/src/app.py"
+HCWD="$WT" SS; [ -n "$OUT" ] || fail "a linked worktree did not reach the main checkout's bus for SessionStart: rc $RC err $ERR"
+ab --as a join --tool t >/dev/null; ab --as a claim src/app.py --purpose p >/dev/null; ab --as a claim lib/ --purpose p >/dev/null
+held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. Claims are advisory; ask the holder or work elsewhere."
+wtpre() { HCWD="$WT" hook PreToolUse "$(payload pre_tool_use_write session_id="\"$SID1\"" tool_input.file_path="\"$1\"")"; }
+wtpre "$WT/src/app.py"; [ "$(text_of)" = "$held" ] || fail "a worktree file held in the main checkout was silent: rc $RC out $OUT err $ERR"
+wtpre "$WT/lib/deep/new/file.py"; [ "$(text_of)" = "$held" ] || fail "a new file under a held folder, from a worktree, was silent: rc $RC out $OUT err $ERR"
+wtpre "src/app.py"; [ "$(text_of)" = "$held" ] || fail "a worktree file by a relative path was silent: rc $RC out $OUT err $ERR"
+wtpre "$WT/src/free.py"; [ "$(text_of)" = "agentbus: src/free.py has no claim. If you are editing it: agentbus --as $N claim src/free.py --purpose WHY" ] || fail "an unclaimed worktree file was not named by its repo path: rc $RC out $OUT err $ERR"
+wtpre "$T/elsewhere-p12b/src/app.py"; quiet || fail "a path outside every worktree was not dropped: rc $RC out $OUT err $ERR"
+wtpre "$WT/../p12b-nowhere.py"; quiet || fail "a path next to the worktree, outside it, was not dropped: rc $RC out $OUT err $ERR"
+ok "a file in a linked worktree is matched against claims by its path in the main checkout; outside paths stay dropped"
+
+echo
 echo "TEST 13: PreToolUse on an unclaimed path nudges once per path per session, and only when another agent is live"
 newbus p13; N=$(dname "$SID1"); SS
 PRE solo.txt; quiet || fail "a nudge to a session alone on the bus: rc $RC out $OUT"

@@ -56,6 +56,48 @@ printf '{"url": "https://example.invalid/agentbus-0.2.0-py3-none-any.whl", "arch
 want "a wheel from a web address" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
 ok "only the wheel update itself downloaded (into its own downloads folder) counts"
 
+echo "TEST 3c: the README's first install (the release page URL, as uv and pipx record it) is a release install; lookalikes are not"
+RELURL="$REPO_URL/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl"
+for m in uv pipx pip; do
+  new_case "relurl-$m" "$m"; printf '{"url": "%s", "archive_info": {"hash": "sha256=00"}}\n' "$RELURL" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+  case $m in pip) a0=python ;; *) a0=$m ;; esac
+  want "release URL by $m" "$m|$REPO_URL|$a0|-"
+done
+new_case relurl-plan uv; printf '{"url": "%s", "archive_info": {}}\n' "$RELURL" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+out=$(ab update --check --json | "$PY" -I -c 'import json,sys; d=json.load(sys.stdin); print(d["install"]["url"], d["download"]["install_with"][1:3], d["download"]["wheel"].rsplit("/", 1)[-1])') || fail "plan of a release URL install"
+grep -qF "$REPO_URL ['tool', 'install'] agentbus-0.3.0-py3-none-any.whl" <<<"$out" || fail "a release URL install did not get the wheel installer: $out"
+NOT="unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
+relcase() {  # NAME URL [EXTRA-JSON]: a recorded URL that must not count
+  new_case relurl-x uv; printf '{"url": "%s", "archive_info": {}%s}\n' "$2" "${3:-}" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+  want "$1" "$NOT"
+}
+relcase "a fork's release URL" "https://github.com/someone/agentbus/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl"
+relcase "another host" "https://example.invalid/wickdninja/agentbus/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl"
+relcase "a lookalike repository" "https://github.com/wickdninja/agentbus-evil/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl"
+relcase "a lookalike path" "$REPO_URL/raw/v0.2.0/agentbus-0.2.0-py3-none-any.whl"
+relcase "a query string" "$RELURL?x=1"
+relcase "a fragment" "$RELURL#sha256=00"
+relcase "a tag that is not the wheel's version" "$REPO_URL/releases/download/v0.3.0/agentbus-0.2.0-py3-none-any.whl"
+relcase "a wheel for another name" "$REPO_URL/releases/download/v0.2.0/other-0.2.0-py3-none-any.whl"
+relcase "a tag outside the release shape" "$REPO_URL/releases/download/v0.2/agentbus-0.2-py3-none-any.whl"
+relcase "a path after the wheel" "$RELURL/extra"
+relcase "plain http" "http://github.com/wickdninja/agentbus/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl"
+new_case relurl-noinfo uv; printf '{"url": "%s"}\n' "$RELURL" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
+want "the release URL without archive_info" "$NOT"
+ok "the documented first install is recognised and updated with the wheel installer; forks, other hosts and lookalikes are not"
+
+echo "TEST 3d: update --check sends an install that can update itself to 'agentbus update', and any other to its printed commands"
+new_case check-uv uv
+out=$(ab update --check) || fail "check of a uv install"
+grep -qxF "Run: agentbus update" <<<"$out" || fail "update --check did not name agentbus update for an install that can update itself: $out"
+for kind in nodirect fork; do
+  case $kind in nodirect) new_case "check-$kind" uv 0.2.0 "" ;; *) new_case "check-$kind" uv 0.2.0 "https://github.com/someone/agentbus" ;; esac
+  out=$(ab update --check) || fail "check of a $kind install"
+  grep -qxF "Run: agentbus update" <<<"$out" && fail "update --check sent a $kind install to agentbus update, which only exits manual_step: $out"
+  grep -qF "  uv tool install" <<<"$out" || fail "update --check did not print the $kind install's commands: $out"
+done
+ok "--check names agentbus update only where it can run; elsewhere it prints the commands"
+
 echo "TEST 4: a dist-info whose RECORD does not list this file gives unknown; the matching one (control) gives uv"
 new_case record uv
 sed -i.bak 's/^agentbus.py,,$/other.py,,/' "$SITE/agentbus-0.2.0.dist-info/RECORD"; rm -f "$SITE/agentbus-0.2.0.dist-info/RECORD.bak"

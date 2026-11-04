@@ -3651,23 +3651,25 @@ def roster_text(shown, total):
     return "On the roster: " + ", ".join(shown) + more + "."
 
 
-def refuse_invalid_name(name):
+def refuse_invalid_name(name, a=None):
     """A name join would never accept (HOOK_NAME_RE): bad_input with the rule and a valid example to run. One
-    message for join and for every write, so no error ever suggests a join that would itself be refused."""
-    die(f"'{name}' is not a valid name. Use 1 to 40 letters, digits, dots, underscores or hyphens ([A-Za-z0-9._-]). Then run: agentbus --as NAME join",
-        "bad_input", next="agentbus --as NAME join", field="name")
+    message for join and for every write, so no error ever suggests a join that would itself be refused. a keeps
+    --up N in the suggested command."""
+    join = next_command(a, "--as", "NAME", "join", as_=False)
+    die(f"'{name}' is not a valid name. Use 1 to 40 letters, digits, dots, underscores or hyphens ([A-Za-z0-9._-]). Then run: {join}",
+        "bad_input", next=join, field="name")
 
 
-def require_joined(con, name):
+def require_joined(con, name, a=None):
     """Every write is made by a name on the roster: inside the caller's transaction, refuse one that
     has not joined (or left) or could never join. A name close to one that has is probably a typo: the error says so, lists
     the roster, and still names the join command."""
     if con.execute("SELECT 1 FROM agents WHERE name=?", (name,)).fetchone():
         return   # a name already on the bus works, even one that predates the name rule
     if not HOOK_NAME_RE.fullmatch(name):
-        refuse_invalid_name(name)   # it could never join: say so, not "join first"
+        refuse_invalid_name(name, a)   # it could never join: say so, not "join first"
     close, shown, total = roster_view(con, name)
-    join = f"agentbus --as {shlex.quote(name)} join"
+    join = next_command(a, "--as", name, "join", as_=False)
     if close:
         die(f"{name} is not on the roster. Did you mean {or_list(close)}? {roster_text(shown, total)} To join as {name}: {join}",
             "not_on_roster", next=join, agent=name, did_you_mean=close, roster=shown)
@@ -3996,10 +3998,11 @@ def cmd_join(con, a):
             if 0 <= mins < LIVE_WINDOW_MIN:
                 age = "less than a minute" if mins < 1 else f"{int(mins)} min"
                 free = free_name(con, name)
-                try_name = f"Pick your own name (run: agentbus --as {shlex.quote(free)} join), or pass" if free else "Pick your own name, or pass"
+                free_join = next_command(a, "--as", free, "join", as_=False) if free else None
+                try_name = f"Pick your own name (run: {free_join}), or pass" if free else "Pick your own name, or pass"
                 die(f"{name} was active {age} ago and may be another live session. "
                     f"{try_name} --takeover only if that session is you.", "name_active",
-                    next=f"agentbus --as {shlex.quote(free)} join" if free else None, agent=name, last_seen_min=int(mins), suggested_name=free)
+                    next=free_join, agent=name, last_seen_min=int(mins), suggested_name=free)
         # --takeover is the same session coming back: what it does not say again (tool, model, role) stays.
         keep = (lambda c: f"COALESCE(excluded.{c}, agents.{c})") if a.takeover else (lambda c: f"excluded.{c}")
         con.execute(
@@ -4136,22 +4139,23 @@ def read_inputs(a):
     a._before_id = a._after_id = None
     if getattr(a, "before", None) is not None:
         if a.cmd == "read" and a.since is not None:
+            since_cmd = next_command(a, "read", "--since", "ID", as_=False)
             die("--before and --since cannot be combined: --since pages forward from an id, --before pages back. "
-                "Use one: agentbus read --since ID, or agentbus read --before NEXT", "bad_input",
-                next="agentbus read --since ID")
+                f"Use one: {since_cmd}, or {next_command(a, 'read', '--before', 'NEXT', as_=False)}", "bad_input",
+                next=since_cmd)
         a._before_id = read_cursor(a, a.before, "--before")
     if getattr(a, "after", None) is not None:
         if not a.peek:
+            peek_cmd = next_command(a, "--as", "NAME", "inbox", "--peek", "--after", "NEXT", as_=False)
             die("--after needs --peek: a consuming inbox continues by running inbox again. "
-                "To page without reading: agentbus --as NAME inbox --peek --after NEXT", "bad_input",
-                next="agentbus --as NAME inbox --peek --after NEXT")
+                f"To page without reading: {peek_cmd}", "bad_input", next=peek_cmd)
         a._after_id = read_cursor(a, a.after, "--after")
     if a.cmd == "ctx" and a.key == "":
-        die("KEY must not be empty. List facts with: agentbus ctx get", "bad_input", next="agentbus ctx get")
+        die(f"KEY must not be empty. List facts with: {next_command(a, 'ctx', 'get', as_=False)}", "bad_input", next=next_command(a, "ctx", "get", as_=False))
     if a.cmd == "ctx" and a.action == "set" and a.key == GOAL_KEY:
         die(f"{GOAL_KEY} is reserved; use: agentbus goal TEXT", "bad_input", next="agentbus goal TEXT", field="key")
     if a.cmd == "join" and not HOOK_NAME_RE.fullmatch(me(a)):
-        refuse_invalid_name(me(a))
+        refuse_invalid_name(me(a), a)
     if a.cmd == "post":
         me(a)
         if a.kind not in KINDS:
@@ -4174,7 +4178,7 @@ def cmd_post(con, a):
     name = me(a)
     body = a._body
     with immediate(con):
-        require_joined(con, name)
+        require_joined(con, name, a)
         if a.request_id is not None:
             old = con.execute("SELECT id, body, recipient, kind, topic, reply_to FROM messages "
                               "WHERE sender=? AND request_id=?", (name, a.request_id)).fetchone()
@@ -4188,7 +4192,7 @@ def cmd_post(con, a):
                      "posted #{} to {} [{}] (already posted)", old['id'], "everyone" if a.to == "*" else a.to, a.kind)
                 return
         if a.reply_to is not None and not con.execute("SELECT 1 FROM messages WHERE id=?", (a.reply_to,)).fetchone():
-            die(f"no message #{a.reply_to} to reply to. See recent ids with: agentbus read", "no_message", next="agentbus read", id=a.reply_to)
+            die(f"no message #{a.reply_to} to reply to. See recent ids with: {next_command(a, 'read', as_=False)}", "no_message", next=next_command(a, "read", as_=False), id=a.reply_to)
         cur = con.execute(
             "INSERT INTO messages(ts,sender,recipient,kind,topic,body,reply_to,request_id) VALUES(?,?,?,?,?,?,?,?)",
             (now(), name, a.to, a.kind, a.topic, body, a.reply_to, a.request_id))
@@ -4275,7 +4279,7 @@ def cmd_read(con, a):
             die("--id shows one message; it cannot be combined with --since, --before or --topic", "bad_input")
         r = con.execute(f"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id=?", (a.id,)).fetchone()
         if not r:
-            die(f"no message #{a.id}. See recent ids with: agentbus read", "no_message", next="agentbus read", id=a.id)
+            die(f"no message #{a.id}. See recent ids with: {next_command(a, 'read', as_=False)}", "no_message", next=next_command(a, "read", as_=False), id=a.id)
         if a.json:
             print_json(dict(r))
         else:
@@ -4316,7 +4320,7 @@ def cmd_ctx(con, a):
         value = a._body
         t = now()
         with immediate(con):
-            require_joined(con, name)
+            require_joined(con, name, a)
             cur = con.execute("SELECT value, updated_by, updated_at FROM context WHERE key=?", (a.key,)).fetchone()
             unchanged = bool(cur) and cur["value"] == value  # the same value again writes nothing
             if unchanged:
@@ -4338,7 +4342,7 @@ def cmd_ctx(con, a):
         if a.key is not None:
             r = con.execute("SELECT * FROM context WHERE key=?", (a.key,)).fetchone()
             if not r:
-                die(f"no fact named {a.key}. List facts with: agentbus ctx get", "no_context_key", next="agentbus ctx get", key=a.key)
+                die(f"no fact named {a.key}. List facts with: {next_command(a, 'ctx', 'get', as_=False)}", "no_context_key", next=next_command(a, "ctx", "get", as_=False), key=a.key)
             if a.json:
                 print_json(dict(r))
             else:
@@ -4370,7 +4374,7 @@ def cmd_goal(con, a):
     if a._body is not None:
         name, t = me(a), now()
         with immediate(con):
-            require_joined(con, name)
+            require_joined(con, name, a)
             cur = current_goal(con)
             unchanged = bool(cur) and cur["goal"] == a._body  # the same goal again writes nothing
             if unchanged:
@@ -4403,7 +4407,7 @@ def cmd_claim(con, a):
     exp = datetime.fromtimestamp(clock().timestamp() + a.ttl_min * 60, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     released, n_released = [], 0
     with immediate(con):
-        require_joined(con, name)
+        require_joined(con, name, a)
         t = now()
         live = "typeof(resource)='text' AND agent<>? AND expires_at>?"
         on_roster = "EXISTS (SELECT 1 FROM agents WHERE agents.name=claims.agent)"
@@ -4414,7 +4418,7 @@ def cmd_claim(con, a):
                             f"WHERE ({where}) AND {live} AND {on_roster} LIMIT 1", [res] + params + [name, t]).fetchone()
             if r:
                 why = f'purpose: "{r["purpose"]}"' if r["purpose"] else "no purpose given"
-                ask = f"agentbus --as {shlex.quote(name)} post QUESTION --to {shlex.quote(r['agent'])} --kind question"
+                ask = next_command(a, "--as", name, "post", "QUESTION", "--to", r["agent"], "--kind", "question", as_=False)
                 next_step = f" Do not edit it yet. Ask {r['agent']}: {ask}, or choose another resource."
                 if not r["same"]:
                     die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {human_time(r['expires_at'])} ({why})." + next_step,
@@ -4425,7 +4429,7 @@ def cmd_claim(con, a):
         for raw, r in odd:
             if con.execute("SELECT 1 FROM agents WHERE name=(SELECT agent FROM claims WHERE resource=CAST(? AS TEXT))",
                            (raw,)).fetchone():
-                ask = f"agentbus --as {shlex.quote(name)} post QUESTION --to {shlex.quote(r['agent'])} --kind question"
+                ask = next_command(a, "--as", name, "post", "QUESTION", "--to", r["agent"], "--kind", "question", as_=False)
                 die(f"{res} overlaps {r['resource']}, claimed by {r['agent']} until {human_time(r['expires_at'])} "
                     f"({'purpose: ' + chr(34) + r['purpose'] + chr(34) if r['purpose'] else 'no purpose given'}). Do not edit it yet. "
                     f"Ask {r['agent']}: {ask}, or choose another resource.",
@@ -4500,7 +4504,7 @@ def cmd_release(con, a):
             emit(a, {"released": [], "released_count": 0}, "released {}", plural(0, "claim"))
             return
         if not paths:
-            die(f"you do not hold {a.resource}. See your claims with: agentbus claims", "not_held", next="agentbus claims", resource=a.resource)
+            die(f"you do not hold {a.resource}. See your claims with: {next_command(a, 'claims', as_=False)}", "not_held", next=next_command(a, "claims", as_=False), resource=a.resource)
         con.execute(f"DELETE FROM claims WHERE agent=? AND resource IN ({','.join('?' * len(forms))})", [name] + forms)
         log(con, name, "release", ", ".join(map(str, paths)))
     emit(a, {"released": paths, "released_count": len(paths)}, "released {}", ", ".join(map(str, paths)))
@@ -4560,7 +4564,7 @@ def cmd_log(con, a):
         name = me(a)
         detail = a._body
         with immediate(con):
-            require_joined(con, name)
+            require_joined(con, name, a)
             row_id = log(con, name, a.what, detail)
         emit(a, {"id": row_id, "logged": True, "agent": name, "action": a.what, "detail": detail}, "logged")
     else:
@@ -9412,14 +9416,24 @@ def externally_managed(prefix):
 
 
 def release_wheel_install(direct):
-    """True when direct_url.json (PEP 610) records an install of the wheel `agentbus update` itself downloaded and
-    checked: file://<cache folder>/downloads/agentbus-X.Y.Z-py3-none-any.whl. A wheel installed from anywhere else (a
+    """True when direct_url.json (PEP 610) records an install of this repository's release wheel: either the one
+    `agentbus update` itself downloaded and checked (file://<cache folder>/downloads/agentbus-X.Y.Z-py3-none-any.whl)
+    or the README's first install from the release page (https://github.com/wickdninja/agentbus/releases/download/
+    vX.Y.Z/agentbus-X.Y.Z-py3-none-any.whl, version in the name equal to the tag). A wheel installed from anywhere else (a
     hand-built dev wheel, a fork's) is not this repository's release, whatever it is called, and `update` must not
     replace it with upstream."""
     import urllib.parse
     info = direct.get("archive_info") if isinstance(direct, dict) else None
     url = direct.get("url") if isinstance(direct, dict) else None
-    if not isinstance(info, dict) or not isinstance(url, str) or not url.startswith("file:///"):
+    if not isinstance(info, dict) or not isinstance(url, str):
+        return False
+    prefix = REPO_URL + "/releases/download/v"
+    if url.startswith(prefix):
+        # The documented first install: `uv tool install <this repository's release wheel URL>` (PEP 610 records the
+        # URL as given). Exactly <repo>/releases/download/vX.Y.Z/agentbus-X.Y.Z-py3-none-any.whl, nothing after it.
+        m = re.fullmatch(r"([^/?#]{1,40})/agentbus-([^/?#]{1,40})-py3-none-any\.whl", url[len(prefix):])
+        return bool(m and guarded(m.group(1)) and m.group(1) == m.group(2))
+    if not url.startswith("file:///"):
         return False
     path = urllib.parse.unquote(url[len("file://"):])
     m = re.fullmatch(r"agentbus-(.{1,40})-py3-none-any\.whl", os.path.basename(path))
@@ -10320,6 +10334,16 @@ def planned_download(plan):
     return dict(plan["download"], install_with=plan["argv"][:-1])
 
 
+def manual_reason(inst, newer, plan):
+    """Why update prints commands instead of running an installer, ending in "Run" (the commands follow)."""
+    if plan.get("missing_assets"):
+        return (f"release {newer} has no {wheel_name(newer)} or SHA256SUMS to install, and agentbus does not build from source "
+                "for you (that fetches a build backend from PyPI). If you want that, run")
+    if inst["method"] not in ("uv", "pipx", "pip") or inst["fork"]:
+        return "this copy is not one agentbus update may replace itself. Run"
+    return "no safe installer was found. Run"
+
+
 def update_check(a, inst, install, latest, newer, no_release, plan):
     notes = f"{REPO_URL}/releases/tag/v{latest}" if latest and not no_release else None
     if a.json:
@@ -10333,7 +10357,13 @@ def update_check(a, inst, install, latest, newer, no_release, plan):
     elif newer:
         tell(head + f" Latest release: {newer}.")
         tell("Notes: " + notes)
-        tell("Run: agentbus update")
+        if plan["argv"]:
+            tell("Run: agentbus update")
+        else:  # update would only print these and exit manual_step: say so here instead of sending the person to it
+            why = manual_reason(inst, newer, plan)
+            tell(why[0].upper() + why[1:] + ":")
+            for c in plan["commands"]:
+                tell("  " + c)
     else:
         tell(head + f" Latest release: {latest}. You have it.")
 
@@ -10392,13 +10422,7 @@ def cmd_update(a):
                     tell("running: " + shlex_join(plan["argv"]))
         else:
             tool.update({"status": "manual", "commands": plan["commands"]})
-            if plan.get("missing_assets"):
-                why = (f"release {newer} has no {wheel_name(newer)} or SHA256SUMS to install, and agentbus does not build from source "
-                       "for you (that fetches a build backend from PyPI). If you want that, run")
-            elif inst["method"] not in ("uv", "pipx", "pip") or inst["fork"]:
-                why = "this copy is not one agentbus update may replace itself. Run"
-            else:
-                why = "no safe installer was found. Run"
+            why = manual_reason(inst, newer, plan)
             if human:
                 tell(why[0].upper() + why[1:] + ":")
                 for c in plan["commands"]:
@@ -11518,9 +11542,27 @@ def hook_codex_paths(payload):
     return paths
 
 
+def hook_main_checkout_path(target):
+    """`target` (a real path) as the same file of the repository's main checkout when it lies inside a linked
+    worktree, else `target`. The bus lives in the main checkout, so a claim on src/auth.py must also cover
+    <worktree>/src/auth.py. File system only, as hook_discovery_start (a hook never runs git); an unreadable layout,
+    a submodule or a path outside every worktree is returned as it is."""
+    here = os.path.dirname(target)
+    while not os.path.isdir(here) and os.path.dirname(here) != here:
+        here = os.path.dirname(here)  # the file or its folders may not exist yet
+    try:
+        repo = hook_git_layout(here)
+    except OSError:
+        return target
+    if not repo or repo["gitdir"] == repo["common"] or os.path.basename(repo["common"]) != ".git":
+        return target
+    return os.path.normpath(os.path.join(os.path.dirname(repo["common"]), os.path.relpath(target, repo["top"])))
+
+
 def hook_edit_targets(payload, db):
     """The files a tool call edits, relative to the bus directory: those that lie inside it (and not inside
-    .agentbus itself), at most HOOK_TARGETS_MAX, each once."""
+    .agentbus itself), at most HOOK_TARGETS_MAX, each once. A file inside a linked worktree counts as the same file
+    of the main checkout, where the bus is."""
     out = []
     for raw in hook_dialect()["paths"](payload)[:HOOK_TARGETS_MAX]:
         if "\0" in raw:
@@ -11528,7 +11570,10 @@ def hook_edit_targets(payload, db):
         if not os.path.isabs(raw):
             raw = os.path.join(os.getcwd(), raw)
         target = os.path.join(os.path.realpath(os.path.dirname(raw)), os.path.basename(raw))
-        rel = os.path.relpath(target, os.path.realpath(bus_directory(db)))
+        base = os.path.realpath(bus_directory(db))
+        rel = os.path.relpath(target, base)
+        if rel.startswith("../"):  # perhaps a file of a linked worktree: the claim is on the main checkout's path
+            rel = os.path.relpath(hook_main_checkout_path(target), base)
         if rel in (".", "..", ".agentbus") or rel.startswith("../") or rel.startswith(".agentbus/"):
             continue
         rel = norm_resource(rel, strict=False)
@@ -13083,18 +13128,19 @@ def _brief_pending_others(con, me_name, limit):
     return _brief_rows(rows), more
 
 
-def _brief_next(me_name, joined, unread_total, questions):
-    if not me_name:
-        return "agentbus --as NAME join"
-    who = shlex.quote(me_name)
-    if not joined:
-        return f"agentbus --as {who} join"
+def _brief_next(a, me_name, joined, unread_total, questions):
+    """The one command to run next, addressed to the bus this brief read (--up N is kept: an inbox run on the
+    inner bus would read and mark read messages the brief never showed)."""
+    def cmd(*words):
+        return next_command(a, "--as", me_name or "NAME", *words, as_=False)
+    if not me_name or not joined:
+        return cmd("join")
     if unread_total:
-        return f"agentbus --as {who} inbox"
+        return cmd("inbox")
     for q in questions:
         if q["sender"] != me_name:
-            return f"agentbus --as {who} post ANSWER --to {shlex.quote(q['sender'])} --reply-to {q['id']} --kind answer"
-    return f"agentbus --as {who} claim PATH --purpose WHY"
+            return cmd("post", "ANSWER", "--to", q["sender"], "--reply-to", q["id"], "--kind", "answer")
+    return cmd("claim", "PATH", "--purpose", "WHY")
 
 
 def cmd_brief(con, a):
@@ -13160,7 +13206,7 @@ def cmd_brief(con, a):
               "facts": {"since": since, "items": _brief_rows(fact_rows)},
               "omitted": {"agents": agents_more, "questions": questions_more, "unread": unread_more, "pending_others": others_more,
                           "facts": facts_more},
-              "next": _brief_next(me_name, joined, unread_total, questions)}
+              "next": _brief_next(a, me_name, joined, unread_total, questions)}
     if a.json:
         print_json(result)
     else:
