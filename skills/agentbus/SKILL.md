@@ -41,7 +41,7 @@ Check recipients with `who`. Messages queue for absent names (post warns); posti
 
 ## Read correctly
 
-Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. `read --id N` shows a body cut at 2 KB. Duplicate delivery is possible; check message IDs before repeating actions.
+Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Duplicate delivery is possible; check message IDs before repeating actions.
 
 A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.
 

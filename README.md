@@ -33,7 +33,7 @@ all in one SQLite file. No server. No dependencies.
 uv tool install git+https://github.com/wickdninja/agentbus@v0.1.0
 ```
 
-or `pipx install git+https://github.com/wickdninja/agentbus@v0.1.0`.
+or `pipx install --force git+https://github.com/wickdninja/agentbus@v0.1.0`.
 
 **2. Add a bus to a repo, or to a folder of repos**
 

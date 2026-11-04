@@ -7,7 +7,8 @@ set -euo pipefail
 T=$(mktemp -d); trap 'stop_servers; rm -rf "$T"' EXIT
 mkdir "$T/srv"; start_server "$T/srv"; rel_latest 0.3.0
 export CLAUDE_CONFIG_DIR="$T/cc"
-repo_spec="git+$REPO_URL@v0.3.0"   # the source-build line, printed for a person when update cannot run an installer
+repo_spec="git+$REPO_URL@v0.3.0"   # the source-build line, printed for a fork or for a release that has no wheel
+wheel_url="$REPO_URL/releases/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl"   # what a person runs when update cannot run an installer
 wheel_rel="downloads/agentbus-0.3.0-py3-none-any.whl"   # under the cache folder: where the verified release wheel is put
 ej() { tail -n 1 "$2" | jx "$1"; }   # a field of the JSON error on the last line of a stderr file (an installer may print before it)
 errof() { "$PY" -I -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1])["error"]["code"])'; }
@@ -50,11 +51,52 @@ mkdir -p "$C/inrepo/bin"; mkrepo "$C/inrepo"; cp "$C/stubs/uv" "$C/inrepo/bin/uv
 mkdir -p "$C/gw"; cp "$C/stubs/uv" "$C/gw/uv"; chmod 770 "$C/gw"
 PATH="$C/gw:/usr/bin:/bin" ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a group-writable PATH entry was used"
 [ "$(errof <"$C/err")" = manual_step ] || fail "group-writable entry: $(cat "$C/err")"
-grep -qF "$repo_spec" "$C/err" || fail "the manual_step does not print the command: $(cat "$C/err")"
+grep -qF "uv tool install --force $wheel_url" "$C/err" && ! grep -qF "git+" "$C/err" || fail "the manual_step does not print the release wheel's install command: $(cat "$C/err")"
 [ ! -s "$STUB_LOG" ] || fail "a skipped installer ran: $(cat "$STUB_LOG")"
 ab update --no-buses --no-setup >/dev/null || fail "the clean stub dir (control) did not run"
 [ -s "$STUB_LOG" ] || fail "the control installer left no log"
 ok "relative, in-repo and group-writable are skipped; the clean one (control) runs"
+
+echo "TEST 3b: a group-writable installer folder is trusted only for the admin group (owner the caller or root); world-writable, another group and a group-writable installer file stay refused"
+new_case admin uv
+gname=$("$PY" -I -c 'import grp, os, sys; print(grp.getgrgid(os.stat(sys.argv[1]).st_gid).gr_name)' "$C/stubs")
+chmod 775 "$C/stubs"   # like /opt/homebrew/bin: drwxrwxr-x, owned by the caller, a group that is not the caller's alone
+AGENTBUS_TEST_ADMIN_GROUP="not-$gname" ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a group-writable folder of another group was used"
+[ "$(errof <"$C/err")" = manual_step ] && [ ! -s "$STUB_LOG" ] || fail "another group: $(cat "$C/err")"
+grep -qF "uv tool install --force $wheel_url" "$C/err" && ! grep -qF "git+" "$C/err" || fail "the refusal does not print the release wheel's install command: $(cat "$C/err")"
+AGENTBUS_TEST_ADMIN_GROUP="$gname" ab update --no-buses --no-setup >"$C/out" 2>&1 || fail "a group-writable folder of the admin group was refused: $(cat "$C/out")"
+grep -qF "ARGV: " "$STUB_LOG" || fail "the installer in the admin group's folder did not run: $(cat "$STUB_LOG")"
+new_case adminwo uv; chmod 777 "$C/stubs"
+AGENTBUS_TEST_ADMIN_GROUP="$gname" ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a world-writable folder was used"
+[ "$(errof <"$C/err")" = manual_step ] && [ ! -s "$STUB_LOG" ] || fail "world-writable: $(cat "$C/err")"
+new_case adminfile uv; chmod 775 "$C/stubs" "$C/stubs/uv"
+AGENTBUS_TEST_ADMIN_GROUP="$gname" ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a group-writable installer file was used"
+[ "$(errof <"$C/err")" = manual_step ] && [ ! -s "$STUB_LOG" ] || fail "writable file: $(cat "$C/err")"
+rel_latest 0.3.0 nowheel; new_case adminnowheel uv; chmod 775 "$C/stubs"
+ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a release without a wheel was installed"
+grep -qF "git+" "$C/err" && ! grep -qF "releases/download" "$C/err" || fail "a release with no wheel got a wheel URL: $(cat "$C/err")"
+rel_latest 0.3.0
+# the owner rule, on a stat the test cannot create without root: a folder owned by someone else but root
+UPDATE_SRC="$UPDATE_SRC" "$PY" -I - <<'PY' || fail "installer_folder_ok trusted a folder owned by another user"
+import importlib.machinery, importlib.util, os, stat
+loader = importlib.machinery.SourceFileLoader("agentbus_mod", os.environ["UPDATE_SRC"])
+spec = importlib.util.spec_from_loader("agentbus_mod", loader)
+m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+class St:
+    def __init__(self, uid, mode): self.st_uid, self.st_mode = uid, mode
+me = 1000
+assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o755), me, "staff") is True
+assert m.installer_folder_ok(St(0, stat.S_IFDIR | 0o755), me, "wheel") is True
+assert m.installer_folder_ok(St(me + 1, stat.S_IFDIR | 0o755), me, "staff") is False
+os.environ["AGENTBUS_TEST_ADMIN_GROUP"] = "admin"
+assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o775), me, "admin") is True
+assert m.installer_folder_ok(St(0, stat.S_IFDIR | 0o775), me, "admin") is True
+assert m.installer_folder_ok(St(me + 1, stat.S_IFDIR | 0o775), me, "admin") is False, "the admin group of a folder owned by another user"
+assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o775), me, "staff") is False
+assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o775), me, None) is False
+assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o777), me, "admin") is False
+PY
+ok "admin group accepted; another group, world-writable, a writable installer file and a foreign owner refused; a release without a wheel prints the source line"
 
 echo "TEST 4: a hostile latest (1!9.0.0, 0.1.0, 9.0.0+x) never reaches an argv"
 for tag in "1!9.0.0" "0.1.0" "9.0.0+x" "0.3.0;id" "0.3.0 --index-url=x"; do

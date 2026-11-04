@@ -9,7 +9,7 @@ Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release c
 1. **Release-prep commit.** One commit on `main`. It differs for a candidate and for a final tag.
    - **Release candidate `vX.Y.ZrcN`:**
      - `__version__` in `bin/agentbus` becomes `X.Y.ZrcN`;
-     - `.claude-plugin/plugin.json` version is `X.Y.ZrcN` and the `ref` in `.claude-plugin/marketplace.json` is the rc tag (a git source, never a `./` path);
+     - `.claude-plugin/plugin.json` version is `X.Y.ZrcN` and the `ref` in `.claude-plugin/marketplace.json` is the rc tag (a git source, never a `./` path, never `main`);
      - the `CHANGELOG.md` heading is `## X.Y.Z - YYYY-MM-DD` (the final version, with the section stating which of the five versioned things changed: tool, copy, schema, skill, hooks);
      - the skill hashes: `python3 scripts/embed_skill.py --release`;
      - **no pin change and no `tests/released_commands.txt` line:** the README and `docs/` keep pinning the last final release, which must already exist as a git tag (`release_check.py` fails if it does not).
@@ -17,14 +17,17 @@ Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release c
      - `__version__` becomes `X.Y.Z`;
      - the new tag's line in `tests/released_commands.txt` (the commands that release has; the README may only name those for the tag it pins);
      - the pinned install lines in `README.md` and `docs/` (`@vX.Y.Z`), except that the README's first-install lines are the release wheel's URL from the first release that publishes a wheel (below): `python3 scripts/release_check.py --wheel --lines vX.Y.Z` prints them, and `vX.Y.Z` is added to `tests/released_wheels.txt` in the same commit;
-     - the plugin version and marketplace `ref` (the tag), the CHANGELOG heading, and `python3 scripts/embed_skill.py --release`.
+     - the plugin version and marketplace `ref` (the tag), the CHANGELOG heading, and `python3 scripts/embed_skill.py --release`;
+     - the prose that names the pinned release (`README.md` "Setup in this release (vX.Y.Z)", `SECURITY.md` "pins vX.Y.Z today"): `release_check.py` fails on one that names another release.
+
+**The marketplace `ref` is always a published tag, and only the release-prep commit moves it.** A plugin installed from the default branch between releases must not run untagged code as session hooks, so `ref` is never `main`. After the tag, the dev bump (`__version__` and `plugin.json` become `X.Y+1.0.dev0`) leaves `ref` at `vX.Y.Z`; `release_check.py` (without `--tag`) requires a development build's `ref` to be the highest final tag whose tree carries `.claude-plugin/plugin.json`. Before any plugin release exists, no tag carries the plugin: a development build then names the tag being prepared (`v0.2.0` for `0.2.0.dev0`), and the install fails until that tag is pushed, which is the safe failure.
 
 **The README's install lines** are, from the first release that publishes a wheel and `SHA256SUMS`, the wheel's URL: no build, no package index, and the same file `agentbus update` installs. `python3 scripts/release_check.py --wheel --lines vX.Y.Z` prints the exact two lines for a tag (without `--wheel` it prints the `git+` lines, the form of any tag not yet in `tests/released_wheels.txt`); `release_check.py` requires them in the README, `verify_published.sh` runs them, and `tests/test_docs.sh` pins the README to them once the pinned release is listed. They replace the `git+` lines in the release-prep commit (the pinned README cannot name a wheel that does not exist yet). The form, with the tag filled in:
 
 <!-- readme-install:begin -->
 ```bash
 uv tool install https://github.com/wickdninja/agentbus/releases/download/vX.Y.Z/agentbus-X.Y.Z-py3-none-any.whl
-pipx install https://github.com/wickdninja/agentbus/releases/download/vX.Y.Z/agentbus-X.Y.Z-py3-none-any.whl
+pipx install --force https://github.com/wickdninja/agentbus/releases/download/vX.Y.Z/agentbus-X.Y.Z-py3-none-any.whl
 ```
 <!-- readme-install:end -->
 

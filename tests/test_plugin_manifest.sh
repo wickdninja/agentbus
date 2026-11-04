@@ -31,11 +31,12 @@ PY
 ok "plugin.json is agentbus $VERSION; marketplace.json names one agentbus plugin"
 
 echo
-echo "TEST 2: the marketplace plugin source is a git source with a ref that exists: main between releases, the release tag in a release"
+echo "TEST 2: the marketplace plugin source is a git source whose ref is always a release tag, never main (between releases it keeps the last tag)"
 cat >"$T/source_check.py" <<'PY'
 import json, re, sys
-def problem(market, dev):
-    """Why a marketplace would install the wrong tree (or fail to), else None. dev: __version__ is a .devN build."""
+def problem(market):
+    """Why a marketplace would install the wrong tree (or fail to), else None. The ref always names a published
+    tag, also in a development build: a plugin installed from the default branch must never run untagged code."""
     for p in market["plugins"]:
         s = p.get("source")
         if not isinstance(s, dict):
@@ -43,30 +44,27 @@ def problem(market, dev):
         if s.get("source") not in ("github", "url", "git"):
             return f"source kind {s.get('source')!r}"
         ref = s.get("ref")
-        if not isinstance(ref, str) or not (re.fullmatch(r"v\d+\.\d+\.\d+(rc\d+)?", ref) or (dev and ref == "main")):
-            return f"ref {ref!r} is not a release tag" + (" or main" if dev else "")
+        if not isinstance(ref, str) or not re.fullmatch(r"v\d+\.\d+\.\d+(rc\d+)?", ref):
+            return f"ref {ref!r} is not a release tag"
     return None
 if __name__ == "__main__":
-    bad = problem(json.load(open(sys.argv[1])), sys.argv[2] == "dev")
+    bad = problem(json.load(open(sys.argv[1])))
     if bad:
         print(bad); sys.exit(1)
 PY
-KIND=release; case "$VERSION" in *.dev*) KIND=dev ;; esac
-"$PY" -I "$T/source_check.py" "$ROOT/.claude-plugin/marketplace.json" "$KIND" || fail "the marketplace source is not a pinned git source: $("$PY" -I "$T/source_check.py" "$ROOT/.claude-plugin/marketplace.json" "$KIND")"
-# negative controls: the checker itself must reject a path source, a missing ref, a branch, and main in a release
+"$PY" -I "$T/source_check.py" "$ROOT/.claude-plugin/marketplace.json" || fail "the marketplace source is not a pinned git source: $("$PY" -I "$T/source_check.py" "$ROOT/.claude-plugin/marketplace.json")"
+# negative controls: the checker itself must reject a path source, a missing ref, a branch, and main (in a dev build too)
 "$PY" -I - "$T" <<'PY' || fail "the source checker accepted a bad marketplace"
 import sys
 sys.path.insert(0, sys.argv[1])
 from source_check import problem
 def m(source): return {"plugins": [{"name": "agentbus", "source": source}]}
 tag = {"source": "github", "repo": "wickdninja/agentbus", "ref": "v0.2.0"}
-assert problem(m(tag), False) is None and problem(m(tag), True) is None
-assert problem(m(dict(tag, ref="main")), True) is None and problem(m(dict(tag, ref="main")), False)
-for source in ("./", {"source": "github", "repo": "wickdninja/agentbus"}, dict(tag, ref="feature"), dict(tag, ref=3), {"source": "npm", "package": "x", "ref": "v1.0.0"}):
-    assert problem(m(source), True), source
-    assert problem(m(source), False), source
+assert problem(m(tag)) is None and problem(m(dict(tag, ref="v0.2.0rc1"))) is None
+for source in ("./", {"source": "github", "repo": "wickdninja/agentbus"}, dict(tag, ref="main"), dict(tag, ref="feature"), dict(tag, ref=3), {"source": "npm", "package": "x", "ref": "v1.0.0"}):
+    assert problem(m(source)), source
 PY
-ok "github source with a ref that exists; ./, no ref, a branch, a non-git source and main in a release are rejected"
+ok "github source with a tag ref; ./, no ref, a branch, a non-git source and main (dev build or release) are rejected"
 
 echo
 echo "TEST 3: every command in hooks.json runs the plugin's own launcher and ends with || true"

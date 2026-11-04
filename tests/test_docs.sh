@@ -321,6 +321,12 @@ if pin[1:] in wheels:
 else:
     assert all(x in readme for x in expected), ('the README must carry the git+ install lines until the pinned release publishes a wheel', expected)
     assert 'releases/download/' not in readme, 'the README names a wheel URL, but the pinned release is not listed in tests/released_wheels.txt'
+# pipx install on an agentbus that is already there changes nothing and exits 0 (pipx 1.11.1) unless it gets --force, so no
+# document may give a pipx install line for a URL or git address without it (the line is also what a person reruns to upgrade).
+for name in ['README.md', 'SECURITY.md', 'RELEASING.md', *sorted(str(p.relative_to(root)) for p in (root/'docs').rglob('*.md'))]:
+    bad = re.findall(r'pipx install (?!--force)\S*(?:git\+|https://)\S*', (root/name).read_text())
+    assert not bad, (name, 'a pipx install line without --force reinstalls nothing when agentbus is already installed', bad)
+assert re.search(r'pipx install (?!--force)git\+https://x', 'pipx install git+https://x'), 'the pipx --force check is vacuous'
 upgrade = (root/'docs/how-to/upgrade.md').read_text()
 assert upgrade.count('git+https://github.com/wickdninja/agentbus@v') == 1, 'upgrade.md documents the from-source route exactly once'
 security = (root/'SECURITY.md').read_text()
@@ -332,7 +338,7 @@ assert 'examples/two-agent-handoff.sh' in readme, 'README must link the executab
 inline = re.sub(r'```.*?```', '', readme, flags=re.S)
 non_commands = {
     *[l for l in lines_for(pin[1:]) if l.startswith('pipx')],
-    'pipx install git+https://github.com/wickdninja/agentbus@v0.1.0',
+    'pipx install --force git+https://github.com/wickdninja/agentbus@v0.1.0',
     'examples/two-agent-handoff.sh',
     'mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus',
     'AGENTS.md', '.agentbus/bin/agentbus', '/path/to/agentbus/skill/SKILL.md', '/hooks',

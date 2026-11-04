@@ -37,6 +37,7 @@ ok "the canonical URL with .git runs; a fork prints its own --force line"
 
 echo "TEST 3: no direct_url, an archive install and an EXTERNALLY-MANAGED python are unknown (the README lines are printed)"
 new_case nodirect uv 0.2.0 ""; want "no direct_url" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
+[ "$(ab update --check --json | jx 'd["commands"][1]')" = "pipx install --force git+$REPO_URL@v0.3.0" ] || fail "an unknown install's pipx line lacks --force, so a rerun on an installed pipx changes nothing"
 new_case archive uv; printf '{"url": "%s/archive/v0.2.0.zip", "archive_info": {}}\n' "$REPO_URL" >"$SITE/agentbus-0.2.0.dist-info/direct_url.json"
 want "archive_info" "unknown|-|-|uv tool install git+$REPO_URL@v0.3.0"
 new_case managed pip; : >"$PREFIX/EXTERNALLY-MANAGED"

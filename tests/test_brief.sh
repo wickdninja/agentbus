@@ -272,6 +272,31 @@ for part in ("goal:", "lead", "tests", "token refactor", "next:"):
     check(part in out, "a realistic brief lost %r:\n%s" % (part, out))
 print("PASS: a realistic bus briefs in %d characters (budget 1,600)" % len(out))
 
+# a fuller bus: 6 agents and 8 open questions (more than the default 5 rows show) with every section populated stays bounded; the
+# CHANGELOG claims exactly the two numbers this file enforces (a small bus under 1,600 characters, any bus under 4,000), not "400 tokens"
+sdb = bus("six")
+for n, role, tool in (("lead", "planner", "claude"), ("api", "implementer", "codex"), ("web", "implementer", "claude"),
+                      ("tests", "reviewer", "codex"), ("docs", "writer", "claude"), ("ops", "release", "codex")):
+    ok(sdb, "--as", n, "join", "--role", role, "--tool", tool)
+ok(sdb, "--as", "lead", "goal", "Move auth to the new token API and ship it before the Friday release")
+for n, res in (("api", "src/auth/"), ("api", "src/api/tokens.py"), ("web", "web/login/"), ("tests", "tests/auth/"), ("docs", "docs/auth.md"), ("ops", "deploy/auth.yml")):
+    ok(sdb, "--as", n, "claim", res, "--purpose", "work on " + res)
+for i in range(8):
+    post(sdb, "lead", "Question %d: should tokens expire after one hour, or follow the session lifetime for this release?" % i, kind="question")
+for i in range(3):
+    post(sdb, "lead", "src/auth/ is yours; branch auth-tokens; tests green; next, wire web/login to the new endpoint (%d)" % i, to="api", kind="handoff")
+post(sdb, "tests", "CI is red on main: the migration test needs the new column", to="api", kind="alert")
+for i in range(6):
+    ok(sdb, "--as", "lead", "ctx", "set", "fact_%d" % i, "a shared value for the whole team, number %d, until Friday" % i)
+full = ok(sdb, "--as", "api", "brief")
+check(len(full) < 4000, "a bus with 6 agents and 8 open questions briefs in %d characters, over the 4,000 the CHANGELOG promises" % len(full))
+check("3 more" in full, "the 8 questions were not bounded at the default 5 rows:\n%s" % full)
+changelog = open(os.path.join(os.environ["TESTS_DIR"], "..", "CHANGELOG.md")).read()
+claim = next(l for l in changelog.splitlines() if l.startswith("- `agentbus brief`"))
+check("under 400 tokens" not in claim, "the CHANGELOG still promises brief in under 400 tokens; a bus with 6 agents and 8 open questions measures %d characters" % len(full))
+check("1,600 characters" in claim and "4,000 characters" in claim, "the CHANGELOG's brief size claim does not name the two bounds this file enforces (1,600 and 4,000 characters)")
+print("PASS: 6 agents and 8 open questions brief in %d characters (bound 4,000); the CHANGELOG claims 1,600 for a small bus and 4,000 for any" % len(full))
+
 # the output rules apply to brief: it wraps to an explicit COLUMNS (no line over it, no word broken) and a pipe with no COLUMNS stays whole
 narrow = ok(db, "--as", "api", "brief", env={"COLUMNS": "60"})
 check(max(len(l) for l in narrow.splitlines()) <= 60, "brief at COLUMNS=60 has a longer line:\n%s" % narrow)

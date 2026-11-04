@@ -165,4 +165,10 @@ grep -qF 'must end with the line' "$T/e.out" || fail "marker message: $(cat "$T/
 ok "embed_skill.py enforces the cap and the marker"
 
 echo
+echo "TEST: the skill does not say read --id cuts a body (a listing cuts at 2 KB; read --id returns the whole body, see test_output.sh)"
+! grep -E 'read --id[^.]*(cut|truncat)' "$SKILL" || fail "the skill says read --id cuts a body: $(grep -E 'read --id[^.]*(cut|truncat)' "$SKILL")"
+grep -qF 'read --id N` shows the whole body' "$SKILL" || fail "the skill does not say read --id shows the whole message"
+ok "read --id is the whole body in the skill's words"
+
+echo
 echo "All skill tests passed"

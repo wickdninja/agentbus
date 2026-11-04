@@ -8215,7 +8215,7 @@ SKILL_TEXT = (
     '\n'
     '## Read correctly\n'
     '\n'
-    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. `read --id N` shows a body cut at 2 KB. Duplicate delivery is possible; check message IDs before repeating actions.\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Duplicate delivery is possible; check message IDs before repeating actions.\n'
     '\n'
     'A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.\n'
     '\n'
@@ -9464,8 +9464,9 @@ def detect_install():
 
 def find_tool(name):
     """The absolute path of the executable `name` on PATH after a filter, or None. Skipped: an entry that is
-    relative, inside the repository of the working directory or a bus folder, or group- or world-writable
-    or owned by someone else but root (the file as well as its folder)."""
+    relative, inside the repository of the working directory or a bus folder, or world-writable or owned by someone
+    else but root (the file as well as its folder); the file may not be group-writable, the folder may be only when
+    its group is the admin group (see installer_folder_ok)."""
     cwd_repo = repo_root()
     cwd_repo = os.path.realpath(cwd_repo) if cwd_repo else None
     uid = os.getuid() if hasattr(os, "getuid") else None
@@ -9484,17 +9485,46 @@ def find_tool(name):
             continue
         if not stat.S_ISREG(fst.st_mode) or not os.access(path, os.X_OK):
             continue
-        if any(st.st_mode & 0o022 or (uid is not None and st.st_uid not in (uid, 0)) for st in (fst, dst)):
+        if fst.st_mode & 0o022 or (uid is not None and fst.st_uid not in (uid, 0)):
+            continue
+        if not installer_folder_ok(dst, uid, group_name(dst.st_gid)):
             continue
         return path
     return None
 
 
-def installer_plan(inst, version, wheel=None):
+def admin_group():
+    """The group whose members can already become root, or None. macOS names it `admin` (Homebrew's folders are
+    group admin and group-writable). Test hook: AGENTBUS_TEST_ADMIN_GROUP=<name> names that group on any system."""
+    return os.environ.get("AGENTBUS_TEST_ADMIN_GROUP") or ("admin" if sys.platform == "darwin" else None)
+
+
+def group_name(gid):
+    try:
+        import grp
+        return grp.getgrgid(gid).gr_name
+    except (ImportError, KeyError, OSError):
+        return None
+
+
+def installer_folder_ok(st, uid, group):
+    """Whether the folder that holds an installer may be trusted: owned by the caller or root, not world-writable, and
+    group-writable only when its group (`group`, a name) is the admin group, whose members can become root anyway."""
+    if uid is not None and st.st_uid not in (uid, 0):
+        return False
+    if st.st_mode & 0o002:
+        return False
+    if st.st_mode & 0o020:
+        return group is not None and group == admin_group()
+    return True
+
+
+def installer_plan(inst, version, wheel=None, has_wheel=True):
     """What `update` does about the tool for release `version`: {"argv": list or None, "commands": [text], "download": ...}.
     argv is set only where update may run it (a canonical install with a safe installer): the installer is given the
     release wheel (`wheel`, or where the download will be put), never a source tree to build; otherwise the commands
-    are printed for the person to run. download names the two assets update fetches and checks first."""
+    are printed for the person to run (the release wheel's URL where the release has a wheel, `has_wheel`; a fork, or a
+    release without one, gets the source line). download names the two assets update fetches and checks first."""
     if inst["method"] in ("uv", "pipx", "pip") and inst["url"]:
         if not inst["fork"]:
             path = wheel or os.path.join(cache_dir(), "downloads", wheel_name(version))
@@ -9510,16 +9540,18 @@ def installer_plan(inst, version, wheel=None):
             if argv:
                 return {"argv": argv, "commands": None,
                         "download": {"wheel": asset_url(version, wheel_name(version))[0], "sha256sums": asset_url(version, "SHA256SUMS")[0]}}
-        spec = f"git+{inst['url']}@v{version}"
         word = {"uv": "uv tool install --force", "pipx": "pipx install --force", "pip": "python3 -m pip install --upgrade"}
-        return {"argv": None, "commands": [f"{word[inst['method']]} {spec}"], "download": None}
+        if not inst["fork"] and has_wheel:  # no safe installer here: the person runs the installer on the release wheel, no source build
+            return {"argv": None, "commands": [f"{word[inst['method']]} {REPO_URL}/releases/download/v{version}/{wheel_name(version)}"],
+                    "download": None}
+        return {"argv": None, "commands": [f"{word[inst['method']]} git+{inst['url']}@v{version}"], "download": None}
     if inst["method"] == "clone":
         d = inst["dir"]
         q = shlex.quote
         return {"argv": None, "commands": [f"git -C {q(d)} fetch --tags", f"git -C {q(d)} checkout v{version}"] if d
                 else ["git fetch --tags", f"git checkout v{version}"], "download": None}
     spec = f"git+{REPO_URL}@v{version}"
-    return {"argv": None, "commands": [f"uv tool install {spec}", f"pipx install {spec}"], "download": None}
+    return {"argv": None, "commands": [f"uv tool install {spec}", f"pipx install --force {spec}"], "download": None}
 
 
 # ---- 4. asking GitHub ----
@@ -10352,8 +10384,8 @@ def cmd_update(a):
     latest = newest_release(out, pre)
     newer = latest if latest and release_newer(latest) else None
     no_release = out["stable"] is None and out["pre"] is None
-    plan = installer_plan(inst, newer) if newer else {"argv": None, "commands": None, "download": None}
     assets = out["assets"].get(newer) if newer else None
+    plan = installer_plan(inst, newer, has_wheel=assets is None or wheel_name(newer) in assets) if newer else {"argv": None, "commands": None, "download": None}
     if newer and plan["argv"] and assets is not None and not (wheel_name(newer) in assets and "SHA256SUMS" in assets):
         # the release has no wheel or no checksums: say so, and never fall back to building from source on the person's behalf
         word = {"uv": "uv tool install --force", "pipx": "pipx install --force", "pip": "python3 -m pip install --upgrade"}[inst["method"]]
@@ -12891,14 +12923,15 @@ DOCTOR_PIECE_STATUS = {"ok": "ok", "missing": "warn", "stale": "warn", "problem"
 def doctor_check_hooks(ctx):
     """The hook entries setup writes, through each hook piece's own check(), then every check the hook
     streams registered in DOCTOR_HOOK_CHECKS. With neither, hooks are not part of this version."""
-    out = []
+    out, absent = [], []
     for target in sorted(SETUP_TARGETS):
         for piece in SETUP_TARGETS[target]:
             if not isinstance(piece, JsonEntriesPiece):
                 continue
             for scope in ctx.scopes:
-                if target == "codex" and scope == "user" and not os.path.isdir(setup_config_dir("codex", "user")):
-                    continue   # no Codex here (agents-md says so): its hooks are not missing
+                if scope == "user" and not os.path.isdir(setup_config_dir(target, "user")):
+                    absent.append(doctor_text(setup_config_dir(target, "user")))
+                    continue   # no Codex (agents-md says so) or no Claude Code (skill says so) here: its hooks are not missing
                 for _id, code, detail, fix in piece.check(scope):
                     if code == "missing" and ctx.scope == "all" and scope == "project":
                         continue   # as for skill and agents-md: a project that never ran setup is not a problem
@@ -12912,6 +12945,8 @@ def doctor_check_hooks(ctx):
                         out.append(doctor_result("hooks", DOCTOR_PIECE_STATUS.get(code, "warn"), detail, fix, scope))
     for fn in DOCTOR_HOOK_CHECKS:
         out.extend(fn(ctx))
+    if not out and absent:
+        return [doctor_result("hooks", "n/a", "no " + " or ".join(sorted(set(absent))) + " found", scope="user")]
     return out or [doctor_result("hooks", "n/a", DOCTOR_NO_HOOKS)]
 
 

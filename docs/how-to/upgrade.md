@@ -32,7 +32,7 @@ done: 0.2.0 -> 0.3.0. Restart Claude Code and Codex sessions, and any agentbus w
 - `agentbus update --dry-run` prints `would run: ...` and the folders it would upgrade, and changes nothing.
 - `agentbus update ~/src/app` names one bus folder. A folder that is not a bus (`agentbus update ~/src`, the folder that holds your repos) is remembered, and every bus under it is upgraded now and on later plain `agentbus update` runs. Buses made by `init` and `upgrade` are remembered too; older buses are not, until you name their folder once.
 - `--no-buses` and `--no-setup` skip those steps.
-- The Claude Code plugin updates through Claude Code. When `update` finds it installed it says so: `/plugin marketplace update agentbus`, then `/reload-plugins`. It never runs `claude` and never writes plugin files.
+- The Claude Code plugin updates through Claude Code. When `update` finds it installed it says so: `/plugin marketplace update agentbus`, then `/reload-plugins`. `update` itself never starts `claude` (it reads the plugin's files), and it never writes plugin files. The setup step it runs (skipped by `--no-setup`, and in an agent session unless `--all-buses`) does ask `claude plugin list --json`, a read-only list, from your home folder with a 10 second limit and only through a `claude` it finds safe, so it does not add a second copy of hooks the plugin already provides. It may do so more than once.
 
 ### How the tool is reinstalled
 
@@ -51,7 +51,9 @@ installed.
 | pip, in a virtual environment | `python -m pip install --upgrade WHEEL` |
 | a clone of the repository | prints `git -C DIR fetch --tags` and `git -C DIR checkout vX.Y.Z` |
 | a fork, or anything else | prints the install lines to run (these build from source) |
-| no safe installer on `PATH` | prints the install line for your tool (this builds from source) |
+| no safe installer on `PATH` | prints your tool's install line for the release wheel's URL (no source build; a release without a wheel prints the source line) |
+
+An installer on `PATH` is used only when its file is yours or root's and is not group- or world-writable, and its folder is yours or root's and not world-writable. A group-writable folder passes only on macOS when its group is `admin` (its members can already become root, so the group bit gives them nothing they lack), which is how Homebrew's `uv` and `pipx` in `/opt/homebrew/bin` are accepted. Any other group, a world-writable folder, a folder owned by another user and a group- or world-writable installer file are skipped. A `PATH` entry that is relative, or inside the repository you are in or a bus folder, is skipped too.
 
 **Installing from source** is for a fork, or for `main` between releases. It builds the package on your machine and
 fetches the build backend (`hatchling`) from PyPI:
@@ -60,7 +62,7 @@ fetches the build backend (`hatchling`) from PyPI:
 uv tool install git+https://github.com/wickdninja/agentbus@v0.1.0
 ```
 
-(or `pipx install` with the same address; use your fork's address, or `@main`, instead of the tag). `update` does not
+(or `pipx install --force` with the same address; use your fork's address, or `@main`, instead of the tag). `update` does not
 install from source on its own.
 
 If a release has no wheel or no `SHA256SUMS`, `update` exits 1 with `manual_step` and the one command that would
@@ -68,7 +70,7 @@ build from source; it never falls back to that on its own. A source build (`git+
 The installer runs with your cache folder as its working folder.
 
 If `update` cannot run an installer itself it exits 1 with `manual_step` and the commands. Coming from 0.1.0,
-which has no `update`, run the install line from the README once at the new tag.
+which has no `update`, run the install line from the README once at the new tag. For pipx the line needs `--force`: without it pipx finds agentbus already installed, changes nothing and exits 0 (pipx 1.11.1).
 
 An installer that fails, hangs (900 s, then it is stopped) or leaves the version unchanged is
 `installer_failed`, with the command to run yourself. Ctrl-C stops the installer and exits 130
