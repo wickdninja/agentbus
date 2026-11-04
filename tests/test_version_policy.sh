@@ -394,8 +394,9 @@ import sys, h
 skill, block = (open(p).read() for p in sys.argv[1:3])
 assert not h.agent_text_problems(skill), h.agent_text_problems(skill)
 assert not h.agent_text_problems(block), h.agent_text_problems(block)
+assert "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it." in skill, skill
+assert "If `agentbus` is not on PATH: ignore this section unless `.agentbus/` is in this folder or a parent; then tell the user to install agentbus, never run the copy in it, and carry on with the task." in block, block
 for text in (skill, block):
-    assert "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it." in text, text
     assert ".agentbus/bin/agentbus" not in text and "git ls-files .agentbus" not in text, text
 assert block.count("`agentbus --as NAME ") >= 4, block
 assert "agentbus upgrade DIR" in skill and "`agentbus upgrade --all PARENT_DIR`" in block

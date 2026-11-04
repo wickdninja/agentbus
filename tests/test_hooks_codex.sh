@@ -477,7 +477,7 @@ echo
 echo "TEST 18: the AGENTS.md block is at most 700 bytes and names only commands the parser has, each run as the installed agentbus, never the project copy"
 block=$("${AB[@]}" skill --agents-md)
 [ "${#block}" -le 700 ] || fail "the AGENTS.md block is ${#block} bytes"
-sed -n 2p <<<"$block" | grep -qF 'Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. If `agentbus buses` says there is no bus here, ignore this section' || fail "the AGENTS.md block does not lead with the PATH rule and discovery as its condition: $(sed -n 2p <<<"$block" | cut -c1-80)"
+sed -n 2p <<<"$block" | grep -qE '^If `agentbus` is not on PATH: ignore this section unless `\.agentbus/` is in this folder or a parent; .* If `agentbus buses` finds no bus, ignore this section\.' || fail "the AGENTS.md block does not lead with the PATH rule and discovery as its condition: $(sed -n 2p <<<"$block" | cut -c1-80)"
 "$PY" -I - "$BIN" "$block" <<'PY' || fail "the AGENTS.md block names a command the parser lacks, or a coordination command that does not run the installed agentbus"
 import argparse, re, runpy, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_block")

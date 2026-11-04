@@ -23,7 +23,7 @@ From v0.1.0, which has no `update`: install once from the [README](README.md), t
 
 ### Changed (breaking)
 
-- Agents run `agentbus` from `PATH`, and stop and tell you to install it when it is not there. The skill and the `AGENTS.md` block no longer offer `.agentbus/bin/agentbus`; a repository can ship that file. Install the tool on any machine where agents join a bus. A dispatcher can still assign a sandboxed worker the copy by absolute path, with `AGENTBUS_DB`. From a clone, `init` says to install it first.
+- Agents run `agentbus` from `PATH`, and tell you to install it when it is not there and the folder has a bus. The skill and the `AGENTS.md` block no longer offer `.agentbus/bin/agentbus`; a repository can ship that file. Install the tool on any machine where agents join a bus. A dispatcher can still assign a sandboxed worker the copy by absolute path, with `AGENTBUS_DB`. From a clone, `init` says to install it first.
 - Every `--json` result starts with `"contract": 1`. Listings (`who`, `inbox`, `read`, `claims`, `ctx get`, `ctx history`, `log show`, `buses`) return `{"contract": 1, "items": [...], "has_more": false, "next": null}`; before, a bare array. Scripts read `.items`; `--before NEXT` (and `--after NEXT` for `inbox --peek`) continues a listing.
 - Exit codes are the same with and without `--json`: 0 ok, 1 the command ran and refused, 2 usage, 3 the bus is unavailable, 4 internal error.
 - A write needs a name on the roster: `post`, `ctx set`, `goal` and `log add` under a name that has not joined fail with `not_on_roster`. Run `agentbus --as NAME join` first.

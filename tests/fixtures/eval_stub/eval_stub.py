@@ -1,5 +1,5 @@
 """A stand-in for the `claude` and `codex` commands, so tests/test_eval_harness.sh can run scripts/agent-eval.sh
-with no agent and no tokens. It does the scenario's work for real (bus commands through .agentbus/bin/agentbus,
+with no agent and no tokens. It does the scenario's work for real (bus commands through agentbus on PATH,
 file edits in the project) and prints the event stream the real harness would: Claude Code stream-json or
 `codex exec --json` lines. EVAL_ROLE and EVAL_SCENARIO say who it plays. EVAL_STUB_MISBEHAVE changes one habit:
   edit-first   the agent edits before it reads its inbox (handoff and resume)
@@ -16,7 +16,7 @@ import time
 fmt = sys.argv[1]
 role, scenario = os.environ["EVAL_ROLE"], os.environ["EVAL_SCENARIO"]
 bad = os.environ.get("EVAL_STUB_MISBEHAVE", "")
-BUS = ".agentbus/bin/agentbus"
+BUS = "agentbus"  # the tool under test, on the PATH the harness gives the agent; never the project copy
 n = [0]
 
 

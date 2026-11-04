@@ -53,4 +53,7 @@ else
   grep -q 'unsupported' "$T/out" && [ "$(tail -n 1 "$T/out")" = "eval complete: 0 of 1 cells pass" ] || { cat "$T/out"; fail "hooks arm not reported unsupported"; }
 fi
 ok "hooks arm handled"
+echo "TEST 5: nothing the harness gives an agent names the project copy; the tool under test is on the agent's PATH"
+! grep -qF '.agentbus/bin/agentbus' "$(cd "$TESTS_DIR/.." && pwd)/scripts/agent-eval/run.py" || fail "scripts/agent-eval/run.py tells an agent to run the project copy"
+ok "the stub agents above reached the bus through agentbus on PATH"
 echo "All eval harness tests passed"

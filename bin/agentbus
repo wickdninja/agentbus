@@ -1876,7 +1876,7 @@ def cmd_init(a):
         say("outer bus: {}", tilde(outer))
     say("next: cd {}", tilde(root))
     # The command an agent runs is always the installed agentbus (on PATH, the skill's rule). From a clone it may not be
-    # installed yet, and an agent is told to stop when it is not, so this says that first.
+    # installed yet, and an agent then only asks for it, so this says that first.
     say("next: {}agentbus --as YOUR_NAME join", "" if install_entry_script() else "install agentbus so your agents have it on PATH (see the README), then ")
     if not setup_detected():
         say("next: agentbus setup claude (teaches Claude Code the protocol)")
@@ -8394,7 +8394,7 @@ SKILL_TEXT = (
 )
 AGENTS_SNIPPET = (
     '## agentbus\n'
-    "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. If `agentbus buses` says there is no bus here, ignore this section; otherwise this workspace has a shared agentbus. Run `agentbus skill` for the full protocol; if it says `unknown command 'skill'`, that agentbus is 0.1.x: stop and tell the user to install the current release and run `agentbus upgrade --all PARENT_DIR`.\n"
+    "If `agentbus` is not on PATH: ignore this section unless `.agentbus/` is in this folder or a parent; then tell the user to install agentbus, never run the copy in it, and carry on with the task. If `agentbus buses` finds no bus, ignore this section. Otherwise run `agentbus skill` for the full protocol; if it says `unknown command 'skill'`, that agentbus is 0.1.x: stop and tell the user to install the current release and run `agentbus upgrade --all PARENT_DIR`.\n"
     'Join: `agentbus --as NAME join`. Before editing: `agentbus --as NAME claim PATH --purpose WHY`.\n'
     'Between steps: `agentbus --as NAME inbox`. Finish: `agentbus --as NAME post RESULT --kind done`, then `leave`.\n'
 )
@@ -8403,7 +8403,7 @@ SKILL_SHA256_HISTORY = (
     "1ecb0d4d63f6d6a70b1b60b70bcbd44d011172773304ecec7e8ecf21b5b0a203",
 )
 AGENTS_SHA256_HISTORY = (
-    "411111c4ebe38ac7770150d2ee6deeac6b808ed33b3759aa7337a4e9c4be4b63",
+    "b84bb2620aa5d911e4dffeb0bcb93811edba5312963e6f8c86f4d84dd61d4c30",
 )
 # END EMBEDDED SKILL
 

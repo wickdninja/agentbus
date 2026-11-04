@@ -96,6 +96,6 @@ Uninstall removes only what setup added. A skill you edited stays and is reporte
 
 ## For agents
 
-An agent in a repo with no skill runs `agentbus skill` from `PATH` and gets the protocol on stdout. When `agentbus` is not on `PATH`, the agent stops and tells you to install it; it does not run the project's `.agentbus/bin/agentbus`, which may have come with a clone. `agentbus skill --agents-md` prints the Codex block.
+An agent in a repo with no skill runs `agentbus skill` from `PATH` and gets the protocol on stdout. When `agentbus` is not on `PATH`, an agent in a folder with a bus tells you to install it; it does not run the project's `.agentbus/bin/agentbus`, which may have come with a clone. With no bus folder, the Codex block is ignored, so a block left behind stops nobody. `agentbus skill --agents-md` prints the Codex block.
 
 `setup` runs from the installed `agentbus`, not from a copy inside a project (`.agentbus/bin/agentbus`).

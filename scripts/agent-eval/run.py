@@ -174,7 +174,7 @@ class Attempt:
         else:
             block = self.sh(self.cmd + ["skill", "--agents-md"], check=False)
             text = block.stdout if block.returncode == 0 and block.stdout.strip() else (
-                "Coordinate with other agents through `.agentbus/bin/agentbus`; follow the skill below.\n\n" + skill)
+                "Coordinate with other agents through the installed `agentbus` on your PATH; follow the skill below.\n\n" + skill)
             open(os.path.join(self.proj, "AGENTS.md"), "w").write(text)
 
     def seed_resume(self):
