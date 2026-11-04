@@ -659,8 +659,8 @@
   {
     "name": "the checksum size is the first one whose checksum matches",
     "file": "bin/agentbus",
-    "find": "        try:\\n            names, link, sparse = hook_index_walk\\(data, size\\)\\n        except ValueError:\\n            continue\\n        return names, link, sparse, size",
-    "replace": "        return hook_index_walk(data, size) + (size,)",
+    "find": "        try:\\n            names, link, sparse = hook_index_walk\\(data, size\\)\\n        except ValueError:\\n            continue\\n        found\\.append",
+    "replace": "        names, link, sparse = hook_index_walk(data, size)\n        found.append",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "the checksum size was chosen by the first checksum"
@@ -700,5 +700,50 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "an index with no entries was taken for a damaged one"
+  },
+  {
+    "name": "the walk reads the extended flags only in version 3",
+    "file": "bin/agentbus",
+    "find": "\\(2 if ext and flags & 0x4000 else 0\\)",
+    "replace": "(2 if version == 3 and flags & 0x4000 else 0)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a version 4 index with intent-to-add and skip-worktree entries was misread"
+  },
+  {
+    "name": "only the first checksum size that fits is taken",
+    "file": "bin/agentbus",
+    "find": "        if not every:\\n            break",
+    "replace": "        break",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size rules"
+  },
+  {
+    "name": "objectFormat is read from any config section",
+    "file": "bin/agentbus",
+    "find": "if section == \"extensions\" and m\\.group\\(1\\)\\.lower\\(\\) == \"objectformat\":",
+    "replace": "if m.group(1).lower() == \"objectformat\":",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size rules"
+  },
+  {
+    "name": "a config that includes another file is trusted",
+    "file": "bin/agentbus",
+    "find": "            if section in \\(\"include\", \"includeif\"\\):\\n                return None",
+    "replace": "            if False:\n                return None",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size rules"
+  },
+  {
+    "name": "a config this reader does not understand counts as known",
+    "file": "bin/agentbus",
+    "find": "            if kind is None:\\n                return \\(20, 32\\), True",
+    "replace": "            if kind is None:\n                continue",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size rules"
   }
 ]

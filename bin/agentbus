@@ -5942,15 +5942,56 @@ def hook_discovery_start(cwd):
     return here
 
 
-def hook_hash_order(repo):
-    """The checksum sizes to try, most likely first: 32 for a repository whose config says extensions.objectFormat is
-    sha256, else 20. Only an ordering: the size that counts is the one whose checksum matches AND whose layout parses
-    exactly (hook_index_read). The config is read as text (no git is run: a repository's config can name a program)."""
+def hook_config_hash(text):
+    """'sha1', 'sha256' or None (unknown) from the text of a git config: the value of extensions.objectFormat, looked for only
+    in an [extensions] section, quotes and a trailing comment allowed, the key and section names in any case. A config that
+    includes another file (include.path, includeIf), continues a line with a backslash, or has a line this reader does not
+    understand is unknown: it may say anything."""
+    section, value = "", "sha1"
+    for raw in text.decode("utf-8", "replace").splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        if line.endswith("\\"):
+            return None
+        m = re.match(r'\[\s*([A-Za-z0-9.-]+)(?:\s+"(?:[^"\\]|\\.)*")?\s*\]\s*(.*)$', line)
+        if m:
+            section, line = m.group(1).lower(), m.group(2).strip()
+            if section in ("include", "includeif"):
+                return None
+            if not line or line[0] in "#;":
+                continue
+        m = re.match(r'([A-Za-z][A-Za-z0-9-]*)\s*(?:=\s*(.*))?$', line)
+        if not m or not section:
+            return None
+        if section == "extensions" and m.group(1).lower() == "objectformat":
+            val = re.sub(r'\s+[#;].*$', "", m.group(2) or "").strip().strip('"').strip().lower()
+            if val not in ("sha1", "sha256"):
+                return None
+            value = val
+    return value
+
+
+def hook_hash_plan(repo):
+    """(sizes in the order to try, whether to take every size that fits). 32 first for a repository whose config says sha256,
+    20 first for sha1. A config that cannot be read as plain text (an include, a line this reader does not understand, an
+    unreadable file) is unknown: both sizes are tried, and every one that fits counts. Never decides alone: the size that
+    counts is one whose checksum matches AND whose layout parses exactly (hook_index_reads). No git is run: a
+    repository's config can name a program."""
+    known = set()
     for folder in (repo["common"], repo["gitdir"]):
-        text = hook_read_file(os.path.join(folder, "config"), 1 << 20)
-        if text is not None and re.search(rb"(?im)^\s*objectformat\s*=\s*sha256\b", text):
-            return (32, 20)
-    return (20, 32)
+        for name in ("config", "config.worktree"):
+            path = os.path.join(folder, name)
+            if not os.path.lexists(path):
+                continue
+            text = hook_read_file(path, 1 << 20)
+            kind = hook_config_hash(text) if text is not None else None
+            if kind is None:
+                return (20, 32), True
+            known.add(kind)
+    if "sha256" in known:
+        return (32, 20), False
+    return (20, 32), False
 
 
 def hook_checksum_ok(data, size):
@@ -5963,10 +6004,15 @@ def hook_checksum_ok(data, size):
     return (hashlib.sha1 if size == 20 else hashlib.sha256)(memoryview(data)[:-size]).digest() == data[-size:]
 
 
-def hook_index_read(data, order=(20, 32)):
-    """(paths in index order, link id or None, sparse, checksum size) for an index file's bytes. The size is the first of
-    `order` whose checksum is right and whose layout (entry fields, extension headers) parses exactly to the end of the file:
-    a zero trailer fits either size, so a checksum alone never decides it. ValueError when no size does."""
+def hook_index_reads(data, order=(20, 32), every=False):
+    """[(paths in index order, link id or None, sparse, checksum size)] for an index file's bytes: the sizes of `order` whose
+    checksum is right and whose layout (entry fields, extension headers) parses exactly to the end of the file. Normally the
+    first one is the answer and the search stops (a real checksum cannot fit two sizes; an all-zero trailer, index.skipHash,
+    fits either, and only a layout that parses decides). With `every` set, or a trailer of 32 zero bytes (the one trailer both
+    sizes could accept), every size is tried and every one that fits is returned, so the caller can take them all.
+    ValueError when no size fits."""
+    every = every or (len(data) >= 32 and data[-32:] == bytes(32))
+    found = []
     for size in order:
         if not hook_checksum_ok(data, size):
             continue
@@ -5974,8 +6020,17 @@ def hook_index_read(data, order=(20, 32)):
             names, link, sparse = hook_index_walk(data, size)
         except ValueError:
             continue
-        return names, link, sparse, size
-    raise ValueError("index")
+        found.append((names, link, sparse, size))
+        if not every:
+            break
+    if not found:
+        raise ValueError("index")
+    return found
+
+
+def hook_index_read(data, order=(20, 32)):
+    """The first of hook_index_reads."""
+    return hook_index_reads(data, order)[0]
 
 
 def hook_index_parse(data, size):
@@ -6057,10 +6112,10 @@ def hook_index_walk(data, size):
         pos, prev, find, names = 12, b"", data.index, []
         append = names.append
         hd, ex = 40 + size, 42 + size
-        v3, v4 = version == 3, version == 4
+        ext, v4 = version > 2, version == 4      # versions 3 and 4 may carry 2 more flag bytes (intent-to-add, skip-worktree)
         for _ in range(count):
             flags = data[pos + hd] << 8 | data[pos + hd + 1]
-            start = pos + ex + (2 if v3 and flags & 0x4000 else 0)
+            start = pos + ex + (2 if ext and flags & 0x4000 else 0)
             if v4:
                 c = data[start]
                 start += 1
@@ -6194,24 +6249,30 @@ def hook_index_pairs(repo):
     The mode is meaningful only for a sparse or split index; a plain one gives 0. FileNotFoundError when there is no index;
     ValueError or OSError for anything unreadable."""
     data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
-    names, link, sparse, size = hook_index_read(data, hook_hash_order(repo))
-    if link is None and not sparse:
-        return [(n, 0) for n in names]
-    return hook_index_entries(repo, data, size)[0]
+    pairs = []
+    for names, link, sparse, size in hook_index_reads(data, *hook_hash_plan(repo)):
+        pairs += [(n, 0) for n in names] if link is None and not sparse else hook_index_entries(repo, data, size)[0]
+    return pairs
 
 
 def hook_index_scan(repo):
     """(candidate paths, stamp of the shared index or None) for the repository's index: one read, one hash, one walk of the
     paths. FileNotFoundError when there is no index; ValueError or OSError for anything unreadable."""
     data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
-    names, link, sparse, size = hook_index_read(data, hook_hash_order(repo))
-    if link is None and not sparse:
-        return hook_walk_candidates(names), None
-    pairs, shared_stamp = hook_index_entries(repo, data, size)     # split or sparse: with the modes, and the shared index
-    return hook_index_candidate_paths(pairs), shared_stamp
+    found, shared_stamp = set(), None
+    for names, link, sparse, size in hook_index_reads(data, *hook_hash_plan(repo)):     # every size that fits counts
+        if link is None and not sparse:
+            found.update(hook_walk_candidates(names))
+        else:
+            pairs, shared = hook_index_entries(repo, data, size)     # split or sparse: with the modes, and the shared index
+            found.update(hook_index_candidate_paths(pairs))
+            shared_stamp = shared_stamp or shared
+        if len(found) > HOOK_CANDIDATES_MAX:
+            break
+    return sorted(found), shared_stamp
 
 
-HOOK_SCAN_VERSION = 9      # change it whenever the rules that turn an index into candidates change: an answer remembered
+HOOK_SCAN_VERSION = 10     # change it whenever the rules that turn an index into candidates change: an answer remembered
                            # under another version is not trusted
 
 

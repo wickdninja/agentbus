@@ -1152,6 +1152,102 @@ SS; quiet || fail "an answer stored by an older scan was trusted: a tracked bus 
 ok "no version, or another version: a miss"
 
 echo
+echo "TEST 46: version 4 indexes with the two extra flag bytes (intent-to-add, skip-worktree), from real git"
+newbus p46; mkdir -p "$P/src"; printf a >"$P/src/a.c"; printf b >"$P/src/b.c"; printf c >"$P/src/c.c"; printf d >"$P/new.c"
+git -C "$P" config index.version 4; gitq "$P" add src; gitq "$P" commit -qm base
+gitq "$P" update-index --skip-worktree src/b.c; gitq "$P" add -N new.c; gitq "$P" add -f .agentbus
+"$PY" -I -c 'import struct,sys; d=open(sys.argv[1],"rb").read(); sys.exit(0 if struct.unpack(">I", d[4:8])[0]==4 else 1)' "$P/.git/index" || fail "the test did not make a version 4 index"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$P" <<'PY' || fail "a version 4 index with intent-to-add and skip-worktree entries was misread"
+import runpy, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_v4ext")
+g = sys.argv[2] + "/.git"
+data = open(g + "/index", "rb").read()
+names, link, sparse, size = m["hook_index_read"](data)
+want = {b"src/a.c", b"src/b.c", b"src/c.c", b"new.c", b".agentbus/VERSION", b".agentbus/bus.db", b".agentbus/bin/agentbus"}
+assert want <= set(names) and len(names) == len(set(names)), sorted(names)      # (the bus may also have a -wal file)
+cands, shared = m["hook_index_scan"]({"gitdir": g, "common": g})
+assert cands == [b".agentbus"], cands
+PY
+before=$(sha "$P/.agentbus/bus.db"); SS; quiet || fail "a tracked bus in a version 4 index with extended flags was used: rc $RC out $OUT"
+[ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a tracked bus in a version 4 index with extended flags"
+ok "extended flags are two bytes in version 4 too; the tracked bus is refused"
+
+echo
+echo "TEST 47: when more than one checksum size fits, every one counts; the config only orders the sizes"
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T" <<'PY' || fail "the checksum size rules"
+import hashlib, os, runpy, struct, sys
+m = runpy.run_path(sys.argv[1], run_name="agentbus_both")
+cfg = m["hook_config_hash"]
+cases = {
+  "[core]\n\tbare = false\n": "sha1",
+  "[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectformat = sha256\n": "sha256",
+  '[extensions]\n\tObjectFormat = "sha256"  # note\n': "sha256",
+  "[Extensions]\n objectformat=SHA256\n": "sha256",
+  "[extensions] objectformat = sha256\n": "sha256",
+  "[core]\n\tobjectformat = sha256\n": "sha1",                # not the [extensions] section
+  '[remote "origin"]\n\turl = x\n': "sha1",
+  "[include]\n\tpath = other\n": None,
+  '[includeIf "gitdir:/x/"]\n\tpath = y\n': None,
+  "[core]\n\tx = a \\\n b\n": None,
+  "this is not a config\n": None,
+  "[extensions]\n\tobjectformat = blake3\n": None,
+}
+for text, want in cases.items():
+    assert cfg(text.encode()) == want, (text, cfg(text.encode()), want)
+d = sys.argv[2] + "/plan"; os.makedirs(d, exist_ok=True)
+repo = {"gitdir": d, "common": d}
+def plan(text):
+    open(d + "/config", "w").write(text)
+    return m["hook_hash_plan"](repo)
+assert plan("[core]\n\tbare = false\n") == ((20, 32), False)
+assert plan("[extensions]\n\tobjectformat = sha256\n") == ((32, 20), False)
+assert plan("[include]\n\tpath = x\n") == ((20, 32), True)           # unknown: both sizes
+assert plan("junk\n") == ((20, 32), True)
+# a trailer of 32 zero bytes is the one both checksums could accept: every size that parses is returned
+def index(size, names):
+    out = [b"DIRC", struct.pack(">II", 2, len(names))]
+    for b in names:
+        e = bytes(40) + bytes(size) + struct.pack(">H", len(b)) + b
+        out.append(e + bytes(8 - len(e) % 8))
+    return b"".join(out) + bytes(size)
+data = index(32, [b".agentbus/bus.db"])
+reads = m["hook_index_reads"](data, (20, 32))
+assert [r[3] for r in reads] == [32], [r[3] for r in reads]
+# both sizes parse (the layout check is replaced here, since no real file satisfies both): every one is taken, nothing is dropped
+calls = []
+G = m["hook_index_reads"].__globals__      # the functions look names up here (runpy hands back a copy of it)
+real = G["hook_index_walk"]
+def walk(data, size):
+    calls.append(size)
+    return ([b"a.c"] if size == 20 else [".agent\u200cbus/x".encode()]), None, False
+G["hook_index_walk"] = walk
+two = m["hook_index_reads"](data, (20, 32))
+assert calls == [20, 32] and [r[3] for r in two] == [20, 32], (calls, two)
+calls.clear()
+one = m["hook_index_reads"](index(20, [b"a"])[:-20] + hashlib.sha1(index(20, [b"a"])[:-20]).digest())   # a real checksum: the search stops at the first fit
+assert calls == [20] and len(one) == 1, calls
+calls.clear()
+m["hook_index_reads"](index(20, [b"a"])[:-20] + hashlib.sha1(index(20, [b"a"])[:-20]).digest(), (20, 32), True)    # an unknown config: every size is tried
+assert calls == [20], calls    # (the sha256 checksum does not fit, so it is not walked)
+G["hook_index_walk"] = real
+PY
+ok "config text read narrowly; unknown config or a zero trailer: every size that fits counts"
+
+echo
+echo "TEST 48: a bus that becomes tracked during a session is not left from (no creation time needed)"
+newbus p48; N=$(dname "$SID1"); SS
+[[ " $(roster) " == *" $N "* ]] || fail "setup: SessionStart did not join $N"
+STATE48="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; "$PY" -I - "$STATE48/$(printf '%s' "$SID1" | tr -c 'A-Za-z0-9_-' '_').bus" <<'PY' || fail "could not clear the recorded creation time"
+import json, sys
+d = json.load(open(sys.argv[1])); d[2] = None
+json.dump(d, open(sys.argv[1], "w"))
+PY
+gitq "$P" add -f .agentbus                                    # the index changed: the remembered answer is stale
+before=$(sha "$P/.agentbus/bus.db"); END other
+[ "$(sha "$P/.agentbus/bus.db")" = "$before" ] && [[ " $(roster) " == *" $N "* ]] || fail "SessionEnd with no creation time left a bus that is now tracked (the index changed since the join)"
+ok "inode alone does not carry SessionEnd past a changed index"
+
+echo
 echo "TEST 22: handler p95 under 250 ms over 20 runs on a 50-agent bus; the whole hook within fixed CPU and wall bounds"
 newbus p22; N=$(dname "$SID1"); SS
 "$PY" -I - "$P/.agentbus/bus.db" "$N" <<'PY'
