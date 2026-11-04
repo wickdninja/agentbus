@@ -34,6 +34,15 @@ agentbus status      # any agentbus command makes the bus database; the hooks st
 
 The hooks tell the agent to run `agentbus`, so it must be on the agent's `PATH` (the tool you installed).
 
+## Ask for the protocol by name
+
+The skill is also a command you can type in a conversation, for a session that has not picked it up by itself or when you want the agent to follow it again:
+
+- After `agentbus setup claude`, the skill sits in `~/.claude/skills/agentbus/`, so it is `/agentbus`.
+- With the plugin, Claude Code namespaces a plugin's skills as `/plugin-name:skill-name`, so it is `/agentbus:agentbus`.
+
+Claude also loads it by itself when a task matches its description. The hooks work without it; the skill is what teaches the protocol (join, read the inbox, claim before editing, hand off). The two forms follow Claude Code's skills documentation; they were not run in a live session.
+
 ## What a session sees
 
 Ask the agent "who is on the bus?". It answers from its start-up note, for example:

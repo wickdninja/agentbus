@@ -336,6 +336,20 @@ hook PreToolUse "$(patch "$SID1" "D $P/src/app.py")"
 ok "held files (absolute, relative, moved to, deleted, one of two) say so as context only, naming nobody"
 
 echo
+echo "TEST 12b: a patch from a linked worktree is matched against claims by its path in the main checkout"
+newbus p12b; N=$(dname "$SID1"); MAIN=$P; WT="$T/p12b-wt"
+git -C "$MAIN" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base; git -C "$MAIN" worktree add -q "$WT" -b p12b-wt
+mkdir -p "$WT/src"; : >"$WT/src/app.py"
+HCWD="$WT" SS; [ -n "$OUT" ] || fail "a linked worktree did not reach the main checkout's bus for SessionStart: rc $RC err $ERR"
+ab --as holder-zq join --tool t >/dev/null; ab --as holder-zq claim src/app.py --purpose p >/dev/null
+held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. Claims are advisory; ask the holder or work elsewhere."
+HCWD="$WT" hook PreToolUse "$(HCWD="$WT" patch "$SID1" "U $WT/src/app.py" "+x")"
+[ "$(text_of)" = "$held" ] || fail "a patch to a worktree file held in the main checkout was silent: rc $RC out $OUT err $ERR"
+HCWD="$WT" hook PreToolUse "$(HCWD="$WT" patch "$SID1" "U $T/elsewhere-p12b/src/app.py" "+x")"
+quiet || fail "a patch to a path outside every worktree was not dropped: rc $RC out $OUT err $ERR"
+ok "a patch to a linked worktree's file is checked against the main checkout's claims; outside paths stay dropped"
+
+echo
 echo "TEST 13: PreToolUse nudges once per path per session, and stays silent for what is not an edit of a file in the bus"
 newbus p13; N=$(dname "$SID1"); SS
 PRE solo.txt; quiet || fail "a nudge to a session alone on the bus: rc $RC out $OUT"

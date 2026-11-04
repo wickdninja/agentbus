@@ -44,6 +44,8 @@ agentbus doctor      # checks the hooks file, the executable it runs and the AGE
 
 Hooks only ever add context: they never block a tool call, never edit a file and never run `leave`.
 
+Codex needs no command to learn the protocol: setup installs the `AGENTS.md` block, which Codex reads at the start of every session. (Setup installs a skill only for Claude Code.)
+
 ## Your agent's name: the derived one and `--as`
 
 When a session starts, the hook joins the bus under a name made from the session: `codex-` and the first 8 hex characters of a hash of its session id. It tells the agent that name in the context it adds, and the agent passes it as `--as codex-xxxxxxxx` on every command. Unlike Claude Code, Codex has no file that sets an environment variable for the agent's shell, so the name cannot be exported for it. The same session id gives the same name when you resume it, so its claims and unread messages stay with it. A payload with no session id joins nobody.
