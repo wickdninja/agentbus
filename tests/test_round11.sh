@@ -94,7 +94,7 @@ def empty():
     for args, text in [(('who',), 'no agents. Join with: agentbus --as NAME join'), (('claims',), 'no claims'),
                        (('claims','--stale'), 'no claims'), (('ctx','get'), 'no facts'), (('read',), 'no messages'), (('log','show'), 'log is empty')]:
         assert ok(*args, db=db) == '  '+text+'\n', args
-        assert json.loads(ok(*args, db=db, json_=True)) == {'v': 1, 'items': [], 'has_more': False, 'next': None}, args
+        assert json.loads(ok(*args, db=db, json_=True)) == {'contract': 1, 'items': [], 'has_more': False, 'next': None}, args
     status = ok('status', db=db)
     for text in ['no agents. Join with: agentbus --as NAME join', 'no claims', 'no facts', 'no messages']:
         assert '\n  '+text+'\n' in status, status
@@ -203,17 +203,17 @@ def retries():
     db = fresh('retries')
     for n in ('a','b'): ok('--as',n,'join',db=db)
     args = ('--as','a','post','payload','--request-id','token')
-    assert json.loads(ok(*args,db=db,json_=True)) == {'id':1,'warnings':[]}
-    assert json.loads(ok(*args,db=db,json_=True)) == {'id':1,'duplicate':True,'warnings':[]}
+    assert json.loads(ok(*args,db=db,json_=True)) == {'contract':1,'id':1,'warnings':[]}
+    assert json.loads(ok(*args,db=db,json_=True)) == {'contract':1,'id':1,'duplicate':True,'warnings':[]}
     assert ok(*args,db=db) == 'posted #1 to everyone [note] (already posted)\n'
     for extra in [('changed',), ('payload','--to','b'), ('payload','--kind','done'),
                   ('payload','--topic','new'), ('payload','--reply-to','1')]:
         error('request_id_reused','--as','a','post',*extra,'--request-id','token',db=db)
-    assert json.loads(ok('--as','b','post','payload','--request-id','token',db=db,json_=True)) == {'id':2,'warnings':[]}
-    for expected in (3,4): assert json.loads(ok('--as','a','post','payload',db=db,json_=True)) == {'id':expected,'warnings':[]}
+    assert json.loads(ok('--as','b','post','payload','--request-id','token',db=db,json_=True)) == {'contract':1,'id':2,'warnings':[]}
+    for expected in (3,4): assert json.loads(ok('--as','a','post','payload',db=db,json_=True)) == {'contract':1,'id':expected,'warnings':[]}
     p = run('--as','a','post','once','--request-id','closed',db=db,closed=True)
     assert p.returncode != 0 and 'stdout is closed' in p.stderr, p
-    assert json.loads(ok('--as','a','post','once','--request-id','closed',db=db,json_=True)) == {'id':5,'duplicate':True,'warnings':[]}
+    assert json.loads(ok('--as','a','post','once','--request-id','closed',db=db,json_=True)) == {'contract':1,'id':5,'duplicate':True,'warnings':[]}
     with contextlib.closing(sqlite3.connect(db)) as c:
         assert c.execute('SELECT request_id FROM messages ORDER BY id').fetchall() == [('token',),('token',),(None,),(None,),('closed',)]
         try: c.execute("INSERT INTO messages(ts,sender,body,request_id) VALUES('t','a','other','token')")

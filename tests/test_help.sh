@@ -158,8 +158,8 @@ import os; exec(open(os.path.join(os.environ["T"], "h.py")).read())
 for args in ([], ["help"]):
     h = help_() if not args else run("help").stdout
     if re.search(r"\bhook\b", h) or "SUPPRESS" in h: fail("agentbus --help shows hook: " + h)
-p = run("hoo")
-if "hook" in p.stderr or p.returncode != 2: fail("an unknown command suggests hook: " + p.stderr)
+p = run("hoo")   # matched as a word: the public command hooks is not the hidden hook
+if re.search(r"\bhook\b", p.stderr) or p.returncode != 2: fail("an unknown command suggests hook: " + p.stderr)
 p = run("--as", "a", "hook", "SessionStart")   # still answers, silently
 if p.returncode != 0: fail("hook stopped answering: rc %s %s" % (p.returncode, p.stderr))
 for sh in ("bash", "zsh", "fish"):

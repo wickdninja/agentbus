@@ -14,7 +14,7 @@ sys.path.insert(0, os.environ["TESTS_DIR"])
 from agentbus_cmd import agentbus_argv
 from schema_check import validate, check_schema
 bin_, tmp = sys.argv[1:]
-NEEDS_ENVELOPE = True  # listings return {v, items, has_more, next}
+NEEDS_ENVELOPE = True  # listings return {contract, items, has_more, next}
 BASE = {k: v for k, v in os.environ.items() if not k.startswith("AGENTBUS_")}
 BASE.update(COLUMNS="4096", PYTHONDONTWRITEBYTECODE="1")
 count = [0]
@@ -75,7 +75,7 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
     "not_held": (1, False, ["resource"]),
     "no_message": (1, False, ["id"]),
     "no_context_key": (1, False, ["key"]),
-    "not_on_roster": (1, False, ["agent"]),
+    "not_on_roster": (1, False, ["agent", "did_you_mean", "roster"]),
     "name_active": (1, False, ["agent", "last_seen_min", "suggested_name"]),
     "request_id_reused": (1, False, ["request_id", "agent", "original_id"]),
     "bad_input": (2, False, []),
@@ -142,7 +142,10 @@ assert args["--request-id"]["type"] == "string" and "default" not in args["--req
 assert commands["who"]["args"][-1]["name"] == "--limit" and commands["who"]["args"][-1]["type"] == "integer"
 # the output-discipline additions (WS L-out): written out here, independently of the registry
 assert [g["name"] for g in doc["global_args"]] == ["--as", "--json", "--up"], doc["global_args"]
-assert "global_args" in commands["schema"]["result"]["anyOf"][0]["required"], "schema's own result must list global_args"
+full_branch = commands["schema"]["result"]["anyOf"][0]
+assert "global_args" in full_branch["properties"], "schema's own result must describe global_args"
+# schema COMMAND leaves the shared parts out unless --full, so they are no longer required of every schema result
+assert {"global_args", "exit_codes", "env"}.isdisjoint(full_branch["required"]) and {"contract", "commands", "errors"} <= set(full_branch["required"]), full_branch["required"]
 assert objects["Message"]["properties"]["body_truncated"] == {"type": "boolean"} and "body_truncated" not in objects["Message"]["required"]
 read_args = {a["name"]: a for a in commands["read"]["args"]}
 assert read_args["--id"]["type"] == "integer" and read_args["--limit"]["default"] == 50, read_args
@@ -264,8 +267,8 @@ p = run("--json", "--as", "a", "post", "late2", "--request-id", "tokC", db=db, c
 assert json.loads(p.stderr)["error"]["retryable"] is True, "with a request id the retry is safe"
 produced["output_failed"] = True
 # every error object declares the fields all of them carry
-assert set(doc["error_fields"]) == {"code", "message", "retryable", "committed"}, doc.get("error_fields")
-for name in ("code", "message", "retryable", "committed"):
+assert set(doc["error_fields"]) == {"code", "message", "retryable", "committed", "next"}, doc.get("error_fields")
+for name in ("code", "message", "retryable", "committed", "next"):
     assert doc["error_fields"][name]["meaning"], name
 for e in produced.values():
     if isinstance(e, dict):
@@ -455,6 +458,7 @@ step("completion", "completion", "bash")
 # a dry run writes nothing; the config folders point into this test's own temp folder all the same
 step("setup", "setup", "claude", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("setup", "setup", "codex", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
+step("hooks", "hooks", "codex")
 # doctor reads only; its config folders point into this test's own temp folder too
 step("doctor", "doctor", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("doctor", "doctor", "--scope", "project", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
@@ -485,7 +489,7 @@ assert covered == set(commands), ("commands the workflow never ran", sorted(set(
 # a wrong result must fail validation: the validator is not vacuous
 assert validate({"id": "1"}, commands["post"]["result"], objects), "a string id passed"
 assert validate({}, commands["post"]["result"], objects), "a missing id passed"
-assert RESULTS["post"][3] == {"id": RESULTS["post"][2]["id"], "duplicate": True, "warnings": []}, RESULTS["post"]
+assert RESULTS["post"][3] == {"contract": 1, "id": RESULTS["post"][2]["id"], "duplicate": True, "warnings": []}, RESULTS["post"]
 print("PASS: every --json result of a scripted workflow of all commands validates against its schema")
 # ---- the tables of docs/reference.md are generated from the registry, and --check notices when they are not ----
 root = os.path.dirname(os.path.dirname(os.path.abspath(bin_)))

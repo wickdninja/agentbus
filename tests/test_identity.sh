@@ -57,10 +57,10 @@ ok "post, ctx set, goal and log add refuse a name that has not joined (or has le
 echo "TEST 2: an unknown --to is delivered, with a warning and a did-you-mean"
 agentbus --as beta join >/dev/null
 j=$(json_ok agentbus --json --as alpha post "hi" --to bata)
-pyj 'assert d["warnings"] == [{"code":"recipient_not_on_roster","name":"bata","did_you_mean":["beta"]}], d' <<<"$j"
+pyj 'assert d["warnings"] == [{"code":"recipient_not_on_roster","name":"bata","did_you_mean":["beta"],"roster":["alpha","beta"],"roster_total":2}], d' <<<"$j"
 [ "$(rows "SELECT COUNT(*) FROM messages WHERE recipient='bata'")" = 1 ] || fail "the message was not delivered"
 agentbus --as alpha post "hi" --to bata 2>"$T/err" >/dev/null
-grep -qF "bata is not on the roster; the message waits for that name. Did you mean: beta?" "$T/err" || fail "text warning: $(cat "$T/err")"
+grep -qF "bata is not on the roster; the message waits for that name. Did you mean beta? On the roster: alpha, beta." "$T/err" || fail "text warning: $(cat "$T/err")"
 j=$(json_ok agentbus --json --as alpha post "hi" --to zzzzzz)
 pyj 'assert d["warnings"][0]["did_you_mean"] == [], d' <<<"$j"
 agentbus --as alpha post "hi" --to zzzzzz 2>"$T/err" >/dev/null
@@ -96,7 +96,7 @@ pyj 'assert d["original_id"] > 0 and "Original: join (log #%d)" % d["original_id
 grep -qF "or pick a new --request-id" <<<"$e" || fail "no way out named: $e"
 e=$(jfail name_active "${AB[@]}" --json --as gamma join --role lead)
 pyj 'assert d["suggested_name"] == "gamma-2", d' <<<"$e"
-expect_fail "Pick your own name (try gamma-2)" agentbus --as gamma join
+expect_fail "Pick your own name (run: agentbus --as gamma-2 join)" agentbus --as gamma join
 agentbus --as gamma-2 join >/dev/null
 e=$(jfail name_active "${AB[@]}" --json --as gamma-2 join)
 pyj 'assert d["suggested_name"] == "gamma-3", d' <<<"$e"
@@ -185,7 +185,13 @@ agentbus who | grep -qF "old name" || fail "an old bus's odd name no longer list
 agentbus status >/dev/null || fail "status on a bus with an odd name"
 agentbus --as "old name" post "still here" >/dev/null || fail "an odd name already on the roster cannot post"
 expect_fail "is not a valid name" agentbus --as "old name" join
-ok "bad names are refused with the rule; names already on a bus keep working"
+# a name that could never join is refused up front by every write, with the rule and a join that would work
+for w in "post hi" "ctx set k v" "claim some/file" "goal x" "log add a b"; do
+  rc=0; agentbus --json --as "bad name" $w >/dev/null 2>"$T/bn" || rc=$?
+  [ "$rc" = 2 ] || fail "'$w' as 'bad name': exit $rc, want 2 (bad_input, not not_on_roster)"
+  pyj 'e = d["error"]; assert e["code"] == "bad_input" and e["field"] == "name" and e["next"] == "agentbus --as NAME join" and "is not a valid name" in e["message"] and "--as '"'"'bad name'"'"' join" not in e["message"], e' <"$T/bn"
+done
+ok "bad names are refused with the rule; names already on a bus keep working; a write as a name that could never join is bad_input with no join that would fail"
 
 echo "TEST 11: a claim renewal logs once; a changed purpose logs again"
 agentbus --as alpha claim res/x --purpose first >/dev/null
@@ -224,7 +230,7 @@ ok "who --limit -2 is a usage error; -1 still means all"
 echo "TEST 14: schema registers the changes"
 j=$(json_ok agentbus --json schema)
 pyj '
-assert d["warnings"]["recipient_not_on_roster"]["fields"] == ["name", "did_you_mean"], d["warnings"]
+assert d["warnings"]["recipient_not_on_roster"]["fields"] == ["name", "did_you_mean", "roster", "roster_total"], d["warnings"]
 assert "original_id" in d["errors"]["request_id_reused"]["fields"] and "suggested_name" in d["errors"]["name_active"]["fields"]
 c = d["commands"]
 for k in ("join", "leave", "claim", "release", "ctx set", "goal", "post"):

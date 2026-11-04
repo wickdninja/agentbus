@@ -30,7 +30,7 @@ SEED_HISTORY = ["2af5e4efedd84d7da42da6c4c5ddd02f230cc002e05b733741557dfd38b0615
 # The Codex AGENTS.md block body. It names the bus copy, per the version policy.
 AGENTS_SNIPPET = (
     "## agentbus\n"
-    "This workspace has a shared agentbus. Run `.agentbus/bin/agentbus skill` for the full protocol; if it says "
+    "If `.agentbus/` exists in this folder (otherwise ignore this section): this workspace has a shared agentbus. Run `.agentbus/bin/agentbus skill` for the full protocol; if it says "
     "`unknown command 'skill'`, the copy is 0.1.x: stop and tell the user to run `agentbus upgrade --all PARENT_DIR`.\n"
     "Join: `.agentbus/bin/agentbus --as NAME join`. "
     "Before editing: `.agentbus/bin/agentbus --as NAME claim PATH --purpose WHY`.\n"

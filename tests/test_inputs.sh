@@ -53,8 +53,8 @@ for args, message in [
         p = run('--as', 'a', *flags, *args)
         assert p.returncode == 1 and p.stdout == '', (args, p)
         if flags:
-            code, field, value = {'ctx': ('no_context_key', 'key', 'missing'), 'post': ('no_message', 'id', 99999), 'release': ('not_held', 'resource', 'missing')}[args[0]]
-            assert json.loads(p.stderr) == {'error': {'code': code, 'message': message, 'retryable': False, 'committed': False, field: value}}, p.stderr
+            code, field, value, nxt = {'ctx': ('no_context_key', 'key', 'missing', 'agentbus ctx get'), 'post': ('no_message', 'id', 99999, 'agentbus read'), 'release': ('not_held', 'resource', 'missing', 'agentbus claims')}[args[0]]
+            assert json.loads(p.stderr) == {'error': {'code': code, 'message': message, 'retryable': False, 'committed': False, 'next': nxt, field: value}}, p.stderr
             assert len(p.stderr.splitlines()) == 1, p.stderr
         else:
             assert p.stderr == 'agentbus: ' + message + '\n', p.stderr

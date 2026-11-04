@@ -240,7 +240,7 @@
     "replace": "    if False:\\n        bad = [",
     "count": 1,
     "run": "tests/test_doctor.sh",
-    "expect": "a newer bus must exit 1"
+    "expect": "doctor must exit 1 where join exits 3"
   },
   {
     "name": "doctor treats an older copy as newer",
@@ -371,8 +371,8 @@
   {
     "name": "PreToolUse nudges about an unclaimed path every time",
     "file": "bin/agentbus",
-    "find": "if own or not peers or not isinstance\\(payload.get\\(\"session_id\"\\), str\\) or not hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\):",
-    "replace": "if own or not peers:",
+    "find": "    new = \\[rel for rel in unclaimed if hook_nudge_once\\(payload\\[\"session_id\"\\], rel\\)\\]",
+    "replace": "    new = list(unclaimed)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "second unclaimed nudge for the same path"
@@ -452,8 +452,8 @@
   {
     "name": "PreToolUse nudges a session that is alone on the bus",
     "file": "bin/agentbus",
-    "find": " or not peers or ",
-    "replace": " or ",
+    "find": "if not peers or not isinstance\\(payload",
+    "replace": "if not isinstance(payload",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "a nudge to a session alone on the bus"
@@ -506,7 +506,7 @@
   {
     "name": "a hook treats every .agentbus as untracked",
     "file": "bin/agentbus",
-    "find": "return not hook_index_tracks\\(repo, prefix\\)",
+    "find": "return not hook_index_tracks\\(repo, folder\\)",
     "replace": "return True",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -596,8 +596,8 @@
   {
     "name": "SessionEnd re-reads the index before it leaves",
     "file": "bin/agentbus",
-    "find": "joined_id = tuple\\(joined_id\\) if isinstance\\(joined_id, list\\)",
-    "replace": "joined_id = None if True or isinstance(joined_id, list)",
+    "find": "joined_id = tuple\\(joined_id\\) if \\(isinstance",
+    "replace": "joined_id = None if (True or isinstance",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd with a 1M-entry index did not leave"
@@ -659,7 +659,7 @@
   {
     "name": "SessionEnd trusts any bus once its session has joined one",
     "file": "bin/agentbus",
-    "find": "same = joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
+    "find": "same = \\(joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\[:2\\]\\)[\\s\\S]*?same = hook_cached_empty\\(directory\\)",
     "replace": "same = joined_id is not None",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -780,7 +780,7 @@
     "replace": "",
     "count": 1,
     "run": "tests/test_control_chars.sh",
-    "expect": "exit 0, want 2"
+    "expect": "--as: exit 0, want 2"
   },
   {
     "name": "AGENTBUS_AGENT is not checked for control characters",
@@ -789,7 +789,7 @@
     "replace": "pass",
     "count": 1,
     "run": "tests/test_control_chars.sh",
-    "expect": "AGENTBUS_AGENT: exit 0, want 2"
+    "expect": "AGENTBUS_AGENT: exit 1, want 2"
   },
   {
     "name": "bidi overrides are not control characters",
@@ -798,7 +798,7 @@
     "replace": ")",
     "count": 1,
     "run": "tests/test_control_chars.sh",
-    "expect": "exit 0, want 2"
+    "expect": "--as: exit 1, want 2"
   },
   {
     "name": "init refuses a missing folder again",
@@ -821,8 +821,8 @@
   {
     "name": "SessionEnd trusts a bus.db of the same device whatever its inode",
     "file": "bin/agentbus",
-    "find": "\\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\)",
-    "replace": "st.st_dev == joined_id[0]",
+    "find": "same = \\(joined_id is not None and \\(st\\.st_dev, st\\.st_ino\\) == tuple\\(joined_id\\[:2\\]\\)[\\s\\S]*?same = hook_cached_empty\\(directory\\)",
+    "replace": "same = joined_id is not None and st.st_dev == joined_id[0]",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd wrote to a tracked bus in another project"
@@ -844,15 +844,6 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "stopped or broke the hook"
-  },
-  {
-    "name": "the index shortcut says untracked whatever the file holds",
-    "file": "bin/agentbus",
-    "find": " or want\\[:-1\\] in low:",
-    "replace": ":",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "a tracked bus with a v2 index was used"
   },
   {
     "name": "wait_exit never gives up on a stalled command",
@@ -996,7 +987,7 @@
     "replace": "            code = loader.get_code(\"agentbus\")\n            compile(open(source, \"rb\").read(), source, \"exec\")  # the cost the cache exists to avoid",
     "count": 1,
     "run": "tests/test_launch.sh",
-    "expect": "the launcher is not faster than the script"
+    "expect": "the launcher compiled agentbus on a run that had its cache"
   },
   {
     "name": "update: the release notice also fires in an agent session",
@@ -1532,8 +1523,8 @@
   {
     "name": "identity: unknown recipient gets no warning",
     "file": "bin/agentbus",
-    "find": "    names = \\(\\[r\\[0\\]",
-    "replace": "    return []\n    names = ([r[0]",
+    "find": "    close, shown, total = roster_view\\(con, to\\)\\n    return \\[\\{\"code\": \"recipient_not_on_roster\"",
+    "replace": "    return []\n    close, shown, total = roster_view(con, to)\n    return [{\"code\": \"recipient_not_on_roster\"",
     "count": 1,
     "run": "tests/test_identity.sh",
     "expect": "recipient_not_on_roster"
@@ -1541,8 +1532,8 @@
   {
     "name": "identity: did-you-mean never matches",
     "file": "bin/agentbus",
-    "find": "n=3, cutoff=0\\.6\\)\\}\\]",
-    "replace": "n=3, cutoff=1.0)}]",
+    "find": "n=3, cutoff=0\\.6\\)",
+    "replace": "n=3, cutoff=1.0)",
     "count": 1,
     "run": "tests/test_identity.sh",
     "expect": "recipient_not_on_roster"
@@ -1750,7 +1741,7 @@
     "file": "bin/agentbus",
     "find": "JOIN thread t ON m\\.reply_to = t\\.id\\)",
     "replace": "JOIN thread t ON m.reply_to = t.id AND t.root = t.id)",
-    "count": 1,
+    "count": 2,
     "run": "tests/test_brief.sh",
     "expect": "worker's open questions"
   },
@@ -1759,7 +1750,7 @@
     "file": "bin/agentbus",
     "find": "a\\.kind = 'answer'",
     "replace": "a.id <> t.root",
-    "count": 1,
+    "count": 2,
     "run": "tests/test_brief.sh",
     "expect": "worker's open questions"
   },
@@ -1955,7 +1946,7 @@
   {
     "name": "the identity error has no example",
     "file": "bin/agentbus",
-    "find": "die\\(\"say\\ who\\ you\\ are\\ with\\ \\-\\-as\\ NAME\\ or\\ AGENTBUS_AGENT=NAME\\.\\ For\\ example:\\ \"\\ \\+\\ identity_example\\(args\\),\\ \"bad_input\"\\)",
+    "find": "die\\(\"say who you are with --as NAME or AGENTBUS_AGENT=NAME\\. For example: \" \\+ identity_example\\(args\\), \"bad_input\",\\n            next=identity_example\\(args\\)\\)",
     "replace": "die(\"say who you are with --as NAME or AGENTBUS_AGENT=NAME\", \"bad_input\")",
     "count": 1,
     "run": "tests/test_help.sh",
@@ -2239,5 +2230,959 @@
     "count": 1,
     "run": "tests/test_upgrade_all.sh",
     "expect": "each bus gets 5 s at most"
+  },
+  {
+    "name": "a Codex payload without a session id gets a name made from its cwd",
+    "file": "bin/agentbus",
+    "find": "derived = hook_derived_name\\(sid\\) if isinstance\\(sid, str\\) and sid else None",
+    "replace": "derived = hook_derived_name(sid if isinstance(sid, str) and sid else str(payload.get(\"cwd\")))",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "an empty session id"
+  },
+  {
+    "name": "a Codex SessionEnd leaves the roster",
+    "file": "bin/agentbus",
+    "find": "\"codex-\", \"codex\", \\(\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"\\), hook_codex_paths\\)",
+    "replace": "\"codex-\", \"codex\", (\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\", \"SessionEnd\"), hook_codex_paths)",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Codex SessionEnd left the roster or released a claim"
+  },
+  {
+    "name": "a patch's Move to target is not checked against claims",
+    "file": "bin/agentbus",
+    "find": "\"\\*\\*\\* Delete File: \", \"\\*\\*\\* Move to: \"\\)",
+    "replace": "\"*** Delete File: \")",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Move to target"
+  },
+  {
+    "name": "a patched line that looks like a file marker counts as a file",
+    "file": "bin/agentbus",
+    "find": "if line\\.startswith\\(marker\\) and",
+    "replace": "if marker in line and",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a patched line that looks like a file marker"
+  },
+  {
+    "name": "the Codex Stop output carries a block decision",
+    "file": "bin/agentbus",
+    "find": "        out\\[\"systemMessage\"\\] = notice\n",
+    "replace": "        out[\"systemMessage\"] = notice\n        if event == \"Stop\":\n            out[\"decision\"] = \"block\"\n",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "Stop JSON shape (a decision or other key)"
+  },
+  {
+    "name": "a Codex hook writes CLAUDE_ENV_FILE",
+    "file": "bin/agentbus",
+    "find": "\"codex-\", \"codex\", \\(\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"\\), hook_codex_paths\\)",
+    "replace": "\"codex-\", \"codex\", (\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"), hook_codex_paths, None, \"CLAUDE_ENV_FILE\")",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Codex hook wrote CLAUDE_ENV_FILE"
+  },
+  {
+    "name": "a Codex session joins the roster as claude-code",
+    "file": "bin/agentbus",
+    "find": "hook_dialect_spec\\(\"codex-\", \"codex\",",
+    "replace": "hook_dialect_spec(\"codex-\", \"claude-code\",",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "the roster shows the wrong tool for a Codex session"
+  },
+  {
+    "name": "the printed Codex hooks have the default 600 s timeout",
+    "file": "bin/agentbus",
+    "find": "\"timeout\": HOOK_ENTRY_TIMEOUT\\.get\\(event, 5\\)",
+    "replace": "\"timeout\": HOOK_ENTRY_TIMEOUT.get(event, 600)",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "hooks codex printed JSON that does not hold the four absolute tagged commands"
+  },
+  {
+    "name": "hooks codex runs from a project copy",
+    "file": "bin/agentbus",
+    "find": "(def cmd_hooks\\(a\\):\\n)    if is_repo_local_copy\\(\\):",
+    "replace": "\\1    if False:",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "hooks codex from a project copy"
+  },
+  {
+    "name": "setup codex grows an AGENTS.md past 32 KiB",
+    "file": "bin/agentbus",
+    "find": "if verb != \"removed\" and len\\(new\\.encode\\(\"utf-8\"\\)\\) > CODEX_AGENTS_MAX:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "oversize AGENTS.md"
+  },
+  {
+    "name": "setup codex does not say how to trust the hooks",
+    "file": "bin/agentbus",
+    "find": "\"Codex ignores hooks until you trust them: start codex, type /hooks, and approve the \"",
+    "replace": "\"Start a new Codex session and approve the \"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line: done. Codex ignores hooks until you trust them"
+  },
+  {
+    "name": "setup codex ignores a non-empty AGENTS.override.md",
+    "file": "bin/agentbus",
+    "find": "return st is not None and not stat\\.S_ISDIR\\(st\\.st_mode\\) and st\\.st_size > 0",
+    "replace": "return False",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line:   ! ~/.codex/AGENTS.override.md"
+  },
+  {
+    "name": "a Codex session writes the process name file of the Claude Code that started it",
+    "file": "bin/agentbus",
+    "find": "\"codex-\", \"codex\", \\(\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"\\), hook_codex_paths\\)",
+    "replace": "\"codex-\", \"codex\", (\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"), hook_codex_paths, \"CLAUDE_PID\")",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Codex session wrote the process name file of Claude Code's process"
+  },
+  {
+    "name": "a Codex session is shown the Claude Code duplicate-hooks notice",
+    "file": "bin/agentbus",
+    "find": "\"codex-\", \"codex\", \\(\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"\\), hook_codex_paths\\)",
+    "replace": "\"codex-\", \"codex\", (\"SessionStart\", \"UserPromptSubmit\", \"PreToolUse\", \"Stop\"), hook_codex_paths, None, None, \"CLAUDE_PLUGIN_ROOT\")",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a Codex session was shown Claude Code's duplicate-hooks notice"
+  },
+  {
+    "name": "hooks claude prints the Codex hooks",
+    "file": "bin/agentbus",
+    "find": "HOOKS_PRINTERS = \\{\"claude\": ClaudeHooksPiece,",
+    "replace": "HOOKS_PRINTERS = {\"claude\": CodexHooksPiece,",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "hooks claude does not match what setup claude writes"
+  },
+  {
+    "name": "setup codex does not notice a login shell that prints",
+    "file": "bin/agentbus",
+    "find": "        elif printed:\\n",
+    "replace": "        elif False:\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "printed 33 bytes at startup"
+  },
+  {
+    "name": "codex check starts the executable a hooks file names",
+    "file": "bin/agentbus",
+    "find": "        rows = \\[\\]\n        other = self\\.path_for\\(\"user\" if scope == \"project\" else \"project\"\\)\n",
+    "replace": "        subprocess.run(commands[0], shell=True, capture_output=True, cwd=os.sep)\n        rows = []\n        other = self.path_for(\"user\" if scope == \"project\" else \"project\")\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check started the executable a hooks file names"
+  },
+  {
+    "name": "setup help does not mention the hooks",
+    "file": "bin/agentbus",
+    "find": "help=\"Teach your agent to use agentbus: the skill and hooks for Claude Code, the AGENTS.md block and hooks for Codex \"",
+    "replace": "help=\"Teach your agent to use agentbus: install the skill for Claude Code or the block for Codex \"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup help does not mention the hooks"
+  },
+  {
+    "name": "setup writes through a project's linked config folder",
+    "file": "bin/agentbus",
+    "find": "    if scope != \"project\":\\n        return None\\n    root = os\\.getcwd\\(\\)",
+    "replace": "    if True:\n        return None\n    root = os.getcwd()",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a linked .codex"
+  },
+  {
+    "name": "the skill piece writes through a linked .claude",
+    "file": "bin/agentbus",
+    "find": "        linked = setup_linked_dir\\(scope, os\\.path\\.dirname\\(folder\\)\\)[^\\n]*\\n        if linked:\\n            return setup_refuse_link\\(linked\\)\\n        try:\\n            return self\\._plan\\(scope, folder, skill, uninstall\\)",
+    "replace": "        try:\n            return self._plan(scope, folder, skill, uninstall)",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a linked .claude"
+  },
+  {
+    "name": "a hook takes a Claude Code name from AGENTBUS_AGENT in a Codex session",
+    "file": "bin/agentbus",
+    "find": "    if env and any\\(d\\[\"derived\"\\]\\.fullmatch\\(env\\) for d in HOOK_DIALECTS\\.values\\(\\) if d is not hook_dialect\\(\\)\\):\\n        env = None\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "took a Claude Code session's name"
+  },
+  {
+    "name": "a Claude hook takes a Codex name from AGENTBUS_AGENT",
+    "file": "bin/agentbus",
+    "find": "if d is not hook_dialect\\(\\)\\):\\n        env = None",
+    "replace": "if d is not hook_dialect() and HOOK_STATE[\"dialect\"] == \"codex\"):\n        env = None",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "took a Codex session's name"
+  },
+  {
+    "name": "check vouches for the first hook command only",
+    "file": "bin/agentbus",
+    "find": "        for command in commands:\\n",
+    "replace": "        for command in commands[:1]:\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with one forged entry among four"
+  },
+  {
+    "name": "check vouches for any file named agentbus",
+    "file": "bin/agentbus",
+    "find": "            if here and not command\\.startswith\\(here \\+ \" hook \"\\):",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with one forged entry among four"
+  },
+  {
+    "name": "check starts the user's login shell",
+    "file": "bin/agentbus",
+    "find": "        return rows \\+ \\[\\(\"codex_trust\", \"ok\", CODEX_TRUST_UNCHECKED, \"\"\\)\\]",
+    "replace": "        codex_probe_shell(os.environ.get(\"SHELL\") or \"/bin/sh\", 5)\n        return rows + [(\"codex_trust\", \"ok\", CODEX_TRUST_UNCHECKED, \"\")]",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check started the user's login shell"
+  },
+  {
+    "name": "setup codex never looks at the login shell",
+    "file": "bin/agentbus",
+    "find": "        change\\.write = lambda: self\\.probe\\(change, shell\\)",
+    "replace": "        change.write = None",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line:   = "
+  },
+  {
+    "name": "the login probe leaves the shell's background processes running",
+    "file": "bin/agentbus",
+    "find": "                os\\.killpg\\(proc\\.pid, signal\\.SIGKILL\\)",
+    "replace": "                proc.kill()",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "outlived setup"
+  },
+  {
+    "name": "the login probe does not tell profiles it is a probe",
+    "file": "bin/agentbus",
+    "find": "    env = dict\\(os\\.environ, AGENTBUS_SHELL_PROBE=\"1\"\\)",
+    "replace": "    env = dict(os.environ)",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "was not told it is being probed"
+  },
+  {
+    "name": "a login shell that never finishes is reported as quiet",
+    "file": "bin/agentbus",
+    "find": "        return len\\(out\\.read\\(1 << 20\\)\\) if finished else None",
+    "replace": "        return len(out.read(1 << 20))",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a login shell that never finishes was reported as fine"
+  },
+  {
+    "name": "SessionStart text omits the name in the commands",
+    "file": "bin/agentbus",
+    "find": "f\"Read with: \\{tool\\} --as \\{name\\} status ; \\{tool\\} --as \\{name\\} inbox\\. ",
+    "replace": "f\"Read with: {tool} status ; {tool} inbox. ",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "SessionStart text differs"
+  },
+  {
+    "name": "UserPromptSubmit text omits the name in the command",
+    "file": "bin/agentbus",
+    "find": "Read them with: \\{hook_tool\\(found\\[0\\]\\)\\} --as \\{name\\} inbox\\. ",
+    "replace": "Read them with: {hook_tool(found[0])} inbox. ",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "UserPromptSubmit text"
+  },
+  {
+    "name": "the claim-held note omits the name in the command",
+    "file": "bin/agentbus",
+    "find": "See who and why: \\{copy\\} --as \\{name\\} claims\\. ",
+    "replace": "See who and why: {copy} claims. ",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "held path"
+  },
+  {
+    "name": "Stop talks to the agent, not the person",
+    "file": "bin/agentbus",
+    "find": "    return None, f\"agentbus: \\{name\\} still holds \\{count\\} claim\\{\\'\\' if count == 1 else \\'s\\'\\} and has not posted a handoff or done\\.\"",
+    "replace": "    return None, f\"agentbus: you still hold {count} claim{'' if count == 1 else 's'} and have not posted a handoff or done. To finish: {hook_tool(found[0])} post \\\"RESULT\\\" --kind done\"",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "Stop text"
+  },
+  {
+    "name": "the no-claim note does not name the file",
+    "file": "bin/agentbus",
+    "find": "    return \\(f\\\"agentbus: \\{first or 'this file'\\} has no claim\\. If you are editing it: \\\"",
+    "replace": "    return (f\"agentbus: this file has no claim. If you are editing it: \"",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "first unclaimed nudge"
+  },
+  {
+    "name": "the no-claim note prints any path",
+    "file": "bin/agentbus",
+    "find": "    first = new\\[0\\] if HOOK_PATH_OK\\.fullmatch\\(new\\[0\\]\\) else None",
+    "replace": "    first = new[0]",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a path with a space and a semicolon was printed"
+  },
+  {
+    "name": "the AGENTS.md block does not lead with the condition",
+    "file": "bin/agentbus",
+    "find": "If `\\.agentbus/` exists in this folder \\(otherwise ignore this section\\): this workspace",
+    "replace": "This workspace",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "does not lead with the condition"
+  },
+  {
+    "name": "the trust line does not name the command to approve",
+    "file": "bin/agentbus",
+    "find": "f\"\\{len\\(CODEX_HOOK_EVENTS\\)\\} entries whose command starts \\{hook_tool_word\\(\\)\\} hook codex and ends \\{MANAGED_TAG\\}\\.\"\\)",
+    "replace": "f\"agentbus entries.\")",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line: done. Codex ignores hooks"
+  },
+  {
+    "name": "a rerun does not remind about trust",
+    "file": "bin/agentbus",
+    "find": "        if step:\\n            show\\(\"Reminder: \\{\\}\", step\\[0\\]\\)\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line: Reminder:"
+  },
+  {
+    "name": "project scope does not say the project must be trusted",
+    "file": "bin/agentbus",
+    "find": "    if scope == \"project\":\\n        line \\+= \" Codex loads project hooks",
+    "replace": "    if False:\n        line += \" Codex loads project hooks",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "Codex loads project hooks only for a project you have trusted"
+  },
+  {
+    "name": "setup help does not mention the trust step",
+    "file": "bin/agentbus",
+    "find": "Codex runs the hooks only after you approve them with /hooks; ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup help does not mention the trust step"
+  },
+  {
+    "name": "uninstall leaves an empty hooks.json",
+    "file": "bin/agentbus",
+    "find": "    remove_empty = True\\n",
+    "replace": "    remove_empty = False\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "left a file or a backup behind"
+  },
+  {
+    "name": "uninstall leaves an empty AGENTS.md",
+    "file": "bin/agentbus",
+    "find": "            if not new\\.strip\\(\\):  # the block was all the file held[^\\n]*\\n",
+    "replace": "            if False:\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "must be removed with it"
+  },
+  {
+    "name": "check treats a forged hook entry as another install",
+    "file": "bin/agentbus",
+    "find": "            if kind == \"forged\":\\n                forged\\.append\\(command\\)",
+    "replace": "            if kind == \"forged\":\n                stale.append(command)",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check of a hostile settings file"
+  },
+  {
+    "name": "check accepts a relative tool path",
+    "file": "bin/agentbus",
+    "find": "        if not all\\(os\\.path\\.isabs\\(w\\) for w in words\\) or ",
+    "replace": "        if False or ",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with a forged entry ('../upgraded"
+  },
+  {
+    "name": "check accepts a tool that is not named agentbus",
+    "file": "bin/agentbus",
+    "find": "        if not \\(name\\.startswith\\(\"agentbus\"\\) or name == \"launch\\.py\"\\):",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "named/tool"
+  },
+  {
+    "name": "doctor flags the running tool when it sits under the working directory",
+    "file": "bin/agentbus",
+    "find": "        if not mine and any\\(hook_path_in_project\\(w\\) for w in words\\):",
+    "replace": "        if any(hook_path_in_project(w) for w in words):",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "AGENTBUS_DB run failed"
+  },
+  {
+    "name": "a forged entry gets the plain setup fix, not the uninstall",
+    "file": "bin/agentbus",
+    "find": "f\"agentbus setup \\{self\\.dialect\\} --uninstall\\{scope_flag\\}, then agentbus setup \\{self\\.dialect\\}\\{scope_flag\\}\"",
+    "replace": "fix",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a forged Claude entry"
+  },
+  {
+    "name": "setup --json hides that the login shell is a report",
+    "file": "bin/agentbus",
+    "find": "        if getattr\\(self, \"info\", False\\):\\n            out\\[\"info\"\\] = True[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "does not report the noisy login shell as skipped"
+  },
+  {
+    "name": "check judges a tool path by where its links point, not where they sit",
+    "file": "bin/agentbus",
+    "find": "        real = os\\.path\\.realpath\\(here\\)\\n",
+    "replace": "        real = os.path.realpath(path)\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "tools/agentbus-link"
+  },
+  {
+    "name": "check accepts any interpreter word",
+    "file": "bin/agentbus",
+    "find": "or \\(len\\(words\\) == 2 and not HOOK_PYTHON_RE\\.fullmatch\\(os\\.path\\.basename\\(words\\[0\\]\\)\\)\\)",
+    "replace": "or False",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with a forged entry ('/bin/sh' '"
+  },
+  {
+    "name": "check accepts a script that is not agentbus",
+    "file": "bin/agentbus",
+    "find": "        if not mine and not HOOK_AGENTBUS_RE\\.search\\(text\\):",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "/planted/agentbus' hook codex Stop"
+  },
+  {
+    "name": "check accepts a directory named agentbus",
+    "file": "bin/agentbus",
+    "find": "        if not stat\\.S_ISREG\\(st\\.st_mode\\):\\n            return \"forged\", script, None",
+    "replace": "        if False:\n            return \"forged\", script, None",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "adir/agentbus"
+  },
+  {
+    "name": "setup does not look at the folder chain again before writing",
+    "file": "bin/agentbus",
+    "find": "    linked = setup_linked_dir\\(_SETUP_SCOPE, os\\.path\\.dirname\\(path\\)\\)\\n",
+    "replace": "    linked = None\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a folder swapped for a link during setup"
+  },
+  {
+    "name": "the skill piece guards only the config folder, not the folders below it",
+    "file": "bin/agentbus",
+    "find": "setup_linked_dir\\(scope, os\\.path\\.dirname\\(folder\\)\\)",
+    "replace": "setup_linked_dir(scope, os.path.dirname(os.path.dirname(folder)))",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a linked .claude/skills"
+  },
+  {
+    "name": "setup starts any login shell",
+    "file": "bin/agentbus",
+    "find": "^CODEX_POSIX_SHELL = re\\.compile\\(.*$",
+    "replace": "CODEX_POSIX_SHELL = re.compile(r\".*\")",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "shells/fish"
+  },
+  {
+    "name": "setup does not start a versioned POSIX shell",
+    "file": "bin/agentbus",
+    "find": "\\(\\?:\\[-_\\.\\]\\?\\\\d\\[\\\\w\\.\\]\\*\\)\\?\"\\)",
+    "replace": "\")",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "allowed/ksh93"
+  },
+  {
+    "name": "the multi-file note says has",
+    "file": "bin/agentbus",
+    "find": "\\{'file' if len\\(new\\) == 2 else 'files'\\} have no claim",
+    "replace": "{'file' if len(new) == 2 else 'files'} has no claim",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a two-file note"
+  },
+  {
+    "name": "doctor shortens only the home as written",
+    "file": "bin/agentbus",
+    "find": "    for home in home_names\\(\\):\\n        text = text\\.replace\\(home \\+ os\\.sep, \"~\" \\+ os\\.sep\\)",
+    "replace": "    for home in [os.path.expanduser(\"~\")]:\n        text = text.replace(home + os.sep, \"~\" + os.sep)",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor_text shortened the home inside another path"
+  },
+  {
+    "name": "a rerun that changes only AGENTS.md prints no trust line",
+    "file": "bin/agentbus",
+    "find": "    return codex_trust_line\\(scope\\), any\\(c\\.action in SETUP_WRITES for c in done\\)",
+    "replace": "    return codex_trust_line(scope), any(c.action != \"unchanged\" for c in hooks)",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "missing line: done. Codex ignores hooks until you trust them"
+  },
+  {
+    "name": "uninstall leaves the empty .codex folder",
+    "file": "bin/agentbus",
+    "find": "                        os\\.rmdir\\(os\\.path\\.dirname\\(path\\)\\)[^\\n]*\\n",
+    "replace": "                        pass\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "uninstall left the empty .codex folder"
+  },
+  {
+    "name": "setup codex --refresh starts the login shell",
+    "file": "bin/agentbus",
+    "find": "        if uninstall or self\\.refreshing or os\\.name != \"posix\":",
+    "replace": "        if uninstall or os.name != \"posix\":",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "setup codex --refresh started the login shell"
+  },
+  {
+    "name": "a Codex hook waits five seconds for a busy bus",
+    "file": "bin/agentbus",
+    "find": "^HOOK_BUSY_S = 0\\.3",
+    "replace": "HOOK_BUSY_S = 5",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a held bus made a hook speak, fail, or outlast its holder"
+  },
+  {
+    "name": "dx2: brief hides what waits between other agents",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ others,\\ others_more\\ =\\ _brief_pending_others\\(con,\\ me_name,\\ limit\\)",
+    "replace": "    others, others_more = [], 0",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "pending between others missing"
+  },
+  {
+    "name": "dx2: brief shows pending between others without its next",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ show\\(\"next:\\ \\{\\}\",\\ po\\[\"next\"\\],\\ row=True\\)",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "pending between others missing its next"
+  },
+  {
+    "name": "dx2: an unknown flag gets no did-you-mean",
+    "file": "bin/agentbus",
+    "find": "guesses\\.append\\(\\(flag,\\ close\\[0\\]\\)\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "unknown flag has no did-you-mean"
+  },
+  {
+    "name": "dx2: an unknown command lists no commands",
+    "file": "bin/agentbus",
+    "find": "\\{'Commands'\\ if\\ not\\ path\\ else\\ 'Actions'\\}:\\ \\{',\\ '\\.join\\(choices\\)\\}\\.\\ ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "unknown command lacks the command list"
+  },
+  {
+    "name": "dx2: --as a typo gets no did-you-mean",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ close:\\\n\\ \\ \\ \\ \\ \\ \\ \\ die\\(f\"\\{name\\}\\ is\\ not\\ on\\ the\\ roster\\.\\ Did\\ you\\ mean",
+    "replace": "    if False:\n        die(f\"{name} is not on the roster. Did you mean",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "--as typo has no did-you-mean"
+  },
+  {
+    "name": "dx2: the --to warning drops the roster from its text",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ text\\ \\+\\ \"\\ \"\\ \\+\\ roster_text\\(w\\[\"roster\"\\],\\ w\\[\"roster_total\"\\]\\)",
+    "replace": "    return text",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "--to warning lacks the roster"
+  },
+  {
+    "name": "dx2: the JSON warning drops roster_total",
+    "file": "bin/agentbus",
+    "find": "\"roster\":\\ shown,\\ \"roster_total\":\\ total\\}\\]",
+    "replace": "\"roster\": shown, \"roster_total\": 0}]",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "the JSON warning lacks the roster"
+  },
+  {
+    "name": "dx2: the roster is not capped",
+    "file": "bin/agentbus",
+    "find": "ROSTER_SHOWN\\ =\\ 10\\ ",
+    "replace": "ROSTER_SHOWN = 1000 ",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "len(w[\"roster\"]) == 10"
+  },
+  {
+    "name": "dx2: a JSON error drops next",
+    "file": "bin/agentbus",
+    "find": "\"next\":\\ None\\ if\\ self\\.next\\ is\\ None\\ else\\ clean\\(self\\.next\\),",
+    "replace": "\"next\": None,",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "d[\"error\"][\"next\"] == \"agentbus post --help\""
+  },
+  {
+    "name": "dx2: not_held names another command as next",
+    "file": "bin/agentbus",
+    "find": "next=\"agentbus\\ claims\",\\ resource=a\\.resource",
+    "replace": "next=\"agentbus who\", resource=a.resource",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "not held: next does not match the message"
+  },
+  {
+    "name": "dx2: a result is printed without contract",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ \\{\"contract\":\\ CONTRACT\\[\"contract\"\\],\\ \\*\\*\\{k:\\ v\\ for\\ k,\\ v\\ in\\ obj\\.items\\(\\)\\ if\\ k\\ !=\\ \"contract\"\\}\\}",
+    "replace": "    return obj",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "a result lacks contract"
+  },
+  {
+    "name": "dx2: the registry does not require contract",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ entry\\[\"result\"\\]\\ =\\ _with_contract\\(entry\\[\"result\"\\]\\)",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "the registry does not require contract"
+  },
+  {
+    "name": "dx2: schema CMD always carries the shared parts",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ full\\ =\\ a\\.full\\ or\\ not\\ want",
+    "replace": "        full = True",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "schema post carries more than its own"
+  },
+  {
+    "name": "dx2: schema CMD --full is ignored",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ full\\ =\\ a\\.full\\ or\\ not\\ want",
+    "replace": "        full = not want",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "schema post --full lacks the shared parts"
+  },
+  {
+    "name": "dx2: claim never says it renewed",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ renewed\\ =\\ bool\\(own\\)\\ and\\ isinstance\\(own\\[\"expires_at\"\\],\\ str\\)\\ and\\ own\\[\"expires_at\"\\]\\ >\\ t",
+    "replace": "        renewed = False",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "a repeat claim must say renewed"
+  },
+  {
+    "name": "dx2: claim hides a purpose change",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ purpose_changed\\ =\\ renewed\\ and\\ a\\.purpose\\ is\\ not\\ None\\ and\\ own\\[\"purpose\"\\]\\ !=\\ a\\.purpose",
+    "replace": "        purpose_changed = False",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "renewed must show the new purpose"
+  },
+  {
+    "name": "dx2: an expired claim counts as renewed",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ renewed\\ =\\ bool\\(own\\)\\ and\\ isinstance\\(own\\[\"expires_at\"\\],\\ str\\)\\ and\\ own\\[\"expires_at\"\\]\\ >\\ t",
+    "replace": "        renewed = bool(own)",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "d[\"renewed\"] is False"
+  },
+  {
+    "name": "dx2: help does not tag status for people",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \"status\":\\ \"The\\ overview\\ for\\ people;\\ agents\\ start\\ with\\ brief\",",
+    "replace": "    \"status\": \"The goal, agents, facts, claims and recent messages\",",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "agentbus --help does not tag status as the overview for people"
+  },
+  {
+    "name": "dx2: help does not tag brief as the first call",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \"brief\":\\ \"Your\\ first\\ call:\\ the\\ goal,\\ who\\ holds\\ what,\\ open\\ questions\",",
+    "replace": "    \"brief\": \"What is going on\",",
+    "count": 1,
+    "run": "tests/test_dx2.sh",
+    "expect": "agentbus --help does not tag brief as the first call"
+  },
+  {
+    "name": "a hook accepts a bus folder under any spelling of its name",
+    "file": "bin/agentbus",
+    "find": "if b\"\\.agentbus\" not in os\\.listdir\\(os\\.fsencode\\(os\\.path\\.dirname\\(folder\\)\\)\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the name and identity rules"
+  },
+  {
+    "name": "the index candidates are picked by exact bytes",
+    "file": "bin/agentbus",
+    "find": "if hook_fold\\(part\\) == \"\\.agentbus\":",
+    "replace": "if part == b\".agentbus\":",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the name and identity rules"
+  },
+  {
+    "name": "a bus is tracked only when an index name matches by identity... never",
+    "file": "bin/agentbus",
+    "find": "        if \\(st\\.st_dev, st\\.st_ino\\) in ids:\\n            return True",
+    "replace": "        if False:\n            return True",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "the raw search ignores ASCII .agentbu",
+    "file": "bin/agentbus",
+    "find": "if b\"agentbu\" in low:\\n        return True",
+    "replace": "if False:\n        return True",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a tracked bus with a v2 index was used"
+  },
+  {
+    "name": "SessionEnd ignores a creation time that differs from the recorded one",
+    "file": "bin/agentbus",
+    "find": "and \\(joined_id\\[2\\] is None or joined_id\\[2\\] == hook_birth\\(st\\)\\)\\)",
+    "replace": "and True)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "recorded creation time differs"
+  },
+  {
+    "name": "a hard-linked bus.db is opened (every link count check is dropped)",
+    "file": "bin/agentbus",
+    "find": "st\\.st_nlink != 1",
+    "replace": "False",
+    "count": 8,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "hard link"
+  },
+  {
+    "name": "a big index is read in 1 MiB pieces appended one after another",
+    "file": "bin/agentbus",
+    "find": "chunk = os\\.read\\(fd, st\\.st_size - got\\)",
+    "replace": "chunk = os.read(fd, min(1 << 20, st.st_size - got))",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a big file was read in many small reads"
+  },
+  {
+    "name": "the fold keeps the characters HFS+ ignores",
+    "file": "bin/agentbus",
+    "find": "if not HOOK_IGNORABLE\\.isdisjoint\\(text\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the fold does not drop every character HFS+ ignores"
+  },
+  {
+    "name": "the raw search misses an ignorable run between two letters",
+    "file": "bin/agentbus",
+    "find": "if low\\[max\\(start - 1, 0\\):start\\] in HOOK_LETTERS_SET and low\\[end:end \\+ 1\\] in HOOK_LETTERS_SET:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the raw-byte search of an index misjudged"
+  },
+  {
+    "name": "a path called linker.c is taken for an index extension",
+    "file": "bin/agentbus",
+    "find": "            if q == end:\\n                return True",
+    "replace": "            return True",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "paths called link or sdir were taken for extensions"
+  },
+  {
+    "name": "the index is hashed once for each possible size",
+    "file": "bin/agentbus",
+    "find": "            found\\.append\\(size\\)\\n            break[^\\n]*\\n",
+    "replace": "            found.append(size)\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "was hashed more than once"
+  },
+  {
+    "name": "a symlinked .agentbus counts as the user's bus",
+    "file": "bin/agentbus",
+    "find": "            return False      # a link is never the user's bus, tracked or not",
+    "replace": "            pass",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "hook_untracked took a symlinked .agentbus"
+  },
+  {
+    "name": "SessionEnd trusts dev and inode alone when no creation time is recorded",
+    "file": "bin/agentbus",
+    "find": "                same = hook_cached_empty\\(directory\\)",
+    "replace": "                pass",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd trusted dev and inode alone"
+  },
+  {
+    "name": "check ignores a .agentbus folder anywhere on the path",
+    "file": "bin/agentbus",
+    "find": "            inside = claude_in_project\\(real, cwd, home\\)\\n",
+    "replace": "            inside = False\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "faraway/.agentbus"
+  },
+  {
+    "name": "project scope cannot replace the old install link",
+    "file": "bin/agentbus",
+    "find": "setup_check_chain\\(folder\\), os\\.unlink\\(folder\\)",
+    "replace": "setup_check_chain(skill), os.unlink(folder)",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "project scope cannot replace the old install link"
+  },
+  {
+    "name": "check trusts a program others can write",
+    "file": "bin/agentbus",
+    "find": "                    if st\\.st_mode & 0o022 and not \\(stat\\.S_ISDIR\\(st\\.st_mode\\) and st\\.st_mode & stat\\.S_ISVTX\\):\\n",
+    "replace": "                    if False:\n",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with an interpreter in a group-writable folder"
+  },
+  {
+    "name": "check ignores the ancestors of a working directory outside HOME",
+    "file": "bin/agentbus",
+    "find": "    extra = hook_outside_roots\\(cwd, home\\)",
+    "replace": "    extra = []",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "a tool in an ancestor of the working directory"
+  },
+  {
+    "name": "check counts the folder that holds HOME as a project",
+    "file": "bin/agentbus",
+    "find": "        if home == here or home\\.startswith\\(here\\.rstrip\\(os\\.sep\\) \\+ os\\.sep\\):\\n            break",
+    "replace": "        if False:\n            break",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with one entry that runs another install among four"
+  },
+  {
+    "name": "the setup report's stop hint drops the scope",
+    "file": "bin/agentbus",
+    "find": "Written before this: \\{wrote\\}\\. Fix that and run again: \\{_RERUN\\}\"\\)",
+    "replace": "Written before this: {wrote}. Fix that and run again: agentbus setup {target}\")",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "the stop hint of the report drops the scope"
+  },
+  {
+    "name": "the setup error's stop hint drops the scope",
+    "file": "bin/agentbus",
+    "find": "stopped: \\{problem\\}\\. Fix that and run again: \\{_RERUN\\}\"",
+    "replace": "stopped: {problem}. Fix that and run again: agentbus setup {target}\"",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "the stop hint of the error drops the scope"
+  },
+  {
+    "name": "uninstall removes ~/.codex",
+    "file": "bin/agentbus",
+    "find": "                if _SETUP_SCOPE == \"project\" and os\\.path\\.basename",
+    "replace": "                if os.path.basename",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "uninstall removed ~/.codex"
+  },
+  {
+    "name": "a write as a name that could never join is told to join first",
+    "file": "bin/agentbus",
+    "find": "    if not HOOK_NAME_RE\\.fullmatch\\(name\\):\\n        refuse_invalid_name\\(name\\)[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "'post hi' as 'bad name': exit 1, want 2"
+  },
+  {
+    "name": "check flags a sticky folder",
+    "file": "bin/agentbus",
+    "find": "if st\\.st_mode & 0o022 and not \\(stat\\.S_ISDIR\\(st\\.st_mode\\) and st\\.st_mode & stat\\.S_ISVTX\\):",
+    "replace": "if st.st_mode & 0o022:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with an interpreter in a sticky folder"
+  },
+  {
+    "name": "check looks at the program's own folder only",
+    "file": "bin/agentbus",
+    "find": "                parent = os\\.path\\.dirname\\(here\\)\\n                if parent == here:\\n                    break",
+    "replace": "                parent = os.path.dirname(here)\n                if True:\n                    break",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with an interpreter in a group-writable folder"
+  },
+  {
+    "name": "check distrusts the interpreter that runs it",
+    "file": "bin/agentbus",
+    "find": "        if running and os\\.path\\.realpath\\(w\\) == running:\\n            continue",
+    "replace": "        if False:\n            continue",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check under an interpreter that lives in a group-writable folder"
   }
 ]
