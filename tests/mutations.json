@@ -2592,15 +2592,6 @@
     "expect": "setup help does not mention the trust step"
   },
   {
-    "name": "setup output is wrapped when stdout is a pipe",
-    "file": "bin/agentbus",
-    "find": "        os\\.environ\\[\"COLUMNS\"\\] = \"4096\"[^\\n]*\\n",
-    "replace": "        pass\n",
-    "count": 1,
-    "run": "tests/test_setup.sh",
-    "expect": "setup output was wrapped in a pipe"
-  },
-  {
     "name": "uninstall leaves an empty hooks.json",
     "file": "bin/agentbus",
     "find": "    remove_empty = True\\n",
@@ -3107,11 +3098,11 @@
   {
     "name": "check trusts a program others can write",
     "file": "bin/agentbus",
-    "find": "            if st\\.st_mode & 0o022:\\n                return f\"is writable by others",
-    "replace": "            if False:\n                return f\"is writable by others",
+    "find": "                    if st\\.st_mode & 0o022 and not \\(stat\\.S_ISDIR\\(st\\.st_mode\\) and st\\.st_mode & stat\\.S_ISVTX\\):\\n",
+    "replace": "                    if False:\n",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check with a program others can write"
+    "expect": "check with an interpreter in a group-writable folder"
   },
   {
     "name": "check ignores the ancestors of a working directory outside HOME",
@@ -3157,5 +3148,32 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "uninstall removed ~/.codex"
+  },
+  {
+    "name": "check flags a sticky folder",
+    "file": "bin/agentbus",
+    "find": "if st\\.st_mode & 0o022 and not \\(stat\\.S_ISDIR\\(st\\.st_mode\\) and st\\.st_mode & stat\\.S_ISVTX\\):",
+    "replace": "if st.st_mode & 0o022:",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with an interpreter in a sticky folder"
+  },
+  {
+    "name": "check looks at the program's own folder only",
+    "file": "bin/agentbus",
+    "find": "                parent = os\\.path\\.dirname\\(here\\)\\n                if parent == here:\\n                    break",
+    "replace": "                parent = os.path.dirname(here)\n                if True:\n                    break",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check with an interpreter in a group-writable folder"
+  },
+  {
+    "name": "check distrusts the interpreter that runs it",
+    "file": "bin/agentbus",
+    "find": "        if running and os\\.path\\.realpath\\(w\\) == running:\\n            continue",
+    "replace": "        if False:\n            continue",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "check under an interpreter that lives in a group-writable folder"
   }
 ]

@@ -9050,8 +9050,6 @@ def cmd_setup(a):
         die("setup runs from the installed agentbus, not a project copy. "
             f"Run: agentbus setup {a.target}", "bad_input", next=f"agentbus setup {a.target}")
     target, scope, uninstall, dry_run = a.target, a.scope, a.uninstall, a.dry_run
-    if not os.environ.get("COLUMNS", "").strip() and not (sys.__stdout__ and sys.__stdout__.isatty()):
-        os.environ["COLUMNS"] = "4096"  # a pipe or a file: one line per change, a path is never split across rows
     if a.refresh and uninstall:
         die("--refresh and --uninstall do not go together", "bad_input")
     global _RERUN, _SETUP_SCOPE
@@ -11975,20 +11973,34 @@ HOOK_AGENTBUS_RE = re.compile(rb'(?m)^(?:from agentbus import\b|import agentbus\
 
 
 def hook_untrusted(words, real):
-    """Why a program a hook entry runs is not trusted, or None: the rule claude_trusted_binary applies to a claude. Each word
-    (the interpreter, the script), as written and resolved, and the folder of each, must be owned by the user or root and not
-    writable by group or others."""
+    """Why a program a hook entry runs is not trusted, or None. The rule OpenSSH applies to the files it trusts (StrictModes)
+    and sudo to its secure path: the file and every folder above it, as written and as resolved, must belong to the user or
+    root and must not be writable by group or others, except a folder with the sticky bit (/tmp), where others cannot replace
+    what is not theirs. The Python interpreter that is running this check is exempt: it is already trusted with the
+    caller's own authority, and where it lives (a CI toolcache, a framework install) is the user's business."""
     uid = os.getuid() if hasattr(os, "getuid") else 0
+    running = os.path.realpath(sys.executable) if sys.executable else None
     for w in words:
-        for path in {w, os.path.realpath(w), os.path.dirname(w), os.path.dirname(os.path.realpath(w))}:
-            try:
-                st = os.stat(path)
-            except OSError:
-                return None  # a path that is not there is "gone", said elsewhere
-            if st.st_mode & 0o022:
-                return f"is writable by others ({path})"
-            if st.st_uid not in (0, uid):
-                return f"belongs to another user ({path})"
+        if running and os.path.realpath(w) == running:
+            continue
+        seen = set()
+        for start in (w, os.path.realpath(w)):
+            here = start
+            while True:
+                if here not in seen:
+                    seen.add(here)
+                    try:
+                        st = os.stat(here)
+                    except OSError:
+                        return None  # a path that is not there is "gone", said elsewhere
+                    if st.st_uid not in (0, uid):
+                        return f"belongs to another user ({here})"
+                    if st.st_mode & 0o022 and not (stat.S_ISDIR(st.st_mode) and st.st_mode & stat.S_ISVTX):
+                        return f"is writable by others ({here})"
+                parent = os.path.dirname(here)
+                if parent == here:
+                    break
+                here = parent
     return None
 
 
