@@ -146,7 +146,7 @@ if command -v claude >/dev/null 2>&1; then
   out=$(cd "$ROOT" && HOME="$T/home" CLAUDE_CONFIG_DIR="$T/home/.claude" claude plugin validate . 2>&1) || fail "claude plugin validate failed: $out"
   grep -qF "Validation passed" <<<"$out" || fail "claude plugin validate did not say Validation passed: $out"
   ok "claude plugin validate ."
-elif [ -n "${CI:-}" ]; then
+elif [ -n "${CI:-}" ] && [ -z "${AGENTBUS_MUTATION_SHARD:-}" ]; then   # the test job installs claude; a mutation shard does not need it
   fail "claude is not on PATH in CI: claude plugin validate cannot run"
 else
   skip_part "claude is not installed; claude plugin validate was not run"

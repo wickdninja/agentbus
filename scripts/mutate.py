@@ -277,7 +277,7 @@ def run_all(picked, jobs, root=ROOT):
             if st[0] == "baseline":
                 st = after_baseline(e, root) or ("test", st[1])
             pending.append(st if st[0] == "done" else pool.submit(lambda e=e, m=st[1]: classify(e, *shadow_run(e, m, root))))
-        results = []
+        results, missed = [], []
         for st in pending:
             if isinstance(st, tuple):
                 verdict, line = st[1], st[2]
@@ -285,6 +285,12 @@ def run_all(picked, jobs, root=ROOT):
                 verdict, line = st.result()
             print(line, flush=True)
             results.append(verdict)
+            if verdict not in ("killed", "skipped"):
+                missed.append(line)
+        if missed:  # again at the end: run_all.sh shows only the last lines of a failing file
+            print("Not killed (%d):" % len(missed))
+            for line in missed:
+                print("  " + line[:300], flush=True)
         return results
     except BaseException:
         pool.shutdown(wait=False, cancel_futures=True)

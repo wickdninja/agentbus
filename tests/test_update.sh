@@ -73,7 +73,8 @@ rel_latest 0.3.0
 # The rule itself, called directly with the admin group passed in (no environment variable can loosen it in the shipped code).
 # st_uid and st_mode are all it reads, so a stand-in stat can have an owner the test could not create without root.
 cat >"$T/rules.py" <<'PY'
-import importlib.machinery, importlib.util, os, stat
+import importlib.machinery, importlib.util, os, stat, sys
+sys.dont_write_bytecode = True  # -I ignores PYTHONDONTWRITEBYTECODE, and the loader would leave bin/__pycache__ in the checkout
 loader = importlib.machinery.SourceFileLoader("agentbus_mod", os.environ["UPDATE_SRC"])
 spec = importlib.util.spec_from_loader("agentbus_mod", loader)
 m = importlib.util.module_from_spec(spec); loader.exec_module(m)
