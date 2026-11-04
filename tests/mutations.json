@@ -663,7 +663,7 @@
     "replace": "        names, link, sparse = hook_index_walk(data, size)\n        found.append",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "the checksum size was chosen by the first checksum"
+    "expect": "in a SHA-256 repository (skipHash true) was refused"
   },
   {
     "name": "ignorable characters in a path are not looked for in the joined paths",
