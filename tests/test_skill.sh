@@ -102,11 +102,6 @@ agentbus skill >"$T/skill.out"
 head -n 2 "$T/skill.out" | grep -qx 'name: agentbus' || fail "agentbus skill does not start with the skill front matter"
 n=$(wc -c <"$T/skill.out" | tr -d ' ')
 [ "$n" -le 4800 ] || fail "agentbus skill printed $n bytes, the cap is 4800"
-if [ "${AGENTBUS_EMBED_CHECK:-}" = 1 ]; then
-  cmp -s "$T/skill.out" "$SKILL" || fail "agentbus skill differs from skills/agentbus/SKILL.md; run python3 scripts/embed_skill.py"
-  python3 "$ROOT/scripts/embed_skill.py" --check >"$T/embed.out" 2>&1 || fail "embed_skill.py --check: $(cat "$T/embed.out")"
-  grep -qx 'embedded skill is current' "$T/embed.out" || fail "embed_skill.py --check said: $(cat "$T/embed.out")"
-fi
 ok "agentbus skill prints $n bytes ending with the marker"
 
 echo "TEST: docs/how-to/setup.md's dry-run example is what setup claude --dry-run prints, byte count included"
@@ -145,6 +140,13 @@ grep -qF 'One repo, one bus. Use the one discovery finds. If it looks wrong, run
 grep -qF 'Set `AGENTBUS_DB` only when a worker cannot discover the bus' "$SKILL" || fail "the skill lacks the AGENTBUS_DB rule"
 agentbus --json skill --agents-md | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["text"].startswith("## agentbus\n"), d' || fail "--json skill --agents-md"
 ok "AGENTS.md block: 4 lines, $(wc -c <"$T/agents.out" | tr -d ' ') bytes"
+# After the text checks, so a mutation of the embedded text fails for what it lost, not only because the copy went stale.
+if [ "${AGENTBUS_EMBED_CHECK:-}" = 1 ]; then
+  cmp -s "$T/skill.out" "$SKILL" || fail "agentbus skill differs from skills/agentbus/SKILL.md; run python3 scripts/embed_skill.py"
+  python3 "$ROOT/scripts/embed_skill.py" --check >"$T/embed.out" 2>&1 || fail "embed_skill.py --check: $(cat "$T/embed.out")"
+  grep -qx 'embedded skill is current' "$T/embed.out" || fail "embed_skill.py --check said: $(cat "$T/embed.out")"
+  ok "the embedded skill and block match their sources"
+fi
 
 echo
 echo "TEST: embed_skill.py --check fails after the skill file is edited and passes after the script runs"
