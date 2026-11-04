@@ -654,7 +654,7 @@
     "replace": "True",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "an answer stored by an older scan was trusted"
+    "expect": "an answer stored with no version was trusted"
   },
   {
     "name": "the checksum size is the first one whose checksum matches",
