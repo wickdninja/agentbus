@@ -3629,12 +3629,21 @@ def roster_text(shown, total):
     return "On the roster: " + ", ".join(shown) + more + "."
 
 
+def refuse_invalid_name(name):
+    """A name join would never accept (HOOK_NAME_RE): bad_input with the rule and a valid example to run. One
+    message for join and for every write, so no error ever suggests a join that would itself be refused."""
+    die(f"'{name}' is not a valid name. Use 1 to 40 letters, digits, dots, underscores or hyphens ([A-Za-z0-9._-]). Then run: agentbus --as NAME join",
+        "bad_input", next="agentbus --as NAME join", field="name")
+
+
 def require_joined(con, name):
     """Every write is made by a name on the roster: inside the caller's transaction, refuse one that
-    has not joined (or left). A name close to one that has is probably a typo: the error says so, lists
+    has not joined (or left) or could never join. A name close to one that has is probably a typo: the error says so, lists
     the roster, and still names the join command."""
     if con.execute("SELECT 1 FROM agents WHERE name=?", (name,)).fetchone():
-        return
+        return   # a name already on the bus works, even one that predates the name rule
+    if not HOOK_NAME_RE.fullmatch(name):
+        refuse_invalid_name(name)   # it could never join: say so, not "join first"
     close, shown, total = roster_view(con, name)
     join = f"agentbus --as {shlex.quote(name)} join"
     if close:
@@ -4120,8 +4129,7 @@ def read_inputs(a):
     if a.cmd == "ctx" and a.action == "set" and a.key == GOAL_KEY:
         die(f"{GOAL_KEY} is reserved; use: agentbus goal TEXT", "bad_input", next="agentbus goal TEXT", field="key")
     if a.cmd == "join" and not HOOK_NAME_RE.fullmatch(me(a)):
-        die(f"'{me(a)}' is not a valid name. Use 1 to 40 letters, digits, dots, underscores or hyphens ([A-Za-z0-9._-]). Then run: agentbus --as NAME join",
-            "bad_input", next="agentbus --as NAME join", field="name")
+        refuse_invalid_name(me(a))
     if a.cmd == "post":
         me(a)
         if a.kind not in KINDS:

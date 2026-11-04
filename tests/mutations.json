@@ -3157,5 +3157,14 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "uninstall removed ~/.codex"
+  },
+  {
+    "name": "a write as a name that could never join is told to join first",
+    "file": "bin/agentbus",
+    "find": "    if not HOOK_NAME_RE\\.fullmatch\\(name\\):\\n        refuse_invalid_name\\(name\\)[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "'post hi' as 'bad name': exit 1, want 2"
   }
 ]
