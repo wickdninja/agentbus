@@ -63,14 +63,40 @@ jobs:
           AGENTBUS_EMBED_CHECK=1 "$PYTHON" scripts/embed_skill.py --check
       - name: Tests
         # A skipped test file is a failure here (a skip means a change is missing); run_all writes the per-file times
-        # to the step summary. The two files that run other tests again run once, in the heavy job.
+        # to the step summary. The two files that run other tests again run once, in the mutations and eval-harness jobs.
         env:
           AGENTBUS_NO_SKIP: "1"
           AGENTBUS_EMBED_CHECK: "1"
         run: bash tests/run_all.sh --keep-going --skip-heavy
 
-  heavy:
-    # test_mutations.sh and test_eval_harness.sh run other tests again: once, on the oldest supported Python.
+  # tests/test_mutations.sh breaks bin/agentbus on purpose, one entry of tests/mutations.json at a time, and needs a test
+  # to notice: far too many runs for one job, so the entries are dealt to shards (scripts/mutate.py --shard I/N, whole
+  # test files per shard) and each shard is one matrix job, on the oldest supported Python. The harness self-tests run
+  # in every shard; a local run of the file without AGENTBUS_MUTATION_SHARD runs every entry.
+  mutations:
+    name: mutations (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        id: py
+        with:
+          python-version: "3.9"
+      - name: Pick Python
+        run: echo "PYTHON=${{ steps.py.outputs.python-path }}" >> "$GITHUB_ENV"
+      - name: Mutation checks, one shard
+        env:
+          AGENTBUS_NO_SKIP: "1"
+          AGENTBUS_EMBED_CHECK: "1"
+          AGENTBUS_MUTATION_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: bash tests/run_all.sh --keep-going tests/test_mutations.sh
+
+  # test_eval_harness.sh runs the agent-eval graders end to end; it has its own job so run_all's per-file cap is its own.
+  eval-harness:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -80,11 +106,11 @@ jobs:
           python-version: "3.9"
       - name: Pick Python
         run: echo "PYTHON=${{ steps.py.outputs.python-path }}" >> "$GITHUB_ENV"
-      - name: Mutation checks and the agent-eval harness
+      - name: The agent-eval harness
         env:
           AGENTBUS_NO_SKIP: "1"
           AGENTBUS_EMBED_CHECK: "1"
-        run: bash tests/run_all.sh --keep-going --only-heavy
+        run: bash tests/run_all.sh --keep-going tests/test_eval_harness.sh
 
   # Every install path in the docs, built and run from the real artifacts, through the installed
   # executable only (scripts/verify_installed.sh), then once more with the installed file broken.
@@ -134,10 +160,14 @@ jobs:
       - name: Install (pipx)
         if: startsWith(matrix.installer, 'pipx')
         run: |
-          python3 -m pip install --user pipx
+          # One explicit interpreter for every pipx call in this job: the setup-python one, pipx installed into ITS site-packages
+          # (not --user: a later step that changes HOME, as scripts/verify_update_layout.sh does, cannot see a user site).
+          PIPX_PYTHON=$(python3 -c 'import sys; print(sys.executable)')
+          "$PIPX_PYTHON" -m pip install pipx
+          echo "PIPX_PYTHON=$PIPX_PYTHON" >> "$GITHUB_ENV"
           artifact=$(ls dist/*.${{ endsWith(matrix.installer, 'wheel') && 'whl' || 'tar.gz' }})
           export PIPX_HOME="$RUNNER_TEMP/pipx" PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
-          python3 -m pipx install "$artifact"
+          "$PIPX_PYTHON" -m pipx install "$artifact"
           echo "INSTALLED=$PIPX_BIN_DIR/agentbus" >> "$GITHUB_ENV"
           echo "INSTALLED_PY=$PIPX_HOME/venvs/agentbus/bin/python" >> "$GITHUB_ENV"
       - name: uvx runs the wheel

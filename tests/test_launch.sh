@@ -170,24 +170,33 @@ v=$(LV --version) && grep -q "agentbus" <<<"$v" || fail "the launcher failed wit
 ok "each case runs the program"
 
 echo
-echo "TEST 8: the launcher is faster than the script, on any machine: its fastest of 15 runs uses under 80% of the script's CPU"
-rm -rf "$HOME/.cache"; L --version >/dev/null
-"$PY" -I - "$PY" "$LAUNCH" "$CHECKOUT/bin/agentbus" "$P" "$T/pl" <<'PY' || fail "the launcher is not faster than the script: its cached run still pays the compile"
-import os, resource, subprocess, sys
-py, launch, script, cwd, pl = sys.argv[1:6]
-env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
-def best(argv):
-    cpu = []
-    for _ in range(15):
-        r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
-        subprocess.run([py] + argv + ["hook", "claude", "UserPromptSubmit"], stdin=open(pl), capture_output=True, cwd=cwd, env=env, timeout=60)
-        r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
-        cpu.append(r1.ru_utime + r1.ru_stime - r0.ru_utime - r0.ru_stime)
-    return min(cpu)
-a, b = best([launch]), best([script])
-print("launcher %.0f ms, script %.0f ms (fastest of 15)" % (a * 1000, b * 1000))
-sys.exit(0 if a < 0.8 * b else 1)
+echo "TEST 8: a cached run does not compile agentbus (counted with an audit hook, so no timing is involved)"
+# runs PROGRAM ARGS... in this Python with an audit hook that logs each compile of a file named bin/agentbus, then prints the count.
+compiles() {
+  local log="$T/compiles"; : >"$log"
+  # Not -I: isolated mode also turns bytecode writing off, and the first run would never fill the cache. From $T so
+  # nothing in the checkout is on sys.path.
+  (cd "$T" && env -u PYTHONDONTWRITEBYTECODE "$PY" - "$log" "$@") <<'PY' >/dev/null 2>&1 || true
+import runpy, sys
+log, program = sys.argv[1:3]
+def watch(event, args):
+    if event == "compile" and str(args[1]).endswith("bin/agentbus"):
+        with open(log, "a") as f:
+            f.write("compile\n")
+sys.addaudithook(watch)
+sys.argv = [program] + sys.argv[3:]
+try:
+    runpy.run_path(program, run_name="__main__")
+except SystemExit:
+    pass
 PY
-ok "the cached launcher run costs well under the script's compile-every-time run"
+  wc -l <"$log" | tr -d ' '
+}
+rm -rf "$HOME/.cache"
+cold=$(compiles "$LAUNCH" --version); warm=$(compiles "$LAUNCH" --version); script=$(compiles "$CHECKOUT/bin/agentbus" --version)
+[ "$script" -ge 1 ] || fail "control: the audit hook saw no compile of the script run directly ($script), so a count of 0 proves nothing"
+[ "$cold" -ge 1 ] || fail "control: the first launcher run, with no cache, compiled nothing ($cold)"
+[ "$warm" = 0 ] || fail "the launcher compiled agentbus on a run that had its cache ($warm compiles)"
+ok "the script compiles ($script), the first launcher run compiles ($cold), the next launcher run does not ($warm)"
 
 all_passed "All launcher tests passed"

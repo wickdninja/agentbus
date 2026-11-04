@@ -26,6 +26,12 @@ want("no anyOf branch matches", dict(good, next=5), True)
 want("a nullable string", dict(good, items=[{"id": 2, "kind": "done", "topic": "t"}]), False)
 want("an unknown $ref", good, True, {"$ref": "#/objects/Nope"})
 want("an array where an object is wanted", [], True)
+both = {"allOf": [{"$ref": "#/objects/Msg"}, {"type": "object", "required": ["contract"], "properties": {"contract": {"type": "integer"}}}]}
+want("allOf: the object and the shared key", {"contract": 1, "id": 1, "kind": "note"}, False, both)
+want("allOf: the shared key is missing", {"id": 1, "kind": "note"}, True, both)
+want("allOf: the object is wrong", {"contract": 1, "id": 0, "kind": "note"}, True, both)
+if check_schema(both, objects) != []: failures.append("check_schema flagged an allOf inside the subset")
+if not check_schema({"allOf": [{"type": "wat"}]}, objects): failures.append("check_schema skipped the branches of allOf")
 if check_schema(env, objects) != []: failures.append("check_schema flagged a schema inside the subset")
 if not check_schema({"type": "wat", "format": "x"}, objects): failures.append("check_schema accepted a keyword and a type outside the subset")
 if failures:

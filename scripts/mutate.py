@@ -7,6 +7,8 @@
   --mutations FILE                          use another mutations file (tests/test_mutations.sh does)
   -j N, --jobs N                            run N mutations at once (default min(cpu count, 4); the environment
                                             variable AGENTBUS_MUTATION_JOBS sets it too, -j wins)
+  --shard I/N                               with --all or --list: only shard I of N (1 <= I <= N), so CI can run the
+                                            entries on N machines; the shards are disjoint and together hold every entry
 
 tests/mutations.json is an array of {"name", "file", "find", "replace", "count", "run", "expect"}, plus an
 optional "after" (the stream that adds the test, shown when the entry is skipped):
@@ -25,6 +27,16 @@ line: a traceback, a missing interpreter), STALE (the pattern matches the wrong 
 Mutations are independent, so they run in a bounded pool of threads, each driving its own subprocess in its own
 temp dir with its own HOME and TMPDIR (nothing shared between two running tests). Results print in file order,
 whatever order they finish in, and the summary line is the same at any -j.
+
+A shard holds whole test files: the entries are grouped by the test file that must kill them (each file is run
+unmutated once per shard that needs it, and that run costs as much as a mutated one), and the groups are dealt to
+the shards heaviest first, each to the lightest shard so far (weight = (entries + 1) x the file's rough run time in
+seconds from tests/mutation_costs.json, 30 for a file not listed there; ties go to the lower shard). The times only
+steer the balance, never what runs: any numbers give disjoint shards that hold every entry. The split depends only
+on the entries and that file, never on the clock, and inside a shard the order is the file's.
+
+Every test, baseline or mutated, runs with its cwd in its own empty temp dir, never in the checkout (a checkout
+sits under a folder that may hold a real bus, and a command run before the test's own cd would find it).
 
 The test runs from a shadow tree in a temp dir (symlinks to the checkout, the mutated file real), so BIN
 in tests/lib.sh is the mutated copy; AGENTBUS_BIN names it too, which tests/lib.sh and
@@ -45,6 +57,8 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_FILE = os.path.join(ROOT, "tests", "mutations.json")
+COSTS = os.path.join(ROOT, "tests", "mutation_costs.json")
+DEFAULT_COST = 30.0
 TIMEOUT = int(os.environ.get("MUTATE_TIMEOUT", "400"))
 
 
@@ -129,7 +143,7 @@ def baseline(e, root):
         test = os.path.join(root, e["run"])
         work = os.path.realpath(tempfile.mkdtemp(prefix="agentbus-mutation-"))
         try:
-            rc, out = _run(test, root, _env(os.path.join(root, "bin", "agentbus"), work))
+            rc, out = _run(test, work, _env(os.path.join(root, "bin", "agentbus"), work))
         finally:
             shutil.rmtree(work, ignore_errors=True)
         if rc == 0:
@@ -158,7 +172,7 @@ def shadow_run(e, mutated, root):
         shadow_test = test if rel.startswith("..") else os.path.join(tmp, rel)  # a test outside the tree runs in place
         # AGENTBUS_BIN is the CLI under test: the mutated copy only when the CLI is what is mutated.
         cli = copy if e["file"] == "bin/agentbus" else os.path.join(tmp, "bin", "agentbus")
-        return _run(shadow_test, tmp, _env(cli, work))
+        return _run(shadow_test, work, _env(cli, work))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -242,6 +256,15 @@ def run_all(picked, jobs, root=ROOT):
     try:
         for f in [pool.submit(baseline, e, root) for e in first]:
             f.result()
+        # A baseline that failed while other test files ran beside it may only have been starved (the timing tests keep
+        # fixed budgets): run each such file once more with the machine to itself before it makes its entries BROKEN.
+        for e in first:
+            key = (root, e["run"])
+            if _baselines.get(key, "").startswith("bad:") and jobs > 1:
+                first_try = _baselines.pop(key)
+                again = baseline(e, root)
+                print(f"NOTE {e['run']}: failed beside other files ({first_try[4:100]}); run alone: "
+                      + ("ok" if again == "ok" else again[:100]), file=sys.stderr, flush=True)
         pending = []
         for e, st in zip(picked, steps):
             if st[0] == "baseline":
@@ -263,6 +286,39 @@ def run_all(picked, jobs, root=ROOT):
         pool.shutdown(wait=True)
 
 
+def parse_shard(spec):
+    """(i, n) from 'I/N' with 1 <= I <= N, else None."""
+    m = re.fullmatch(r"([0-9]+)/([0-9]+)", spec or "")
+    if not m or not 1 <= int(m.group(1)) <= int(m.group(2)):
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def file_costs():
+    try:
+        with open(COSTS, encoding="utf-8") as f:
+            costs = json.load(f)
+        return {k: float(v) for k, v in costs.items() if float(v) > 0}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def shard_entries(entries, i, n, costs=None):
+    """The entries of shard i (1-based) of n, in file order. Entries of one test file stay together, so a shard runs
+    only the baselines it needs; the groups go heaviest first to the lightest shard (ties: the lower one)."""
+    costs = file_costs() if costs is None else costs
+    groups = {}
+    for e in entries:
+        groups.setdefault(e["run"], []).append(e)
+    weight = {r: (len(g) + 1) * costs.get(r, DEFAULT_COST) for r, g in groups.items()}
+    loads, owner = [0.0] * n, {}
+    for run in sorted(groups, key=lambda r: (-weight[r], r)):
+        k = min(range(n), key=lambda j: (loads[j], j))
+        owner[run] = k
+        loads[k] += weight[run]
+    return [e for e in entries if owner[e["run"]] == i - 1]
+
+
 def default_jobs():
     raw = os.environ.get("AGENTBUS_MUTATION_JOBS", "").strip()
     if not raw:
@@ -274,7 +330,7 @@ def default_jobs():
 
 
 def main(argv):
-    path, args, jobs = DEFAULT_FILE, [], None
+    path, args, jobs, shard = DEFAULT_FILE, [], None, None
     it = iter(argv)
     for a in it:
         if a == "--mutations":
@@ -288,12 +344,23 @@ def main(argv):
                 print("mutate: %s needs a whole number of 1 or more" % a, file=sys.stderr)
                 return 2
             jobs = int(v)
+        elif a == "--shard":
+            v = next(it, None)
+            shard = parse_shard(v)
+            if shard is None:
+                print("mutate: --shard needs I/N with 1 <= I <= N, not %r" % v, file=sys.stderr)
+                return 2
         else:
             args.append(a)
     if len(args) != 1 or args[0] in ("-h", "--help"):
         print(__doc__.strip())
         return 0 if args[:1] in (["-h"], ["--help"]) else 2
     entries = load(path)
+    if shard and args[0] not in ("--all", "--list"):
+        print("mutate: --shard goes with --all or --list", file=sys.stderr)
+        return 2
+    if shard:
+        entries = shard_entries(entries, *shard)
     if args[0] == "--list":
         for e in entries:
             print(e["name"])

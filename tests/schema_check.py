@@ -1,7 +1,7 @@
 """A small JSON Schema subset validator for the tests (standard library only), so they need no third-party package.
 
 The subset is what `agentbus schema --json` uses: type (a name or a list of names), required, properties, items,
-enum, anyOf, minimum, $ref of the form "#/objects/NAME" resolved against the schema document's `objects`, and
+enum, anyOf, allOf, minimum, $ref of the form "#/objects/NAME" resolved against the schema document's `objects`, and
 description (ignored). Extra object keys are allowed: JSON changes are additive within contract version 1.
 
     from schema_check import validate, check_schema
@@ -9,7 +9,7 @@ description (ignored). Extra object keys are allowed: JSON changes are additive 
     problems = check_schema(schema, objects)          # [] when the schema itself uses only the subset
 """
 TYPES = ("string", "integer", "number", "boolean", "null", "object", "array")
-KEYWORDS = {"type", "required", "properties", "items", "enum", "anyOf", "minimum", "$ref", "description"}
+KEYWORDS = {"type", "required", "properties", "items", "enum", "anyOf", "allOf", "minimum", "$ref", "description"}
 
 
 def _is(value, name):
@@ -49,6 +49,9 @@ def validate(instance, schema, objects, path="$"):
         branches = [validate(instance, s, objects, path) for s in schema["anyOf"]]
         if not any(not b for b in branches):
             return ["%s: matches none of the anyOf branches (%s)" % (path, "; ".join(b[0] for b in branches if b))]
+    if "allOf" in schema:  # every branch must hold (a shared object plus the keys every result adds)
+        for s in schema["allOf"]:
+            errors += validate(instance, s, objects, path)
     if "type" in schema:
         names = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
         if not any(_is(instance, n) for n in names):
@@ -92,4 +95,6 @@ def check_schema(schema, objects, path="$"):
         problems += check_schema(schema["items"], objects, path + "[]")
     for i, sub in enumerate(schema.get("anyOf", [])):
         problems += check_schema(sub, objects, "%s|%d" % (path, i))
+    for i, sub in enumerate(schema.get("allOf", [])):
+        problems += check_schema(sub, objects, "%s&%d" % (path, i))
     return problems

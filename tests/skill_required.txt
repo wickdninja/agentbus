@@ -20,3 +20,6 @@ s|100|With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus un
 s|100|Listings return {items, has_more, next}; if has_more, call again or raise --limit.
 p|200|Hooks: with the agentbus plugin or setup, a hook message gives your exact name
 s|160|Start with `join`, then `brief`
+s|100|Kinds: note, question, answer, handoff, decision, alert, done.
+s|40|Assign work with handoff.
+s|60|Run error.next to recover (fill in capitals).

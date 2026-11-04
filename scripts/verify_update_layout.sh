@@ -16,7 +16,13 @@ unset -f agentbus   # lib.sh's helper runs the checkout; this script runs the IN
 W=$(mktemp -d); trap 'stop_servers; rm -rf "$W"' EXIT
 export HOME="$W/home"; mkdir -p "$HOME" "$W/srv"
 G=(git -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
-git clone -q "$ROOT" "$W/src"
+# A fresh repository from the checkout's committed files, not a clone of it: CI checks out one commit (a shallow clone),
+# and a repository cloned from that cannot be cloned again ("did not send all necessary objects").
+mkdir "$W/src"; git -C "$ROOT" archive HEAD | tar -x -C "$W/src"
+"${G[@]}" -C "$W/src" init -q; "${G[@]}" -C "$W/src" add -A; "${G[@]}" -C "$W/src" commit -q -m base
+# The interpreter pipx is installed in: the package job exports PIPX_PYTHON (the setup-python interpreter, pipx in its own
+# site-packages). Not a pipx command on PATH, which can belong to another python, and not a --user install: HOME is changed below.
+PIPX=("${PIPX_PYTHON:-$PY}" -m pipx)
 setver() { sed "s/^__version__ = .*/__version__ = \"$1\"/" "$W/src/bin/agentbus" >"$W/v" && cp "$W/v" "$W/src/bin/agentbus"; }
 setver 9.0.0; "${G[@]}" -C "$W/src" commit -qam v9.0.0; "${G[@]}" -C "$W/src" tag v9.0.0
 setver 9.1.0; "${G[@]}" -C "$W/src" commit -qam v9.1.0; "${G[@]}" -C "$W/src" tag v9.1.0
@@ -29,7 +35,7 @@ case "$tool" in
     BIN_DIR="$W/bin" ;;
   pipx)
     export PIPX_HOME="$W/pipx-home" PIPX_BIN_DIR="$W/bin"
-    pipx install -q "git+$URL@v9.0.0"
+    "${PIPX[@]}" install -q "git+$URL@v9.0.0"
     BIN_DIR="$W/bin" ;;
   *) echo "usage: verify_update_layout.sh uv|pipx" >&2; exit 2 ;;
 esac
@@ -62,7 +68,7 @@ WHEEL=$(ls "$W"/wheel/agentbus-9.0.0-py3-none-any.whl)
 install_wheel() {  # FILE
   case "$tool" in
     uv) uv tool install -q --force "$1" ;;
-    pipx) pipx install -q --force "$1" ;;
+    pipx) "${PIPX[@]}" install -q --force "$1" ;;
   esac
 }
 rel_latest 9.1.0

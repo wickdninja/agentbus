@@ -552,13 +552,16 @@ row bus fail "SQLite cannot use $W/app/.agentbus/bus.db (file is not a database)
 ! grep -q permissions "$T/out" || fail "a garbage bus.db was blamed on permissions"
 ok "garbage: fail, SQLite's reason, a restore hint (not permissions)"
 
-echo "TEST 7: a bus held by a sqlite3 shell: bus is warn busy within 1 s"
+echo "TEST 7: a bus held by a sqlite3 shell: bus is warn busy, and doctor gives up on its own short budget"
 world
-"$PY" - "$W/app/.agentbus/bus.db" "$T" "${DOC[*]}" <<'PY' || fail "busy"
-import json, os, subprocess, sys, time
-db, T, doc = sys.argv[1], sys.argv[2], sys.argv[3].split()
+"$PY" - "$W/app/.agentbus/bus.db" "$T" "${DOC[*]}" "${AGENTBUS_BIN:-$BIN}" <<'PY' || fail "busy"
+import json, os, re, subprocess, sys, time
+db, T, doc, src = sys.argv[1], sys.argv[2], sys.argv[3].split(), open(sys.argv[4], encoding="utf-8").read()
+# No wall-clock bound here (a loaded machine stretches any real second). Doctor must return while the holder still holds
+# the bus (the holder is killed only after doctor exits, and doctor gets a 60 s deadline); its own budget is read from the
+# source, where it must stay short, below the 15 s every other command waits, and be the one doctor opens the bus with.
 code = ("import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None); c.execute('PRAGMA locking_mode=EXCLUSIVE'); "
-        "c.execute('BEGIN EXCLUSIVE'); c.execute(\"INSERT INTO log(ts,agent,action) VALUES('t','holder','x')\"); open(sys.argv[2],'w').close(); time.sleep(30)")
+        "c.execute('BEGIN EXCLUSIVE'); c.execute(\"INSERT INTO log(ts,agent,action) VALUES('t','holder','x')\"); open(sys.argv[2],'w').close(); time.sleep(300)")
 mark = T + "/held"
 p = subprocess.Popen([sys.executable, "-c", code, db, mark])
 try:
@@ -566,18 +569,21 @@ try:
         if os.path.exists(mark):
             break
         time.sleep(0.05)
-    t0 = time.monotonic()
-    r = subprocess.run(doc + ["doctor", "--json"], cwd=os.path.dirname(os.path.dirname(db)), capture_output=True, text=True)
-    took = time.monotonic() - t0
+    r = subprocess.run(doc + ["doctor", "--json"], cwd=os.path.dirname(os.path.dirname(db)), capture_output=True, text=True, timeout=60)
+    held = p.poll() is None
 finally:
     p.kill(); p.wait()
+assert held, "the holder let go before doctor returned: doctor did not report a bus that was still held"
 assert r.returncode == 0, r
+budget = float(re.search(r"^DOCTOR_BUSY_WAIT_S = ([0-9.]+)", src, re.M).group(1))
+full = float(re.search(r"^BUSY_WAIT_S = ([0-9.]+)", src, re.M).group(1))
+assert budget <= 1.0 and budget < full, (budget, full)
+assert "open_bus(ctx.db, ctx.strict, read_only=True, busy_wait=DOCTOR_BUSY_WAIT_S)" in src, "doctor opens the bus without its own budget"
 bus = [c for c in json.loads(r.stdout)["checks"] if c["id"] == "bus"][0]
 assert bus["status"] == "warn" and "is busy: another process holds it" in bus["detail"], bus
 assert bus["fix"] is None and bus["hint"] == "Close it, then run agentbus doctor again.", bus
-assert took < 1.0, took
 PY
-ok "busy is a warning with a hint (no command), in under a second"
+ok "busy is a warning with a hint (no command), reported while the bus is still held, on a budget of 1 s or less"
 
 echo "TEST 8: copy: one case per state, and the copy's bytes are compared with the installed agentbus's"
 world

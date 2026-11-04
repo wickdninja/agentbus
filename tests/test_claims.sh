@@ -341,7 +341,10 @@ for purpose in preserve replace; do
   "$PY" - "$o" "$purpose" <<'PY'
 import json, sys
 d = json.loads(sys.argv[1])
-assert set(d) == {'resource', 'agent', 'purpose', 'claimed_at', 'expires_at', 'auto_released', 'auto_released_count'}, d
+base = {'contract', 'resource', 'agent', 'purpose', 'claimed_at', 'expires_at', 'auto_released', 'auto_released_count', 'renewed'}
+assert set(d) == base | (set() if sys.argv[2] == 'preserve' else {'previous_purpose'}), d
+assert d['renewed'] is True, d
+assert d.get('previous_purpose') == (None if sys.argv[2] == 'preserve' else 'original purpose'), d
 assert d['purpose'] == ('original purpose' if sys.argv[2] == 'preserve' else 'new purpose'), d
 assert d['claimed_at'] == '2001-02-03T04:05:06Z', d
 assert d['resource'] == 'renew' and d['agent'] == 'renew', d

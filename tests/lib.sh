@@ -106,6 +106,20 @@ wait_marker() {
     sleep 0.05
   done
 }
+# plant_big_messages DB TO N [SENDER]: N messages to TO, 3 KB each, inserted straight into the bus (fast). A listing cuts a
+# body at 2 KB, so N of them are about N * 2.1 KB of output; a test that needs output to outlast a reader's buffer plants
+# enough to pass the pipe (64 KB on Linux, up to 1 MB if it grew) AND the first block a reader may take before it leaves
+# (uutils head and BSD head read 64 KB at once, which made a 126 KB output fit "in the pipe" on CI): N = 600 is 1.2 MB.
+plant_big_messages() {
+  python3 - "$1" "$2" "$3" "${4:-a}" <<'PYPLANT'
+import sqlite3, sys
+db, to, n, sender = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+c = sqlite3.connect(db)
+c.executemany("INSERT INTO messages(ts,sender,recipient,kind,body) VALUES(?,?,?,?,?)",
+              [("2026-01-01T00:00:00Z", sender, to, "note", "m%d " % i + "x" * 3000) for i in range(n)])
+c.commit(); c.close()
+PYPLANT
+}
 mkrepo() { mkdir -p "$1"; git -C "$1" init -q; git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init; }
 
 # expect_fail "text stderr must contain" cmd args...
