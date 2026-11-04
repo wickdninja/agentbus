@@ -33,7 +33,7 @@ SEED_HISTORY = ["2af5e4efedd84d7da42da6c4c5ddd02f230cc002e05b733741557dfd38b0615
 AGENTS_SNIPPET = (
     "## agentbus\n"
     "If `agentbus` is not on PATH: ignore this section unless `.agentbus/` is in this folder or a parent; "
-    "then tell the user to install agentbus, never run the copy in it, and carry on with the task. "
+    "if one is, tell the user to install agentbus, never run the copy in it, and carry on with the task. "
     "If `agentbus buses` finds no bus, ignore this section. "
     "Otherwise run `agentbus skill` for the full protocol; if it says "
     "`unknown command 'skill'`, that agentbus is 0.1.x: stop and tell the user to install the current release and run `agentbus upgrade --all PARENT_DIR`.\n"

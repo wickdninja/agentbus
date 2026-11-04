@@ -8394,7 +8394,7 @@ SKILL_TEXT = (
 )
 AGENTS_SNIPPET = (
     '## agentbus\n'
-    "If `agentbus` is not on PATH: ignore this section unless `.agentbus/` is in this folder or a parent; then tell the user to install agentbus, never run the copy in it, and carry on with the task. If `agentbus buses` finds no bus, ignore this section. Otherwise run `agentbus skill` for the full protocol; if it says `unknown command 'skill'`, that agentbus is 0.1.x: stop and tell the user to install the current release and run `agentbus upgrade --all PARENT_DIR`.\n"
+    "If `agentbus` is not on PATH: ignore this section unless `.agentbus/` is in this folder or a parent; if one is, tell the user to install agentbus, never run the copy in it, and carry on with the task. If `agentbus buses` finds no bus, ignore this section. Otherwise run `agentbus skill` for the full protocol; if it says `unknown command 'skill'`, that agentbus is 0.1.x: stop and tell the user to install the current release and run `agentbus upgrade --all PARENT_DIR`.\n"
     'Join: `agentbus --as NAME join`. Before editing: `agentbus --as NAME claim PATH --purpose WHY`.\n'
     'Between steps: `agentbus --as NAME inbox`. Finish: `agentbus --as NAME post RESULT --kind done`, then `leave`.\n'
 )
@@ -8403,7 +8403,7 @@ SKILL_SHA256_HISTORY = (
     "1ecb0d4d63f6d6a70b1b60b70bcbd44d011172773304ecec7e8ecf21b5b0a203",
 )
 AGENTS_SHA256_HISTORY = (
-    "b84bb2620aa5d911e4dffeb0bcb93811edba5312963e6f8c86f4d84dd61d4c30",
+    "815c2ff5f71c6b01dbbc4563c8d6b16bcf3355866880642ee6b28b109fad7e5d",
 )
 # END EMBEDDED SKILL
 

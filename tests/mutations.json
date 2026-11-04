@@ -1019,8 +1019,8 @@
   {
     "name": "the AGENTS.md block loses the refusal wording",
     "file": "bin/agentbus",
-    "find": "then tell the user to install agentbus, never run the copy in it, and carry on with the task\\.",
-    "replace": "then carry on with the task.",
+    "find": "if one is, tell the user to install agentbus, never run the copy in it, and carry on with the task\\.",
+    "replace": "if one is, carry on with the task.",
     "count": 1,
     "run": "tests/test_skill.sh",
     "expect": "the block lacks the no-PATH rule for a folder with a bus"
@@ -2882,8 +2882,8 @@
   {
     "name": "the AGENTS.md block does not lead with the condition",
     "file": "bin/agentbus",
-    "find": "If `agentbus` is not on PATH: ignore this section unless `\\.agentbus/` is in this folder or a parent; then",
-    "replace": "If `agentbus` is not on PATH: then",
+    "find": "If `agentbus` is not on PATH: ignore this section unless `\\.agentbus/` is in this folder or a parent; if one is,",
+    "replace": "If `agentbus` is not on PATH:",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
     "expect": "does not lead with the PATH rule and discovery as its condition"
@@ -3953,7 +3953,7 @@
   {
     "name": "the AGENTS.md block stops an agent with no bus folder",
     "file": "bin/agentbus",
-    "find": "If `agentbus` is not on PATH: ignore this section unless `\\.agentbus/` is in this folder or a parent; then tell",
+    "find": "If `agentbus` is not on PATH: ignore this section unless `\\.agentbus/` is in this folder or a parent; if one is, tell",
     "replace": "If `agentbus` is not on PATH: tell",
     "count": 1,
     "run": "tests/test_skill.sh",
