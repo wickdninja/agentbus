@@ -8300,7 +8300,7 @@ SKILL_TEXT = (
     '\n'
     '## Command and identity\n'
     '\n'
-    "Use `agentbus` from PATH. Use the bus directory's `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing; otherwise stop and tell the user. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
+    "Use `agentbus` from PATH. Use the bus directory's `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing; otherwise stop and tell the user. Pass `--as YOUR_NAME` and keep that name all session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
     '\n'
     'Set `AGENTBUS_DB` only when a worker cannot discover the bus (a sandbox or a folder outside the checkout). If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
     '\n'
@@ -8332,7 +8332,7 @@ SKILL_TEXT = (
     '\n'
     '## Read correctly\n'
     '\n'
-    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities get older direct messages but only later broadcasts. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body.\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities get older direct messages but only later broadcasts. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.\n'
     '\n'
     'A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.\n'
     '\n'

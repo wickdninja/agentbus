@@ -23,3 +23,4 @@ s|160|Start with `join`, then `brief`
 s|100|Kinds: note, question, answer, handoff, decision, alert, done.
 s|40|Assign work with handoff.
 s|60|Run error.next to recover (fill in capitals).
+s|60|Delivery can repeat; dedupe by message ID.

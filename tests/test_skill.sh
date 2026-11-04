@@ -103,6 +103,8 @@ head -n 2 "$T/skill.out" | grep -qx 'name: agentbus' || fail "agentbus skill doe
 n=$(wc -c <"$T/skill.out" | tr -d ' ')
 [ "$n" -le 4800 ] || fail "agentbus skill printed $n bytes, the cap is 4800"
 ok "agentbus skill prints $n bytes ending with the marker"
+grep -qF 'Delivery can repeat; dedupe by message ID.' "$T/skill.out" || fail "the printed skill lost the sentence that duplicate delivery is possible (inbox is at least once)"
+ok "the printed skill says delivery can repeat"
 
 echo "TEST: docs/how-to/setup.md's dry-run example is what setup claude --dry-run prints, byte count included"
 # Bug it catches: the example said 4,277 bytes after the skill had grown to 4,317.

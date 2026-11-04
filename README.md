@@ -45,19 +45,17 @@ agentbus init .
 **3. Hand off some work**
 
 ```bash
-bus=.agentbus/bin/agentbus
+agentbus --as claude join
+agentbus --as codex  join
 
-$bus --as claude join
-$bus --as codex  join
+agentbus --as claude goal "auth on the new token API"
 
-$bus --as claude goal "auth on the new token API"
-
-$bus --as claude post "auth refactor is yours" --to codex --kind handoff
-$bus --as codex  inbox
-$bus --as codex  claim src/auth/
-$bus --as codex  release src/auth/
-$bus --as codex  post "done, tests green" --to claude --reply-to 1 --kind done
-$bus --as claude inbox
+agentbus --as claude post "auth refactor is yours" --to codex --kind handoff
+agentbus --as codex  inbox
+agentbus --as codex  claim src/auth/
+agentbus --as codex  release src/auth/
+agentbus --as codex  post "done, tests green" --to claude --reply-to 1 --kind done
+agentbus --as claude inbox
 ```
 
 ```text

@@ -3607,5 +3607,14 @@
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
     "expect": "a patch to a worktree file held in the main checkout was silent"
+  },
+  {
+    "name": "the printed skill loses the duplicate-delivery sentence",
+    "file": "bin/agentbus",
+    "find": " Delivery can repeat; dedupe by message ID\\.",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the printed skill lost the sentence that duplicate delivery is possible"
   }
 ]

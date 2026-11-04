@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 # Workflow: a new user with an empty HOME. Checks the command answers --version, `init` installs a
-# bus copy, the README's hand-off block runs unchanged against that copy and its printed result is
+# bus copy, the README's hand-off block runs unchanged (as the `agentbus` on PATH) and its printed result is
 # the README's printed result, the stored rows tell the same story, and `watch --once` shows it.
 # `setup claude` runs too once the command exists. Runs on the source script, a mutation copy
 # (AGENTBUS_BIN) and an installed command (AGENTBUS_CMD); the bus copy runs under $PYTHON.
@@ -10,6 +10,8 @@ set -euo pipefail
 wf_setup
 # The bus copy starts with `#!/usr/bin/env python3`: put the interpreter under test first on PATH.
 mkdir "$T/shim"; ln -s "$(command -v "$PY")" "$T/shim/python3"
+# The README block runs the installed `agentbus` from PATH (step 1 of the quick start installs it): the shim is the command under test.
+{ printf '#!/bin/sh\nexec'; printf ' %q' "${AB[@]}"; printf ' "$@"\n'; } >"$T/shim/agentbus"; chmod +x "$T/shim/agentbus"
 
 echo "STEP 1: the command reports its version"
 got=$(agentbus --version)
