@@ -344,6 +344,8 @@ non_commands = {
     'AGENTS.md', '.agentbus/bin/agentbus', '/path/to/agentbus/skill/SKILL.md', '/hooks',
     'issue:17', '.git', 'AGENTBUS_DB', 'AGENTBUS_NO_UPDATE_CHECK=1', '.agentbus/bin/',
     'pip install agentbus', 'uv tool install agentbus',   # the README's Update section names these two (and the variable above) to warn against them: not commands to check
+    '/agentbus', '/agentbus:agentbus',                    # what you type in Claude Code, not a shell command
+    'codex queue', 'tmux send-keys', 'git push', 'codex',  # other tools, named in the setup steps and in How it compares
 }
 for snippet in re.findall(r'`([^`]+)`', inline):
     if snippet in non_commands:
