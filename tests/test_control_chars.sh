@@ -26,14 +26,15 @@ check() {  # FIELD CODEPOINT -- args...
   [ "$rc" = 2 ] || fail "$field --json: exit $rc"
   echo "$err" | "$PY" -c "import json,sys;e=json.load(sys.stdin)['error'];assert e['code']=='bad_input' and e['field']==sys.argv[1] and e['committed'] is False, e" "$field" || fail "$field: JSON error was $err"
 }
-check --as 001B -- agentbus --as "ev${ESC}]52;c;x" join
 check --as 001B -- agentbus --as "ev${ESC}x" inbox
 check --as 000A -- agentbus --as "a${NL}b" post hi
+# a read takes the name without any roster or name rule, so these rows are guarded by the control-character check alone (a write also meets the name rule, which refuses the same names with its own message)
+check --as 202E -- agentbus --as "a${BIDI}b" who
 check --as 202E -- agentbus --as "a${BIDI}b" ctx set k v
 check --as 001B -- agentbus --as "a${ESC}" claim some/file
 check --as 001B -- agentbus --as "a${ESC}" who
 check --as 001B -- agentbus --as "a${ESC}" watch --once
-check AGENTBUS_AGENT 001B -- env "AGENTBUS_AGENT=ev${ESC}x" "${AB[@]}" join
+check AGENTBUS_AGENT 000A -- env "AGENTBUS_AGENT=ev${NL}x" "${AB[@]}" who
 check AGENTBUS_AGENT 000A -- env "AGENTBUS_AGENT=ev${NL}x" "${AB[@]}" post hi
 check --to 001B -- agentbus --as a post --to "n${ESC}x" hi
 check --to 202E -- agentbus --as a post --to "n${BIDI}x" hi
@@ -45,8 +46,11 @@ check KEY 0085 -- agentbus --as a ctx history "$C1"
 check RESOURCE 001B -- agentbus --as a claim "f${ESC}x"
 check RESOURCE 0007 -- agentbus --as a claim $'issue:\a1'
 check RESOURCE 0009 -- agentbus --as a release $'f\tx'
+# join also validates the name itself (a second check with its own message), so these two come last: the rows above are guarded by the control-character check alone
+check --as 001B -- agentbus --as "ev${ESC}]52;c;x" join
+check AGENTBUS_AGENT 001B -- env "AGENTBUS_AGENT=ev${ESC}x" "${AB[@]}" join
 [ "$(rows)" = "$before" ] || fail "a refused input changed the bus"
-ok "18 input paths refused, nothing written"
+ok "20 input paths refused, nothing written"
 
 echo "TEST: plain names, keys, resources and unicode letters are still accepted"
 agentbus --as "sam-2.x" join >/dev/null

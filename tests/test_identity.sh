@@ -185,7 +185,13 @@ agentbus who | grep -qF "old name" || fail "an old bus's odd name no longer list
 agentbus status >/dev/null || fail "status on a bus with an odd name"
 agentbus --as "old name" post "still here" >/dev/null || fail "an odd name already on the roster cannot post"
 expect_fail "is not a valid name" agentbus --as "old name" join
-ok "bad names are refused with the rule; names already on a bus keep working"
+# a name that could never join is refused up front by every write, with the rule and a join that would work
+for w in "post hi" "ctx set k v" "claim some/file" "goal x" "log add a b"; do
+  rc=0; agentbus --json --as "bad name" $w >/dev/null 2>"$T/bn" || rc=$?
+  [ "$rc" = 2 ] || fail "'$w' as 'bad name': exit $rc, want 2 (bad_input, not not_on_roster)"
+  pyj 'e = d["error"]; assert e["code"] == "bad_input" and e["field"] == "name" and e["next"] == "agentbus --as NAME join" and "is not a valid name" in e["message"] and "--as '"'"'bad name'"'"' join" not in e["message"], e' <"$T/bn"
+done
+ok "bad names are refused with the rule; names already on a bus keep working; a write as a name that could never join is bad_input with no join that would fail"
 
 echo "TEST 11: a claim renewal logs once; a changed purpose logs again"
 agentbus --as alpha claim res/x --purpose first >/dev/null
