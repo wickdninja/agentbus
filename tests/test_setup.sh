@@ -1214,7 +1214,7 @@ cp "$T/py/python3" "$T/stickypy/python3"; chmod 1777 "$T/stickypy"
 run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
 set_tool all "'$T/stickypy/python3' '$T/upgraded/agentbus'"
 got=$(cd "$W" && rows user)
-! grep -q "^codex_hooks_tool problem" <<<"$got" || fail "check with an interpreter in a sticky folder: $got"   # not flagged; whether it is stale or ok is other cases' business
+grep -q "^codex_hooks_tool stale 4 of 4" <<<"$got" || fail "check with an interpreter in a sticky folder: $got"
 # one forged entry among genuine ones is not vouched for: every tagged command is checked, not only the first
 run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
 set_tool Stop "'$T/upgraded/agentbus'"
