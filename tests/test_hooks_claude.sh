@@ -16,7 +16,8 @@ unset AGENTBUS_HOOKS AGENTBUS_HOOK_DEBUG CLAUDE_ENV_FILE CLAUDE_CONFIG_DIR CLAUD
 FIX="$TESTS_DIR/fixtures/claude_hooks"
 # Does this system record when a file was created? macOS does; Linux does not. Without it SessionEnd trusts the joined bus.db
 # by device and inode only while the remembered answer for the unchanged index is empty, so a test that wants SessionEnd to
-# leave must not change the index (it need not change it to prove the shortcut anyway: the cache answers).
+# leave must not change the index. There the full check reads the same remembered answer, so it leaves as well: what proves
+# the shortcut on every system is TEST 34, where the full check is made to refuse.
 if "$PY" -c 'import os,sys; sys.exit(0 if hasattr(os.stat("."), "st_birthtime") else 1)'; then BIRTH=1; else BIRTH=0; fi
 ALL="$T/all.jsonl"; : >"$ALL"   # every non-empty hook output of the run, checked against the templates at the end
 SID1=aaaaaaaa-0000-4000-8000-000000000001
@@ -767,6 +768,19 @@ set -- $(timed1 SessionStart session_start_startup_print)
 set -- $(timed1 UserPromptSubmit user_prompt_submit)
 [ "$2" = 0 ] && [ "$4" = 1 ] || fail "UserPromptSubmit with an unchanged 1M-entry index: exit $2, $3 bytes, hook JSON valid=$4 (1 wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)' "$1" || fail "UserPromptSubmit re-read an unchanged 1M-entry index ($1 s)"
+# The shortcut itself, on every system: a session leaving the very bus.db it joined never asks the full check, here made to
+# refuse. Changing the index cannot show this on Linux (no creation time: a changed index gets the full check on purpose,
+# TEST 41) and an unchanged one cannot either (the full check answers from the same remembered list, and leaves too).
+SS "$SID2"; N34=$(dname "$SID2"); [[ " $(roster) " == *" $N34 "* ]] || fail "setup: SessionStart did not join $N34"
+payload session_end_other session_id="\"$SID2\"" reason="other" >"$T/pl"
+(cd "$P" && "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/pl" <<'PY') || fail "the in-process SessionEnd crashed"
+import json, runpy, sys
+g = runpy.run_path(sys.argv[1], run_name="agentbus_shortcut")["hook_session_end"].__globals__
+g["HOOK_STATE"]["dialect"] = "claude"
+g["hook_untracked"] = lambda directory: False
+g["hook_session_end"](json.load(open(sys.argv[2])))
+PY
+[[ " $(roster) " != *" $N34 "* ]] || fail "SessionEnd with a 1M-entry index did not leave without the full check: $(roster)"
 [ "$BIRTH" = 0 ] || printf garbage >"$P/.git/index"      # git rewrites the index all the time (here: into something unreadable); with a creation time SessionEnd must not depend on it
 set -- $(timed1 SessionEnd session_end_other); [ "$2" = 0 ] && [ "$4" = 0 ] || fail "SessionEnd with a 1M-entry index: exit $2, valid=$4 (0: no output wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$1" || fail "SessionEnd with a 1M-entry index took $1 s, past its 1.5 s budget"
@@ -995,7 +1009,17 @@ HCWD="$PB38" END other
 unset HCWD; rm -f "$PB38/.agentbus/bus.db"          # A's own link count is back to 1, so A's bus can be read again
 P="$PA38"; [ "$(sha "$PA38/.agentbus/bus.db")" = "$before" ] || fail "SessionEnd wrote through a hard link into a tracked project"
 [[ " $(roster) " == *" $N "* ]] || fail "SessionEnd left through a hard link (the inode matched, nothing else stopped it)"
-ok "a hard-linked bus.db is refused by the link count even though its inode matches"
+# Untracked, so no index stops it on any system: on Linux the tracked case above is refused by the index before the link count is looked at.
+newbus p38c; PC38="$P"; N=$(dname "$SID2"); SS "$SID2"
+[[ " $(roster) " == *" $N "* ]] || fail "setup: SessionStart did not join $N in p38c"
+newbus p38d; PD38="$P"; rm -f "$PD38/.agentbus/bus.db" "$PD38/.agentbus/bus.db-wal" "$PD38/.agentbus/bus.db-shm"
+ln "$PC38/.agentbus/bus.db" "$PD38/.agentbus/bus.db"
+before=$(sha "$PC38/.agentbus/bus.db")
+HCWD="$PD38" END other "$SID2"
+unset HCWD; rm -f "$PD38/.agentbus/bus.db"
+P="$PC38"; [ "$(sha "$PC38/.agentbus/bus.db")" = "$before" ] || fail "SessionEnd wrote through an untracked hard link"
+[[ " $(roster) " == *" $N "* ]] || fail "SessionEnd left through an untracked hard link (the link count is all that stops it)"
+ok "a hard-linked bus.db is refused by the link count even though its inode matches, tracked or not"
 
 echo
 echo "TEST 40: a tracked symlinked .agentbus is refused, and it is the link that is looked at, not what it points to"
