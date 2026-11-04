@@ -59,44 +59,68 @@ ok "relative, in-repo and group-writable are skipped; the clean one (control) ru
 
 echo "TEST 3b: a group-writable installer folder is trusted only for the admin group (owner the caller or root); world-writable, another group and a group-writable installer file stay refused"
 new_case admin uv
-gname=$("$PY" -I -c 'import grp, os, sys; print(grp.getgrgid(os.stat(sys.argv[1]).st_gid).gr_name)' "$C/stubs")
-chmod 775 "$C/stubs"   # like /opt/homebrew/bin: drwxrwxr-x, owned by the caller, a group that is not the caller's alone
-AGENTBUS_TEST_ADMIN_GROUP="not-$gname" ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a group-writable folder of another group was used"
+chmod 775 "$C/stubs"   # like /opt/homebrew/bin: drwxrwxr-x, owned by the caller, in a group that is not the admin group here
+ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a group-writable folder of another group was used"
 [ "$(errof <"$C/err")" = manual_step ] && [ ! -s "$STUB_LOG" ] || fail "another group: $(cat "$C/err")"
 grep -qF "uv tool install --force $wheel_url" "$C/err" && ! grep -qF "git+" "$C/err" || fail "the refusal does not print the release wheel's install command: $(cat "$C/err")"
-AGENTBUS_TEST_ADMIN_GROUP="$gname" ab update --no-buses --no-setup >"$C/out" 2>&1 || fail "a group-writable folder of the admin group was refused: $(cat "$C/out")"
-grep -qF "ARGV: " "$STUB_LOG" || fail "the installer in the admin group's folder did not run: $(cat "$STUB_LOG")"
 new_case adminwo uv; chmod 777 "$C/stubs"
-AGENTBUS_TEST_ADMIN_GROUP="$gname" ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a world-writable folder was used"
+ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a world-writable folder was used"
 [ "$(errof <"$C/err")" = manual_step ] && [ ! -s "$STUB_LOG" ] || fail "world-writable: $(cat "$C/err")"
-new_case adminfile uv; chmod 775 "$C/stubs" "$C/stubs/uv"
-AGENTBUS_TEST_ADMIN_GROUP="$gname" ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a group-writable installer file was used"
-[ "$(errof <"$C/err")" = manual_step ] && [ ! -s "$STUB_LOG" ] || fail "writable file: $(cat "$C/err")"
 rel_latest 0.3.0 nowheel; new_case adminnowheel uv; chmod 775 "$C/stubs"
 ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a release without a wheel was installed"
 grep -qF "git+" "$C/err" && ! grep -qF "releases/download" "$C/err" || fail "a release with no wheel got a wheel URL: $(cat "$C/err")"
 rel_latest 0.3.0
-# the owner rule, on a stat the test cannot create without root: a folder owned by someone else but root
-UPDATE_SRC="$UPDATE_SRC" "$PY" -I - <<'PY' || fail "installer_folder_ok trusted a folder owned by another user"
+# The rule itself, called directly with the admin group passed in (no environment variable can loosen it in the shipped code).
+# st_uid and st_mode are all it reads, so a stand-in stat can have an owner the test could not create without root.
+cat >"$T/rules.py" <<'PY'
 import importlib.machinery, importlib.util, os, stat
 loader = importlib.machinery.SourceFileLoader("agentbus_mod", os.environ["UPDATE_SRC"])
 spec = importlib.util.spec_from_loader("agentbus_mod", loader)
 m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+import sys
 class St:
     def __init__(self, uid, mode): self.st_uid, self.st_mode = uid, mode
-me = 1000
-assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o755), me, "staff") is True
-assert m.installer_folder_ok(St(0, stat.S_IFDIR | 0o755), me, "wheel") is True
-assert m.installer_folder_ok(St(me + 1, stat.S_IFDIR | 0o755), me, "staff") is False
-os.environ["AGENTBUS_TEST_ADMIN_GROUP"] = "admin"
-assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o775), me, "admin") is True
-assert m.installer_folder_ok(St(0, stat.S_IFDIR | 0o775), me, "admin") is True
-assert m.installer_folder_ok(St(me + 1, stat.S_IFDIR | 0o775), me, "admin") is False, "the admin group of a folder owned by another user"
-assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o775), me, "staff") is False
-assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o775), me, None) is False
-assert m.installer_folder_ok(St(me, stat.S_IFDIR | 0o777), me, "admin") is False
+D, F = stat.S_IFDIR, stat.S_IFREG
+def rules():
+    me = 1000
+    ok = lambda uid, mode, group, admin="admin": m.installer_folder_ok(St(uid, D | mode), me, group, admin)
+    assert ok(me, 0o755, "staff") is True, "a plain folder of the caller"
+    assert ok(0, 0o755, "wheel") is True, "a folder of root"
+    assert ok(me + 1, 0o755, "staff") is False, "a folder owned by another user"
+    assert ok(me, 0o775, "admin") is True, "the admin group's group-writable folder was refused"
+    assert ok(0, 0o775, "admin") is True, "the admin group's folder of root was refused"
+    assert ok(me + 1, 0o775, "admin") is False, "the admin group's folder owned by another user was trusted"
+    assert ok(me, 0o775, "staff") is False, "a group-writable folder of another group was trusted"
+    assert ok(me, 0o775, None) is False, "a group-writable folder of an unknown group was trusted"
+    assert ok(me, 0o777, "admin") is False, "a world-writable folder was trusted"
+    assert ok(me, 0o757, "staff") is False, "a world-writable folder was trusted"
+    assert ok(me, 0o775, "admin", admin=None) is (m.admin_group() == "admin"), "the default admin group is not admin_group()"
+    assert m.admin_group() == ("admin" if m.sys.platform == "darwin" else None), m.admin_group()
+    fo = lambda uid, mode: m.installer_file_ok(St(uid, F | mode), me)
+    assert fo(me, 0o755) is True and fo(0, 0o755) is True, "a plain installer file"
+    assert fo(me, 0o775) is False and fo(me, 0o757) is False, "a group- or world-writable installer file was trusted"
+    assert fo(me + 1, 0o755) is False, "an installer file owned by another user was trusted"
+try:
+    rules()
+except AssertionError as e:
+    sys.exit(str(e))
 PY
-ok "admin group accepted; another group, world-writable, a writable installer file and a foreign owner refused; a release without a wheel prints the source line"
+rules=$(UPDATE_SRC="$UPDATE_SRC" "$PY" -I "$T/rules.py" 2>&1) || fail "the installer trust rule is wrong: $rules"
+# End to end through the real Homebrew shape, only where it can exist: macOS, a user who is in group admin can chgrp a folder to it.
+if [ "$(uname)" = Darwin ] && id -Gn | tr ' ' '\n' | grep -qx admin; then
+  new_case adminreal uv; chgrp admin "$C/stubs"; chmod 775 "$C/stubs"
+  ab update --no-buses --no-setup >"$C/out" 2>&1 || fail "a real group-admin folder (drwxrwxr-x) was refused: $(cat "$C/out")"
+  grep -qF "ARGV: " "$STUB_LOG" || fail "the installer in the real admin folder did not run: $(cat "$STUB_LOG")"
+  new_case adminfile uv; chgrp admin "$C/stubs"; chmod 775 "$C/stubs" "$C/stubs/uv"
+  ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a group-writable installer file in an admin folder was used"
+  [ "$(errof <"$C/err")" = manual_step ] && [ ! -s "$STUB_LOG" ] || fail "writable file in an admin folder: $(cat "$C/err")"
+  new_case adminwo2 uv; chgrp admin "$C/stubs"; chmod 777 "$C/stubs"
+  ab update --no-buses --no-setup --json 2>"$C/err" >/dev/null && fail "a world-writable admin folder was used"
+  ok "a real group-admin folder runs the installer; a writable installer file and a world-writable folder do not"
+else
+  echo "NOTE: not macOS, or the user is not in group admin: the end-to-end Homebrew folder (group admin, drwxrwxr-x) was not run; the rule itself is tested above"
+fi
+ok "another group, world-writable and a release without a wheel refused or printed right; the folder and file rules hold on stand-in stats"
 
 echo "TEST 4: a hostile latest (1!9.0.0, 0.1.0, 9.0.0+x) never reaches an argv"
 for tag in "1!9.0.0" "0.1.0" "9.0.0+x" "0.3.0;id" "0.3.0 --index-url=x"; do

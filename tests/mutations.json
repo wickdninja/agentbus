@@ -1613,8 +1613,8 @@
   {
     "name": "update trusts a group-writable installer folder of any group",
     "file": "bin/agentbus",
-    "find": "        return group is not None and group == admin_group\\(\\)",
-    "replace": "        return True",
+    "find": "return group is not None and group == admin",
+    "replace": "return True",
     "count": 1,
     "run": "tests/test_update.sh",
     "expect": "a group-writable PATH entry was used"
@@ -1622,11 +1622,11 @@
   {
     "name": "update refuses the admin group's group-writable installer folder",
     "file": "bin/agentbus",
-    "find": "        return group is not None and group == admin_group\\(\\)",
-    "replace": "        return False",
+    "find": "return group is not None and group == admin",
+    "replace": "return False",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "a group-writable folder of the admin group was refused"
+    "expect": "the admin group's group-writable folder was refused"
   },
   {
     "name": "update trusts a world-writable installer folder",
@@ -1635,16 +1635,16 @@
     "replace": "    if st.st_mode & 0o020:",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "a world-writable folder was used"
+    "expect": "a world-writable folder was trusted"
   },
   {
     "name": "update trusts a group-writable installer file",
     "file": "bin/agentbus",
-    "find": "if fst\\.st_mode & 0o022 or",
-    "replace": "if fst.st_mode & 0o002 or",
+    "find": "return not \\(st\\.st_mode & 0o022 or",
+    "replace": "return not (st.st_mode & 0o002 or",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "a group-writable installer file was used"
+    "expect": "a group- or world-writable installer file was trusted"
   },
   {
     "name": "update trusts an installer folder owned by another user",
@@ -1653,7 +1653,7 @@
     "replace": "    if st.st_mode & 0o002:",
     "count": 1,
     "run": "tests/test_update.sh",
-    "expect": "installer_folder_ok trusted a folder owned by another user"
+    "expect": "a folder owned by another user"
   },
   {
     "name": "update prints a source build where it cannot run the installer",
