@@ -578,8 +578,8 @@
   {
     "name": "the index answer is never remembered",
     "file": "bin/agentbus",
-    "find": "if \\(isinstance\\(saved, dict\\) and saved\\.get\\(\"stamp\"\\) == stamp",
-    "replace": "if False and (isinstance(saved, dict) and saved.get(\"stamp\") == stamp",
+    "find": "and saved\\.get\\(\"stamp\"\\) == stamp",
+    "replace": "and False",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "a cached answer was not used"
@@ -587,8 +587,8 @@
   {
     "name": "an index without a checksum is refused",
     "file": "bin/agentbus",
-    "find": "data\\[-size:\\] == bytes\\(size\\) or ",
-    "replace": "",
+    "find": "    if data\\[-size:\\] == bytes\\(size\\):\\n        return True",
+    "replace": "    if False:\n        return True",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "an untracked bus with a skipHash index was refused"
@@ -650,11 +650,56 @@
   {
     "name": "an index with no entries is taken for a damaged one",
     "file": "bin/agentbus",
-    "find": "len\\(data\\) >= 12 \\+ size and",
-    "replace": "len(data) > 12 + size and",
+    "find": "if len\\(data\\) < 12 \\+ size:",
+    "replace": "if len(data) <= 12 + size:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "an index with no entries was taken for a damaged one"
+  },
+  {
+    "name": "the walk reads the extended flags only in version 3",
+    "file": "bin/agentbus",
+    "find": "\\(2 if ext and flags & 0x4000 else 0\\)",
+    "replace": "(2 if version == 3 and flags & 0x4000 else 0)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a version 4 index with intent-to-add and skip-worktree entries was misread"
+  },
+  {
+    "name": "only the first checksum size that fits is taken",
+    "file": "bin/agentbus",
+    "find": "        if not every:\\n            break",
+    "replace": "        break",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size rules"
+  },
+  {
+    "name": "objectFormat is read from any config section",
+    "file": "bin/agentbus",
+    "find": "if section == \"extensions\" and m\\.group\\(1\\)\\.lower\\(\\) == \"objectformat\":",
+    "replace": "if m.group(1).lower() == \"objectformat\":",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size rules"
+  },
+  {
+    "name": "a config that includes another file is trusted",
+    "file": "bin/agentbus",
+    "find": "            if section in \\(\"include\", \"includeif\"\\):\\n                return None",
+    "replace": "            if False:\n                return None",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size rules"
+  },
+  {
+    "name": "a config this reader does not understand counts as known",
+    "file": "bin/agentbus",
+    "find": "            if kind is None:\\n                return \\(20, 32\\), True",
+    "replace": "            if kind is None:\n                continue",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size rules"
   },
   {
     "name": "SessionEnd trusts any bus once its session has joined one",
@@ -2988,15 +3033,6 @@
     "expect": "a tracked bus with a v2 index was used"
   },
   {
-    "name": "the raw search ignores ASCII .agentbu",
-    "file": "bin/agentbus",
-    "find": "if b\"agentbu\" in low:\\n        return True",
-    "replace": "if False:\n        return True",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "a tracked bus with a v2 index was used"
-  },
-  {
     "name": "SessionEnd ignores a creation time that differs from the recorded one",
     "file": "bin/agentbus",
     "find": "and \\(joined_id\\[2\\] is None or joined_id\\[2\\] == hook_birth\\(st\\)\\)\\)",
@@ -3033,33 +3069,6 @@
     "expect": "the fold does not drop every character HFS+ ignores"
   },
   {
-    "name": "the raw search misses an ignorable run between two letters",
-    "file": "bin/agentbus",
-    "find": "if low\\[max\\(start - 1, 0\\):start\\] in HOOK_LETTERS_SET and low\\[end:end \\+ 1\\] in HOOK_LETTERS_SET:",
-    "replace": "if False:",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "the raw-byte search of an index misjudged"
-  },
-  {
-    "name": "a path called linker.c is taken for an index extension",
-    "file": "bin/agentbus",
-    "find": "            if q == end:\\n                return True",
-    "replace": "            return True",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "paths called link or sdir were taken for extensions"
-  },
-  {
-    "name": "the index is hashed once for each possible size",
-    "file": "bin/agentbus",
-    "find": "            found\\.append\\(size\\)\\n            break[^\\n]*\\n",
-    "replace": "            found.append(size)\n",
-    "count": 1,
-    "run": "tests/test_hooks_claude.sh",
-    "expect": "was hashed more than once"
-  },
-  {
     "name": "a symlinked .agentbus counts as the user's bus",
     "file": "bin/agentbus",
     "find": "            return False      # a link is never the user's bus, tracked or not",
@@ -3076,6 +3085,33 @@
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "SessionEnd trusted dev and inode alone"
+  },
+  {
+    "name": "an answer stored under another scan version is trusted",
+    "file": "bin/agentbus",
+    "find": "saved\\.get\\(\"v\"\\) == HOOK_SCAN_VERSION",
+    "replace": "True",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "an answer stored with no version was trusted"
+  },
+  {
+    "name": "the checksum size is the first one whose checksum matches",
+    "file": "bin/agentbus",
+    "find": "        try:\\n            names, link, sparse = hook_index_walk\\(data, size\\)\\n        except ValueError:\\n            continue\\n        found\\.append",
+    "replace": "        names, link, sparse = hook_index_walk(data, size)\n        found.append",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the checksum size was chosen by the first checksum"
+  },
+  {
+    "name": "ignorable characters in a path are not looked for in the joined paths",
+    "file": "bin/agentbus",
+    "find": "    hits \\+= \\[m\\.start\\(\\) for m in HOOK_IGNORABLE_RE\\.finditer\\(blob\\)\\]\\n",
+    "replace": "    hits += []\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "was not picked as a candidate"
   },
   {
     "name": "check ignores a .agentbus folder anywhere on the path",

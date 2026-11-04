@@ -1472,4 +1472,15 @@ grep -qxF "  + would add 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, St
 ok "project trust note, rerun reminder, and one line per change when stdout is not a terminal"
 
 echo
+echo "TEST: hooks: setup with a stub claude (AGENTBUS_CLAUDE_BIN) inside an untracked corner of a git work tree runs, does not crash, and uses its answer"
+export AGENTBUS_CLAUDE_BIN=
+reset; WT3="$T/wt3"; rm -rf "$WT3"; mkdir -p "$WT3/bin"; git -C "$WT3" init -q; printf readme >"$WT3/README"; gitq "$WT3" add README
+mkclaude "$WT3/bin/claude"; rm -f "$T/claude.log"
+export AGENTBUS_CLAUDE_BIN="$WT3/bin/claude"; run_setup claude; export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
+[ "$RC" = 0 ] || fail "setup with a stub claude in a work tree: exit $RC: $OUT"
+ran || fail "setup did not start the stub claude (untracked, in a work tree)"
+grep -qF "provided by the agentbus plugin" <<<"$OUT" || fail "the stub claude's answer was not used"
+ok "no crash; the stub is asked and answers"
+
+echo
 echo "All setup tests passed"
