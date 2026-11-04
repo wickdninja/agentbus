@@ -30,10 +30,10 @@ all in one SQLite file. No server. No dependencies.
 **1. Install**
 
 ```bash
-uv tool install git+https://github.com/wickdninja/agentbus@v0.1.0
+uv tool install https://github.com/wickdninja/agentbus/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl
 ```
 
-or `pipx install --force git+https://github.com/wickdninja/agentbus@v0.1.0`.
+or `pipx install --force https://github.com/wickdninja/agentbus/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl`.
 
 **2. Add a bus to a repo, or to a folder of repos**
 
@@ -75,7 +75,13 @@ Want to see it without touching a repo? From a clone, without the install:
 AGENTBUS="python3 bin/agentbus" bash examples/two-agent-handoff.sh
 ```
 
-With the install, run `examples/two-agent-handoff.sh` as it is. From v0.2.0, `demo` is the same tour with no clone.
+With the install, `agentbus demo` is the same tour with no clone.
+
+<br>
+
+## Update
+
+`agentbus update` installs the latest release, upgrades your bus folders and refreshes the skill. Once a day, a command you run at a terminal may tell you a release is out (on stderr; never in CI, with `--json` or in an agent session); `AGENTBUS_NO_UPDATE_CHECK=1` turns that off. Do not run `pip install agentbus` or `uv tool install agentbus`: that name on PyPI is a different project.
 
 <br>
 
@@ -109,10 +115,10 @@ Full diagrams and their sources: [docs/workflow.md](docs/workflow.md)
 
 ## Teach your agents
 
-| Agent | Setup in this release (v0.1.0) | From v0.2.0 |
+| Agent | Setup in this release (v0.2.0) | Or from a clone, without the tool |
 | --- | --- | --- |
-| **Claude Code** | From a clone: `mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus` | One command, no clone: [Set up your agents](docs/how-to/setup.md) |
-| **Codex**, or anything that reads `AGENTS.md` | Add: *Coordinate with other agents through the installed agentbus; follow `/path/to/agentbus/skill/SKILL.md`.* | One command, then approve the hooks with `/hooks` in Codex: [Use agentbus with Codex](docs/how-to/codex.md) |
+| **Claude Code** | One command: [Set up your agents](docs/how-to/setup.md) | `mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus` |
+| **Codex**, or anything that reads `AGENTS.md` | One command, then approve the hooks with `/hooks` in Codex: [Use agentbus with Codex](docs/how-to/codex.md) | Add: *Coordinate with other agents through the installed agentbus; follow `/path/to/agentbus/skill/SKILL.md`.* |
 
 The skill tells an agent when to join, check its inbox, claim files and hand off.
 

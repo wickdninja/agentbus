@@ -42,7 +42,7 @@ from functools import lru_cache  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from urllib.parse import quote  # noqa: E402
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.2.0"
 MIN_GIT = (2, 31)
 MAX_TTL_MIN = 10080  # a week
 
@@ -8356,8 +8356,10 @@ AGENTS_SNIPPET = (
 )
 SKILL_SHA256_HISTORY = (
     "2af5e4efedd84d7da42da6c4c5ddd02f230cc002e05b733741557dfd38b06156",
+    "dd53a49a89231b9e2d4033e5fa928226f589bd56b7f291ec03161ce6177638d5",
 )
 AGENTS_SHA256_HISTORY = (
+    "bd847f66f4fde6a4fdc83e0ebe4802329ea4b86e3db14bad46d5e738d8b363a5",
 )
 # END EMBEDDED SKILL
 

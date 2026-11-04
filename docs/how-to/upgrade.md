@@ -59,7 +59,7 @@ An installer on `PATH` is used only when its file is yours or root's and is not 
 fetches the build backend (`hatchling`) from PyPI:
 
 ```
-uv tool install git+https://github.com/wickdninja/agentbus@v0.1.0
+uv tool install git+https://github.com/wickdninja/agentbus@v0.2.0
 ```
 
 (or `pipx install --force` with the same address; use your fork's address, or `@main`, instead of the tag). `update` does not
