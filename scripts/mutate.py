@@ -20,9 +20,10 @@ optional "after" (the stream that adds the test, shown when the entry is skipped
            fails for that reason, not when it crashes, times out, or cannot find its interpreter
 
 Each distinct test file is first run unmutated and must pass (exit 77 skips its entries). The mutated run is then
-classified: KILLED (exit non-zero, a FAIL line holding `expect`), WRONG (a FAIL line without it), SURVIVED (exit 0),
-TIMEOUT (over MUTATE_TIMEOUT seconds, default 400, below run_all's per-file cap), CRASHED (non-zero exit with no FAIL
-line: a traceback, a missing interpreter), STALE (the pattern matches the wrong number of times).
+classified: KILLED (exit non-zero, a FAIL line holding `expect`), WRONG (a FAIL line without it), SURVIVED (exit 0, or
+exit 77 from a file that ended in all_passed with a section skipped: every assertion it ran held), TIMEOUT (over
+MUTATE_TIMEOUT seconds, default 400, below run_all's per-file cap), CRASHED (any other non-zero exit with no FAIL line: a
+traceback, a missing interpreter, a file that skipped itself), STALE (the pattern matches the wrong number of times).
 
 Mutations are independent, so they run in a bounded pool of threads, each driving its own subprocess in its own
 temp dir with its own HOME and TMPDIR (nothing shared between two running tests). Results print in file order,
@@ -136,6 +137,12 @@ def _run(test, cwd, env):
 _baselines = {}
 
 
+def all_passed_with_skip(rc, out):
+    """True for a file that ran everything it could and skipped a section (tests/lib.sh all_passed): exit 77, and the last
+    line says so. Its assertions held, unlike a file that skipped itself (skip_test), which exits 77 too."""
+    return rc == 77 and re.match(r"All .* (passed|killed)", (out.strip().splitlines() or [""])[-1]) is not None
+
+
 def baseline(e, root):
     """'ok', 'skip:<reason>' or 'bad:<why>' for the unmutated test file, run once per file."""
     key = (root, e["run"])
@@ -148,8 +155,8 @@ def baseline(e, root):
             shutil.rmtree(work, ignore_errors=True)
         if rc == 0:
             _baselines[key] = "ok"
-        elif rc == 77 and re.match(r"All .* (passed|killed)", (out.strip().splitlines() or [""])[-1]):
-            _baselines[key] = "ok"  # a file that ran everything it could and skipped a section (all_passed): its assertions held
+        elif all_passed_with_skip(rc, out):
+            _baselines[key] = "ok"
         elif rc == 77:
             skips = [x for x in out.splitlines() if x.startswith("SKIP")]
             _baselines[key] = "skip:" + (skips[-1][5:].strip() if skips else "no reason")
@@ -218,9 +225,9 @@ def classify(e, rc, out):
     name = e["name"]
     if rc is None:
         return "timeout", "TIMEOUT %s: %s ran past %ds on the mutated copy" % (name, e["run"], TIMEOUT)
-    if rc == 0:
-        return "survived", "SURVIVED %s: %s passed against the mutated copy" % (name, e["run"])
     fails = [x for x in out.splitlines() if x.startswith("FAIL")]
+    if rc == 0 or (all_passed_with_skip(rc, out) and not fails):
+        return "survived", "SURVIVED %s: %s passed against the mutated copy" % (name, e["run"])
     if rc in (77, 124, 126, 127) or not fails:
         tail = (out.strip().splitlines() or ["(no output)"])[-1]
         return "crashed", "CRASHED %s: %s exited %d with no FAIL line: %s" % (name, e["run"], rc, tail[:160])

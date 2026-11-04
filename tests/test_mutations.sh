@@ -20,6 +20,8 @@ printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then exit 127; 
 printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then sleep 30; fi\n' > "$T/slow.sh"
 printf '#!/bin/bash\necho "FAIL: always"; exit 1\n' > "$T/broken.sh"
 printf '#!/bin/bash\necho "SKIP: needs a thing"; exit 77\n' > "$T/skips.sh"   # skip-ok: throwaway test file
+printf '#!/bin/bash\necho "SKIP: a section"; echo "All thing tests passed"; exit 77\n' > "$T/partpass.sh"   # skip-ok: throwaway test file, ends the way all_passed does when a section was skipped
+printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then echo "SKIP: broke itself"; exit 77; fi\n' > "$T/skipsmutated.sh"   # skip-ok: throwaway test file
 # entry NAME RUN FIND COUNT EXPECT [REPLACE]: a one-entry mutations file at $T/m.json.
 entry() {
   "$PY" - "$T/m.json" "$1" "$2" "$3" "$4" "$5" "${6:-__version__ = \"$VER\"  # MUTATION-MARKER}" <<'PY'
@@ -39,7 +41,11 @@ ok "killed, and AGENTBUS_BIN names the mutated copy"
 echo "TEST 2: a mutation that survives fails the run"
 entry "survive" "$T/passes.sh" "$F" 1 "x"
 [ "$(status survive)" = 1 ] && grep -q '^SURVIVED survive' "$T/out" || fail "a passing test was not reported as a survivor: $(cat "$T/out")"
-ok "survivor exits 1"
+entry "partsurvive" "$T/partpass.sh" "$F" 1 "x"
+[ "$(status partsurvive)" = 1 ] && grep -q '^SURVIVED partsurvive' "$T/out" || fail "a mutated run that reported all passed with a section skipped (exit 77) was not a survivor: $(cat "$T/out")"
+entry "skipsmutated" "$T/skipsmutated.sh" "$F" 1 "x"
+[ "$(status skipsmutated)" = 2 ] && grep -q '^CRASHED skipsmutated: .*exited 77 with no FAIL line: SKIP: broke itself' "$T/out" || fail "a mutated run that skipped itself instead of finishing was not a crash: $(cat "$T/out")"
+ok "survivor exits 1, also when the file ran all it could and exited 77"
 
 echo "TEST 3: a test that fails for another reason, crashes, or times out is not a kill"
 entry "wrong" "$T/other.sh" "$F" 1 "a different reason"
