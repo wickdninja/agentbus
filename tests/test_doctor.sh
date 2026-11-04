@@ -831,4 +831,25 @@ assert "hook" in m.EARLY_COMMANDS, "the hook command is gone"
 PY
 ok "the Claude hooks piece is registered and the hook command exists"
 
+echo "TEST 18: hooks: no Claude Code folder means no Claude hooks warning (as for Codex); a folder without the hooks still warns"
+hooks_rows() {   # the hooks rows of the --json output in $T/out as "status scope detail" lines
+  "$PY" -I -c 'import json,sys; [print(c["status"], c["scope"], c["detail"]) for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "hooks"]' "$T/out"
+}
+world; rm -rf "$HOME/.claude"
+doc doctor --json
+rows=$(hooks_rows)
+case "$rows" in *"~/.claude"*|*".claude/settings.json"*) fail "doctor warned about Claude hooks with no ~/.claude: $rows";; esac
+grep -q "^ok user .*codex" <<<"$rows" || fail "the Codex hooks row went missing when only Claude was absent: $rows"
+world; rm -rf "$HOME/.codex"
+doc doctor --json
+case "$(hooks_rows)" in *codex*) fail "doctor warned about Codex hooks with no ~/.codex";; esac
+grep -q "^ok user .*claude" <<<"$(hooks_rows)" || fail "the Claude hooks row went missing when only Codex was absent: $(hooks_rows)"
+world; rm -rf "$HOME/.claude" "$HOME/.codex"
+doc doctor --json
+[ "$(hooks_rows)" = "n/a user no ~/.claude or ~/.codex found" ] || fail "neither tool installed: the hooks row is $(hooks_rows)"
+world; rm -f "$HOME/.claude/settings.json"
+doc doctor --json
+grep -q "^warn user .*claude.*no agentbus hooks" <<<"$(hooks_rows)" || fail "a Claude folder without the hooks no longer warns: $(hooks_rows)"
+ok "no ~/.claude: no Claude hooks row; no ~/.codex: no Codex row; neither: one n/a row; a folder with no hooks still warns"
+
 all_passed "All doctor tests passed"

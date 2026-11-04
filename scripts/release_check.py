@@ -14,7 +14,15 @@ problem and exits 1, or prints `release check passed: X.Y.Z`. Checks:
     (the newest tag in tests/released_commands.txt) for an rc: main's public README must never point at
     a tag that does not exist yet, so the pin bump and the final tag land in one commit;
   - .claude-plugin/plugin.json has the version and marketplace.json names the plugin with a git source
-    whose ref is the tag, never a ./ source (skipped when the files are absent);
+    whose ref is always a release tag, never main, a branch or a ./ source (skipped when the files are absent):
+    a release or release-candidate tree (and any --tag run) names its own tag; a development build keeps the
+    last published plugin release, the highest final tag that carries .claude-plugin/plugin.json, so a plugin
+    installed from the default branch between releases never runs untagged code. Before any plugin release
+    exists, a development build names the tag being prepared (v0.2.0 for 0.2.0.dev0): that tag does not exist
+    yet, so the install fails until the release, and it never runs main. Only the release-prep commit moves
+    the ref;
+  - the lines that name the pinned release in prose (README.md "Setup in this release (vX.Y.Z)", SECURITY.md
+    "pins vX.Y.Z today") name the release the install lines pin;
   - the current SKILL.md and AGENTS.md block hashes are in SKILL_SHA256_HISTORY and AGENTS_SHA256_HISTORY
     (python3 scripts/embed_skill.py --release);
   - DIST_NAME in bin/agentbus equals the name in pyproject.toml (the update check names no other project);
@@ -46,13 +54,23 @@ def wheel_tags():
         return set()
 
 
+def plugin_release_tags():
+    """The final release tags (vX.Y.Z) whose tree carries .claude-plugin/plugin.json, lowest first: the releases a plugin
+    install can come from."""
+    listed = subprocess.run(["git", "-C", ROOT, "tag", "--list", "v*"], capture_output=True, text=True).stdout.split()
+    finals = [t for t in listed if re.fullmatch(r"v(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})", t)]
+    carries = [t for t in finals if subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{t}:.claude-plugin/plugin.json"],
+                                                  capture_output=True).returncode == 0]
+    return sorted(carries, key=lambda t: tuple(int(x) for x in t[1:].split(".")))
+
+
 def install_lines(tag, wheel):
     """(the uv line, the pipx line) of the README for the tag. The wheel form installs the release's wheel by URL (no
     build, no package index; the file `agentbus update` installs); the git form builds from source."""
     if wheel:
         url = f"https://github.com/wickdninja/agentbus/releases/download/{tag}/agentbus-{tag[1:]}-py3-none-any.whl"
-        return f"uv tool install {url}", f"pipx install {url}"
-    return f"uv tool install git+https://github.com/wickdninja/agentbus@{tag}", f"pipx install git+https://github.com/wickdninja/agentbus@{tag}"
+        return f"uv tool install {url}", f"pipx install --force {url}"
+    return f"uv tool install git+https://github.com/wickdninja/agentbus@{tag}", f"pipx install --force git+https://github.com/wickdninja/agentbus@{tag}"
 
 
 def read(*parts):
@@ -165,6 +183,17 @@ def main():
     if wheel and re.search(REPO_URL, readme):
         problems.append(f"README.md still has a git+ install line, but v{pin_to} publishes a wheel (tests/released_wheels.txt): use the wheel URL")
 
+    # Prose that names the pinned release goes stale silently: each such line must name the release the install lines pin.
+    for name, rule in (("README.md", r"Setup in this release \((v[^)\s]*)\)"), ("SECURITY.md", r"pins (v\d+\.\d+\.\d+(?:rc\d+)?) today")):
+        try:
+            text = read(name)
+        except OSError:
+            continue
+        for line in text.splitlines():
+            for named in re.findall(rule, line):
+                if named != f"v{pin_to}":
+                    problems.append(f"{name}: '{re.search(rule, line).group(0)}' names {named}, but the install lines pin v{pin_to}")
+
     plugin = os.path.join(ROOT, ".claude-plugin", "plugin.json")
     market = os.path.join(ROOT, ".claude-plugin", "marketplace.json")
     if os.path.exists(plugin):
@@ -176,15 +205,22 @@ def main():
         entries = [p for p in data.get("plugins", []) if p.get("name") == "agentbus"]
         if not entries:
             problems.append(".claude-plugin/marketplace.json does not name the agentbus plugin")
-        # Between releases (an untagged dev build) the marketplace points at main, which exists; the release-prep commit
-        # moves the ref to the tag, and a tagged or release-versioned tree must name exactly that tag.
-        want_ref = "main" if dev and not a.tag else tag
+        # The ref always names a published tag; only the release-prep commit moves it. A tagged or release-versioned
+        # tree names exactly its own tag. A development build (main between releases) keeps the last plugin release:
+        # plugin users installing from the default branch must not run untagged code.
+        want_ref, why = tag, ""
+        if dev and not a.tag:
+            have = plugin_release_tags()
+            if have:
+                want_ref, why = have[-1], " (the last plugin release; the release-prep commit moves it)"
+            else:
+                want_ref, why = "v" + re.sub(r"\.dev\d+$", "", version), " (no tag carries the plugin yet, so the tag being prepared)"
         for p in entries:
             s = p.get("source")
             if isinstance(s, str):
                 problems.append(f".claude-plugin/marketplace.json source '{s}' is a path; it must be a git source with ref {want_ref}")
             elif not isinstance(s, dict) or s.get("ref") != want_ref:
-                problems.append(f".claude-plugin/marketplace.json source ref is {s.get('ref') if isinstance(s, dict) else s}, not {want_ref}")
+                problems.append(f".claude-plugin/marketplace.json source ref is {s.get('ref') if isinstance(s, dict) else s}, not {want_ref}{why}")
 
     skill = open(os.path.join(ROOT, "skills", "agentbus", "SKILL.md"), "rb").read()
     history = re.search(r"^SKILL_SHA256_HISTORY = \((.*?)^\)", src, re.S | re.M)

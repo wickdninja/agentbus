@@ -1611,6 +1611,150 @@
     "expect": "expected request_id_reused but succeeded"
   },
   {
+    "name": "update trusts a group-writable installer folder of any group",
+    "file": "bin/agentbus",
+    "find": "return group is not None and group == admin",
+    "replace": "return True",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a group-writable PATH entry was used"
+  },
+  {
+    "name": "update refuses the admin group's group-writable installer folder",
+    "file": "bin/agentbus",
+    "find": "return group is not None and group == admin",
+    "replace": "return False",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "the admin group's group-writable folder was refused"
+  },
+  {
+    "name": "update trusts a world-writable installer folder",
+    "file": "bin/agentbus",
+    "find": "    if st\\.st_mode & 0o002:\\n        return False\\n    if st\\.st_mode & 0o020:",
+    "replace": "    if st.st_mode & 0o020:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a world-writable folder was trusted"
+  },
+  {
+    "name": "update trusts a group-writable installer file",
+    "file": "bin/agentbus",
+    "find": "return not \\(st\\.st_mode & 0o022 or",
+    "replace": "return not (st.st_mode & 0o002 or",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a group- or world-writable installer file was trusted"
+  },
+  {
+    "name": "update trusts an installer folder owned by another user",
+    "file": "bin/agentbus",
+    "find": "    if uid is not None and st\\.st_uid not in \\(uid, 0\\):\\n        return False\\n    if st\\.st_mode & 0o002:",
+    "replace": "    if st.st_mode & 0o002:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a folder owned by another user"
+  },
+  {
+    "name": "update prints a source build where it cannot run the installer",
+    "file": "bin/agentbus",
+    "find": "if not inst\\[\"fork\"\\] and has_wheel:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "the manual_step does not print the release wheel's install command"
+  },
+  {
+    "name": "update prints a wheel URL for a release that has no wheel",
+    "file": "bin/agentbus",
+    "find": "if not inst\\[\"fork\"\\] and has_wheel:",
+    "replace": "if not inst[\"fork\"]:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a release with no wheel got a wheel URL"
+  },
+  {
+    "name": "an unknown install's pipx line has no --force",
+    "file": "bin/agentbus",
+    "find": "f\"pipx install --force \\{spec\\}\"",
+    "replace": "f\"pipx install {spec}\"",
+    "count": 1,
+    "run": "tests/test_update_detect.sh",
+    "expect": "an unknown install's pipx line lacks --force"
+  },
+  {
+    "name": "the README's pipx source line has no --force",
+    "file": "scripts/release_check.py",
+    "find": "f\"pipx install --force git\\+",
+    "replace": "f\"pipx install git+",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "README.md must carry the install line: pipx install git+"
+  },
+  {
+    "name": "a development build's marketplace ref follows main",
+    "file": "scripts/release_check.py",
+    "find": "want_ref, why = have\\[-1\\], ",
+    "replace": "want_ref, why = \"main\", ",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "an untagged dev build"
+  },
+  {
+    "name": "a development build keeps the oldest plugin release",
+    "file": "scripts/release_check.py",
+    "find": "want_ref, why = have\\[-1\\], ",
+    "replace": "want_ref, why = have[0], ",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "a dev build that keeps an older plugin release than the last"
+  },
+  {
+    "name": "before any plugin release a development build names the wrong tag",
+    "file": "scripts/release_check.py",
+    "find": "want_ref, why = \"v\" \\+ re\\.sub",
+    "replace": "want_ref, why = \"main\" + re.sub",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "a dev build before any plugin release, ref the tag being prepared"
+  },
+  {
+    "name": "the marketplace ref is main",
+    "file": ".claude-plugin/marketplace.json",
+    "find": "\"ref\": \"v0\\.2\\.0\"",
+    "replace": "\"ref\": \"main\"",
+    "count": 1,
+    "run": "tests/test_plugin_manifest.sh",
+    "expect": "the marketplace source is not a pinned git source"
+  },
+  {
+    "name": "release check ignores stale prose that names the pinned release",
+    "file": "scripts/release_check.py",
+    "find": "if named != f\"v\\{pin_to\\}\":",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_release_check.sh",
+    "expect": "a README that still says Setup in this release (v0.1.0)"
+  },
+  {
+    "name": "doctor warns about Claude hooks when there is no Claude folder",
+    "file": "bin/agentbus",
+    "find": "if scope == \"user\" and not os\\.path\\.isdir\\(setup_config_dir\\(target, \"user\"\\)\\):",
+    "replace": "if target == \"codex\" and scope == \"user\" and not os.path.isdir(setup_config_dir(target, \"user\")):",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor warned about Claude hooks with no ~/.claude"
+  },
+  {
+    "name": "doctor says hooks are not installed when neither tool has a folder",
+    "file": "bin/agentbus",
+    "find": "    if not out and absent:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "neither tool installed: the hooks row is"
+  },
+  {
     "name": "identity: name_active suggests no name",
     "file": "bin/agentbus",
     "find": "                free = free_name\\(con, name\\)",
