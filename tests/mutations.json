@@ -780,7 +780,7 @@
     "replace": "",
     "count": 1,
     "run": "tests/test_control_chars.sh",
-    "expect": "exit 0, want 2"
+    "expect": "--as: exit 0, want 2"
   },
   {
     "name": "AGENTBUS_AGENT is not checked for control characters",
@@ -789,7 +789,7 @@
     "replace": "pass",
     "count": 1,
     "run": "tests/test_control_chars.sh",
-    "expect": "AGENTBUS_AGENT: exit 0, want 2"
+    "expect": "AGENTBUS_AGENT: exit 1, want 2"
   },
   {
     "name": "bidi overrides are not control characters",
@@ -798,7 +798,7 @@
     "replace": ")",
     "count": 1,
     "run": "tests/test_control_chars.sh",
-    "expect": "exit 0, want 2"
+    "expect": "--as: exit 1, want 2"
   },
   {
     "name": "init refuses a missing folder again",
