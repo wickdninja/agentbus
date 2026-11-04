@@ -204,6 +204,32 @@ if normalize.bus_commands("agentbus --json --as x post 'a b' --to y && .agentbus
     failures.append("bus_commands: %s" % normalize.bus_commands("agentbus --json --as x post 'a b' --to y && .agentbus/bin/agentbus claims"))
 if normalize.bus_commands("echo agentbus-notes > f") != []: failures.append("bus_commands matched a word that only starts with agentbus")
 
+# ---- worktrees: one repo, one bus ----
+# A lead told only "coordinate lanes across these worktrees" (which sit in a folder apart from the repo) must use the
+# repo's bus: every join and message lands on it, and no second bus appears anywhere.
+WT = {"agent": "lead", "lanes": ["lane-a", "lane-b"]}
+def wt_events():
+    return [bus("lead", "join"), bus("lead", "post"), bus("lead", "post"), bus("lead", "leave")]
+WT_BUS = {"messages": [{"kind": "handoff", "sender": "lead", "recipient": "lane-a", "body": "x"},
+                       {"kind": "handoff", "sender": "lead", "recipient": "lane-b", "body": "x"}],
+          "claims": [], "agents": [], "log": [{"id": 1, "agent": "lead", "action": "join", "detail": "{}"}]}
+WT_FUNC = {"second_buses": []}
+must("worktrees good", "worktrees", wt_events(), WT_BUS, WT_FUNC, WT, True)
+# a side-bus run: the lead's calls all succeeded, on a bus made in the worktrees folder, so the repo's bus saw nothing
+side = {"messages": [], "claims": [], "agents": [], "log": []}
+must("worktrees: a side-bus run", "worktrees", wt_events(), side, {"second_buses": ["wts"]}, WT, False, "second bus")
+must("worktrees: the side bus is the whole finding", "worktrees", wt_events(), WT_BUS, {"second_buses": ["wts"]}, WT, False, "second bus was made: wts")
+must("worktrees: messages on another bus", "worktrees", wt_events(), dict(WT_BUS, messages=[]), WT_FUNC, WT, False, "2 posts succeeded but only 0")
+b2 = copy.deepcopy(WT_BUS); b2["messages"] = b2["messages"][:1]
+must("worktrees: one post went elsewhere", "worktrees", wt_events(), b2, WT_FUNC, WT, False, "2 posts succeeded but only 1")
+must("worktrees: the join is not on the repo's bus", "worktrees", wt_events(), dict(WT_BUS, log=[]), WT_FUNC, WT, False, "never joined the repo's bus")
+b2 = copy.deepcopy(WT_BUS); b2["messages"][1]["recipient"] = "lane-a"
+must("worktrees: lane-b was never told", "worktrees", wt_events(), b2, WT_FUNC, WT, False, "no message to lane-b")
+must("worktrees: the lead did not leave", "worktrees", wt_events(), dict(WT_BUS, agents=["lead"]), WT_FUNC, WT, False, "did not leave")
+must("worktrees: the lead ran init", "worktrees", wt_events() + [bus("lead", "init", "../wts")], WT_BUS, WT_FUNC, WT, False, "ran agentbus init")
+must("worktrees: the bus search was not run", "worktrees", wt_events(), WT_BUS, {}, WT, False, "did not search for a second bus")
+must("worktrees: empty trace", "worktrees", [], WT_BUS, WT_FUNC, WT, False, "empty trace")
+
 if failures:
     print("\n".join("FAIL: " + f for f in failures)); sys.exit(1)
 print("graders checked")

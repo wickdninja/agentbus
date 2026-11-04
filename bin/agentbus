@@ -575,7 +575,9 @@ CONTRACT = {
         "DoctorCheck": _o({"id": _STR, "status": {"type": "string", "enum": ["ok", "warn", "fail", "n/a"]}, "detail": _STR,
                            "fix": _NSTR, "hint": _NSTR, "scope": {"type": "string", "enum": ["user", "project"]}},
                            optional=("scope",)),
-        "Warning": _o({"code": _STR, "name": _STR, "did_you_mean": _list(_STR), "roster": _list(_STR), "roster_total": _INT}),
+        "Warning": _o({"code": _STR, "name": _STR, "did_you_mean": _list(_STR), "roster": _list(_STR), "roster_total": _INT,
+                       "agentbus_db": _STR, "discovered": _STR},
+                      optional=("name", "did_you_mean", "roster", "roster_total", "agentbus_db", "discovered")),
         "Envelope": _env({}),
     },
     # A warning is not an error: the command succeeded, and its result carries "warnings": [Warning].
@@ -585,6 +587,12 @@ CONTRACT = {
                                                "did_you_mean lists the closest roster names (at most 3, possibly none). roster lists "
                                                "the agents that have joined, by name (the 10 most recently seen at most); roster_total is how many there are.",
                                     "action": "If the name is a typo, post again to a name in did_you_mean or roster. The first message waits for the typo."},
+        "bus_env_mismatch": {"fields": ["agentbus_db", "discovered"], "commands": ["join", "brief"],
+                             "meaning": "AGENTBUS_DB names a bus other than the one this folder finds (the nearest .agentbus above it, or the main "
+                                        "checkout's for a linked worktree). The command used AGENTBUS_DB. Given only when discovery finds a bus "
+                                        "and the two differ; a worker outside any checkout is never warned.",
+                             "action": "One repo, one bus: unset AGENTBUS_DB to use the one discovery finds, or keep it only when the worker cannot "
+                                       "discover the bus (a sandbox, or a folder outside the checkout). Run buses to see the chain."},
     },
     "errors": {
         "claim_conflict": {"exit": 1, "retryable": False, "fields": ["resource", "holder", "expires_at", "purpose"],
@@ -717,8 +725,8 @@ CONTRACT = {
     },
     "commands": {
         "join": _cmd("Register on the roster",
-                     _o({"joined": _STR, "bus": _STR, "goal": _NGOAL, "agentbus": _STR, "contract": _INT, "duplicate": _BOOL},
-                        optional=("duplicate",)),
+                     _o({"joined": _STR, "bus": _STR, "goal": _NGOAL, "agentbus": _STR, "contract": _INT, "duplicate": _BOOL,
+                         "warnings": _list(_ref("Warning"))}, optional=("duplicate", "warnings")),
                      ["name_active", "request_id_reused"],
                      {"class": "idempotent_with_flag", "short": "with --request-id or --takeover",
                       "how": "join --request-id TOKEN: the same token and flags return the first result with duplicate true "
@@ -1720,10 +1728,81 @@ def setup_detected():
     return False
 
 
+# init looks at no more than this many entries of DIR for linked worktrees, and reads at most GITFILE_MAX bytes of any file.
+INIT_SCAN_MAX = 200
+GITFILE_MAX = 4096
+
+
+def linked_worktree_main(child):
+    """The main checkout of the linked worktree at `child` (a folder whose .git is a file), or None. Reads two small
+    files the way git writes them (child/.git: `gitdir: <repo>/.git/worktrees/<name>`, and that folder's commondir)
+    and runs nothing, so no program a repository's config names can run. A submodule, a --separate-git-dir or bare
+    repository's worktree, a pointer that does not check out and anything unreadable is None."""
+    try:
+        first = read_small(os.path.join(child, ".git"), GITFILE_MAX).split("\n", 1)[0].strip()
+        if not first.startswith("gitdir:"):
+            return None
+        gitdir = os.path.realpath(os.path.join(child, first[len("gitdir:"):].strip()))
+        common = os.path.realpath(os.path.join(gitdir, read_small(os.path.join(gitdir, "commondir"), GITFILE_MAX).strip()))
+    except (OSError, SystemExit):
+        return None
+    if os.path.basename(common) != ".git" or os.path.dirname(gitdir) != os.path.join(common, "worktrees"):
+        return None
+    return os.path.dirname(common)
+
+
+def worktrees_of_a_bused_repo(root):
+    """(a worktree, its main checkout, the bus folder's directory) when DIR holds, as immediate children, linked
+    worktrees of a repository that discovery already gives a bus, else None. This is init's one-repo-one-bus check.
+    The rule: only a linked worktree counts (agents in it use its repo's bus, wherever the worktree is), so an
+    ordinary workspace folder of independent checkouts, each maybe with a bus of its own, is never refused: nested
+    and workspace buses are a feature. A worktree whose main checkout is DIR or sits under DIR does not count either:
+    a bus at DIR would be an outer bus of that repo. The repo's bus is the one walk_buses finds from its main checkout
+    (its own .agentbus, or a workspace's above it), and DIR itself is not in question when it already has a bus.
+    Bounded: the first INIT_SCAN_MAX entries of DIR, and no program a repository's config names is run."""
+    try:
+        with os.scandir(root) as it:
+            names = []
+            for e in it:
+                if len(names) >= INIT_SCAN_MAX:
+                    break
+                if e.is_dir(follow_symlinks=False):
+                    names.append(e.name)
+    except OSError:
+        return None
+    seen = set()
+    for name in sorted(names):
+        child = os.path.join(root, name)
+        main = linked_worktree_main(child)
+        if not main or main in seen:
+            continue
+        seen.add(main)
+        if main == root or main.startswith(root + os.sep):
+            continue
+        try:
+            bus = next(walk_buses(main), None)
+        except SystemExit:
+            continue   # a suspect .agentbus there is refused wherever it is used; it is not this init's finding
+        if bus:
+            return child, main, bus
+    return None
+
+
 def cmd_init(a):
+    """Install the tool into DIR/.agentbus/. One repo, one bus: DIR is refused, with nothing made, when it holds linked
+    worktrees of a repository whose bus discovery already finds (worktrees_of_a_bused_repo has the rule), because
+    the agents in those worktrees use that bus and never this one; --second-bus makes the bus anyway. A DIR that
+    already has a bus is a re-run and always works. It makes the bus database too, so the hooks work right away."""
     if is_repo_local_copy():
         die("init runs from the installed agentbus or a clone of its repo, not a project copy. Run: agentbus init DIR", "bad_input", next="agentbus init DIR")
     root = os.path.realpath(os.path.abspath(os.path.expanduser(a.repo or os.getcwd())))
+    if not getattr(a, "second_bus", False) and os.path.isdir(root) and not os.path.lexists(os.path.join(root, ".agentbus")):
+        held = worktrees_of_a_bused_repo(root)
+        if held:
+            child, main, bus = held
+            die(f"{tilde(root)} holds worktrees of {tilde(main)}, whose bus is {tilde(bus)}/.agentbus; agents there use that bus, not one here. "
+                f"One repo, one bus. To check, run agentbus buses in {tilde(child)}. To make a second bus here on purpose: "
+                f"agentbus init {shlex.quote(root)} --second-bus", "bad_input", next=f"cd {shlex.quote(child)} && agentbus buses")
     made = make_target(root)
     info = repo_info(root)
     if info and os.path.realpath(info[0]) != root:
@@ -1740,6 +1819,12 @@ def cmd_init(a):
     global _RERUN
     _RERUN = "agentbus init " + root
     old, new = install_copy(root)
+    db = os.path.join(folder, "bus.db")
+    if not os.path.lexists(db):
+        # The hooks speak only for a bus whose database exists, and a hook never makes one, so init does: through
+        # open_bus, which has every check, mode and refusal a command's first open has. A bus that is there is
+        # left as it is (a re-run never migrates; upgrade does).
+        open_bus(db, strict_dir=True).close()
     record_buses(buses=[root])
     version = shown_version(new)
     if re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})? .*", version):
@@ -3692,6 +3777,28 @@ def warn_text(w):
     return text + " " + roster_text(w["roster"], w["roster_total"])
 
 
+def bus_env_warnings(up):
+    """[] or one bus_env_mismatch warning: AGENTBUS_DB is set and names a bus other than the one this folder finds
+    (selected_bus, at --up UP). Silent when it is the same file (links resolved), when discovery finds nothing or is
+    refused (a sandboxed worker with an assigned bus outside any checkout), and for every command but join and brief."""
+    env = explicit_db()
+    if not env:
+        return []
+    try:
+        found = os.path.join(selected_bus(up), ".agentbus", "bus.db")
+    except SystemExit:
+        return []
+    if os.path.realpath(env) == os.path.realpath(found):
+        return []
+    return [{"code": "bus_env_mismatch", "agentbus_db": env, "discovered": found}]
+
+
+def bus_env_text(w):
+    """A bus_env_mismatch warning as one stderr line."""
+    return (f"AGENTBUS_DB names {tilde(w['agentbus_db'])}, but this folder's bus is {tilde(w['discovered'])}. "
+            "Unset AGENTBUS_DB to use this folder's bus; keep it only if this worker cannot discover the bus.")
+
+
 def request_reused(token, name, original_id, original, what, same):
     """The one refusal for a request id reused with a different request: it names the original and the way out."""
     die(f"request id '{token}' was already used with a different {what}. Original: {original}. "
@@ -3960,6 +4067,10 @@ def join_result(con, a, name, **extra):
 def cmd_join(con, a):
     name = me(a)
     t = now()
+    warnings = bus_env_warnings(a.up)   # before the bus is held: it asks git, and the notice is queued until the bus closes
+    for w in warnings:
+        note(bus_env_text(w))
+    flag = {"warnings": warnings} if warnings else {}
     detail = {"tool": a.tool, "model": a.model, "branch": a.branch, "role": a.role}
     if a.request_id is not None:
         detail["request_id"] = a.request_id
@@ -3976,7 +4087,7 @@ def cmd_join(con, a):
             if isinstance(old, dict) and old.get("request_id") == a.request_id:
                 if old != detail:
                     request_reused(a.request_id, name, prev["id"], f"join (log #{prev['id']})", "join", "flags")
-                result = join_result(con, a, name, duplicate=True)
+                result = join_result(con, a, name, duplicate=True, **flag)
                 g = result["goal"]
                 emit(a, result, "joined as {} on {} (already joined)", name, a._db)
                 if g and not a.json:
@@ -4010,7 +4121,7 @@ def cmd_join(con, a):
             (name, a.tool, a.model, a.cwd or cwd_text(), a.branch, a.role, t, t))
         ensure_cursor(con, name)
         log(con, name, "join", json.dumps(detail))
-    result = join_result(con, a, name)
+    result = join_result(con, a, name, **flag)
     g = result["goal"]
     emit(a, result, "joined as {} on {}", name, tilde(a._db))
     if g and not a.json:
@@ -5273,6 +5384,8 @@ def register_buses(sub):
 def register_init(sub):
     ini = sub("init", help="Install this tool into DIR/.agentbus/ (installed tool or clone only)")
     ini.add_argument("repo", nargs="?", metavar="DIR", help="Directory to initialize, created (with its parents) if missing; default current directory. Run from the installed tool or source clone.")
+    ini.add_argument("--second-bus", action="store_true", help="Make a bus in DIR even though DIR holds linked worktrees of a repo that already has one "
+                                                              "(by default init refuses: one repo, one bus, and agents in those worktrees use the repo's)")
 
 
 def register_upgrade(sub):
@@ -8183,11 +8296,11 @@ SKILL_TEXT = (
     '\n'
     '## Command and identity\n'
     '\n'
-    "Run the bus directory's `.agentbus/bin/agentbus`; from another worktree, use its absolute path. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Reuse a name only when its session has ended. Below, `agentbus` means that copy. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
+    "Use `agentbus` from PATH. Use the bus directory's `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing; otherwise stop and tell the user. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
     '\n'
-    'Dispatchers give workers the absolute CLI and database paths and set `AGENTBUS_DB` for every command. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
+    'Set `AGENTBUS_DB` only when a worker cannot discover the bus (a sandbox or a folder outside the checkout). If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
     '\n'
-    'Discovery finds the nearest ancestor bus. `buses` lists the chain; `--up 1` selects the next outer bus.\n'
+    'Discovery finds the nearest ancestor bus. One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` and ask; do not create another. `--up 1` is the next outer bus.\n'
     '\n'
     '## Start\n'
     '\n'
@@ -8211,11 +8324,11 @@ SKILL_TEXT = (
     '\n'
     'Kinds: note, question, answer, handoff, decision, alert, done. Assign work with handoff. Decisions, if used: `read --topic decision`.\n'
     '\n'
-    'Check recipients with `who`. Messages queue for absent names (post warns); posting starts no agents. Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.\n'
+    'Check recipients with `who`. Messages queue for absent names (post warns). Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.\n'
     '\n'
     '## Read correctly\n'
     '\n'
-    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. `read --id N` shows a body cut at 2 KB. Duplicate delivery is possible; check message IDs before repeating actions.\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities get older direct messages but only later broadcasts. Use `read` for older history, `read --since ID` for newer. `read --id N` shows a body cut at 2 KB.\n'
     '\n'
     'A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.\n'
     '\n'
@@ -8233,9 +8346,9 @@ SKILL_TEXT = (
 )
 AGENTS_SNIPPET = (
     '## agentbus\n'
-    "If `.agentbus/` exists in this folder (otherwise ignore this section): this workspace has a shared agentbus. Run `.agentbus/bin/agentbus skill` for the full protocol; if it says `unknown command 'skill'`, the copy is 0.1.x: stop and tell the user to run `agentbus upgrade --all PARENT_DIR`.\n"
-    'Join: `.agentbus/bin/agentbus --as NAME join`. Before editing: `.agentbus/bin/agentbus --as NAME claim PATH --purpose WHY`.\n'
-    'Between steps: `.agentbus/bin/agentbus --as NAME inbox`. Finish: `.agentbus/bin/agentbus --as NAME post RESULT --kind done`, then `leave`.\n'
+    "If `.agentbus/` exists in this folder or a parent (otherwise ignore this section): this workspace has a shared agentbus. Use `agentbus` from PATH; use `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing, otherwise stop and tell the user. Run `agentbus skill` for the full protocol; if it says `unknown command 'skill'`, the copy is 0.1.x: stop and tell the user to run `agentbus upgrade --all PARENT_DIR`.\n"
+    'Join: `agentbus --as NAME join`. Before editing: `agentbus --as NAME claim PATH --purpose WHY`.\n'
+    'Between steps: `agentbus --as NAME inbox`. Finish: `agentbus --as NAME post RESULT --kind done`, then `leave`.\n'
 )
 SKILL_SHA256_HISTORY = (
     "2af5e4efedd84d7da42da6c4c5ddd02f230cc002e05b733741557dfd38b06156",
@@ -12763,6 +12876,67 @@ def doctor_check_copy(ctx):
     return [doctor_result("copy", "ok", f"{copy or label}, same as the installed agentbus")]
 
 
+# ---- one repo, one bus ----
+
+def doctor_check_bus_env(ctx):
+    """A row only when AGENTBUS_DB names a bus other than the one this folder finds (bus_env_warnings): one repo, one bus."""
+    return [doctor_result("bus-env", "warn", f"AGENTBUS_DB names {w['agentbus_db']}, but this folder's bus is {w['discovered']}", "unset AGENTBUS_DB")
+            for w in bus_env_warnings(ctx.up)]
+
+
+# At most this many of a repo's linked worktrees are read for doctor's two-buses check.
+DOCTOR_WORKTREES_MAX = 50
+
+
+def repo_worktree_dirs(main):
+    """The linked worktrees of the repository whose main checkout is `main`, from git's own records
+    (<main>/.git/worktrees/*/gitdir, each holding `<worktree>/.git`): files read, nothing run. At most
+    DOCTOR_WORKTREES_MAX. [] for a repository whose git dir is not <main>/.git."""
+    base = os.path.join(main, ".git", "worktrees")
+    try:
+        with os.scandir(base) as it:
+            names = sorted(e.name for e in it if e.is_dir(follow_symlinks=False))[:DOCTOR_WORKTREES_MAX]
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        try:
+            line = read_small(os.path.join(base, name, "gitdir"), GITFILE_MAX).strip()
+        except (OSError, SystemExit):
+            continue
+        if os.path.isabs(line) and os.path.basename(line) == ".git":
+            out.append(os.path.dirname(line))
+    return out
+
+
+def doctor_check_two_buses(ctx):
+    """One warning for each bus folder that sits directly above this repo's linked worktrees but is not one the repo
+    uses: not the bus discovery finds from the repo's main checkout, and not an outer bus above the checkout (a
+    workspace's bus nests, which is a feature). The agents in those worktrees use the repo's bus, so that folder is a
+    second bus nobody finds. Judged from files alone (git's worktree records); the list of recorded buses is not read,
+    because a recorded bus that serves the repo by nesting is not a problem and one that does not is found here."""
+    try:
+        info = repo_info(os.getcwd())
+        keep = next(walk_buses(info[0]), None) if info else None
+    except SystemExit:
+        return []
+    if not keep:
+        return []
+    main, out, seen = info[0], [], set()
+    for wt in repo_worktree_dirs(main):
+        above = os.path.realpath(os.path.dirname(wt))
+        if above in seen or above == keep or main == above or main.startswith(above + os.sep):
+            continue
+        seen.add(above)
+        if os.path.lexists(os.path.join(above, ".agentbus")):
+            second = os.path.join(above, ".agentbus")
+            out.append(doctor_result(
+                "two-buses", "warn", f"{second} sits directly above this repo's worktrees, but they use {keep}/.agentbus (one repo, one bus)",
+                hint=f"Keep {keep}/.agentbus. Read anything worth keeping in the other first (AGENTBUS_DB={shlex.quote(os.path.join(second, 'bus.db'))} agentbus read), "
+                     f"then remove it: rm -r {shlex.quote(second)}. Lanes that set AGENTBUS_DB to it should unset it."))
+    return out
+
+
 # ---- the skill and the AGENTS.md block ----
 
 def doctor_piece(target, id):
@@ -12916,6 +13090,7 @@ def doctor_check_hooks(ctx):
 
 
 for _id, _fn in (("tool", doctor_check_tool), ("bus", doctor_check_bus), ("copy", doctor_check_copy),
+                 ("bus-env", doctor_check_bus_env), ("two-buses", doctor_check_two_buses),
                  ("skill", doctor_check_skill), ("agents-md", doctor_check_agents), ("hooks", doctor_check_hooks)):
     register_doctor_check(_id, _fn)
 
@@ -13161,6 +13336,11 @@ def cmd_brief(con, a):
               "omitted": {"agents": agents_more, "questions": questions_more, "unread": unread_more, "pending_others": others_more,
                           "facts": facts_more},
               "next": _brief_next(me_name, joined, unread_total, questions)}
+    warnings = bus_env_warnings(a.up)
+    if warnings:
+        result["warnings"] = warnings
+        for w in warnings:
+            note(bus_env_text(w))
     if a.json:
         print_json(result)
     else:
@@ -13291,7 +13471,7 @@ CONTRACT["commands"]["brief"] = _cmd(
         "pending_others": _o({"items": _list(_ref("BriefMessage")), "next": _NSTR}),
         "facts": _o({"since": _NSTR, "items": _list(_ref("BriefFact"))}),
         "omitted": _o({"agents": _INT, "questions": _INT, "unread": _INT, "pending_others": _INT, "facts": _INT}),
-        "next": _STR}))
+        "next": _STR, "warnings": _list(_ref("Warning"))}, optional=("warnings",)))
 
 
 # ---- demo: a hands-off tour for a person -----------------------------------------------------------------------------

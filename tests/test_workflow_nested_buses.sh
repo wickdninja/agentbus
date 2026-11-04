@@ -23,9 +23,9 @@ next: agentbus setup codex (teaches Codex the protocol)" "$(sed 1d <<<"$got")"
 grep -Eq '^installed agentbus .+ into <REPO>/app/\.agentbus/$' <<<"$(sed -n 1p <<<"$got")" || fail "first init line: $(sed -n 1p <<<"$got")"
 APP_DB="$R/app/.agentbus/bus.db"
 mkdir -p "$R/app/src"; cd "$R/app/src"
-say "  0  <REPO>/app  bus.db not created  copy <copy>
-  1  <REPO>  bus.db not created  copy <copy>" agentbus buses
-ok "chain listed nearest first, before any bus file exists"
+say "  0  <REPO>/app  bus.db exists  copy <copy>
+  1  <REPO>  bus.db exists  copy <copy>" agentbus buses
+ok "chain listed nearest first; init made each bus's database"
 
 echo "STEP 2: the same name joins both buses; claims and messages stay on the bus they were made on"
 say "joined as a on <REPO>/app/.agentbus/bus.db" agentbus --as a join

@@ -68,7 +68,7 @@ PY
 ok "required sentences present and within their caps"
 
 echo
-echo "TEST: every command the skill names exists in the parser; coordination commands name .agentbus/bin/agentbus, never a bare agentbus"
+echo "TEST: every command the skill names exists in the parser; coordination commands run the installed agentbus, never the project copy"
 "$PY" -I - "$BIN" "$SKILL" <<'PY'
 import re, runpy, shlex, sys
 bin_, skill_path = sys.argv[1:]
@@ -79,7 +79,7 @@ for action in parser._actions:
     if hasattr(action, 'choices') and isinstance(action.choices, dict):
         commands |= set(action.choices)
 INSTALLED = {'init', 'upgrade', 'setup', 'doctor', 'skill', 'watch', 'schema'}  # the installed tool's own
-skip = {'agentbus', 'AGENTBUS_DB', '.agentbus/bin/agentbus'}
+skip = {'agentbus', 'AGENTBUS_DB', '.agentbus/bin/agentbus', 'git ls-files .agentbus'}   # the last gates running the project copy
 for snippet in re.findall(r'`([^`]+)`', skill):
     if snippet in skip:
         continue
@@ -88,13 +88,12 @@ for snippet in re.findall(r'`([^`]+)`', skill):
         tokens = tokens[2:] if tokens[0] in ('--as', '--up') else tokens[1:]
     if tokens and not tokens[0].startswith('-') and tokens[0].isalpha():
         assert tokens[0] in commands, ('the skill names a command that does not exist', snippet)
-# A bare `agentbus <command>` in agent-facing text is the installed tool, which is only for the
-# human commands. Everything an agent runs for coordination names .agentbus/bin/agentbus.
-for m in re.finditer(r'(?<![./\w-])agentbus[ ]+([a-z][a-z-]*)', skill):
-    assert m.group(1) not in commands or m.group(1) in INSTALLED, ('bare agentbus used for a coordination command', m.group(0))
+# A hostile clone can ship .agentbus/bin/agentbus: the skill names it alone, as the gated fallback, and never with a command.
+for m in re.finditer(r'\.agentbus/bin/agentbus[ ]+([a-z][a-z-]*)', skill):
+    assert m.group(1) not in commands, ('the project copy is told to run a command', m.group(0))
 print(f'{len(commands)} commands in the parser')
 PY
-ok "commands named by the skill exist; none is a bare agentbus coordination command"
+ok "commands named by the skill exist; none is run through the project copy"
 
 echo
 echo "TEST: agentbus skill prints the bundled skill; with AGENTBUS_EMBED_CHECK=1 it is exactly skills/agentbus/SKILL.md"
@@ -129,14 +128,21 @@ $want"
 ok "the setup how-to's dry-run example matches the real output"
 
 echo
-echo "TEST: agentbus skill --agents-md prints the 4-line AGENTS.md block, at most 700 bytes, naming .agentbus/bin/agentbus"
+echo "TEST: agentbus skill --agents-md prints the 4-line AGENTS.md block, at most 700 bytes, running the installed agentbus and gating the project copy"
 agentbus skill --agents-md >"$T/agents.out"
 [ "$(wc -l <"$T/agents.out" | tr -d ' ')" = 4 ] || fail "the AGENTS.md block is not 4 lines: $(cat "$T/agents.out")"
 [ "$(wc -c <"$T/agents.out" | tr -d ' ')" -le 700 ] || fail "the AGENTS.md block is over 700 bytes"
 head -n 1 "$T/agents.out" | grep -qx '## agentbus' || fail "first line is not '## agentbus'"
-grep -qF '`.agentbus/bin/agentbus skill`' "$T/agents.out" || fail "the block does not name .agentbus/bin/agentbus skill"
+grep -qF 'Run `agentbus skill` for the full protocol' "$T/agents.out" || fail "the block does not send the agent to agentbus skill from PATH"
+grep -qF 'exists in this folder or a parent' "$T/agents.out" || fail "the block's condition is wrong for a repo inside a workspace whose bus is in a parent folder"
+grep -qF 'Use `agentbus` from PATH; use `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing, otherwise stop and tell the user.' "$T/agents.out" || fail "the block lacks the gated fallback and its refusal wording"
+grep -qF '`.agentbus/bin/agentbus skill`' "$T/agents.out" && fail "the block still tells the agent to run the project copy unconditionally"
 grep -qF "if it says \`unknown command 'skill'\`, the copy is 0.1.x" "$T/agents.out" || fail "the block lacks the stale-copy rule"
-grep -qE '(^|[^./a-z-])agentbus (join|claim|inbox|post|leave)' "$T/agents.out" && fail "a bare agentbus coordination command in the block"
+grep -qF '`.agentbus/bin/agentbus --as' "$T/agents.out" && fail "a coordination command in the block runs the project copy"
+grep -qF '`agentbus --as NAME join`' "$T/agents.out" || fail "the block lacks the installed-agentbus join command"
+grep -qF 'Use `agentbus` from PATH. Use the bus directory'"'"'s `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing; otherwise stop and tell the user.' "$SKILL" || fail "the skill lacks the PATH rule and its refusal wording"
+grep -qF 'One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` and ask; do not create another.' "$SKILL" || fail "the skill lacks the one-repo-one-bus rule"
+grep -qF 'Set `AGENTBUS_DB` only when a worker cannot discover the bus' "$SKILL" || fail "the skill lacks the AGENTBUS_DB rule"
 agentbus --json skill --agents-md | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["text"].startswith("## agentbus\n"), d' || fail "--json skill --agents-md"
 ok "AGENTS.md block: 4 lines, $(wc -c <"$T/agents.out" | tr -d ' ') bytes"
 

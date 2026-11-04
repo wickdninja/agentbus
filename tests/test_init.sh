@@ -13,11 +13,13 @@ agentbus init "$R" > "$T/out1"
 grep -qx '.agentbus/' "$R/.git/info/exclude" && grep -q 'optional: add .* to .gitignore to share that rule' "$T/out1" || fail "exclude line / hint"
 [ ! -e "$R/.gitignore" ] && [ -z "$(git -C "$R" status --porcelain)" ] || fail "init dirtied the repo"
 [ "$(mode "$R/.agentbus/VERSION")" = 600 ] || fail "VERSION mode"
-[ ! -e "$R/.agentbus/bus.db" ] || fail "init opened a bus"
+[ -f "$R/.agentbus/bus.db" ] && [ "$(mode "$R/.agentbus/bus.db")" = 600 ] || fail "init did not make a private bus database"
+[ "$("$PY" -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("PRAGMA user_version").fetchone()[0])' "$R/.agentbus/bus.db")" = 1 ] || fail "the database init made has no schema version"
+[ ! -e "$R/.agentbus/bus.db-journal" ] || fail "init left a journal"
 [ ! -e "$HOME/.agentbus" ] || fail "init wrote ~/.agentbus"
 agentbus init "$R" > "$T/out1b"
 [ "$(grep -c '^.agentbus/$' "$R/.git/info/exclude")" = 1 ] && ! grep -q 'added' "$T/out1b" || fail "not idempotent"
-ok "layout, modes, VERSION, gitignore, idempotent, no bus opened, HOME untouched"
+ok "layout, modes, VERSION, gitignore, idempotent, the database made, HOME untouched"
 
 echo "TEST 2: a worktree's call finds the main checkout's bus"
 W="$T/wt"; git -C "$R" worktree add -q "$W" -b wt
@@ -52,9 +54,9 @@ echo "TEST 5: init in a workspace creates the copy, with no git exclude"
 WS="$T/workspace"; mkdir -p "$WS"
 (cd "$WS" && agentbus init > "$T/ws-init")
 [ -x "$WS/.agentbus/bin/agentbus" ] && [ -s "$WS/.agentbus/VERSION" ] || fail "workspace copy missing"
-[ ! -e "$WS/.git" ] && [ ! -e "$WS/.agentbus/bus.db" ] || fail "init created git metadata or opened the bus"
+[ ! -e "$WS/.git" ] && [ -f "$WS/.agentbus/bus.db" ] || fail "init created git metadata or no bus database"
 WSR=$(cd "$WS" && pwd -P); grep -qF "into $WSR/.agentbus/" "$T/ws-init" && grep -qx "next: cd $WSR" "$T/ws-init" || fail "init did not name its copy and the next step: $(cat "$T/ws-init")"
-ok "non-repo init installs without an exclude or a database"
+ok "non-repo init installs with a database and without an exclude"
 
 echo "TEST 6: nested init names the outer bus, and targets exactly DIR"
 N="$WS/repo"; mkrepo "$N"
@@ -89,4 +91,50 @@ rc=0; agentbus init "$T/afile" 2> "$T/f-err" || rc=$?
 rc=0; agentbus init "$T/afile/sub" 2> "$T/f-err" || rc=$?
 [ "$rc" = 2 ] && grep -q "not a directory" "$T/f-err" || fail "init under a file was not refused"
 ok "missing folders are created; unwritable parent, a file, and a path under a file are refused with exit 2"
+echo "TEST: one repo, one bus: init refuses a folder of linked worktrees whose repo already has a bus, unless --second-bus"
+# Bug it catches: `init ~/src/wt`, a plain folder of worktrees of a repo that has its own bus, made a second bus nobody
+# there would find, and the lanes were then told to set AGENTBUS_DB to it. The worktrees' own commands use the repo's bus.
+rl() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
+O="$T/one"; mkdir -p "$O"; OAPP="$O/app"; mkrepo "$OAPP"; agentbus init "$OAPP" >/dev/null
+OWT="$O/wts"; mkdir -p "$OWT"; git -C "$OAPP" worktree add -q "$OWT/lane-a" -b one-a; git -C "$OAPP" worktree add -q "$OWT/lane-b" -b one-b
+mkdir -p "$OWT/notes"
+expect_fail "holds worktrees of $(rl "$OAPP"), whose bus is $(rl "$OAPP")/.agentbus; agents there use that bus, not one here" agentbus init "$OWT"
+[ ! -e "$OWT/.agentbus" ] || fail "the refused init left a bus folder"
+rc=0; agentbus --json init "$OWT" >"$T/one-out" 2>"$T/one-err" || rc=$?
+python3 - "$T/one-err" "$rc" "$(rl "$OAPP")" <<'PYT' || fail "the refusal is not a bad_input error with next and the flag"
+import json, sys
+e = json.loads(open(sys.argv[1]).read())["error"]
+assert sys.argv[2] == "2" and e["code"] == "bad_input", e
+assert e["next"] and "buses" in e["next"], e
+assert "--second-bus" in e["message"] and sys.argv[3] in e["message"], e
+PYT
+[ ! -s "$T/one-out" ] || fail "the refused init printed a result"
+agentbus init "$OWT" --second-bus >/dev/null || fail "--second-bus did not allow the deliberate second bus"
+[ -x "$OWT/.agentbus/bin/agentbus" ] || fail "--second-bus made no bus"
+agentbus init "$OWT" >/dev/null || fail "re-running init on a folder that already has a bus was refused"
+ok "a folder of linked worktrees of a repo with a bus is refused (bad_input, next, nothing made); --second-bus and a re-run work"
+
+echo "TEST: one repo, one bus: what is not refused"
+# A workspace of independent repos (nested and workspace buses are a feature), a workspace holding the repo's main checkout
+# beside its worktree (its bus is an outer bus of the repo), a repo with no bus yet, and git files that name nothing.
+OW="$T/one-ws"; mkdir -p "$OW"; mkrepo "$OW/r1"; mkrepo "$OW/r2"; agentbus init "$OW/r1" >/dev/null
+agentbus init "$OW" >/dev/null || fail "a workspace of independent repos was refused"
+OW2="$T/one-ws2"; mkdir -p "$OW2"; mkrepo "$OW2/app"; agentbus init "$OW2/app" >/dev/null; git -C "$OW2/app" worktree add -q "$OW2/app-wt" -b one-ws2
+agentbus init "$OW2" >/dev/null || fail "a workspace holding the main checkout beside its worktree was refused"
+OB="$T/one-nobus"; mkdir -p "$OB"; mkrepo "$OB/app"; mkdir -p "$T/one-nobus-wts"; git -C "$OB/app" worktree add -q "$T/one-nobus-wts/w1" -b one-nb
+agentbus init "$T/one-nobus-wts" >/dev/null || fail "worktrees of a repo with no bus were refused"
+OJ="$T/one-junk"; mkdir -p "$OJ/a" "$OJ/b" "$OJ/c"; printf 'gitdir: %s\n' "$T/does/not/exist" > "$OJ/a/.git"; head -c 20000 /dev/zero | tr '\0' x > "$OJ/b/.git"; mkdir "$OJ/c/.git"
+for i in $(seq 1 250); do mkdir -p "$OJ/many/d$i"; done
+agentbus init "$OJ" >/dev/null || fail "git files that name nothing refused an init"
+ok "independent repos, main checkout beside its worktree, no bus yet, and junk git files all init"
+
+echo "TEST: one repo, one bus: a workspace bus counts as the repo's bus, and no program a repository names is run"
+OS="$T/one-wsbus"; mkdir -p "$OS"; mkrepo "$OS/app"; agentbus init "$OS" >/dev/null
+OSW="$T/one-wsbus-wts"; mkdir -p "$OSW"; git -C "$OS/app" worktree add -q "$OSW/w1" -b one-sw1
+M="$T/one-marker"; printf '#!/bin/sh\ntouch "%s"\n' "$M" > "$T/one-hook.sh"; chmod +x "$T/one-hook.sh"
+git -C "$OS/app" config core.fsmonitor "$T/one-hook.sh"; git -C "$OS/app" config core.sshCommand "$T/one-hook.sh"; git -C "$OS/app" config core.pager "$T/one-hook.sh"
+expect_fail "holds worktrees of $(rl "$OS/app"), whose bus is $(rl "$OS")/.agentbus" agentbus init "$OSW"
+[ ! -e "$M" ] || fail "init ran a program the repository's config names"
+[ ! -e "$OSW/.agentbus" ] || fail "the workspace-bus refusal made a bus"
+ok "worktrees of a repo covered by a workspace bus are refused too; the repo's config programs are never run"
 echo "All init tests passed"

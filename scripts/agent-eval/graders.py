@@ -159,7 +159,37 @@ def grade_resume(events, bus, func, cfg):
     return not why, why
 
 
-GRADERS = {"handoff": grade_handoff, "conflict": grade_conflict, "resume": grade_resume}
+def grade_worktrees(events, bus, func, cfg):
+    """One repo, one bus. A lead told only to coordinate lanes across worktrees (which sit in a folder apart from the
+    repo) must use the repo's bus: every join and post that succeeded is on it, each lane was told something, the lead
+    left, it never ran init, and the harness found no other .agentbus anywhere in the attempt (func["second_buses"])."""
+    me, lanes, why = cfg["agent"], cfg["lanes"], []
+    if not events:
+        return False, ["empty trace"]
+    second = func.get("second_buses")
+    if second is None:
+        why.append("the harness did not search for a second bus")
+    elif second:
+        why.append("a second bus was made: " + ", ".join(second))
+    if _bus(events, me, "init"):
+        why.append("%s ran agentbus init in a project whose bus already exists" % me)
+    posts, joins = _bus(events, me, "post", ok=True), _bus(events, me, "join", ok=True)
+    mine = [m for m in bus["messages"] if m["sender"] == me]
+    if len(mine) < len(posts):
+        why.append("%d posts succeeded but only %d are on the repo's bus" % (len(posts), len(mine)))
+    if not [r for r in bus["log"] if r["agent"] == me and r["action"] == "join"]:
+        why.append("%s never joined the repo's bus" % me)
+    elif len([r for r in bus["log"] if r["agent"] == me and r["action"] == "join"]) < len(joins):
+        why.append("%s joins succeeded but fewer are on the repo's bus" % me)
+    for lane in lanes:
+        if not [m for m in mine if m["recipient"] == lane]:
+            why.append("no message to %s on the repo's bus" % lane)
+    if me in bus["agents"]:
+        why.append("%s did not leave" % me)
+    return not why, why
+
+
+GRADERS = {"handoff": grade_handoff, "conflict": grade_conflict, "resume": grade_resume, "worktrees": grade_worktrees}
 
 
 def grade(scenario, events, bus, func, cfg):

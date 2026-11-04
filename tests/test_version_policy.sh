@@ -63,19 +63,16 @@ HUMAN = {"init", "upgrade", "setup", "doctor", "skill", "watch", "schema"}   # t
 AGENT = {"join", "leave", "who", "post", "inbox", "read", "ctx", "claim", "release", "claims", "log", "status", "goal", "buses"}
 
 def agent_text_problems(text):
-    """Commands in agent-facing text that name the installed agentbus where the bus copy belongs, or a path that is not the copy."""
+    """Commands in agent-facing text that run something other than the installed `agentbus` (a hostile clone can ship
+    .agentbus/bin/agentbus): any path-named agentbus, and the project copy with arguments. The bare copy path is allowed
+    only as the one gated fallback (named alone, never with a command)."""
     import re
     bad = []
     for span in re.findall(r"`([^`\n]+)`", text):
         words = span.split()
         if words[0].endswith("agentbus") and words[0] != "agentbus":
-            if not (words[0] == ".agentbus/bin/agentbus" or words[0].endswith("/.agentbus/bin/agentbus")):
+            if not (words[0] == ".agentbus/bin/agentbus" and len(words) == 1):
                 bad.append(span)
-        elif words[0] == "agentbus" and len(words) > 1 and words[1] not in HUMAN:
-            bad.append(span)
-    for m in re.finditer(r"(?<![./\w-])agentbus ([a-z]+)", text):   # prose: `agentbus VERB` outside a path is the installed tool
-        if m.group(1) in AGENT:
-            bad.append(m.group(0))
     return bad
 
 def agents_block(path):
@@ -153,7 +150,7 @@ ROWS=(
 "9|0.1.0|0.1.0|synthetic schema 2|n/a|n/a|the 0.1.0 copy answers schema_refused, bytes equal; upgrade from a project copy is refused"
 "10|new|new|needs migration|current|current|watch and doctor write nothing; a non-hook command migrates with one backup"
 "11|new|0.1.0|any|AGENTS.md block|n/a|the 0.1.0 copy has no skill command; the block names the upgrade --all fallback"
-"12|new|new|current|current|templates|every agent-facing command is .agentbus/bin/agentbus (the Claude hook text excepted: it names the installed agentbus); the installed agentbus only in human commands"
+"12|new|new|current|current|templates|every agent-facing command is the installed agentbus from PATH; the bus copy is named once, as a gated fallback, never with a command"
 "13|new|new|current|current|Codex hook|tripwire: the Codex hook cells are added the day a Codex hook piece exists"
 )
 
@@ -399,15 +396,17 @@ import sys, h
 skill, block = (open(p).read() for p in sys.argv[1:3])
 assert not h.agent_text_problems(skill), h.agent_text_problems(skill)
 assert not h.agent_text_problems(block), h.agent_text_problems(block)
-assert "Run the bus directory's `.agentbus/bin/agentbus`" in skill
-assert block.count("`.agentbus/bin/agentbus ") >= 4, block
-# the human-facing commands do appear, by the installed name
+for text in (skill, block):
+    assert "Use `agentbus` from PATH" in text or "Use `agentbus` from PATH;" in text, text
+    assert "only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing" in text, text
+    assert "otherwise stop and tell the user" in text, text
+assert block.count("`agentbus --as NAME ") >= 4, block
 assert "agentbus upgrade DIR" in skill and "`agentbus upgrade --all PARENT_DIR`" in block
 # the detector itself: each bad shape is caught, the good ones pass
-assert h.agent_text_problems("`agentbus join`") == ["agentbus join"] or h.agent_text_problems("`agentbus join`")
-assert h.agent_text_problems("run agentbus claim src/a.py first")
+assert h.agent_text_problems("`.agentbus/bin/agentbus --as a join`")
+assert h.agent_text_problems("`/w/app/.agentbus/bin/agentbus --as a join`")
 assert h.agent_text_problems("`/usr/local/bin/agentbus --as a join`")
-assert not h.agent_text_problems("`/w/app/.agentbus/bin/agentbus --as a join` and `.agentbus/bin/agentbus skill` and `agentbus upgrade DIR`")
+assert not h.agent_text_problems("`agentbus --as a join` and `.agentbus/bin/agentbus` and `agentbus upgrade DIR`")
 PY
 }
 
