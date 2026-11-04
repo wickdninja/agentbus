@@ -97,8 +97,30 @@ MESSAGE_COLUMNS = "id, ts, sender, recipient, kind, topic, body, reply_to"
 _JSON_ERRORS = False
 
 
+def _test_clock_offset():
+    """Test hook, inert unless set: AGENTBUS_TEST_NOW=2026-11-03T23:30:00Z makes this process start its clock at that
+    time (UTC) and run on from there, so a test can put "now" anywhere in the day (the human time format switches to a
+    date when a claim's expiry falls on the next local day). An unset or malformed value changes nothing."""
+    v = os.environ.get("AGENTBUS_TEST_NOW", "")
+    if not v:
+        return None
+    try:
+        return datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)
+    except ValueError:
+        return None
+
+
+_CLOCK_OFFSET = _test_clock_offset()
+
+
+def clock():
+    """The current time as an aware UTC datetime: the real clock, or the one AGENTBUS_TEST_NOW started."""
+    t = datetime.now(timezone.utc)
+    return t + _CLOCK_OFFSET if _CLOCK_OFFSET is not None else t
+
+
 def now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return clock().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------- output safety ----------
@@ -3966,7 +3988,7 @@ def cmd_join(con, a):
         if row and not a.takeover:
             try:
                 seen = datetime.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                mins = (datetime.now(timezone.utc) - seen).total_seconds() / 60
+                mins = (clock() - seen).total_seconds() / 60
             except (TypeError, ValueError):
                 mins = LIVE_WINDOW_MIN  # not a time this tool wrote: counts as stale
             # A last_seen in the future is not a time this tool wrote either (a lane can set it):
@@ -4057,8 +4079,8 @@ def q_who(con, limit=LISTING_LIMIT):
 
 def fmt_who(r):
     return [r['name'], r['role'], r['tool'], r['model'], r['branch'],
-            "seen just now" if ago(r['last_seen'], datetime.now(timezone.utc)) == "now"
-            else f"seen {ago(r['last_seen'], datetime.now(timezone.utc))} ago"]
+            "seen just now" if ago(r['last_seen'], clock()) == "now"
+            else f"seen {ago(r['last_seen'], clock())} ago"]
 
 
 def table_formatter(rows, fmt):
@@ -4378,7 +4400,7 @@ def cmd_claim(con, a):
         die(f"--ttl-min must be at least 1 and at most {MAX_TTL_MIN} (a week). For example: agentbus --as NAME claim PATH --ttl-min 120", "bad_input",
             next="agentbus --as NAME claim PATH --ttl-min 120")
     res = norm_resource(a.resource)
-    exp = datetime.fromtimestamp(time.time() + a.ttl_min * 60, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    exp = datetime.fromtimestamp(clock().timestamp() + a.ttl_min * 60, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     released, n_released = [], 0
     with immediate(con):
         require_joined(con, name)
@@ -4498,7 +4520,7 @@ def q_claims(con, stale=False, limit=LISTING_LIMIT):
 
 
 def fmt_claim(r):
-    t_now = datetime.now(timezone.utc)
+    t_now = clock()
     t = _when(r['expires_at'])
     if r['state'] == 'expired':
         remaining = "expired"
@@ -5913,7 +5935,7 @@ def human_time(ts, t_now=None):
     if t is None:
         return str(ts)
     local = t.astimezone()
-    today = (t_now or datetime.now(timezone.utc)).astimezone().date()
+    today = (t_now or clock()).astimezone().date()
     stamp = local.strftime("%H:%M")
     return stamp if local.date() == today else f"{_MONTHS[local.month - 1]} {local.day} {stamp}"
 
@@ -7857,7 +7879,7 @@ def cmd_watch(a, strict):
     if a.once or not tty_out or dumb:
         snap = watch_snapshot(a._db, strict, HELD, body_head=BODY_HEAD)
         size = shutil.get_terminal_size((100, 40))
-        frame = render(View(), snap, where, (size.columns, size.lines), datetime.now(timezone.utc), paint, live=False)
+        frame = render(View(), snap, where, (size.columns, size.lines), clock(), paint, live=False)
         write_out("\n".join(l.rstrip() for l in frame) + "\n")
         if dumb:
             note(DUMB_LINE if term == "dumb" else "TERM is not set, printing one frame. Use a terminal for the live view.")
@@ -8053,7 +8075,7 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
                 continue
             d = view.detail
             data = cache.get((d["section"], d["key"])) if d else None
-            view = step(view, key, snap, (size.columns, size.lines), datetime.now(timezone.utc), data, error)
+            view = step(view, key, snap, (size.columns, size.lines), clock(), data, error)
             for eff in view.effects:
                 if eff[0] == "quit":
                     stop.append(eff[1])
@@ -8104,7 +8126,7 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
         if got_first or error is not None:  # never an empty frame before the first read is in
             size = shutil.get_terminal_size()
             d = view.detail
-            frame = render(view, snap, where, (size.columns, size.lines), datetime.now(timezone.utc), paint,
+            frame = render(view, snap, where, (size.columns, size.lines), clock(), paint,
                            error=error, stale=stale, fresh=fresh,
                            detail=cache.get((d["section"], d["key"])) if d else None)
             if view.mode in ("detail", "help"):
@@ -8372,7 +8394,7 @@ def setup_backup_write(path, data):
     lost and names sort in the order they were made. The name is chosen when this runs, with O_EXCL, so
     two setups at once never share one; a clash moves the stamp on a microsecond. Returns the basename."""
     from datetime import timedelta
-    now, n = datetime.now(timezone.utc), 0
+    now, n = datetime.now(timezone.utc), 0  # a file name: the real clock
     while True:
         name = f"{path}.agentbus-{(now + timedelta(microseconds=n)).strftime('%Y%m%dT%H%M%S.%fZ')}.bak"
         try:
@@ -10563,7 +10585,7 @@ class HookNotice(Exception):
 def hook_cutoff():
     """The oldest last_seen that still counts as live (LIVE_WINDOW_MIN, the rule join applies)."""
     from datetime import timedelta
-    return (datetime.now(timezone.utc) - timedelta(minutes=LIVE_WINDOW_MIN)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (clock() - timedelta(minutes=LIVE_WINDOW_MIN)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def hook_exit_now(msg, code, grace=None):
@@ -11315,7 +11337,7 @@ def hook_live_minutes(last_seen):
     (the rule cmd_join applies)."""
     try:
         seen = datetime.strptime(last_seen, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - seen).total_seconds() / 60
+        return (clock() - seen).total_seconds() / 60
     except (TypeError, ValueError):
         return LIVE_WINDOW_MIN
 
@@ -13139,7 +13161,7 @@ def _brief_line(text, n):
 
 def _brief_show(r, limit):
     more_hint = f"(brief --limit {max(limit * 4, 20)})"
-    now_dt = datetime.now(timezone.utc)
+    now_dt = clock()
     omitted = r["omitted"]
 
     def more(n):

@@ -13,7 +13,7 @@ import pathlib, re, sys
 text = pathlib.Path(sys.argv[1]).read_text()
 assert re.search(r'^#1 claude -> codex \[handoff\] · [0-9]{2}:[0-9]{2}$', text, re.M), text
 assert re.search(r'^#2 codex -> claude \[answer\] re #1 · [0-9]{2}:[0-9]{2}$', text, re.M), text
-assert re.search(r'^  src/api/ +codex +for 2h \(until [0-9]{2}:[0-9]{2}\) +demo review$', text, re.M), text
+assert re.search(r'^  src/api/ +codex +for 2h \(until (?:[A-Z][a-z]{2} [0-9]{1,2} )?[0-9]{2}:[0-9]{2}\) +demo review$', text, re.M), text
 assert '+ .agentbus/bin/agentbus claims ' in text, text
 assert text.index('+ .agentbus/bin/agentbus claims ') < text.index('+ .agentbus/bin/agentbus --as codex release '), text
 for name in ('codex', 'claude'):
