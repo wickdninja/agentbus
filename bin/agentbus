@@ -1843,7 +1843,9 @@ def cmd_init(a):
     if outer:
         say("outer bus: {}", tilde(outer))
     say("next: cd {}", tilde(root))
-    say("next: .agentbus/bin/agentbus --as YOUR_NAME join")
+    # The command an agent runs: the installed agentbus (on PATH, the skill's rule) when this is a tool install; from a clone the
+    # tool may not be on PATH, so the copy init just made, the skill's gated fallback, is the command that works.
+    say("next: {} --as YOUR_NAME join", "agentbus" if install_entry_script() else ".agentbus/bin/agentbus")
     if not setup_detected():
         say("next: agentbus setup claude (teaches Claude Code the protocol)")
         say("next: agentbus setup codex (teaches Codex the protocol)")
@@ -5106,7 +5108,11 @@ class Parser(argparse.ArgumentParser):
             leaf = self.leaf_for(ns)
             if getattr(ns, "cmd", None) in words and extras[0] in words[:words.index(ns.cmd)]:
                 leaf = self  # a flag typed before the command belongs to agentbus, not to the command
-            leaf.error(leaf.unrecognized(extras))
+            see = None
+            bare = [x for x in extras if not x.startswith("-")]
+            if leaf.cmd_path == ("join",) and len(bare) == 1:
+                see = f"agentbus --as {shlex.quote(bare[0])} join"  # `join NAME`: the name goes in --as, before the command
+            leaf.error(leaf.unrecognized(extras), see=see)
         return ns
 
     def unrecognized(self, extras):
@@ -5121,6 +5127,8 @@ class Parser(argparse.ArgumentParser):
                 if close and close[0] != flag:
                     guesses.append((flag, close[0]))
         text = "unrecognized arguments: " + " ".join(extras)
+        if self.cmd_path == ("join",) and len([x for x in extras if not x.startswith("-")]) == 1:
+            text += ". join takes no name; give it with --as, before the command"
         if len(guesses) == 1:
             text += f". Did you mean {guesses[0][1]}?"
         elif guesses:

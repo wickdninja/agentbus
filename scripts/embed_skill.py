@@ -59,7 +59,7 @@ def block(skill_text, history, agents_history):
 
 
 def split_bin(src):
-    m = re.search(r"^" + re.escape("# BEGIN EMBEDDED SKILL") + r".*\n(.*?)^" + re.escape(END) + r"\n", src, re.S | re.M)
+    m = re.search(r"^" + re.escape("# BEGIN EMBEDDED SKILL") + r"[^\n]*\n(.*?)^" + re.escape(END) + r"\n", src, re.S | re.M)
     if not m:
         sys.exit("embed_skill: bin/agentbus has no '# BEGIN EMBEDDED SKILL' ... '# END EMBEDDED SKILL' block")
     return m

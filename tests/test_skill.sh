@@ -165,6 +165,19 @@ python3 "$T/tree/scripts/embed_skill.py" --check >"$T/e.out" 2>&1 || fail "--che
 ok "--check: stale after an edit, current after the script ran"
 
 echo
+echo "TEST: embed_skill.py --release records the hash and --check still says current (the release-prep order)"
+# Bug it catches: the block's regex swallowed the history, so --check rebuilt it from the v0.1.0 seed and called every tree stale after --release.
+rm -rf "$T/rel"; mkdir -p "$T/rel/scripts" "$T/rel/skills/agentbus" "$T/rel/bin"
+cp "$ROOT/scripts/embed_skill.py" "$T/rel/scripts/"; cp "$SKILL" "$T/rel/skills/agentbus/"; cp "$BIN" "$T/rel/bin/agentbus"
+sed -i.orig 's/^# agentbus protocol$/# agentbus protocol (a later edit)/' "$T/rel/skills/agentbus/SKILL.md"
+python3 "$T/rel/scripts/embed_skill.py" --release >"$T/e.out" 2>&1 || fail "embed_skill.py --release failed: $(cat "$T/e.out")"
+python3 "$T/rel/scripts/embed_skill.py" --check >"$T/e.out" 2>&1 || fail "--check failed after --release: $(cat "$T/e.out")"
+grep -qx 'embedded skill is current' "$T/e.out" || fail "after --release, expected 'embedded skill is current', got: $(cat "$T/e.out")"
+python3 "$T/rel/scripts/embed_skill.py" >"$T/e.out" 2>&1 || fail "a plain run after --release failed: $(cat "$T/e.out")"
+[ "$(grep -c '^    "[0-9a-f]\{64\}",$' "$T/rel/bin/agentbus")" -ge 3 ] || fail "a plain run after --release dropped a recorded hash (wanted the v0.1.0 seed, this skill and the AGENTS.md block): $(grep -n '_SHA256_HISTORY = (' -A3 "$T/rel/bin/agentbus")"
+ok "--release then --check: current; a plain run keeps the recorded hashes"
+
+echo
 echo "TEST: embed_skill.py refuses a skill over the cap or without the marker"
 printf 'x%.0s' $(seq 1 4900) >>"$T/tree/skills/agentbus/SKILL.md"
 if python3 "$T/tree/scripts/embed_skill.py" >"$T/e.out" 2>&1; then fail "embed_skill.py accepted an oversize skill"; fi

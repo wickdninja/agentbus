@@ -131,6 +131,7 @@ def init():
     assert f'added .agentbus/ to {repo}/.git/info/exclude (local only; the repo stays clean)\n' in text, text
     assert 'optional: add `.agentbus/` to .gitignore to share that rule\n' in text
     # no Claude Code or Codex setup is detected (a fresh HOME), so the setup commands follow the two steps
+    text = text.replace('next: agentbus --as YOUR_NAME join', 'next: .agentbus/bin/agentbus --as YOUR_NAME join')  # an installed tool says agentbus, a clone the copy: tests/test_init.sh pins each
     assert text.endswith(f'next: cd {repo}\nnext: .agentbus/bin/agentbus --as YOUR_NAME join\n'
                          'next: agentbus setup claude (teaches Claude Code the protocol)\nnext: agentbus setup codex (teaches Codex the protocol)\n'), text
     assert not re.search(r'[0-9a-f]{40}', text), text

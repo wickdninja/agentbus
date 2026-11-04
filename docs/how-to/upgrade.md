@@ -120,7 +120,7 @@ never follows a symlink and skips `.git`, `node_modules`, `.venv` and `__pycache
 replaces the copy, then opens the database once, which migrates it if needed. One line per bus:
 
 ```
-~/src/app   0.1.0 -> 0.2.0   schema 0 -> 1   backup .agentbus/backups/bus-v0-20261101T201500Z.db
+~/src/app   0.1.0 -> 0.2.0   schema 0 -> 1
 ~/src/api   0.1.0 -> 0.2.0   schema 0 -> 1
 ~/src/site   current (0.2.0)
 ~/src/old   skipped: copy is newer (0.3.0)
@@ -128,8 +128,8 @@ replaces the copy, then opens the database once, which migrates it if needed. On
 upgraded 2, current 1, skipped 1, failed 1
 ```
 
-- `schema 0 -> 1` with no backup: the bus already had the new shape and only got its version stamp.
-- `schema 0 -> 1` with a backup: the bus was migrated, after a backup was taken.
+- `schema 0 -> 1`: the bus already had the new shape and only got its version stamp. No backup is made for a stamp.
+- A release that changes the database's shape migrates it after a backup in `.agentbus/backups/`; v0.2.0 has no such migration.
 - `skipped`: the folder's copy is newer than the tool you ran. It is never downgraded.
 - `failed`: the line says why. The others are still upgraded, and the command exits 1. A bus held
   by another process for more than 5 seconds fails as busy, with nothing changed. When the bus was

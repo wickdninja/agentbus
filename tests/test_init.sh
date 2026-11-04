@@ -137,4 +137,15 @@ expect_fail "holds worktrees of $(rl "$OS/app"), whose bus is $(rl "$OS")/.agent
 [ ! -e "$M" ] || fail "init ran a program the repository's config names"
 [ ! -e "$OSW/.agentbus" ] || fail "the workspace-bus refusal made a bus"
 ok "worktrees of a repo covered by a workspace bus are refused too; the repo's config programs are never run"
+echo "TEST 20: init's join step is the command that works: agentbus for a tool install, the copy it just made for a clone"
+# Bug it catches: init always said .agentbus/bin/agentbus, the project copy the skill allows only when agentbus is not on PATH.
+nj() { git init -q "$1"; }
+nj "$T/j1"; out=$(cd "$T" && "$PY" "$BIN" init "$T/j1")
+grep -qx 'next: .agentbus/bin/agentbus --as YOUR_NAME join' <<<"$out" || fail "a run from a clone should name the copy it made: $out"
+FE="$T/fakeenv"; mkdir -p "$FE/bin"; printf '#!%s\nraise SystemExit(0)\n' "$(command -v "$PY")" >"$FE/bin/agentbus"; chmod 755 "$FE/bin/agentbus"
+nj "$T/j2"; out=$(cd "$T" && "$PY" -c 'import runpy, sys; sys.prefix = sys.argv[1]; sys.argv = [sys.argv[2], "init", sys.argv[3]]; runpy.run_path(sys.argv[0], run_name="__main__")' "$FE" "$BIN" "$T/j2")
+grep -qx 'next: agentbus --as YOUR_NAME join' <<<"$out" || fail "a tool install should name agentbus on PATH: $out"
+! grep -q 'next: .agentbus/bin/agentbus' <<<"$out" || fail "a tool install still names the project copy: $out"
+ok "init names agentbus for a tool install and the copy for a clone"
+
 echo "All init tests passed"

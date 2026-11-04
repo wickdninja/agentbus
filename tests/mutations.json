@@ -3616,5 +3616,32 @@
     "count": 1,
     "run": "tests/test_skill.sh",
     "expect": "the printed skill lost the sentence that duplicate delivery is possible"
+  },
+  {
+    "name": "embed_skill's block regex swallows the history again",
+    "file": "scripts/embed_skill.py",
+    "find": "\\[\\^\\\\n\\]\\*\\\\n\\(\\.\\*\\?\\)\\^",
+    "replace": ".*\\\\n(.*?)^",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "a fresh copy of the tree is not current"
+  },
+  {
+    "name": "init always names the project copy in its join step",
+    "file": "bin/agentbus",
+    "find": "\"agentbus\" if install_entry_script\\(\\) else \"\\.agentbus/bin/agentbus\"",
+    "replace": "\".agentbus/bin/agentbus\"",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "a tool install should name agentbus on PATH"
+  },
+  {
+    "name": "join NAME gets no hint naming --as",
+    "file": "bin/agentbus",
+    "find": "            if leaf\\.cmd_path == \\(\\\"join\\\",\\) and len\\(bare\\) == 1:",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_help.sh",
+    "expect": "join NAME:"
   }
 ]

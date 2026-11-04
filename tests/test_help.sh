@@ -78,7 +78,15 @@ p = run("--project", "who")
 if p.returncode != 2 or "unrecognized arguments: --project" not in p.stderr or "See: agentbus --help" not in p.stderr: fail("top-level usage error: " + p.stderr)
 p = run("completion")
 if p.returncode != 2 or "Usage: agentbus completion {bash,zsh,fish}" not in " ".join(p.stderr.split()): fail("completion without a shell: " + p.stderr)
-print("PASS: usage errors are scoped to the command")
+# `join NAME` is the likeliest slip: the error names the form that works, as text and as the JSON next.
+p = run("join", "rel-prep")
+err = " ".join(p.stderr.split())
+if p.returncode != 2 or p.stdout or "unrecognized arguments: rel-prep" not in err or "give it with --as" not in err or not err.endswith("See: agentbus --as rel-prep join"): fail("join NAME: rc %s %s" % (p.returncode, err))
+e = json.loads(run("--json", "join", "rel-prep").stderr)["error"]
+if e["code"] != "bad_input" or e["next"] != "agentbus --as rel-prep join": fail("join NAME --json: " + repr(e))
+p = run("join", "--bogus")
+if "give it with --as" in p.stderr or "See: agentbus join --help" not in " ".join(p.stderr.split()): fail("a bad flag on join got the name hint: " + p.stderr)
+print("PASS: usage errors are scoped to the command; join NAME names agentbus --as NAME join")
 PY
 ok "usage errors are scoped"
 
@@ -366,12 +374,12 @@ ok "log show is readable and the counts read right"
 echo "TEST 12: init prints the next step, and the setup commands when nothing is set up"
 mkdir "$T/p1" "$T/p2"
 o=$(outof agentbus init "$T/p1")
-grep -q '^next: .agentbus/bin/agentbus --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step: $o"
+grep -Eq '^next: (agentbus|\.agentbus/bin/agentbus) --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step: $o"
 grep -q '^next: agentbus setup claude' <<<"$o" && grep -q '^next: agentbus setup codex' <<<"$o" || fail "init does not suggest setup when none is detected: $o"
 agentbus setup claude >/dev/null
 o=$(outof agentbus init "$T/p2")
 grep -q 'agentbus setup' <<<"$o" && fail "init still suggests setup after setup claude: $o"
-grep -q '^next: .agentbus/bin/agentbus --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step after setup: $o"
+grep -Eq '^next: (agentbus|\.agentbus/bin/agentbus) --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step after setup: $o"
 ok "init says what to do next"
 
 all_passed "All help tests passed"
