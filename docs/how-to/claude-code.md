@@ -29,7 +29,6 @@ Then, in each repo that should share a bus:
 
 ```bash
 agentbus init .
-agentbus status      # any agentbus command makes the bus database; the hooks stay silent until it exists
 ```
 
 The hooks tell the agent to run `agentbus`, so it must be on the agent's `PATH` (the tool you installed).

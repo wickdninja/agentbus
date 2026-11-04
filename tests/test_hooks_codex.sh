@@ -442,11 +442,11 @@ RC=0; (cd "$T" && "$PY" "$P/.agentbus/bin/agentbus" hooks codex >"$T/out" 2>"$T/
 ok "a project copy prints nothing and says why"
 
 echo
-echo "TEST 18: the AGENTS.md block is at most 700 bytes and names only commands the parser has, each as .agentbus/bin/agentbus"
+echo "TEST 18: the AGENTS.md block is at most 700 bytes and names only commands the parser has, each run as the installed agentbus (the project copy only as the gated fallback)"
 block=$("${AB[@]}" skill --agents-md)
 [ "${#block}" -le 700 ] || fail "the AGENTS.md block is ${#block} bytes"
 sed -n 2p <<<"$block" | grep -qF 'If `.agentbus/` exists in this folder' || fail "the AGENTS.md block does not lead with the condition that .agentbus/ exists: $(sed -n 2p <<<"$block" | cut -c1-80)"
-"$PY" -I - "$BIN" "$block" <<'PY' || fail "the AGENTS.md block names a command the parser lacks, or a coordination command without the .agentbus/bin/agentbus prefix"
+"$PY" -I - "$BIN" "$block" <<'PY' || fail "the AGENTS.md block names a command the parser lacks, or a coordination command that does not run the installed agentbus"
 import argparse, re, runpy, sys
 m = runpy.run_path(sys.argv[1], run_name="agentbus_block")
 parser = m["build_parser"]()
@@ -460,8 +460,10 @@ used = 0
 for span in spans:
     words = span.split()
     if words and words[0].endswith("agentbus"):
-        # the bus's own copy runs every coordination command; the installed tool only upgrades
-        assert words[0] == ".agentbus/bin/agentbus" or (words[0] == "agentbus" and words[1] == "upgrade"), span
+        # the installed tool runs every command; the project copy is named once, alone, as the gated fallback
+        if words in ([".agentbus/bin/agentbus"], ["agentbus"]):
+            continue
+        assert words[0] == "agentbus", span
         rest = [w for w in words[1:] if not w.startswith("-") and w not in ("NAME",)]
         # skip the value of --as
         if "--as" in words:

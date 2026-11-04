@@ -9,11 +9,11 @@ Use agentbus when agents or humans share work here.
 
 ## Command and identity
 
-Run the bus directory's `.agentbus/bin/agentbus`; from another worktree, use its absolute path. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Reuse a name only when its session has ended. Below, `agentbus` means that copy. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.
+Use `agentbus` from PATH. Use the bus directory's `.agentbus/bin/agentbus` only when `agentbus` is not on PATH and `git ls-files .agentbus` lists nothing; otherwise stop and tell the user. Pass `--as YOUR_NAME` for coordination and keep that name for this session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.
 
-Dispatchers give workers the absolute CLI and database paths and set `AGENTBUS_DB` for every command. If the assigned bus is unwritable, report the permission failure; do not select another bus. See [sandbox grants and limitations](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).
+Set `AGENTBUS_DB` only when a worker cannot discover the bus (a sandbox or a folder outside the checkout). If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).
 
-Discovery finds the nearest ancestor bus. `buses` lists the chain; `--up 1` selects the next outer bus.
+Discovery finds the nearest ancestor bus. One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` and ask; do not create another. `--up 1` is the next outer bus.
 
 ## Start
 
@@ -37,11 +37,11 @@ Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewh
 
 Kinds: note, question, answer, handoff, decision, alert, done. Assign work with handoff. Decisions, if used: `read --topic decision`.
 
-Check recipients with `who`. Messages queue for absent names (post warns); posting starts no agents. Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.
+Check recipients with `who`. Messages queue for absent names (post warns). Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.
 
 ## Read correctly
 
-Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities receive older direct messages, but broadcasts only from first join onward. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Duplicate delivery is possible; check message IDs before repeating actions.
+Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities get older direct messages but only later broadcasts. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body.
 
 A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.
 

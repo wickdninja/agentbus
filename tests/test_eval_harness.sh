@@ -16,17 +16,18 @@ run_eval() { rc=0; env EVAL_STUB_DIR="$STUB" "${EVAL[@]}" "$@" --out "$T/o$RANDO
 
 echo "TEST 1: the invocation count is printed first, and a real run needs --go"
 rc=0; out=$(env -u EVAL_STUB_DIR "${EVAL[@]}" --dry-run --all) || rc=$?
-[ "$rc" = 0 ] && [ "$out" = "agent invocations: 60 (12 cells x 3 attempts)" ] || fail "dry run: rc $rc: $out"
+[ "$rc" = 0 ] && [ "$out" = "agent invocations: 72 (16 cells x 3 attempts)" ] || fail "dry run: rc $rc: $out"
 rc=0; out=$(env -u EVAL_STUB_DIR "${EVAL[@]}" --cell claude skill resume 2>&1) || rc=$?
 [ "$rc" = 3 ] && grep -q '^agent invocations: 3 ' <<<"$out" && grep -q -- '--go' <<<"$out" || fail "a real run without --go: rc $rc: $out"
-ok "dry run counts 60; no --go means no run"
+ok "dry run counts 72; no --go means no run"
 
 echo "TEST 2: every scenario passes for both agents' formats with a well-behaved stand-in"
 run_eval --arm skill --attempts 1
 [ "$rc" = 0 ] || { cat "$T/out"; fail "a good stand-in failed a cell (rc $rc)"; }
-[ "$(tail -n 1 "$T/out")" = "eval complete: 6 of 6 cells pass" ] || fail "last line: $(tail -n 1 "$T/out")"
+[ "$(tail -n 1 "$T/out")" = "eval complete: 8 of 8 cells pass" ] || fail "last line: $(tail -n 1 "$T/out")"
+grep -q '^worktrees: pass (1 of 1 attempts)$' "$T/out" || fail "no worktrees line: $(cat "$T/out")"
 grep -q '^resume: pass (1 of 1 attempts)$' "$T/out" || fail "no resume line: $(cat "$T/out")"
-ok "6 of 6 cells pass"
+ok "8 of 8 cells pass"
 
 echo "TEST 3: a misbehaving agent fails its cell, for the right reason"
 bad() { # MISBEHAVE AGENT SCENARIO WANTED-REASON
@@ -39,7 +40,9 @@ bad edit-first claude handoff "bob edited before its first inbox"
 bad no-done codex handoff "no done message from bob"
 bad edit-first claude resume "edited before inbox"
 bad ignore-conflict codex conflict "while alice held a claim"
-ok "edit before inbox, a missing done message and an edit through a conflict each fail"
+bad side-bus claude worktrees "second bus was made: wts"
+bad side-bus codex worktrees "second bus was made: wts"
+ok "edit before inbox, a missing done message, an edit through a conflict and a second bus made for the worktrees each fail"
 
 echo "TEST 4: the hooks arm runs once setup exists, and is reported as unsupported until then"
 if "${AB[@]}" setup --help >/dev/null 2>&1; then

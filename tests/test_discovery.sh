@@ -36,6 +36,7 @@ ok "external worktree maps to the same relative directory"
 echo "TEST 3: nested buses, --up on either side, and a chain that does not create databases"
 agentbus init "$R" > "$T/nested-init"
 grep -qxF "outer bus: $(real "$WS")" "$T/nested-init" || fail "outer bus notice missing"
+rm -f "$R/.agentbus"/bus.db*   # init made the database; this test is about buses, which must never make one
 o=$(cd "$R" && json_ok agentbus buses --json)
 # copy_version: the folder copy's VERSION when it is a release (an installed tool, or a checkout without git),
 # null when it names a source commit (this checkout under git); stale is false either way, the copy being this tool.
@@ -223,4 +224,44 @@ MR="$T/mode"; mkdir -p "$MR"; agentbus init "$MR" >/dev/null
 (cd "$MR" && agentbus --as m join >/dev/null)
 [ "$(mode "$MR/.agentbus/bus.db")" = 600 ] || fail "bus.db is $(mode "$MR/.agentbus/bus.db")"
 ok ".agentbus is 0700 and bus.db 0600"
+echo "TEST 17: AGENTBUS_DB that is not the bus this folder finds: join and brief warn once, in --json too; other commands, the same file and a folder outside any checkout stay quiet"
+# Bug it catches: a brain told lanes to set AGENTBUS_DB to a second bus; every command in a worktree used it and nothing said the
+# repo's own bus was the one discovery finds. Sandboxed workers with an assigned bus outside any checkout must stay quiet.
+MA="$T/mm-app"; mkrepo "$MA"; agentbus init "$MA" >/dev/null
+MW="$T/mm-wt"; git -C "$MA" worktree add -q "$MW" -b mm
+MO="$T/mm-other"; mkdir -p "$MO"; agentbus init "$MO" >/dev/null
+MFREE="$T/mm-free"; mkdir -p "$MFREE"; ln -s "$MA" "$T/mm-link"
+want="AGENTBUS_DB names $MO/.agentbus/bus.db, but this folder's bus is $(real "$MA")/.agentbus/bus.db"
+for c in join brief; do
+  (cd "$MW" && AGENTBUS_DB="$MO/.agentbus/bus.db" agentbus --as mm $c >"$T/mm-out" 2>"$T/mm-err") || fail "$c failed with a mismatched AGENTBUS_DB: $(cat "$T/mm-err")"
+  [ "$(grep -c "AGENTBUS_DB names" "$T/mm-err")" = 1 ] || fail "$c did not warn exactly once about a mismatched AGENTBUS_DB: $(cat "$T/mm-err")"
+  grep -qF "$want" "$T/mm-err" || fail "$c warning lacks both buses: $(cat "$T/mm-err")"
+  (cd "$MW" && AGENTBUS_DB="$MO/.agentbus/bus.db" agentbus --as "mmj-$c" --json $c >"$T/mm-json" 2>/dev/null) || fail "$c --json failed"
+  python3 - "$T/mm-json" "$MO/.agentbus/bus.db" "$(real "$MA")/.agentbus/bus.db" <<'PYT' || fail "$c --json warnings are not one bus_env_mismatch"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["warnings"] == [{"code": "bus_env_mismatch", "agentbus_db": sys.argv[2], "discovered": sys.argv[3]}], d.get("warnings")
+PYT
+done
+n=0
+for env in "$MA/.agentbus/bus.db" "$T/mm-link/.agentbus/bus.db"; do
+  for dir in "$MW" "$MA"; do
+    for c in join brief; do
+      n=$((n+1))
+      (cd "$dir" && AGENTBUS_DB="$env" agentbus --as "same$n" --json $c >"$T/mm-json" 2>"$T/mm-err") || fail "$c failed on the same file: $(cat "$T/mm-err")"
+      [ ! -s "$T/mm-err" ] || fail "the same bus file warned on $c: $(cat "$T/mm-err")"
+      python3 -c 'import json,sys; assert "warnings" not in json.load(open(sys.argv[1]))' "$T/mm-json" || fail "the same bus file put warnings in $c --json"
+    done
+  done
+done
+for c in join brief; do
+  n=$((n+1))
+  (cd "$MFREE" && AGENTBUS_DB="$MO/.agentbus/bus.db" agentbus --as "free$n" $c >"$T/mm-out" 2>"$T/mm-err") || fail "$c failed outside a checkout: $(cat "$T/mm-err")"
+  [ ! -s "$T/mm-err" ] || fail "a worker outside any checkout was warned on $c: $(cat "$T/mm-err")"
+done
+for c in "who" "status" "read" "inbox" "claims" "post hello" "ctx set k v" "buses"; do
+  (cd "$MW" && AGENTBUS_DB="$MO/.agentbus/bus.db" agentbus --as mm $c >/dev/null 2>"$T/mm-err") || fail "$c failed with a mismatched AGENTBUS_DB"
+  [ ! -s "$T/mm-err" ] || fail "$c warned about a mismatched AGENTBUS_DB: $(cat "$T/mm-err")"
+done
+ok "join and brief warn once (text and --json); same file, symlink, no checkout and other commands are silent"
 echo "All discovery tests passed"

@@ -496,12 +496,16 @@ row skill ok "is current" ""
 doc "$W/none" doctor
 has "  n/a   bus        no bus here or in any parent folder. Run: agentbus init ."
 ok "no bus: n/a with 'agentbus init .', and the other checks still ran"
-# a fresh init: the folder and copy exist, the first command makes the database
+# a fresh init: the folder, the copy and the (empty) database exist
 mkdir -p "$W/fresh"; "${DOC[@]}" init "$W/fresh" >/dev/null 2>&1
 doc "$W/fresh" doctor --json
-row bus ok "no database yet; the first command creates it" ""
+row bus ok "$W/fresh (schema 1)" ""
 row copy ok "0.2.0, same as the installed agentbus" ""
-ok "a fresh init is ok, not a problem"
+# a bus folder whose database is gone (a copy from an older init): the first command makes it
+rm -f "$W/fresh/.agentbus"/bus.db*
+doc "$W/fresh" doctor --json
+row bus ok "no database yet; the first command creates it" ""
+ok "a fresh init is ok, not a problem; a folder without a database is too"
 # the v0.1.0 shape without the stamp
 mkdir -p "$W/legacy"; "${OLD[@]}" init "$W/legacy" >/dev/null 2>&1; (cd "$W/legacy" && "$PY" .agentbus/bin/agentbus --as a join >/dev/null 2>&1)
 doc "$W/legacy" doctor --json
@@ -851,5 +855,42 @@ world; rm -f "$HOME/.claude/settings.json"
 doc doctor --json
 grep -q "^warn user .*claude.*no agentbus hooks" <<<"$(hooks_rows)" || fail "a Claude folder without the hooks no longer warns: $(hooks_rows)"
 ok "no ~/.claude: no Claude hooks row; no ~/.codex: no Codex row; neither: one n/a row; a folder with no hooks still warns"
+
+echo "TEST 23: AGENTBUS_DB naming a bus other than the one this folder finds is a bus-env warning; the same file, no checkout and no AGENTBUS_DB add no row"
+world
+mkrepo "$W/envrepo"; "${DOC[@]}" init "$W/envrepo" >/dev/null 2>&1
+git -C "$W/envrepo" worktree add -q "$W/envwt" -b envwt
+RC=0; (cd "$W/envwt" && AGENTBUS_DB="$W/app/.agentbus/bus.db" "${DOC[@]}" doctor --json >"$T/out" 2>"$T/err") || RC=$?
+[ "$RC" = 0 ] || fail "bus-env doctor failed: $(cat "$T/err")"
+row bus-env warn "AGENTBUS_DB names $W/app/.agentbus/bus.db, but this folder's bus is $W/envrepo/.agentbus/bus.db" "unset AGENTBUS_DB"
+OUT=$(cd "$W/envwt" && AGENTBUS_DB="$W/app/.agentbus/bus.db" "${DOC[@]}" doctor 2>&1); hasf "bus-env"
+RC=0; (cd "$W/envwt" && AGENTBUS_DB="$W/envrepo/.agentbus/bus.db" "${DOC[@]}" doctor --json >"$T/out" 2>"$T/err") || RC=$?
+"$PY" -c 'import json,sys; assert not [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "bus-env"]' "$T/out" || fail "the same bus file got a bus-env row"
+RC=0; (cd "$W/envwt" && "${DOC[@]}" doctor --json >"$T/out" 2>"$T/err") || RC=$?
+"$PY" -c 'import json,sys; assert not [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "bus-env"]' "$T/out" || fail "no AGENTBUS_DB got a bus-env row"
+mkdir -p "$W/outside"; RC=0; (cd "$W/outside" && AGENTBUS_DB="$W/app/.agentbus/bus.db" "${DOC[@]}" doctor --json >"$T/out" 2>"$T/err") || RC=$?
+"$PY" -c 'import json,sys; assert not [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "bus-env"]' "$T/out" || fail "a folder outside any checkout got a bus-env row"
+ok "bus-env names both buses and the fix; silent for the same file, no variable and no checkout"
+
+echo "TEST 24: a bus folder directly above a repo's linked worktrees is a two-buses warning naming the bus to keep; nesting is not"
+world
+mkrepo "$W/main"; "${DOC[@]}" init "$W/main" >/dev/null 2>&1
+mkdir -p "$W/lanes"; git -C "$W/main" worktree add -q "$W/lanes/a" -b tb-a; git -C "$W/main" worktree add -q "$W/lanes/b" -b tb-b
+doc "$W/lanes/a" doctor --json
+"$PY" -c 'import json,sys; assert not [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "two-buses"]' "$T/out" || fail "a repo with one bus got a two-buses row"
+"${DOC[@]}" init "$W/lanes" --second-bus >/dev/null 2>&1
+doc "$W/lanes/a" doctor --json
+row two-buses warn "$W/lanes/.agentbus sits directly above this repo's worktrees, but they use $W/main/.agentbus" "" "" "Keep $W/main/.agentbus"
+"$PY" - "$T/out" "$W" <<'PY' || fail "two-buses hint does not give the exact removal command"
+import json, sys
+c = [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "two-buses"]
+assert len(c) == 1 and ("rm -r " + sys.argv[2] + "/lanes/.agentbus") in c[0]["hint"], c
+PY
+doc "$W/main" doctor --json; row two-buses warn "$W/lanes/.agentbus" "" "" "Keep $W/main/.agentbus"
+mkdir -p "$W/nest"; mkrepo "$W/nest/repo"; "${DOC[@]}" init "$W/nest" >/dev/null 2>&1; "${DOC[@]}" init "$W/nest/repo" >/dev/null 2>&1
+git -C "$W/nest/repo" worktree add -q "$W/nest/repo-wt" -b tb-n
+doc "$W/nest/repo-wt" doctor --json
+"$PY" -c 'import json,sys; assert not [c for c in json.load(open(sys.argv[1]))["checks"] if c["id"] == "two-buses"]' "$T/out" || fail "a workspace bus above the repo and its worktree (nesting) got a two-buses row"
+ok "two-buses fires from a worktree and the main checkout, names the bus to keep and the exact command; a workspace's outer bus does not fire it"
 
 all_passed "All doctor tests passed"

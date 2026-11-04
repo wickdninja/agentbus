@@ -900,6 +900,150 @@
     "expect": "hung to the cap with a command that never finishes"
   },
   {
+    "name": "one bus: init no longer refuses a folder of worktrees of a repo with a bus",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ held\\ =\\ worktrees_of_a_bused_repo\\(root\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ held:",
+    "replace": "        held = worktrees_of_a_bused_repo(root)\n        if False:",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "expected failure but succeeded"
+  },
+  {
+    "name": "one bus: init refuses a workspace holding the repo's main checkout beside its worktree",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ main\\ ==\\ root\\ or\\ main\\.startswith\\(root\\ \\+\\ os\\.sep\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ continue",
+    "replace": "        if False:\n            continue",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "a workspace holding the main checkout beside its worktree was refused"
+  },
+  {
+    "name": "one bus: --second-bus is ignored",
+    "file": "bin/agentbus",
+    "find": "if\\ not\\ getattr\\(a,\\ \"second_bus\",\\ False\\)\\ and\\ os\\.path\\.isdir\\(root\\)",
+    "replace": "if os.path.isdir(root)",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "--second-bus did not allow the deliberate second bus"
+  },
+  {
+    "name": "one bus: re-running init on a folder that has a bus is refused",
+    "file": "bin/agentbus",
+    "find": "and\\ not\\ os\\.path\\.lexists\\(os\\.path\\.join\\(root,\\ \"\\.agentbus\"\\)\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ held\\ =",
+    "replace": ":\n        held =",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "re-running init on a folder that already has a bus was refused"
+  },
+  {
+    "name": "one bus: a workspace bus no longer counts as the repo's bus",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ bus\\ =\\ next\\(walk_buses\\(main\\),\\ None\\)",
+    "replace": "            bus = main if os.path.lexists(os.path.join(main, \".agentbus\")) else None",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "expected failure but succeeded"
+  },
+  {
+    "name": "init does not make the bus database",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ open_bus\\(db,\\ strict_dir=True\\)\\.close\\(\\)",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "init did not make a private bus database"
+  },
+  {
+    "name": "AGENTBUS_DB warning fires for the same file",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ os\\.path\\.realpath\\(env\\)\\ ==\\ os\\.path\\.realpath\\(found\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ \\[\\]",
+    "replace": "    if False:\n        return []",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "the same bus file warned on"
+  },
+  {
+    "name": "AGENTBUS_DB warning fires outside any checkout",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ except\\ SystemExit:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ \\[\\]\\\n\\ \\ \\ \\ if\\ os\\.path\\.realpath\\(env\\)",
+    "replace": "    except SystemExit:\n        found = os.path.join(os.getcwd(), \".agentbus\", \"bus.db\")\n    if os.path.realpath(env)",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "a worker outside any checkout was warned"
+  },
+  {
+    "name": "brief --json drops the AGENTBUS_DB warning",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ result\\[\"warnings\"\\]\\ =\\ warnings",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "--json warnings are not one bus_env_mismatch"
+  },
+  {
+    "name": "join does not print the AGENTBUS_DB warning",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ for\\ w\\ in\\ warnings:\\\n\\ \\ \\ \\ \\ \\ \\ \\ note\\(bus_env_text\\(w\\)\\)\\\n\\ \\ \\ \\ flag\\ =",
+    "replace": "    flag =",
+    "count": 1,
+    "run": "tests/test_discovery.sh",
+    "expect": "join did not warn exactly once"
+  },
+  {
+    "name": "doctor has no bus-env row",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ for\\ w\\ in\\ bus_env_warnings\\(ctx\\.up\\)\\]",
+    "replace": "            for w in []]",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "row bus-env: status warn"
+  },
+  {
+    "name": "doctor has no two-buses row",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ os\\.path\\.lexists\\(os\\.path\\.join\\(above,\\ \"\\.agentbus\"\\)\\):",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "row two-buses: status warn"
+  },
+  {
+    "name": "doctor calls a workspace's outer bus a second bus",
+    "file": "bin/agentbus",
+    "find": "\\ or\\ main\\ ==\\ above\\ or\\ main\\.startswith\\(above\\ \\+\\ os\\.sep\\):",
+    "replace": ":",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "(nesting) got a two-buses row"
+  },
+  {
+    "name": "the AGENTS.md block loses the refusal wording",
+    "file": "bin/agentbus",
+    "find": "lists\\ nothing,\\ otherwise\\ stop\\ and\\ tell\\ the\\ user\\.\\ ",
+    "replace": "lists nothing. ",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the block lacks the gated fallback and its refusal wording"
+  },
+  {
+    "name": "worktrees grader ignores a second bus",
+    "file": "scripts/agent-eval/graders.py",
+    "find": "\\ \\ \\ \\ elif\\ second:",
+    "replace": "    elif False:",
+    "count": 1,
+    "run": "tests/test_eval_graders.sh",
+    "expect": "worktrees: a side-bus run: failed for the wrong reason"
+  },
+  {
+    "name": "worktrees grader ignores posts that landed on another bus",
+    "file": "scripts/agent-eval/graders.py",
+    "find": "\\ \\ \\ \\ if\\ len\\(mine\\)\\ <\\ len\\(posts\\):",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_eval_graders.sh",
+    "expect": "worktrees: messages on another bus: failed for the wrong reason"
+  },
+  {
     "name": "wait_marker keeps waiting on a command that already exited",
     "file": "tests/lib.sh",
     "find": "    if ! kill -0 \"\\$pid\" 2>/dev/null; then\\n      WAIT_RC=0; wait \"\\$pid\" \\|\\| WAIT_RC=\\$\\?\\n      \\[ -e \"\\$file\" \\]",
@@ -2738,7 +2882,7 @@
   {
     "name": "the AGENTS.md block does not lead with the condition",
     "file": "bin/agentbus",
-    "find": "If `\\.agentbus/` exists in this folder \\(otherwise ignore this section\\): this workspace",
+    "find": "If `\\.agentbus/` exists in this folder or a parent \\(otherwise ignore this section\\): this workspace",
     "replace": "This workspace",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",

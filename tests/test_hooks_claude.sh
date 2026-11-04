@@ -475,9 +475,12 @@ UPS; quiet || fail "a planted bus folder, UserPromptSubmit: out $OUT"
 END; quiet || fail "a planted bus folder, SessionEnd: out $OUT"
 [ ! -e "$P/.agentbus/bus.db" ] || fail "a hook created bus.db in a folder that had none"
 P="$T/initonly"; mkdir -p "$P"; (cd "$P" && "${AB[@]}" init . >/dev/null)
-SS; quiet || fail "an init-ed folder before any bus command: rc $RC out $OUT err $ERR"
+[ -f "$P/.agentbus/bus.db" ] || fail "init did not make the bus database the hooks need"
+SS; [ "$RC" = 0 ] && grep -q "you are on this folder's bus as" <<<"$OUT" || fail "an init-ed folder before any bus command: the hook said nothing: rc $RC out $OUT err $ERR"
+rm -f "$P/.agentbus"/bus.db*
+SS; quiet || fail "an init-ed folder whose database is gone: rc $RC out $OUT err $ERR"
 [ ! -e "$P/.agentbus/bus.db" ] || fail "a hook created bus.db after init"
-ok "no bus.db: silent, and none is made"
+ok "no bus.db: silent, and none is made by a hook; init makes it, so the hooks speak right after init"
 
 echo
 echo "TEST 24: a .agentbus that git tracks is refused whatever the index (v2, v3, v4, split, a submodule, a linked worktree); an untracked one works; nothing runs git"

@@ -2,9 +2,9 @@
 
 ## Setup
 
-`agentbus init [DIR]` installs `.agentbus/bin/agentbus` and VERSION in a directory: a repo or a workspace of repos. DIR defaults to cwd. A DIR that does not exist is created with its parents (like `mkdir -p`); a path whose nearest existing parent is not a writable directory, or that is a file, is refused with `bad_input` and nothing is created. At a checkout root, it adds `.agentbus/` to the local git exclude. Nested init names the outer bus. The database appears on first use.
+`agentbus init [DIR]` installs `.agentbus/bin/agentbus` and VERSION in a directory: a repo or a workspace of repos. DIR defaults to cwd. A DIR that does not exist is created with its parents (like `mkdir -p`); a path whose nearest existing parent is not a writable directory, or that is a file, is refused with `bad_input` and nothing is created. At a checkout root, it adds `.agentbus/` to the local git exclude. Nested init names the outer bus. It also makes the empty bus database (the hooks speak only for a bus whose database exists, and a hook never makes one); re-running init on a folder that has a bus leaves the database as it is. One repo, one bus: a DIR that holds linked worktrees of a repository whose bus discovery already finds (the repo's own, or a workspace's above it) is refused with `bad_input`, because the agents in those worktrees use that bus and never one made here. Only linked worktrees that are immediate children count (the first 200 entries are looked at, from git's own files; no program a repository names is run), so a workspace folder of independent repos, each with or without a bus, is never refused. `--second-bus` makes the bus anyway; a DIR that already has a bus is not refused.
 
-Run agents through that copy, using its absolute path from other directories. Run init and `upgrade [DIR]` from the installed tool or a source clone. Upgrade keeps its checkout resolution: DIR selects a repo's main checkout, whose copy is replaced.
+Agents run the installed `agentbus` from `PATH`. A project's `.agentbus/bin/agentbus` is a fallback for when `agentbus` is not on `PATH` and `git ls-files .agentbus` lists nothing (a copy git tracks came with a clone and is not trusted); otherwise the agent stops and tells the user. Run init and `upgrade [DIR]` from the installed tool or a source clone. Upgrade keeps its checkout resolution: DIR selects a repo's main checkout, whose copy is replaced.
 
 ### Upgrade and schema versions
 
@@ -16,6 +16,8 @@ Run agents through that copy, using its absolute path from other directories. Ru
 
 Commands walk from cwd to the nearest ancestor containing `.agentbus/`. Linked worktrees first map cwd to the same relative spot in their main checkout, even when the worktree sits outside the workspace. `$HOME/.agentbus` is never discovered. Unsafe bus folders are refused, never skipped.
 
+One repo, one bus. Use the one discovery finds; if it looks wrong, run `buses` and ask, and do not create another. `init` refuses a folder of worktrees whose repo already has a bus (`--second-bus` overrides), and `doctor` shows a `two-buses` row when a bus folder sits directly above this repo's linked worktrees without being the repo's.
+
 No bus means: `agentbus: no bus here or in any parent folder. Run: agentbus init <dir>`.
 
 `--up N` selects the Nth bus above the nearest (default 0). `--up 1` reaches the next outer bus; a missing level is an error. Like `--as` and `--json`, it works before or after the subcommand.
@@ -26,7 +28,7 @@ Claims and messages are per bus; nothing merges across buses.
 
 ## Explicit buses
 
-`AGENTBUS_DB` overrides discovery and `--up`; relative paths become absolute from cwd. With it set, `buses` lists only that explicit bus. Dispatchers set it for themselves and their lanes. See [sandboxed agents](sandboxed-agents.md).
+`AGENTBUS_DB` overrides discovery and `--up`; relative paths become absolute from cwd. With it set, `buses` lists only that explicit bus. Set it only when a worker cannot discover the bus (a sandbox, or a folder outside the checkout). When it names a bus other than the one this folder finds, `join` and `brief` print one `bus_env_mismatch` warning (in `--json`, `warnings`) and `doctor` shows a `bus-env` row; no warning when it is the same file or when discovery finds nothing. See [sandboxed agents](sandboxed-agents.md).
 
 ## Claims and messages
 
@@ -178,7 +180,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `UpgradeRow` | `directory`, `status`, `old`, `new`, `schema_old`, `schema_new`, `backup`, `error` |
 | `SetupResult` | `target`, `scope`, `directory`, `changes`, `error` |
 | `DoctorCheck` | `id`, `status`, `detail`, `fix`, `hint`, `scope` (optional) |
-| `Warning` | `code`, `name`, `did_you_mean`, `roster`, `roster_total` |
+| `Warning` | `code`, `name` (optional), `did_you_mean` (optional), `roster` (optional), `roster_total` (optional), `agentbus_db` (optional), `discovered` (optional) |
 | `BriefGoal` | `goal`, `set_by`, `set_at`, `truncated` |
 | `BriefMessage` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to`, `body_truncated` |
 | `BriefClaim` | `resource`, `purpose`, `expires_at` |
@@ -271,6 +273,7 @@ A warning is not an error: the command succeeded and its `--json` result carries
 | Code | Extra fields | Commands | Meaning and what to do |
 | --- | --- | --- | --- |
 | `recipient_not_on_roster` | `name`, `did_you_mean`, `roster`, `roster_total` | `post` | The message was delivered to --to NAME, but no agent with that name has joined. did_you_mean lists the closest roster names (at most 3, possibly none). roster lists the agents that have joined, by name (the 10 most recently seen at most); roster_total is how many there are. If the name is a typo, post again to a name in did_you_mean or roster. The first message waits for the typo. |
+| `bus_env_mismatch` | `agentbus_db`, `discovered` | `join`, `brief` | AGENTBUS_DB names a bus other than the one this folder finds (the nearest .agentbus above it, or the main checkout's for a linked worktree). The command used AGENTBUS_DB. Given only when discovery finds a bus and the two differ; a worker outside any checkout is never warned. One repo, one bus: unset AGENTBUS_DB to use the one discovery finds, or keep it only when the worker cannot discover the bus (a sandbox, or a folder outside the checkout). Run buses to see the chain. |
 <!-- /generated:warnings -->
 
 ### Exit codes
