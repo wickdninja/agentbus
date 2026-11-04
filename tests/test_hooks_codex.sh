@@ -410,7 +410,7 @@ for event, groups in hooks.items():
     ran = subprocess.run([*tool, "--version"], capture_output=True, text=True, cwd="/")
     assert ran.returncode == 0 and ran.stdout.startswith("agentbus "), (tool, ran)
 PY
-"${AB[@]}" --json hooks codex | "$PY" -c 'import json,sys; assert json.load(sys.stdin) == json.loads(sys.argv[1])' "$OUT" || fail "hooks codex --json differs from the plain output"
+"${AB[@]}" --json hooks codex | "$PY" -c 'import json,sys; r = json.load(sys.stdin); assert r.pop("contract") == 1 and r == json.loads(sys.argv[1])' "$OUT" || fail "hooks codex --json differs from the plain output (apart from contract, which every result carries)"
 RC=0; "${AB[@]}" hooks codex --write >/dev/null 2>"$T/err" || RC=$?
 [ "$RC" = 2 ] && grep -qF -- "--write" "$T/err" || fail "hooks codex --write was accepted or not a usage error: $RC $(cat "$T/err")"
 RC=0; "${AB[@]}" hooks codex --use copy >/dev/null 2>"$T/err" || RC=$?

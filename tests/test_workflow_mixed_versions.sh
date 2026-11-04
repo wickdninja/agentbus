@@ -32,7 +32,7 @@ ok "each version reads what the other wrote"
 
 echo "CELL 2: claims and facts written by one version are enforced and shown by the other"
 old --as legacy claim src/a.py --purpose "old claim" >/dev/null
-refuse 1 "agentbus: src/a.py is claimed by legacy until <TS> (purpose: \"old claim\"). Do not edit it yet. Ask legacy with post --to legacy --kind question, or choose another resource." \
+refuse 1 "agentbus: src/a.py is claimed by legacy until <TS> (purpose: \"old claim\"). Do not edit it yet. Ask legacy: agentbus --as current post QUESTION --to legacy --kind question, or choose another resource." \
   agentbus --as current claim src/a.py
 agentbus --as current claim src/b.py --purpose "new claim" >/dev/null
 refuse 1 "agentbus: src/b.py is claimed by current until <TS> (new claim). Do not edit it yet. Ask current with post --to current --kind question, or choose another resource." \
@@ -47,7 +47,7 @@ ok "claims refuse across versions, facts keep both authors"
 
 echo "CELL 3: JSON shapes"
 is_equal "the v0.1.0 copy prints a bare array" "array" "$(old --json claims | json_shape)"
-# The current tool prints the envelope {"v":1,"items":[...],"has_more":...,"next":...}; the old copy keeps its bare array.
+# The current tool prints the envelope {"contract":1,"items":[...],"has_more":...,"next":...}; the old copy keeps its bare array.
 is_equal "the current tool prints the envelope" "object" "$(agentbus --json claims | json_shape)"
 is_equal "the envelope's items are the old array" "$(old --json claims | python3 -c 'import json,sys; print([c["resource"] for c in json.load(sys.stdin)])')" \
   "$(agentbus --json claims | python3 -c 'import json,sys; print([c["resource"] for c in json.load(sys.stdin)["items"]])')"

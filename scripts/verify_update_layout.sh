@@ -20,7 +20,9 @@ G=(git -c user.name=t -c user.email=t@t -c commit.gpgsign=false)
 # and a repository cloned from that cannot be cloned again ("did not send all necessary objects").
 mkdir "$W/src"; git -C "$ROOT" archive HEAD | tar -x -C "$W/src"
 "${G[@]}" -C "$W/src" init -q; "${G[@]}" -C "$W/src" add -A; "${G[@]}" -C "$W/src" commit -q -m base
-PIPX=("$PY" -m pipx)   # as the package job installs and runs it (python3 -m pipx): a pipx command on PATH can belong to another python
+# The interpreter pipx is installed in: the package job exports PIPX_PYTHON (the setup-python interpreter, pipx in its own
+# site-packages). Not a pipx command on PATH, which can belong to another python, and not a --user install: HOME is changed below.
+PIPX=("${PIPX_PYTHON:-$PY}" -m pipx)
 setver() { sed "s/^__version__ = .*/__version__ = \"$1\"/" "$W/src/bin/agentbus" >"$W/v" && cp "$W/v" "$W/src/bin/agentbus"; }
 setver 9.0.0; "${G[@]}" -C "$W/src" commit -qam v9.0.0; "${G[@]}" -C "$W/src" tag v9.0.0
 setver 9.1.0; "${G[@]}" -C "$W/src" commit -qam v9.1.0; "${G[@]}" -C "$W/src" tag v9.1.0

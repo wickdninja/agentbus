@@ -25,7 +25,7 @@ def inventory(p, prefix=()):
 seen = set()
 def bad_constant(value):
     raise AssertionError('not strict JSON: ' + value)
-def j(*args, after=False):
+def j(*args, after=False, keep=False):
     parsed = parser.parse_args(list(args))
     path = (parsed.cmd,)
     seen.add(path)
@@ -35,7 +35,13 @@ def j(*args, after=False):
     with tempfile.TemporaryDirectory() as cwd:
         p = subprocess.run([*agentbus_argv(), *argv], cwd=cwd, capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, (args, p.stderr)
-    return json.loads(p.stdout, parse_constant=bad_constant)
+    r = json.loads(p.stdout, parse_constant=bad_constant)
+    # One version rule: every result is an object that starts with "contract": the contract's number (the same key
+    # in the registry and in `schema`). It is checked here for every command, then left out of the exact shapes below.
+    assert type(r) is dict and list(r)[0] == 'contract' and r['contract'] == json_module['CONTRACT']['contract'] == 1, (args, r)
+    if not keep:
+        r = {k: v for k, v in r.items() if k != 'contract'}
+    return r
 def shape(row, **fields):
     assert type(row) is dict and set(row) == set(fields), (row, fields)
     for key, typ in fields.items():
@@ -46,8 +52,8 @@ def array(rows, **fields):
     for row in rows:
         shape(row, **fields)
 def listing(r, **fields):
-    """A listing is an envelope: the contract version, the rows, whether rows were left out, a cursor."""
-    assert type(r) is dict and set(r) == {'v', 'items', 'has_more', 'next'} and r['v'] == 1, r
+    """A listing is an envelope: the rows, whether rows were left out, a cursor (and the contract version, checked in j)."""
+    assert type(r) is dict and set(r) == {'items', 'has_more', 'next'}, r
     assert r['has_more'] is False and r['next'] is None, r
     array(r['items'], **fields)
     return r['items']
@@ -57,7 +63,7 @@ agent = dict(name=str, tool=(str, null), model=(str, null), cwd=str, branch=(str
 message = dict(id=int, ts=str, sender=str, recipient=str, kind=str, topic=(str, null), body=str, reply_to=(int, null))
 claim = dict(resource=str, agent=str, purpose=(str, null), claimed_at=str, expires_at=str, state=str)
 for name in ('a', 'b'):
-    joined = shape(j('--as', name, 'join', '--tool', 't'), joined=str, bus=str, goal=(dict, null), agentbus=str, contract=int)
+    joined = shape(j('--as', name, 'join', '--tool', 't', keep=True), joined=str, bus=str, goal=(dict, null), agentbus=str, contract=int)
     assert joined['contract'] == 1
 shape(j('--as', 'a', 'post', 'hello'), id=int, warnings=list)
 qid = shape(j('--as', 'a', 'post', 'q', '--to', 'b', '--kind', 'question'), id=int, warnings=list)['id']
@@ -76,10 +82,10 @@ assert [(r['key'], r['value'], r['updated_by']) for r in history] == [('k', 'sha
 assert history[0]['id'] < history[1]['id'], history
 for resource in ('src/a.py', 'issue:1'):
     shape(j('--as', 'a', 'claim', resource), resource=str, agent=str, purpose=null, claimed_at=str, expires_at=str,
-          auto_released=list, auto_released_count=int)
+          auto_released=list, auto_released_count=int, renewed=bool)
 listing(j('claims'), **claim)
 assert j('claims', '--stale')['items'] == []
-assert j('goal') is None
+assert j('goal') == {'goal': None, 'set_by': None, 'set_at': None}
 goal = shape(j('--as', 'a', 'goal', 'ship it'), goal=str, set_by=str, set_at=str, unchanged=bool)
 assert goal['goal'] == 'ship it' and goal['set_by'] == 'a', goal
 assert shape(j('goal'), goal=str, set_by=str, set_at=str)['goal'] == 'ship it'
@@ -106,9 +112,10 @@ ucache.mkdir(parents=True, mode=0o700)
 (ucache/'release-check.json').chmod(0o600)
 upd = shape(j('update', '--check'), running=str, latest=(str, null), update_available=bool, install=dict, argv=null, commands=list, download=(dict, null), notes=(str, null))
 assert upd['update_available'] is True and upd['latest'] == '0.9.0' and set(upd['install']) == {'method', 'url'}, upd   # a clone here, another method when run installed
-schema = shape(j('schema'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
+schema = shape(j('schema', keep=True), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 assert schema['contract'] == 1 and 'post' in schema['commands']
-shape(j('schema', 'post'), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
+shape(j('schema', 'post', keep=True), contract=int, agentbus=str, commands=dict, objects=dict, error_fields=dict, errors=dict, warnings=dict, common_errors=list, more=str)
+shape(j('schema', 'post', '--full', keep=True), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 listing(j('buses'), level=int, directory=str, exists=bool, copy_version=(str, null), stale=bool)
 assert shape(j('skill'), text=str)['text'].startswith('---\nname: agentbus\n')
 assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbus\n')
@@ -120,16 +127,17 @@ assert done['shell'] == 'bash' and '_agentbus()' in done['text'], done
 setup = shape(j('setup', 'claude', '--dry-run'), target=str, scope=str, dry_run=bool, changes=list)
 array(setup['changes'], path=str, action=str, detail=str)
 assert set(shape(j('hooks', 'codex'), hooks=dict)['hooks']) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'}
-doctor = shape(j('doctor'), agentbus=str, path=str, contract=int, checks=list, fail=int, warn=int)
+doctor = shape(j('doctor', keep=True), agentbus=str, path=str, contract=int, checks=list, fail=int, warn=int)
 assert doctor['checks'], doctor
 for check in doctor['checks']:   # scope is there for the checks of a user or project file
     shape(check, id=str, status=str, detail=str, fix=(str, null), hint=(str, null), **({'scope': str} if 'scope' in check else {}))
-brief = shape(j('--as', 'b', 'brief'), bus=str, me=dict, goal=dict, agents=dict, questions=dict, unread=dict, facts=dict, omitted=dict, next=str)
+brief = shape(j('--as', 'b', 'brief'), bus=str, me=dict, goal=dict, agents=dict, questions=dict, unread=dict, pending_others=dict, facts=dict, omitted=dict, next=str)
+shape(brief['pending_others'], items=list, next=(str, null))
 shape(brief['me'], name=str, joined=bool)
 shape(brief['goal'], goal=str, set_by=str, set_at=str, truncated=bool)
 shape(brief['agents'], items=list); shape(brief['questions'], items=list)
 shape(brief['unread'], total=int, items=list); shape(brief['facts'], since=(str, null), items=list)
-shape(brief['omitted'], agents=int, questions=int, unread=int, facts=int)
+shape(brief['omitted'], agents=int, questions=int, unread=int, pending_others=int, facts=int)
 array(brief['agents']['items'], name=str, role=(str, null), tool=(str, null), last_seen=str, claims=list, claims_omitted=int)
 for row in brief['questions']['items'] + brief['unread']['items']:
     shape(row, id=int, ts=str, sender=str, recipient=str, kind=str, topic=(str, null), body=str, reply_to=(int, null), body_truncated=bool)
@@ -152,7 +160,7 @@ visible = inventory(parser) - {(h,) for h in json_module['CONTRACT']['hidden']} 
 assert seen == visible, ('untested parser commands', visible - seen, 'extra', seen - visible)
 print('PASS: every parser subcommand prints one JSON value with exact keys and types')
 # Both shared-option placements must work, including nested actions.
-shape(j('--as', 'a', 'join', after=True), joined=str, bus=str, goal=dict, agentbus=str, contract=int)
+shape(j('--as', 'a', 'join', after=True, keep=True), joined=str, bus=str, goal=dict, agentbus=str, contract=int)
 for args in [('who',), ('read',), ('status',), ('claims',), ('log', 'show'), ('ctx', 'get'), ('--as', 'a', 'inbox'),
              ('--as', 'a', 'post', 'after'), ('--as', 'a', 'ctx', 'set', 'k2', 'v'), ('upgrade', str(repo)), ('buses',), ('schema',)]:
     j(*args, after=True)

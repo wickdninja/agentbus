@@ -26,6 +26,11 @@ echo "TEST: the skill ends with the managed marker, and fits the byte budget"
 n=$(wc -c <"$SKILL" | tr -d ' ')
 [ "$n" -le 4800 ] || fail "SKILL.md is $n bytes, the cap is 4800"
 ok "marker present; $n bytes (cap 4800)"
+w=$(wc -w <"$SKILL" | tr -d ' ')
+[ "$w" -le 720 ] || fail "SKILL.md is $w words, the cap is 720"
+grep -q '^Kinds: note, question, answer, handoff, decision, alert, done\. Assign work with handoff\.' "$SKILL" || fail "the skill must list all seven kinds on one line and say to assign work with handoff"
+if grep -q 'Run `release RESOURCE` when finished' "$SKILL"; then fail "the skill still has the release-before-leave step; leave releases everything"; fi
+ok "$w words (cap 720); the seven kinds and 'assign work with handoff' on one line; no release-before-leave step"
 
 echo
 echo "TEST: every required sentence in tests/skill_required.txt is present and within its byte cap"

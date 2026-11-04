@@ -116,7 +116,8 @@ def block_env(doc):
 
 
 def block_error_fields(doc):
-    return table(["Field", "Type", "Meaning"], [["`%s`" % k, v["type"], v["meaning"]] for k, v in doc["error_fields"].items()])
+    return table(["Field", "Type", "Meaning"], [["`%s`" % k, v["type"] if isinstance(v["type"], str) else " or ".join(v["type"]), v["meaning"]]
+                                          for k, v in doc["error_fields"].items()])
 
 
 BLOCKS = {"error-fields": block_error_fields, "results": block_results, "objects": block_objects, "errors": block_errors,

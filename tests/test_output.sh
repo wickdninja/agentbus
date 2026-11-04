@@ -124,7 +124,7 @@ for args in (("status",), ("who",), ("read",), ("claims",), ("ctx", "get"), ("lo
         fail("--json %s is not compact when piped: %r" % (" ".join(args), raw[:120]))
 print("PASS: --json is compact (no indent, no spaces) when stdout is a pipe")
 raw = tty(db, "--json", "who")
-if not raw.startswith("{\n  \"v\": 1,\n  \"items\": [\n"):
+if not raw.startswith("{\n  \"contract\": 1,\n  \"items\": [\n"):
     fail("--json on a terminal is not indented: %r" % raw[:80])
 if json.loads(raw) != json.loads(ok(db, "--json", "who")):
     fail("the indented and compact JSON hold different values")
@@ -364,7 +364,7 @@ for listing in (("read",), ("--as", "b", "inbox", "--peek"), ("status",)):
     if "body_truncated" in short or short["body"] != "short one":
         fail("%s marked or cut a short body: %r" % (listing[-1], short))
 whole = js(db, "read", "--id", str(mid))
-if whole["body"] != text.strip() or "body_truncated" in whole or whole["id"] != mid or set(whole) != {"id", "ts", "sender", "recipient", "kind", "topic", "body", "reply_to"}:
+if whole["body"] != text.strip() or "body_truncated" in whole or whole["id"] != mid or set(whole) != {"contract", "id", "ts", "sender", "recipient", "kind", "topic", "body", "reply_to"}:
     fail("read --id N did not return the whole message as a Message: %r" % list(whole))
 shown = ok(db, "read", "--limit", "2")
 if "  ... cut at 2 KB. Full text: agentbus read --id %d\n" % mid not in shown or "line 0099" in shown:

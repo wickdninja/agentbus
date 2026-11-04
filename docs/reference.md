@@ -96,13 +96,13 @@ On a terminal, watch shows emoji: a role per agent (🧠 brain or lead, ✋ lane
 
 ## JSON output
 
-Use `--json` to parse results. On success stdout holds exactly one JSON value and the exit status is `0`; stderr may hold non-error notices. Read stdout and the exit status, never the two streams merged. `agentbus schema --json` prints everything on this page in machine form: every command's arguments, result schema, error codes, retry rule and exit codes. `agentbus schema` prints a one-screen table, and each command's `--help` ends with its result and retry line.
+Use `--json` to parse results. On success stdout holds exactly one JSON value and the exit status is `0`; stderr may hold non-error notices. Read stdout and the exit status, never the two streams merged. `agentbus schema --json` prints everything on this page in machine form: every command's arguments, result schema, error codes, retry rule and exit codes. `agentbus schema` prints a one-screen table, and each command's `--help` ends with its result and retry line. `agentbus --json schema COMMAND` prints only that command: its arguments, result, the errors of its own (`common_errors` names the ones every command that opens a bus can raise) and the warnings it can give; add `--full` for the global arguments, environment, exit codes and every error's definition. `schema --index` lists every command's arguments and errors in about 2 KB.
 
-Contract version. `join --json` reports `agentbus` (the version of the running copy) and `contract` (`1`). Within contract 1 changes are additive: new keys on results, new error codes and new commands. Removing or renaming a key, changing a type or changing an exit status bumps `contract` and is listed under "Changed" in the CHANGELOG. A listing that prints a bare `[...]` instead of an object with `items` comes from a 0.1.x copy; upgrade it.
+Contract version. Every `--json` result is an object whose first key is `contract` (`1`): the same name in every command, in `agentbus schema --json` and in the registry. Nothing else carries a version. `join --json` also reports `agentbus` (the version of the running copy). Within contract 1 changes are additive: new keys on results, new error codes and new commands. Removing or renaming a key, changing a type or changing an exit status bumps `contract` and is listed under "Changed" in the CHANGELOG. A listing that prints a bare `[...]` instead of an object with `items` comes from a 0.1.x copy; upgrade it. The tables below leave `contract` out of each result; it is always there. `goal` with no goal set returns `{"contract": 1, "goal": null, "set_by": null, "set_at": null}`, so no result is ever a bare `null`.
 
 ### Listings
 
-Commands that list rows return an envelope, `{"v": 1, "items": [...], "has_more": false, "next": null}`:
+Commands that list rows return an envelope, `{"contract": 1, "items": [...], "has_more": false, "next": null}`:
 
 - `items` is the array 0.1.x returned, with the same row shape and order.
 - `has_more` is `true` when rows were left out by `--limit`. An empty `items` with `has_more: true` means "ask again", not "nothing to do" (`inbox --limit 0` is the clearest case).
@@ -130,27 +130,27 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 <!-- generated:results -->
 | Command | `--json` result |
 | --- | --- |
-| `join` | `{"joined": string, "bus": string, "goal": null or Goal, "agentbus": string, "contract": integer}` |
+| `join` | `{"joined": string, "bus": string, "goal": null or Goal, "agentbus": string}` |
 | `leave` | `{"left": string, "was_joined": boolean, "released": [string], "released_count": integer}` |
-| `who` | `{"v": integer, "items": [Agent], "has_more": boolean, "next": string or null}` |
+| `who` | `{"items": [Agent], "has_more": boolean, "next": string or null}` |
 | `post` | `{"id": integer, "warnings": [Warning]}` |
-| `inbox` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}` |
-| `read` | `{"v": integer, "items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message` |
+| `inbox` | `{"items": [Message], "has_more": boolean, "next": string or null}` |
+| `read` | `{"items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message` |
 | `ctx set` | `Fact` |
-| `ctx get` | `a Fact, or {"v": integer, "items": [Fact], "has_more": boolean, "next": string or null}` |
-| `ctx history` | `{"v": integer, "items": [FactVersion], "has_more": boolean, "next": string or null}` |
-| `claim` | `{"resource": string, "agent": string, "purpose": string or null, "claimed_at": string, "expires_at": string, "auto_released": [{"resource": string, "agent": string}], "auto_released_count": integer}` |
+| `ctx get` | `a Fact, or {"items": [Fact], "has_more": boolean, "next": string or null}` |
+| `ctx history` | `{"items": [FactVersion], "has_more": boolean, "next": string or null}` |
+| `claim` | `{"resource": string, "agent": string, "purpose": string or null, "claimed_at": string, "expires_at": string, "auto_released": [{"resource": string, "agent": string}], "auto_released_count": integer, "renewed": boolean}` |
 | `release` | `{"released": [string], "released_count": integer}` |
-| `claims` | `{"v": integer, "items": [Claim], "has_more": boolean, "next": string or null}` |
+| `claims` | `{"items": [Claim], "has_more": boolean, "next": string or null}` |
 | `log add` | `{"id": integer, "logged": boolean, "agent": string, "action": string, "detail": string}` |
-| `log show` | `{"v": integer, "items": [LogEntry], "has_more": boolean, "next": string or null}` |
+| `log show` | `{"items": [LogEntry], "has_more": boolean, "next": string or null}` |
 | `status` | `{"bus": string, "goal": null or Goal, "agents": [Agent], "context": [Fact], "claims": [Claim], "messages": [Message], "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}` |
-| `goal` | `null or a Goal` |
+| `goal` | `a Goal, or {"goal": null, "set_by": null, "set_at": null} when none is set` |
 | `watch` | `{"bus": string, "directory": string, "agents": [{"name": string, "role": string or null, "last_seen": string, "joined_at": string}], "claims": [{"resource": string, "agent": string, "purpose": string or null, "expires_at": string}], "goal": null or Goal, "context": [Fact], "messages": [{"id": integer, "ts": string, "sender": string, "recipient": string, "kind": string, "topic": string or null, "body": string, "reply_to": integer or null}], "unread": object, "counts": {"agents": integer, "claims": integer, "messages": integer}, "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}` |
-| `buses` | `{"v": integer, "items": [BusLevel], "has_more": boolean, "next": string or null}` |
+| `buses` | `{"items": [BusLevel], "has_more": boolean, "next": string or null}` |
 | `init` | `{"directory": string, "copy": string, "old": string, "new": string, "exclude_added": boolean, "gitignore_rule": boolean, "outer": string or null}` |
 | `upgrade` | `{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}` |
-| `schema` | `the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, "errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command's commands, objects and errors; with --index {"contract": integer, "agentbus": string, "commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}` |
+| `schema` | `the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, "errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command's commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env and every error it can raise); with --index {"contract": integer, "agentbus": string, "commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}` |
 | `help` | `{"command": string or null, "text": string}` |
 | `completion` | `{"shell": string, "text": string}` |
 | `skill` | `{"text": string}` |
@@ -158,7 +158,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `update` | `{"from": string, "to": string, "latest": string or null, "install": {"method": string, "url": string or null}, "tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null (only when update downloads the release wheel; "install_with" in a dry run)}, "buses": [UpgradeRow], "setup": [SetupResult], "plugin": {"fix": string} or null, "restart": boolean, "scope": {"narrowed": boolean, "why": string or null}}, or with --check {"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, "url": string or null}, "argv": null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null, "notes": string or null}` |
 | `hooks` | `{"hooks": {EVENT: [{"matcher": string (optional), "hooks": [{"type": string, "timeout": integer, "command": string}]}]}}` |
 | `doctor` | `{"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" \| "warn" \| "fail" \| "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0` |
-| `brief` | `{"bus": string, "me": null or {"name": string, "joined": boolean}, "goal": null or BriefGoal, "agents": {"items": [BriefAgent]}, "questions": {"items": [BriefMessage]}, "unread": {"total": integer, "items": [BriefMessage]}, "facts": {"since": string or null, "items": [BriefFact]}, "omitted": {"agents": integer, "questions": integer, "unread": integer, "facts": integer}, "next": string}` |
+| `brief` | `{"bus": string, "me": null or {"name": string, "joined": boolean}, "goal": null or BriefGoal, "agents": {"items": [BriefAgent]}, "questions": {"items": [BriefMessage]}, "unread": {"total": integer, "items": [BriefMessage]}, "pending_others": {"items": [BriefMessage], "next": string or null}, "facts": {"since": string or null, "items": [BriefFact]}, "omitted": {"agents": integer, "questions": integer, "unread": integer, "pending_others": integer, "facts": integer}, "next": string}` |
 | `demo` | `{"steps": [{"command": string, "exit": integer}], "cleaned": boolean}` |
 <!-- /generated:results -->
 
@@ -178,7 +178,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `UpgradeRow` | `directory`, `status`, `old`, `new`, `schema_old`, `schema_new`, `backup`, `error` |
 | `SetupResult` | `target`, `scope`, `directory`, `changes`, `error` |
 | `DoctorCheck` | `id`, `status`, `detail`, `fix`, `hint`, `scope` (optional) |
-| `Warning` | `code`, `name`, `did_you_mean` |
+| `Warning` | `code`, `name`, `did_you_mean`, `roster`, `roster_total` |
 | `BriefGoal` | `goal`, `set_by`, `set_at`, `truncated` |
 | `BriefMessage` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to`, `body_truncated` |
 | `BriefClaim` | `resource`, `purpose`, `expires_at` |
@@ -202,7 +202,7 @@ A real `update`, `update --dry-run` and `update --check` print one object each (
 
 ### Failures
 
-A failing command exits non-zero and, under `--json`, prints one JSON object on stderr: `{"error": {"code": "claim_conflict", "message": "...", "retryable": false, "committed": false, ...}}`, plus the fields listed for its code below. Branch on `error.code`, not on the message. Every error object carries these fields:
+A failing command exits non-zero and, under `--json`, prints one JSON object on stderr: `{"error": {"code": "claim_conflict", "message": "...", "retryable": false, "committed": false, ...}}`, plus the fields listed for its code below. Branch on `error.code`, not on the message. `error.next` is the command that recovers, spelled as the message gives it (fill in any capitals), or `null`. Every error object carries these fields:
 
 <!-- generated:error-fields -->
 | Field | Type | Meaning |
@@ -211,6 +211,7 @@ A failing command exits non-zero and, under `--json`, prints one JSON object on 
 | `message` | string | What happened and what to do, for a person. |
 | `retryable` | boolean | Whether running the same command again can succeed. False once the command saved database rows, unless it had a --request-id; a command that changed only files (init, upgrade's copy, setup) stays retryable. |
 | `committed` | boolean | True when the command's own change had been saved before the failure, so a write must not be repeated without its --request-id unless retryable is true. |
+| `next` | string or null | The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A write's request id is not repeated here: reuse the one you sent. |
 <!-- /generated:error-fields -->
 
 What stdout holds depends on when the failure happened:
@@ -235,7 +236,7 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `not_held` | 1 | no | `resource` | You do not hold that claim. Nothing to release; use release --if-held for cleanup. |
 | `no_message` | 1 | no | `id` | There is no message with that id. Check the id with read. |
 | `no_context_key` | 1 | no | `key` | There is no fact with that key. List facts with ctx get. |
-| `not_on_roster` | 1 | no | `agent` | That name has not joined. Join first. |
+| `not_on_roster` | 1 | no | `agent`, `did_you_mean`, `roster` | That name has not joined. did_you_mean lists the roster names closest to it (at most 3, possibly none); roster lists the agents that have joined, by name (the 10 most recently seen at most). If the name is a typo, repeat the command with a name in did_you_mean. Otherwise join first. |
 | `name_active` | 1 | no | `agent`, `last_seen_min`, `suggested_name` | The name was active recently and may be another live session. suggested_name is a free name, or null. Join under suggested_name, or join --takeover if it is you. To retry your own join, pass the same --request-id. |
 | `request_id_reused` | 1 | no | `request_id`, `agent`, `original_id` | That request id was used with a different message or join. original_id is the message id, or the log id of the join, that first used it. Repeat the original request exactly, or use a new token for a different one. |
 | `bad_input` | 2 | no | `field` (optional) | The arguments are not valid (a usage error). field names the argument when a value is refused: a body, value, detail or text over 64 KB (field body for post). Fix the arguments. |
@@ -269,7 +270,7 @@ A warning is not an error: the command succeeded and its `--json` result carries
 <!-- generated:warnings -->
 | Code | Extra fields | Commands | Meaning and what to do |
 | --- | --- | --- | --- |
-| `recipient_not_on_roster` | `name`, `did_you_mean` | `post` | The message was delivered to --to NAME, but no agent with that name has joined. did_you_mean lists the closest roster names (at most 3, possibly none). If the name is a typo, post again to a name in did_you_mean. The first message waits for the typo. |
+| `recipient_not_on_roster` | `name`, `did_you_mean`, `roster`, `roster_total` | `post` | The message was delivered to --to NAME, but no agent with that name has joined. did_you_mean lists the closest roster names (at most 3, possibly none). roster lists the agents that have joined, by name (the 10 most recently seen at most); roster_total is how many there are. If the name is a typo, post again to a name in did_you_mean or roster. The first message waits for the typo. |
 <!-- /generated:warnings -->
 
 ### Exit codes
@@ -303,7 +304,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `ctx set` | idempotent | an unchanged value writes no history row and returns unchanged true |
 | `ctx get` | safe | repeat freely |
 | `ctx history` | safe | repeat freely |
-| `claim` | idempotent | renews the claim and keeps its purpose and claimed_at |
+| `claim` | idempotent | renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, and previous_purpose is set when --purpose changed it |
 | `release` | idempotent with flag | release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent |
 | `claims` | safe | repeat freely |
 | `log add` | unsafe | each call appends a row; check log show --limit 1 before retrying |
