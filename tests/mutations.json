@@ -3719,8 +3719,8 @@
   {
     "name": "the AGENTS.md block offers the project copy again",
     "file": "bin/agentbus",
-    "find": "(never run the copy in it, and carry on with the task\\.)",
-    "replace": "\\1 Or `.agentbus/bin/agentbus`.",
+    "find": "the current release and run `agentbus upgrade --all PARENT_DIR`\\.",
+    "replace": "`.agentbus/bin/agentbus`.",
     "count": 1,
     "run": "tests/test_skill.sh",
     "expect": "the block names the project copy"
@@ -3728,8 +3728,8 @@
   {
     "name": "the AGENTS.md block goes back to the folder condition",
     "file": "bin/agentbus",
-    "find": "If `agentbus buses` finds no bus, ignore this section\\.",
-    "replace": "If `.agentbus/` exists in this folder or a parent (otherwise ignore this section).",
+    "find": "If `agentbus buses` finds no bus, ignore this section\\. Otherwise run",
+    "replace": "If `.agentbus/` exists in this folder or a parent: run",
     "count": 1,
     "run": "tests/test_skill.sh",
     "expect": "the block's condition tells an agent in a linked worktree elsewhere"
