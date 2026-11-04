@@ -1109,8 +1109,8 @@
   {
     "name": "update: an installer in a group-writable folder is used",
     "file": "bin/agentbus",
-    "find": "if any\\(st\\.st_mode & 0o022 or \\(uid is not None and st\\.st_uid not in \\(uid, 0\\)\\) for st in \\(fst, dst\\)\\):",
-    "replace": "if any((uid is not None and st.st_uid not in (uid, 0)) for st in (fst, dst)):",
+    "find": "installer_folder_ok\\(dst, uid, group_name\\(dst\\.st_gid\\)\\)",
+    "replace": "True",
     "count": 1,
     "run": "tests/test_update.sh",
     "expect": "a group-writable PATH entry was used"
@@ -1532,7 +1532,7 @@
   {
     "name": "identity: post allowed without joining",
     "file": "bin/agentbus",
-    "find": "        require_joined\\(con, name\\)\\n        if a\\.request_id is not None:",
+    "find": "        require_joined\\(con, name, a\\)\\n        if a\\.request_id is not None:",
     "replace": "        if a.request_id is not None:",
     "count": 1,
     "run": "tests/test_identity.sh",
@@ -1541,7 +1541,7 @@
   {
     "name": "identity: ctx set allowed without joining",
     "file": "bin/agentbus",
-    "find": "            require_joined\\(con, name\\)\\n            cur = con\\.execute\\(\\\"SELECT value, updated_by",
+    "find": "            require_joined\\(con, name, a\\)\\n            cur = con\\.execute\\(\\\"SELECT value, updated_by",
     "replace": "            cur = con.execute(\"SELECT value, updated_by",
     "count": 1,
     "run": "tests/test_identity.sh",
@@ -1550,7 +1550,7 @@
   {
     "name": "identity: goal allowed without joining",
     "file": "bin/agentbus",
-    "find": "            require_joined\\(con, name\\)\\n            cur = current_goal\\(con\\)",
+    "find": "            require_joined\\(con, name, a\\)\\n            cur = current_goal\\(con\\)",
     "replace": "            cur = current_goal(con)",
     "count": 1,
     "run": "tests/test_identity.sh",
@@ -1559,7 +1559,7 @@
   {
     "name": "identity: log add allowed without joining",
     "file": "bin/agentbus",
-    "find": "            require_joined\\(con, name\\)\\n            row_id = log",
+    "find": "            require_joined\\(con, name, a\\)\\n            row_id = log",
     "replace": "            row_id = log",
     "count": 1,
     "run": "tests/test_identity.sh",
@@ -2180,8 +2180,8 @@
   {
     "name": "a missing fact is a context key",
     "file": "bin/agentbus",
-    "find": "f\"no\\ fact\\ named\\ \\{a\\.key\\}\\.\\ List\\ facts\\ with:\\ agentbus\\ ctx\\ get\"",
-    "replace": "f\"no context key {a.key}. List keys with: agentbus ctx get\"",
+    "find": "f\"no\\ fact\\ named\\ \\{a\\.key\\}\\.\\ List\\ facts\\ with:\\ \\{next_command\\(a,\\ 'ctx',\\ 'get',\\ as_=False\\)\\}\"",
+    "replace": "f\"no context key {a.key}. List keys with: {next_command(a, 'ctx', 'get', as_=False)}\"",
     "count": 1,
     "run": "tests/test_help.sh",
     "expect": "lacks its next step"
@@ -3062,8 +3062,8 @@
   {
     "name": "dx2: not_held names another command as next",
     "file": "bin/agentbus",
-    "find": "next=\"agentbus\\ claims\",\\ resource=a\\.resource",
-    "replace": "next=\"agentbus who\", resource=a.resource",
+    "find": "next=next_command\\(a,\\ \"claims\",\\ as_=False\\),\\ resource=a\\.resource",
+    "replace": "next=next_command(a, \"who\", as_=False), resource=a.resource",
     "count": 1,
     "run": "tests/test_dx2.sh",
     "expect": "not held: next does not match the message"
@@ -3332,7 +3332,7 @@
   {
     "name": "a write as a name that could never join is told to join first",
     "file": "bin/agentbus",
-    "find": "    if not HOOK_NAME_RE\\.fullmatch\\(name\\):\\n        refuse_invalid_name\\(name\\)[^\\n]*\\n",
+    "find": "    if not HOOK_NAME_RE\\.fullmatch\\(name\\):\\n        refuse_invalid_name\\(name, a\\)[^\\n]*\\n",
     "replace": "",
     "count": 1,
     "run": "tests/test_identity.sh",
