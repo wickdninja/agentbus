@@ -475,13 +475,23 @@ PY
 payload user_prompt_submit session_id="\"$SID1\"" >"$T/pl"
 # CPU time (child user + system) against a fixed 250 ms: it does not move with how busy the host is, wall time does.
 # The wall time of a hook is measured through Codex's login shell by scripts/e2e_codex.sh, where the budget is decided.
-"$PY" -I - "$T/pl" "$P" "${AB[@]}" <<'PY' || fail "hook p95 CPU time over the 250 ms budget"
-import resource, subprocess, sys
+# What setup codex records for an installed tool: the entry script pip, uv and pipx write (an absolute interpreter and
+# `from agentbus import cli`), which imports the module, so its bytecode is cached. Run as `python3 bin/agentbus` the
+# whole 13,000-line file is compiled again on every hook, which no user's Codex does. The module is bin/agentbus (the
+# wheel ships it as agentbus.py), or the mutation copy under test; an installed command (AGENTBUS_CMD) is run as given.
+if [ -n "${AGENTBUS_CMD:-}" ]; then HB=("${AB[@]}"); else
+  mkdir -p "$T/inst/site" "$T/inst/bin"; cp "${AGENTBUS_BIN:-$BIN}" "$T/inst/site/agentbus.py"
+  printf '#!%s\nimport sys\nsys.path.insert(0, %s)\nfrom agentbus import cli\nsys.exit(cli())\n' "$(command -v "$PY")" "'$T/inst/site'" >"$T/inst/bin/agentbus"
+  chmod 755 "$T/inst/bin/agentbus"; HB=("$T/inst/bin/agentbus")
+fi
+"$PY" -I - "$T/pl" "$P" "${HB[@]}" <<'PY' || fail "hook p95 CPU time over the 250 ms budget"
+import os, resource, subprocess, sys
 pl, cwd, argv = sys.argv[1], sys.argv[2], sys.argv[3:]
+env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}   # the suite sets it; a user's Codex does not
 cpu = []
 for _ in range(20):
     r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
-    p = subprocess.run([*argv, "hook", "codex", "UserPromptSubmit"], stdin=open(pl), capture_output=True, cwd=cwd, timeout=60)
+    p = subprocess.run([*argv, "hook", "codex", "UserPromptSubmit"], stdin=open(pl), capture_output=True, cwd=cwd, env=env, timeout=60)
     r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu.append(r1.ru_utime + r1.ru_stime - r0.ru_utime - r0.ru_stime)
     assert p.returncode == 0 and p.stdout, (p.returncode, p.stdout, p.stderr)
