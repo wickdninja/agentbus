@@ -3184,5 +3184,14 @@
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "check under an interpreter that lives in a group-writable folder"
+  },
+  {
+    "name": "output: the test clock does not move the claim expiry",
+    "file": "bin/agentbus",
+    "find": "datetime\\.fromtimestamp\\(clock\\(\\)\\.timestamp\\(\\)\\ \\+\\ a\\.ttl_min\\ \\*\\ 60,\\ timezone\\.utc\\)",
+    "replace": "datetime.fromtimestamp(time.time() + a.ttl_min * 60, timezone.utc)",
+    "count": 1,
+    "run": "tests/test_output.sh",
+    "expect": "the claim says"
   }
 ]

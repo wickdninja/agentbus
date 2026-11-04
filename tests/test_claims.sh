@@ -277,10 +277,12 @@ echo "TEST: --ttl-min counts minutes"
 agentbus --as ttl join --tool t >/dev/null
 o=$(json_ok agentbus --json --as ttl claim ttl/a.py --ttl-min 7)
 python3 -c '
-import json, sys, time
+import json, os, sys, time
 from datetime import datetime, timezone
 e = datetime.strptime(json.loads(sys.argv[1])["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
-d = e - (time.time() + 7 * 60)
+pin = os.environ.get("AGENTBUS_TEST_NOW")  # a test-only hook: the tool'"'"'s clock starts at this UTC time
+now = datetime.strptime(pin, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp() if pin else time.time()
+d = e - (now + 7 * 60)
 sys.exit(0 if abs(d) < 90 else "expires %+.0f s off now + 7 min" % d)' "$o" || fail "--ttl-min 7 did not expire in 7 minutes: $o"
 ok "--ttl-min 7 expires 7 minutes from now"
 

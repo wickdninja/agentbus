@@ -69,7 +69,10 @@ check('1 local message headers and UTC JSON', headers)
 def listings():
     db = fresh('rows')
     stamp = lambda d: d.strftime('%Y-%m-%dT%H:%M:%SZ')
-    now = datetime.datetime.now(datetime.timezone.utc)
+    # AGENTBUS_TEST_NOW pins the tool's clock (a test-only hook); plant relative to the same moment, or the rows are not 2 minutes old
+    pin = os.environ.get('AGENTBUS_TEST_NOW')
+    now = (datetime.datetime.strptime(pin, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc) if pin
+           else datetime.datetime.now(datetime.timezone.utc))
     with contextlib.closing(sqlite3.connect(db)) as c:
         for name, role in [('claude', 'planner'), ('codex', 'implementer'), ('reviewer-subagent-security', 'security'), ('nate', '')]:
             c.execute('INSERT INTO agents VALUES(?,?,?,?,?,?,?,?)', (name, 'codex', None, '/', None, role, stamp(now), stamp(now-datetime.timedelta(minutes=2))))
@@ -81,7 +84,8 @@ def listings():
         lines = text.splitlines()
         assert len(lines) == count, text
         assert all(l.startswith('  ') and len(physical_rows(l, 80)) == 1 for l in lines), text
-        assert ('seen 2m ago' in text if cmd == 'who' else len(re.findall(r'for 2h \(until \d\d:\d\d\)', text)) == 2 and text.count('expired') == 1), text
+        # a claim's expiry carries its date when it falls on tomorrow
+        assert ('seen 2m ago' in text if cmd == 'who' else len(re.findall(r'for 2h \(until (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d\)', text)) == 2 and text.count('expired') == 1), text
         section = ok('status', db=db).split('== '+('agents' if cmd == 'who' else 'claims')+'\n', 1)[1].split('\n\n', 1)[0]
         assert section.splitlines() == lines, (section, text)
     expected = {'  '+name.ljust(26)+'  '+role.ljust(11)+'  codex  seen 2m ago'

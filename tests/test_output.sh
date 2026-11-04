@@ -9,11 +9,11 @@ set -euo pipefail
 T=$(mktemp -d); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
 export TZ=America/New_York
 "$PY" - "$T" <<'PY'
-import json, os, pty, fcntl, re, shlex, sqlite3, struct, subprocess, sys, termios, time
+import calendar, json, os, pty, fcntl, re, shlex, sqlite3, struct, subprocess, sys, termios, time
 sys.path.insert(0, os.environ["TESTS_DIR"])
 from agentbus_cmd import agentbus_argv
 T = sys.argv[1]
-BASE = {k: v for k, v in os.environ.items() if not k.startswith("AGENTBUS_") and k != "COLUMNS"}
+BASE = {k: v for k, v in os.environ.items() if (not k.startswith("AGENTBUS_") or k == "AGENTBUS_TEST_NOW") and k != "COLUMNS"}
 BASE["PYTHONDONTWRITEBYTECODE"] = "1"
 n = [0]
 
@@ -209,25 +209,47 @@ for name, (args, pattern) in checks.items():
 if re.search(r"\d{4}-\d\d-\d\dT", ok(db, "ctx", "get") + ok(db, "log", "show", "--limit", "1") + ok(db, "goal")):
     fail("an ISO time is left in human output")
 claimed = ok(db, "--as", "a", "claim", "src/a.py", "--purpose", "edit")
-now = time.time()
+# AGENTBUS_TEST_NOW (a test-only hook) starts the tool's clock at a given UTC time, so this runs at any hour: "now" is
+# that moment, and an expiry 2 hours on is HH:MM if it is still today (local) and `Mon D HH:MM` if it is tomorrow.
+pin = os.environ.get("AGENTBUS_TEST_NOW")
+now = calendar.timegm(time.strptime(pin, "%Y-%m-%dT%H:%M:%SZ")) if pin else time.time()
 
 
-def hhmm(t):
-    return time.strftime("%H:%M", time.localtime(t))
+def human(t):
+    """The expected text of the time t (epoch seconds) relative to now: the format the tool documents."""
+    local, today = time.localtime(t), time.localtime(now)
+    stamp = time.strftime("%H:%M", local)
+    return stamp if local[:3] == today[:3] else "%s %d %s" % (time.strftime("%b", local), local.tm_mday, stamp)
 
 
-m = re.fullmatch(r"claimed src/a\.py for 2h \(until (\d\d:\d\d)\)\n", claimed)
-if not m or m.group(1) not in {hhmm(now + 7200 + d) for d in (-90, -30, 0, 30, 90)}:
-    fail("claim does not say `for 2h (until HH:MM)`: %r" % claimed)
+expected_until = {human(now + 7200 + d) for d in (-90, -30, 0, 30, 90)}   # the clock runs a little between commands
+m = re.fullmatch(r"claimed src/a\.py for 2h \(until ((?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d)\)\n", claimed)
+if not m or m.group(1) not in expected_until:
+    fail("claim does not say `for 2h (until HH:MM)` (or with the date when tomorrow, wanted one of %s): %r" % (sorted(expected_until), claimed))
 listed = ok(db, "claims")
-if not re.search(r"^  src/a\.py +a +for 2h \(until " + m.group(1) + r"\) +edit$", listed, re.M):
+if not re.search(r"^  src/a\.py +a +for 2h \(until " + re.escape(m.group(1)) + r"\) +edit$", listed, re.M):
     fail("claims does not say `for 2h (until HH:MM)`: %r" % listed)
 day = ok(db, "--as", "a", "claim", "src/b.py", "--ttl-min", "1500")
 if not re.search(r"claimed src/b\.py for 1d 1h \(until [A-Z][a-z]{2} \d{1,2} \d\d:\d\d\)", day):
     fail("a claim past today does not give the day: %r" % day)
+# the same claim at fixed moments (TZ is America/New_York, EST in November): 23:30 local puts the expiry on the next
+# day, so it carries the date; 10:00 local keeps it today; a malformed AGENTBUS_TEST_NOW is ignored
+for pinned, want in (("2026-11-04T04:30:00Z", "for 2h (until Nov 4 01:30)"), ("2026-11-04T15:00:00Z", "for 2h (until 12:00)"),
+                     ("2026-11-04T04:59:00Z", "for 2h (until Nov 4 01:59)")):
+    pdb = new_bus("pin" + pinned[11:16].replace(":", ""))
+    ok(pdb, "--as", "p", "join", env={"AGENTBUS_TEST_NOW": pinned})
+    got = ok(pdb, "--as", "p", "claim", "x", env={"AGENTBUS_TEST_NOW": pinned})
+    if got != "claimed x " + want + "\n":
+        fail("with the clock at %s the claim says %r, wanted %r" % (pinned, got, want))
+    if "(until " + want[len("for 2h (until "):-1] + ")" not in ok(pdb, "claims", env={"AGENTBUS_TEST_NOW": pinned}):
+        fail("claims at %s lost the expiry" % pinned)
+pdb = new_bus("pinbad")
+ok(pdb, "--as", "p", "join")
+if not re.fullmatch(r"claimed x for 2h \(until [^)]+\)\n", ok(pdb, "--as", "p", "claim", "x", env={"AGENTBUS_TEST_NOW": "yesterday"})):
+    fail("a malformed AGENTBUS_TEST_NOW must change nothing")
 error, p = refused(db, "--as", "b", "claim", "src/a.py")
-if error["code"] != "claim_conflict" or not re.search(r"claimed by a until \d\d:\d\d \(purpose: \"edit\"\)", error["message"]):
-    fail("the conflict message does not use HH:MM: %r" % error["message"])
+if error["code"] != "claim_conflict" or not re.search(r"claimed by a until " + re.escape(m.group(1)) + r" \(purpose: \"edit\"\)", error["message"]):
+    fail("the conflict message does not use the same time as the claim, %s: %r" % (m.group(1), error["message"]))
 if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", error["expires_at"]):
     fail("the error field expires_at is not the stored ISO time: %r" % error)
 doc = js(db, "ctx", "get", "old")
