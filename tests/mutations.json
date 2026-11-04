@@ -2382,7 +2382,7 @@
     "replace": "        subprocess.run(commands[0], shell=True, capture_output=True, cwd=os.sep)\n        rows = []\n        other = self.path_for(\"user\" if scope == \"project\" else \"project\")\n",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check started the executable a hooks file names"
+    "expect": "check ran a hook program that looks like agentbus"
   },
   {
     "name": "setup help does not mention the hooks",
@@ -2436,7 +2436,7 @@
     "replace": "        for command in commands[:1]:\n",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check with one forged entry among four"
+    "expect": "check with one entry that runs another install among four"
   },
   {
     "name": "check vouches for any file named agentbus",
@@ -2445,7 +2445,7 @@
     "replace": "            if False:",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check with one forged entry among four"
+    "expect": "check with one entry that runs another install among four"
   },
   {
     "name": "check starts the user's login shell",

@@ -1207,6 +1207,14 @@ rm -rf "$W/.codex"
 # a hooks file can be a project's: check looks at the executable it names and never starts it
 mkdir -p "$T/planted" "$T/upgraded"; printf '#!/bin/sh\ntouch "%s"\n' "$T/canary-check" >"$T/planted/agentbus"; chmod +x "$T/planted/agentbus"
 cp "${AGENTBUS_BIN:-$BIN}" "$T/upgraded/agentbus"   # a real other install of agentbus (an upgrade moved it): stale, never forged
+# An interpreter the test controls, in a private 0700 folder, never wherever the host keeps its Python. First of all the cases that judge
+# a path, so a check that rejects sticky folders (/tmp is one, and so is where CI puts the test's folders) fails here, by name.
+mkdir -p "$T/py" "$T/stickypy"; printf '#!/bin/sh\nexit 0\n' >"$T/py/python3"; chmod 755 "$T/py/python3"
+cp "$T/py/python3" "$T/stickypy/python3"; chmod 1777 "$T/stickypy"
+run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
+set_tool all "'$T/stickypy/python3' '$T/upgraded/agentbus'"
+got=$(cd "$W" && rows user)
+! grep -q "^codex_hooks_tool problem" <<<"$got" || fail "check with an interpreter in a sticky folder: $got"   # not flagged; whether it is stale or ok is other cases' business
 # one forged entry among genuine ones is not vouched for: every tagged command is checked, not only the first
 run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
 set_tool Stop "'$T/upgraded/agentbus'"
@@ -1216,22 +1224,24 @@ run_setup codex --uninstall >/dev/null; run_setup codex >/dev/null
 set_tool all "'$T/upgraded/agentbus'"
 got=$(cd "$W" && rows user)
 grep -q "^codex_hooks_tool stale 4 of 4 hook commands run $T/upgraded/agentbus, not this agentbus" <<<"$got" || fail "check with an upgraded install's entries: $got"
+# a program that passes for agentbus (it carries the version marker) and does something when run: check reads it and never starts it
+mkdir -p "$T/canary-tool"; printf '#!/bin/sh\ntouch "%s"\nexit 0\n__version__ = "0.2.0"\n' "$T/canary-run" >"$T/canary-tool/agentbus"; chmod 755 "$T/canary-tool/agentbus"
+set_tool all "'$T/canary-tool/agentbus'"
+got=$(cd "$W" && rows user)
+[ ! -e "$T/canary-run" ] || fail "check ran a hook program that looks like agentbus"
+grep -q "^codex_hooks_tool stale 4 of 4 hook commands run $T/canary-tool/agentbus" <<<"$got" || fail "check with a program that carries agentbus's version marker: $got"
 # its Python interpreter plus the script is the other form setup writes. The interpreter is one the test controls: a private
 # 0700 folder, never wherever the host keeps its Python (a CI toolcache and a framework install have group- or world-writable folders)
-mkdir -p "$T/py"; printf '#!/bin/sh\nexit 0\n' >"$T/py/python3"; chmod 755 "$T/py/python3"
 set_tool all "'$T/py/python3' '$T/upgraded/agentbus'"
 got=$(cd "$W" && rows user)
 grep -q "^codex_hooks_tool stale 4 of 4 hook commands run $T/upgraded/agentbus, not this agentbus" <<<"$got" || fail "check with an interpreter and script entry: $got"
 # any other interpreter in a folder group or others can write is flagged; a sticky folder (like /tmp) and a private one are not
-mkdir -p "$T/gwpy" "$T/stickypy" "$T/wwancestor/inner"
-for d in gwpy stickypy; do cp "$T/py/python3" "$T/$d/python3"; done
-cp "$T/upgraded/agentbus" "$T/wwancestor/inner/agentbus"; chmod 775 "$T/gwpy"; chmod 1777 "$T/stickypy"; chmod 777 "$T/wwancestor"
+mkdir -p "$T/gwpy" "$T/wwancestor/inner"
+cp "$T/py/python3" "$T/gwpy/python3"
+cp "$T/upgraded/agentbus" "$T/wwancestor/inner/agentbus"; chmod 775 "$T/gwpy"; chmod 777 "$T/wwancestor"
 set_tool all "'$T/gwpy/python3' '$T/upgraded/agentbus'"
 got=$(cd "$W" && rows user)
 grep -q "^codex_hooks_tool problem the hooks run $T/upgraded/agentbus, which is writable by others ($T/gwpy)" <<<"$got" || fail "check with an interpreter in a group-writable folder: $got"
-set_tool all "'$T/stickypy/python3' '$T/upgraded/agentbus'"
-got=$(cd "$W" && rows user)
-grep -q "^codex_hooks_tool stale 4 of 4" <<<"$got" || fail "check with an interpreter in a sticky folder: $got"
 # ... unless it is the interpreter running the check (a CI toolcache's Python lives in such folders)
 set_tool all "'$T/gwpy/python3' '$T/upgraded/agentbus'"
 got=$(cd "$W" && "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$T/gwpy/python3" <<'PY'
