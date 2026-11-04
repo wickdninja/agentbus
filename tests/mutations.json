@@ -672,7 +672,7 @@
     "replace": "    hits += []\n",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "a disguised .agentbus entry was hidden"
+    "expect": "was not picked as a candidate"
   },
   {
     "name": "the index answer is never remembered",

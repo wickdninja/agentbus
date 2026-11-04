@@ -6189,6 +6189,17 @@ def hook_walk_candidates(names):
     return sorted(found)
 
 
+def hook_index_pairs(repo):
+    """[(path bytes, mode)] for the repository's index (a split index joined with its shared index): one read, one hash.
+    The mode is meaningful only for a sparse or split index; a plain one gives 0. FileNotFoundError when there is no index;
+    ValueError or OSError for anything unreadable."""
+    data = hook_read_file_exact(os.path.join(repo["gitdir"], "index"))
+    names, link, sparse, size = hook_index_read(data, hook_hash_order(repo))
+    if link is None and not sparse:
+        return [(n, 0) for n in names]
+    return hook_index_entries(repo, data, size)[0]
+
+
 def hook_index_scan(repo):
     """(candidate paths, stamp of the shared index or None) for the repository's index: one read, one hash, one walk of the
     paths. FileNotFoundError when there is no index; ValueError or OSError for anything unreadable."""
@@ -6823,7 +6834,7 @@ def claude_tracked_in_index(exe):
         key = repo["gitdir"]
         if key not in indexes:
             try:
-                indexes[key] = hook_index_entries(repo)[0]
+                indexes[key] = hook_index_pairs(repo)
             except FileNotFoundError:
                 indexes[key] = []
             except (OSError, ValueError, MemoryError):

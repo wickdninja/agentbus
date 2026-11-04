@@ -14,6 +14,10 @@ case "$TREAL/" in "${AGENTBUS_TEST_FORBIDDEN_ROOT:-/nonexistent-root}"/*) fail "
 export HOME="$T/home"; mkdir -p "$HOME"
 unset AGENTBUS_HOOKS AGENTBUS_HOOK_DEBUG CLAUDE_ENV_FILE CLAUDE_CONFIG_DIR CLAUDE_PID CLAUDE_PLUGIN_ROOT   # a test that wants one sets it
 FIX="$TESTS_DIR/fixtures/claude_hooks"
+# Does this system record when a file was created? macOS does; Linux does not. Without it SessionEnd trusts the joined bus.db
+# by device and inode only while the remembered answer for the unchanged index is empty, so a test that wants SessionEnd to
+# leave must not change the index (it need not change it to prove the shortcut anyway: the cache answers).
+if "$PY" -c 'import os,sys; sys.exit(0 if hasattr(os.stat("."), "st_birthtime") else 1)'; then BIRTH=1; else BIRTH=0; fi
 ALL="$T/all.jsonl"; : >"$ALL"   # every non-empty hook output of the run, checked against the templates at the end
 SID1=aaaaaaaa-0000-4000-8000-000000000001
 SID2=aaaaaaaa-0000-4000-8000-000000000002
@@ -763,7 +767,7 @@ set -- $(timed1 SessionStart session_start_startup_print)
 set -- $(timed1 UserPromptSubmit user_prompt_submit)
 [ "$2" = 0 ] && [ "$4" = 1 ] || fail "UserPromptSubmit with an unchanged 1M-entry index: exit $2, $3 bytes, hook JSON valid=$4 (1 wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)' "$1" || fail "UserPromptSubmit re-read an unchanged 1M-entry index ($1 s)"
-printf garbage >"$P/.git/index"      # git rewrites the index all the time (here: into something unreadable); SessionEnd must not depend on it
+[ "$BIRTH" = 0 ] || printf garbage >"$P/.git/index"      # git rewrites the index all the time (here: into something unreadable); with a creation time SessionEnd must not depend on it
 set -- $(timed1 SessionEnd session_end_other); [ "$2" = 0 ] && [ "$4" = 0 ] || fail "SessionEnd with a 1M-entry index: exit $2, valid=$4 (0: no output wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$1" || fail "SessionEnd with a 1M-entry index took $1 s, past its 1.5 s budget"
 [ "$(roster)" = "peer" ] || fail "SessionEnd with a 1M-entry index did not leave: $(roster)"
@@ -808,7 +812,7 @@ printf garbage >"$P/.git/index"; END other
 [[ " $(roster) " == *" $N "* ]] || fail "SessionEnd trusted a bus.db whose recorded creation time differs (a reused inode number)"
 # the very same file reached through another spelling of the directory still counts, and then needs no index at all
 newbus p35f; PF35="$P"; SS; ln -s "$PF35" "$T/p35-link"
-printf garbage >"$PF35/.git/index"
+[ "$BIRTH" = 0 ] || printf garbage >"$PF35/.git/index"
 HCWD="$T/p35-link" END other
 [ -z "$(HCWD="$PF35" roster)" ] || fail "SessionEnd did not leave the bus it joined when reached through a linked directory"
 unset HCWD
@@ -1128,18 +1132,21 @@ echo "TEST 45: an answer remembered by an older scan is not trusted"
 newbus p45; mkgenindex "$P/.git/index" 50 ".agentbus/bus.db"; before=$(sha "$P/.agentbus/bus.db")
 STATE45="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; rm -f "$STATE45"/idx-*.json
 SS; quiet || fail "setup: a tracked bus (generated index) was used: out $OUT"
-"$PY" -I - "$P/.git/index" "$STATE45" "${AGENTBUS_BIN:-$BIN}" <<'PY' || fail "could not write the older scan's answer"
-import json, os, runpy, sys
-st = os.lstat(sys.argv[1]); stamp = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
-m = runpy.run_path(sys.argv[3], run_name="agentbus_cache")
-repo = {"gitdir": os.path.dirname(sys.argv[1]), "common": os.path.dirname(sys.argv[1])}
-# what the previous scan stored for this very index: no version, no candidates
-old = os.path.join(sys.argv[2], "idx-" + __import__("hashlib").sha256(os.fsencode(repo["gitdir"])).hexdigest()[:20] + ".json")
-json.dump({"stamp": stamp, "shared": None, "cands": []}, open(old, "w"))
-# and under the current name, an entry of another version
-cur = os.path.join(sys.argv[2], m["hook_index_cache_name"](repo))
-json.dump({"v": m["HOOK_SCAN_VERSION"] - 1, "stamp": stamp, "shared": None, "cands": []}, open(cur, "w"))
+ls "$STATE45"/idx-*.json >/dev/null 2>&1 || fail "setup: the first SessionStart remembered no answer"
+setcache() {  # setcache VERSION|none : the answer the hook remembered for this index, rewritten as an empty list under that version
+  "$PY" -I - "$1" "$STATE45" <<'PY' || fail "could not rewrite the remembered answer"
+import glob, json, sys
+files = glob.glob(sys.argv[2] + "/idx-*.json"); assert len(files) == 1, files
+d = json.load(open(files[0])); d["cands"] = []
+if sys.argv[1] == "none": d.pop("v", None)
+else: d["v"] = int(sys.argv[1])
+json.dump(d, open(files[0], "w"))
 PY
+}
+CURV=$("$PY" -I -c 'import runpy,sys; print(runpy.run_path(sys.argv[1], run_name="v")["HOOK_SCAN_VERSION"])' "${AGENTBUS_BIN:-$BIN}")
+setcache none
+SS; quiet || fail "an answer stored with no version was trusted: a tracked bus was used: out $OUT"
+setcache $((CURV - 1))
 SS; quiet || fail "an answer stored by an older scan was trusted: a tracked bus was used: out $OUT"
 [ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a hook wrote to a tracked bus after reading an older scan's answer"
 ok "no version, or another version: a miss"
