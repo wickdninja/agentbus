@@ -2481,7 +2481,7 @@
     "replace": "        for command in commands[:1]:\n",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check with one entry that runs another install among four"
+    "expect": "check with an interpreter in a sticky folder"
   },
   {
     "name": "check vouches for any file named agentbus",
@@ -2490,7 +2490,7 @@
     "replace": "            if False:",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check with one entry that runs another install among four"
+    "expect": "check with an interpreter in a sticky folder"
   },
   {
     "name": "check starts the user's login shell",
@@ -3156,7 +3156,7 @@
     "replace": "        if False:\n            break",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "check with one entry that runs another install among four"
+    "expect": "check with an interpreter in a sticky folder"
   },
   {
     "name": "the setup report's stop hint drops the scope",
