@@ -53,7 +53,7 @@ When a session starts, the hook joins the bus under a name made from the session
 The `AGENTS.md` block shows `--as NAME`: any name works if you run commands yourself. The difference is who recognises it.
 
 - The derived name is the one the hooks act for: the unread count, the claim note and the end-of-turn reminder all look at it.
-- A name the agent picked itself is a second agent as far as the hooks are concerned. A claim made under it is not the session's own, so the claim note for that file says `a claim under a different name covers this file` even though the same agent made it, and the end-of-turn reminder does not count it. When SessionStart gives a name, use it.
+- A name the agent picked itself is a second agent as far as the hooks are concerned. A claim made under it is not the session's own, so the claim note for that file says `a claim under a different name covers this file` (once per file per session) even though the same agent made it, the unread note does not count messages sent to it, and the end-of-turn reminder does not count it. When SessionStart gives a name, use it.
 - If `AGENTBUS_AGENT` is set in the environment Codex runs in (a dispatcher naming its lane), the hooks use that name as given, if it is a plain name (letters, digits, `.`, `_`, `-`, up to 40), and never take it over from a live agent.
 
 ## What the hooks do
@@ -62,7 +62,7 @@ The `AGENTS.md` block shows `--as NAME`: any name works if you run commands your
 | --- | --- | --- |
 | `SessionStart` | the agent | it joined the bus; its name, how many agents are on it, unread counts, and the commands to read, each with `--as` and its name |
 | `UserPromptSubmit` | the agent | the unread count and `agentbus --as NAME inbox`, only when something is unread |
-| `PreToolUse` (matcher `apply_patch\|Edit\|Write`) | the agent | a note when another name holds a claim on a file the patch touches; or, when another agent is on the bus, which file has no claim and the exact command to claim it |
+| `PreToolUse` (matcher `apply_patch\|Edit\|Write`) | the agent | a note when another name holds a claim on a file the patch touches, once per file per session; or, when another agent is on the bus, which file has no claim and the exact command to claim it; and, once for each new message, how many messages sent to its name, broadcast decisions and alerts are unread |
 | `Stop` | you | `codex-xxxxxxxx still holds 1 claim and has not posted a handoff or done.`, once for each set of claims |
 
 Messages, goals and names other agents wrote are never put in a hook message, only counts and the tool's own text. A file name is printed only when it is plain (letters, digits, `. _ / @ + -`). Edits made through the shell (`sed -i`, redirects) are invisible to the claim note.
