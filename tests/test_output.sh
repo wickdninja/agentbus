@@ -248,7 +248,7 @@ ok(pdb, "--as", "p", "join")
 if not re.fullmatch(r"claimed x for 2h \(until [^)]+\)\n", ok(pdb, "--as", "p", "claim", "x", env={"AGENTBUS_TEST_NOW": "yesterday"})):
     fail("a malformed AGENTBUS_TEST_NOW must change nothing")
 error, p = refused(db, "--as", "b", "claim", "src/a.py")
-if error["code"] != "claim_conflict" or not re.search(r"claimed by a until " + re.escape(m.group(1)) + r" \(purpose: \"edit\"\)", error["message"]):
+if error["code"] != "claim_conflict" or not re.search(r"claimed by a since .+? until " + re.escape(m.group(1)) + r" \(purpose: \"edit\"\)", error["message"]):
     fail("the conflict message does not use the same time as the claim, %s: %r" % (m.group(1), error["message"]))
 if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", error["expires_at"]):
     fail("the error field expires_at is not the stored ISO time: %r" % error)
