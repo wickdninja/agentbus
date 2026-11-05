@@ -4259,7 +4259,7 @@
   {
     "name": "value eval: a hook in a run without the tool is allowed",
     "file": "scripts/value-eval/grade.py",
-    "find": "    if condition != \\\"agentbus\\\" and hook_events:\\n        bad\\.append\\(\\\"%d hook events in a %s run\\\" % \\(hook_events, condition\\)\\)\\n",
+    "find": "    if condition not in HOOKED and hook_events:\\n        bad\\.append\\(\\\"%d hook events in a %s run\\\" % \\(hook_events, condition\\)\\)\\n",
     "replace": "",
     "count": 1,
     "run": "tests/test_value_eval.sh",
