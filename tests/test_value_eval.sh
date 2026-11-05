@@ -195,6 +195,14 @@ codex_stub codex-state
 [ "$rc" = 0 ] || { cat "$T/log"; fail "Codex's own state stopped the batch (rc $rc)"; }
 ok "a planted hook or skill in CODEX_HOME stops the batch; Codex's own state does not"
 
+env VALUE_STUB_ROLLOUT=1 VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks recovery --conditions none --pairings cx --seeds 1 --time-cap 60 --snap-every 0.2 --out "$T/killed" >"$T/log" 2>&1 || { cat "$T/log"; fail "a killed Codex run"; }
+"$PY" -B - "$T/killed" <<'CHECK' || fail "a killed Codex session's tokens were lost"
+import glob, json, sys
+cost = json.load(open(glob.glob(sys.argv[1] + "/r*/cost.json")[0]))
+assert cost["alice"]["usage"]["cache_read"] == 900 and cost["alice"]["complete"] is False, cost["alice"]
+CHECK
+ok "a killed Codex session keeps its tokens, from its rollout"
+
 echo "TEST 12c: the batch halts when Codex use passes the budget"
 rc=0; env VALUE_STUB_QUOTA_FILE="$T/quota" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cx --seeds 1 2 3 4 --time-cap 60 --out "$T/budget" >"$T/log" 2>&1 || rc=$?
 [ "$rc" = 6 ] && grep -q 'Codex budget stop' "$T/log" || { cat "$T/log"; fail "no budget stop (rc $rc)"; }

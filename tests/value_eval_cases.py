@@ -146,6 +146,19 @@ def test_codex_quota():
     shutil.rmtree(d)
 
 
+def test_killed_codex_tokens_come_from_the_rollout():
+    """Codex reports usage at turn end, so a killed session's stream says 0: a pilot run recorded 0 for a session that used 100,000."""
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, "sessions"))
+    usage = {"input_tokens": 101148, "cached_input_tokens": 94720, "output_tokens": 928}
+    rows = [{"payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 5, "cached_input_tokens": 1, "output_tokens": 1}}}},
+            {"payload": {"type": "token_count", "info": {"total_token_usage": usage}}}, {"payload": {"type": "token_count", "info": None}}]
+    open(os.path.join(d, "sessions", "rollout-x.jsonl"), "w").write("\n".join(json.dumps(x) for x in rows) + "\n")
+    check(grade.codex_rollout_usage(d) == {"input": 6428, "cache_write": 0, "cache_read": 94720, "output": 928}, "rollout totals: %s" % grade.codex_rollout_usage(d))
+    check(grade.codex_rollout_usage(os.path.join(d, "none")) is None, "no rollout means no reading")
+    shutil.rmtree(d)
+
+
 def test_budget_stop():
     over = analyze.over_budget
     check(over(50, 92, 100, 300, 40), "spent alone past the budget halts")

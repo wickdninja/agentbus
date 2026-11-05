@@ -260,6 +260,23 @@ def codex_quota(codex_home):
     return newest
 
 
+def codex_rollout_usage(codex_home):
+    """The newest running totals in a CODEX_HOME's rollouts, shaped like cost_of's usage, or None. Codex's stream reports usage only
+    at turn end, so a killed session's stream says 0 while its rollout holds what it spent up to its last completed model call."""
+    usage = None
+    for d, _dirs, files in os.walk(os.path.join(codex_home, "sessions")):
+        for name in files:
+            if name.startswith("rollout-") and name.endswith(".jsonl"):
+                for line in open(os.path.join(d, name), errors="replace"):
+                    payload = _obj(line).get("payload")
+                    info = payload.get("info") if isinstance(payload, dict) and payload.get("type") == "token_count" else None
+                    total = (info or {}).get("total_token_usage")
+                    if total:
+                        usage = {"input": total.get("input_tokens", 0) - total.get("cached_input_tokens", 0), "cache_write": 0,
+                                 "cache_read": total.get("cached_input_tokens", 0), "output": total.get("output_tokens", 0)}
+    return usage
+
+
 def cost_of(lines, harness, condition):
     """Tokens, tool calls and what the channel itself took. Claude's per-message usage carries only the first streamed fragment of
     the output (575 against a true 3,277 in one run), so the result event's totals win. A killed session has no result event: its

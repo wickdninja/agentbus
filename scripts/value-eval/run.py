@@ -522,6 +522,9 @@ class Run:
             "load": {"max": max(self.loads or [0]), "mean": round(sum(self.loads or [0]) / max(1, len(self.loads)), 1)},
             "kill": self.kill, "merge": self.merge})
         cost = {a.role: grade.cost_of(a.lines, a.harness, self.condition) for a in agents.values()}
+        for a in agents.values():
+            if a.harness == "codex" and not cost[a.role]["complete"]:
+                cost[a.role]["usage"] = grade.codex_rollout_usage(self.codex_home) or cost[a.role]["usage"]
         grade.write_json(os.path.join(self.out, "cost.json"), cost)
         self.quota = grade.codex_quota(self.codex_home) if "codex" in self.harnesses.values() else None
         grade.write_json(os.path.join(self.out, "quota.json"), self.quota)

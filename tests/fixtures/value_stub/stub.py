@@ -119,6 +119,10 @@ if harness == "codex" and os.environ.get("VALUE_STUB_QUOTA_FILE"):
     os.makedirs(os.path.join(os.environ["CODEX_HOME"], "sessions"), exist_ok=True)
     with open(os.path.join(os.environ["CODEX_HOME"], "sessions", "rollout-stub.jsonl"), "w") as f:
         f.write(json.dumps({"payload": {"rate_limits": {"limit_id": "codex", "primary": {"used_percent": used, "resets_at": 1}}}}) + "\n")
+if harness == "codex" and os.environ.get("VALUE_STUB_ROLLOUT"):
+    os.makedirs(os.path.join(os.environ["CODEX_HOME"], "sessions"), exist_ok=True)
+    with open(os.path.join(os.environ["CODEX_HOME"], "sessions", "rollout-tokens.jsonl"), "w") as f:
+        f.write(json.dumps({"payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 1000, "cached_input_tokens": 900, "output_tokens": 50}}}}) + "\n")
 if harness == "codex" and mode == "leak-token":
     print(json.dumps(json.load(open(os.path.join(os.environ["CODEX_HOME"], "auth.json")))), flush=True)
 if harness == "codex" and mode == "codex-hooks":

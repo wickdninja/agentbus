@@ -196,3 +196,10 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 
 **2026-11-05, after piloting the last three tasks.** `control` passed in every condition, which is its job: it only measures cost. `facts` and `interface` hit a ceiling. In one shared tree, alice wrote the decision into `README.md` unprompted, and bob polled the folder until `feed.py` appeared, so the tree itself was a flat-file channel. No comparison between conditions drove this. Both tasks now run as concurrent lanes in separate worktrees, as `overlap` does, and the tickets state the merge rule. `facts` also loses "Bob does the export ticket after you", a cue a real alice would not get, and now runs concurrently, not in sequence. Notes are not forbidden, and in `none` an agent may still find the sibling worktree with `git worktree list`. The Tasks table's schedule for these two is superseded by this entry. Runs on seeds 9101 and 9102 count only for cost, except `control`.
 
+**2026-11-05, end of the second pilot.** The protocol is frozen here for the counted run. No run so far counts, and no effect was read from any of them.
+
+- All five tasks have now been piloted. `control` passes everywhere, as a cost measure should. The other four produce both passes and failures, and every channel run used its channel. `none` sits at or near a floor on `overlap`, `interface` and `facts`, because separate lanes share nothing by default; S5 therefore says little there. `facts` passed in every channel run, so it may have no room to separate one channel from another; that would be a result, not a defect, and it would pull P1 and P2 toward zero.
+- Claude plus Codex ran on real agents, five runs, one per task, with both role orders. Codex hooks fired, and the bus and the ledger both worked from a Codex lane.
+- A Codex session killed by `recovery` has its tokens read from its own session log, since its stream reports nothing until the end of a turn.
+- The full matrix is 700 runs on seeds 1 to 20, and may be sharded by seed. Each shard projects from its own share of runs against the pool's total, so a shared budget stays correctly projected.
+
