@@ -52,7 +52,7 @@ The kill in `recovery` is triggered by files on disk, not by a tool count, so it
 
 ## Agents and limits
 
-- Claude: `claude -p --model sonnet`, launched by `clauth start --isolated` (the first-party binary in a throwaway runtime). The model id comes from the stream's init event and is recorded per run.
+- Claude: `claude -p --model sonnet`, started through a launcher that gives the first-party binary a throwaway config folder and an existing sign-in. The model id comes from the stream's init event and is recorded per run.
 - Codex: `gpt-6.1-sol`, reasoning effort medium. Route pending, see Open items.
 - Caps per agent: 40 minutes of wall time and 80 tool calls, enforced by the runner, because `--max-turns` did not hold in a probe (limit 2, 4 turns reported). A run that hits a cap is scored as it stands.
 - Every run lives in `mktemp`, under a temp HOME, with a scrubbed environment. Claude runs in its sandbox. The runner stops the batch if an isolation check fails.
@@ -187,11 +187,11 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 
 **2026-11-05, rulings, before any run counts.**
 
-- **Codex route:** `codex exec` directly in `mktemp`, as `scripts/e2e_codex.sh` does, because `codex-lane` refuses a write lane there. Same isolation as the Claude side: a temp HOME, and a scratch CODEX_HOME holding a private copy of the sign-in plus, for `agentbus` only, what `setup codex` writes. The runner stops the batch if a credential appears in anything it keeps, if the real sign-in changes, or if a run refreshes its token.
+- **Codex route:** `codex exec` directly in `mktemp`, as `scripts/e2e_codex.sh` does. Same isolation as the Claude side: a temp HOME, and a scratch CODEX_HOME holding a private copy of the sign-in plus, for `agentbus` only, what `setup codex` writes. The runner stops the batch if a credential appears in anything it keeps, if the real sign-in changes, or if a run refreshes its token.
 - **Parity:** "Write what the reader needs to act without asking you: exact names, values and files." is removed from the ledger and peer-message texts, so no channel has an instruction the skill lacks. The rest stays.
 - **Sample size:** n = 20 seeds per cell, seeds 1 to 20.
 - **Tool under test:** the release, `642009c`. The runner refuses any other `bin/agentbus` and records its hash per run. The dead-claim stall stays and is listed under Threats.
-- **Codex stop rule:** the batch halts if projected Codex use passes 40 quota points, or if 40 are spent outright. Projected use is points spent so far times Codex runs planned, over Codex runs done, read from each run's own quota readings once 30 Codex runs are in, because quota moves in whole points and one rounded point early on would project hundreds. The pool is shared, so other work counts toward the 40, and a halt can come early but not late. A halt is a budget stop under Sample size and stopping: complete seed blocks are analyzed and the shortfall stated.
+- **Codex stop rule:** the batch halts if projected Codex use passes 40 points of its usage budget, or if 40 are spent outright. Projected use is points spent so far times Codex runs planned, over Codex runs done, read from each run's own usage readings once 30 Codex runs are in, because usage moves in whole points and one rounded point early on would project hundreds. The pool is shared, so other work counts toward the 40, and a halt can come early but not late. A halt is a budget stop under Sample size and stopping: complete seed blocks are analyzed and the shortfall stated.
 - **Pilot runs never count toward results.** Pilot seeds start at 9001; the full matrix uses 1 to 20.
 
 **2026-11-05, after piloting the last three tasks.** `control` passed in every condition, which is its job: it only measures cost. `facts` and `interface` hit a ceiling. In one shared tree, alice wrote the decision into `README.md` unprompted, and bob polled the folder until `feed.py` appeared, so the tree itself was a flat-file channel. No comparison between conditions drove this. Both tasks now run as concurrent lanes in separate worktrees, as `overlap` does, and the tickets state the merge rule. `facts` also loses "Bob does the export ticket after you", a cue a real alice would not get, and now runs concurrently, not in sequence. Notes are not forbidden, and in `none` an agent may still find the sibling worktree with `git worktree list`. The Tasks table's schedule for these two is superseded by this entry. Runs on seeds 9101 and 9102 count only for cost, except `control`.
