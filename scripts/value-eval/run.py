@@ -119,11 +119,13 @@ def claude_args(prompt, role, model, root, condition):
             "--tools", ",".join(allowed_tools(condition))]
 
 
-def codex_args(prompt, proj, model, condition):
-    argv = ["exec", "--json", "--skip-git-repo-check", "--color", "never", "-C", proj, "-m", model, "-s", "workspace-write",
+def codex_args(prompt, workdir, model, condition, shared_dir=None):
+    argv = ["exec", "--json", "--skip-git-repo-check", "--color", "never", "-C", workdir, "-m", model, "-s", "workspace-write",
             "-c", 'model_reasoning_effort="medium"']
     for feature in CODEX_FEATURE_PINS:
         argv += ["-c", "features.%s=false" % feature]
+    if shared_dir:
+        argv += ["--add-dir", shared_dir]   # a worktree lane still has to reach the bus or the ledger in the main checkout
     if condition == "agentbus":
         argv.append("--dangerously-bypass-hook-trust")  # hooks in a scratch CODEX_HOME, as scripts/e2e_codex.sh runs them
     return argv + [prompt]
@@ -160,7 +162,8 @@ class Run:
         self.stop_threads = threading.Event()
         self.snaps = open(os.path.join(self.out, "snaps.jsonl"), "w")
         self.seen = {}
-        self.loads, self.kill = [], {"fired": False}
+        self.loads, self.kill, self.merge = [], {"fired": False}, None
+        self.worktrees = self.task.workspace == "worktrees"
         self.real_home = os.environ["HOME"]
         self.real_state = {"settings_sha": sha_file(os.path.join(self.real_home, ".claude", "settings.json")),
                            "bus": bus_roster(os.environ.get("VALUE_REAL_BUS"))}
@@ -170,6 +173,9 @@ class Run:
     def path_var(self):
         """No agentbus on PATH unless this condition has it: `none` must not find the tool by accident."""
         return os.pathsep.join(([self.ab] if self.condition == "agentbus" else []) + ["/usr/bin", "/bin"])
+
+    def workdir(self, role):
+        return os.path.join(self.root, "proj-" + role) if self.worktrees else self.proj
 
     def base_env(self):
         env = {"HOME": self.home, "PATH": self.path_var(), "TMPDIR": self.tmp, "LANG": "en_US.UTF-8", "TERM": "dumb",
@@ -203,10 +209,40 @@ class Run:
         self.sh(GIT + ["add", "."])
         self.sh(GIT + ["commit", "-q", "-m", "project"])
         with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
-            f.write("\n__pycache__/\n.claude/\nAGENTS.md\n")
+            f.write("\n__pycache__/\n.claude/\nAGENTS.md\nCOORDINATION.md\n")
         self.install_channel()
+        if self.worktrees:
+            self.make_worktrees()
         if not self.stub:
             self.write_claude_shim()
+
+    def make_worktrees(self):
+        """One linked worktree per agent. The bus is found through git; the ledger is one file, linked into each worktree, so
+        every channel keeps its same instructions."""
+        if self.condition == "ledger":
+            open(os.path.join(self.proj, "COORDINATION.md"), "w").close()
+        for role in self.harnesses:
+            path = self.workdir(role)
+            self.sh(["git", "worktree", "add", "-q", path, "-b", "lane-" + role])
+            if os.path.isdir(os.path.join(self.proj, ".claude")):
+                shutil.copytree(os.path.join(self.proj, ".claude"), os.path.join(path, ".claude"))
+            if os.path.exists(os.path.join(self.proj, "AGENTS.md")):
+                shutil.copy(os.path.join(self.proj, "AGENTS.md"), path)
+            if self.condition == "ledger":
+                os.symlink(os.path.join(self.proj, "COORDINATION.md"), os.path.join(path, "COORDINATION.md"))
+
+    def merge_lanes(self):
+        """What a lead does at the end: commit each lane and merge them in order. A conflict stays in the tree as markers, so the
+        hidden tests see it. The result is recorded, never repaired."""
+        env = self.base_env()
+        run = lambda argv, cwd: subprocess.run(argv, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=120)  # noqa: E731
+        for role in ("alice", "bob"):
+            run(GIT + ["add", "-A"], self.workdir(role))
+            run(GIT + ["commit", "-q", "--allow-empty", "-m", "lane " + role], self.workdir(role))
+        first = run(GIT + ["merge", "-q", "--no-edit", "lane-alice"], self.proj)
+        second = run(GIT + ["merge", "-q", "--no-edit", "lane-bob"], self.proj)
+        conflicts = [x for x in run(["git", "diff", "--name-only", "--diff-filter=U"], self.proj).stdout.split("\n") if x]
+        self.merge = {"conflicts": conflicts, "clean": first.returncode == 0 and second.returncode == 0}
 
     def install_channel(self):
         codex = "codex" in self.harnesses.values()
@@ -259,7 +295,7 @@ class Run:
                     {"HOME": self.real_home, "USER": env["USER"], "LANG": env["LANG"], "TERM": env["TERM"], "VALUE_ROLE": agent.role,
                      "PATH": os.pathsep.join([self.shim, "/usr/bin", "/bin"])})
         env = dict(env, CODEX_HOME=self.codex_home, VALUE_ROLE=agent.role)
-        rest = codex_args(prompt, self.proj, args.codex_model, self.condition)
+        rest = codex_args(prompt, self.workdir(agent.role), args.codex_model, self.condition, self.proj if self.worktrees else None)
         if self.stub:
             return [os.path.join(self.stub, "codex")] + rest, env
         auth = os.path.join(self.codex_home, "auth.json")
@@ -274,7 +310,7 @@ class Run:
         argv, env = self.command(agent, prompt)
         agent.started = time.time()
         err = open(os.path.join(self.out, "stderr-%s.txt" % agent.role), "w")
-        agent.proc = subprocess.Popen(argv, cwd=self.proj, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
+        agent.proc = subprocess.Popen(argv, cwd=self.workdir(agent.role), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
                                       universal_newlines=True, start_new_session=True, errors="replace")
         agent.timer = threading.Timer(self.args.time_cap, self.stop_agent, (agent, "time_cap"))
         agent.timer.start()
@@ -338,7 +374,12 @@ class Run:
             self.stop_threads.wait(self.args.snap_every)
 
     def take_snapshot(self):
-        files = grade.read_tree(self.proj, CHANNEL_PATHS)
+        files = {}
+        if self.worktrees:
+            for role in self.harnesses:
+                files.update({role + "/" + k: v for k, v in grade.read_tree(self.workdir(role), CHANNEL_PATHS).items()})
+        else:
+            files = grade.read_tree(self.proj, CHANNEL_PATHS)
         changed = {k: v for k, v in files.items() if self.seen.get(k) != v}
         gone = [k for k in self.seen if k not in files]
         if changed or gone:
@@ -368,6 +409,8 @@ class Run:
         snapper.join(timeout=30)
         self.take_snapshot()
         self.snaps.close()
+        if self.worktrees:
+            self.merge_lanes()
         return agents
 
     # ---- after the agents -------------------------------------------------------------------------------------------
@@ -380,6 +423,8 @@ class Run:
                 bad += ["%s: %s" % (a.role, x) for x in grade.check_claude_init(a.lines, self.condition, allowed_tools(self.condition))]
         if self.condition != "agentbus" and os.path.exists(os.path.join(self.proj, ".agentbus")):
             bad.append("a bus exists in a %s run" % self.condition)
+        if self.worktrees and any(os.path.exists(os.path.join(self.workdir(r), ".agentbus")) for r in self.harnesses):
+            bad.append("a second bus exists in a worktree")
         if sha_file(os.path.join(self.real_home, ".claude", "settings.json")) != self.real_state["settings_sha"]:
             bad.append("the real ~/.claude/settings.json changed during the run")
         roster = bus_roster(os.environ.get("VALUE_REAL_BUS"))
@@ -388,16 +433,17 @@ class Run:
         return bad
 
     def collect(self, agents):
-        base = os.path.realpath(self.proj)
         events = []
+        known = set(self.task.files) | set(grade.read_tree(self.proj, CHANNEL_PATHS))
         for a in agents.values():
+            base = os.path.realpath(self.workdir(a.role))
             evs, _final = normalize.capture_events(a.lines, a.role, a.harness)
-            for e in evs:
-                if e["kind"] == "edit" and e["path"]:
-                    if os.path.isabs(e["path"]):
-                        e["path"] = os.path.relpath(os.path.realpath(e["path"]), base)
-                    if e["path"].split(os.sep)[0] not in CHANNEL_PATHS:
-                        events.append({"ts": e["ts"], "agent": e["agent"], "path": e["path"]})
+            found = [(e["ts"], e["path"]) for e in evs if e["kind"] == "edit" and e["path"]] + grade.script_edits(a.lines, a.harness, known)
+            for ts, path in found:
+                if os.path.isabs(path):
+                    path = os.path.relpath(os.path.realpath(path), base)
+                if path.split(os.sep)[0] not in CHANNEL_PATHS:
+                    events.append({"ts": ts, "agent": a.role, "path": path})
         grade.write_json(os.path.join(self.out, "edits.json"), sorted(events, key=lambda e: e["ts"]))
         final = os.path.join(self.out, "final")
         for rel, text in grade.read_tree(self.proj, CHANNEL_PATHS).items():
@@ -412,7 +458,7 @@ class Run:
                                 "tool_calls": a.tool_calls} for a in agents.values()},
             "seconds": round(max(a.ended for a in agents.values()) - min(a.started for a in agents.values()), 1),
             "load": {"max": max(self.loads or [0]), "mean": round(sum(self.loads or [0]) / max(1, len(self.loads)), 1)},
-            "kill": self.kill})
+            "kill": self.kill, "merge": self.merge})
         cost = {a.role: grade.cost_of(a.lines, a.harness, self.condition) for a in agents.values()}
         grade.write_json(os.path.join(self.out, "cost.json"), cost)
         return {a.role: grade.infra_failure(a.lines, a.harness, a.proc.returncode, a.killed_by_task, a.stop_reason) for a in agents.values()}
@@ -452,7 +498,7 @@ def plan(args):
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--tasks", nargs="+", choices=tasks.TASKS, default=list(tasks.TASKS))
+    ap.add_argument("--tasks", nargs="+", choices=tasks.TASKS + tasks.RETIRED, default=list(tasks.TASKS))
     ap.add_argument("--conditions", nargs="+", choices=tasks.CONDITIONS, default=list(tasks.CONDITIONS))
     ap.add_argument("--pairings", nargs="+", choices=PAIRINGS, default=list(PAIRINGS))
     ap.add_argument("--seeds", nargs="+", type=int, default=[1])

@@ -74,12 +74,20 @@ echo "TEST 4: recovery's kill fires on files, and the runner lets the session di
 ok "the kill fires at 3 files in every cell"
 
 echo "TEST 5: a lost edit shows up, whichever agent lost it"
-env VALUE_STUB_MODE=clobber VALUE_STUB_CLOBBER_AFTER=2 VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks overlap --conditions none --pairings cc --seeds 2 --snap-every 0.2 --time-cap 60 --out "$T/lost" >"$T/log" 2>&1 || { tail -5 "$T/log"; fail "clobber run"; }
+env VALUE_STUB_MODE=clobber VALUE_STUB_CLOBBER_AFTER=2 VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks overlap-shared --conditions none --pairings cc --seeds 2 --snap-every 0.2 --time-cap 60 --out "$T/lost" >"$T/log" 2>&1 || { tail -5 "$T/log"; fail "clobber run"; }
 grades "$T/lost"
 [ "$(field "$T/lost" 'g["pass"]')" = False ] || fail "the clobbered run passed"
 [ "$(field "$T/lost" '",".join(g["lost_features"])')" = "discount,tax" ] || fail "lost features: $(field "$T/lost" 'g["lost_features"]')"
 [ "$(field "$T/lost" '",".join(g["paths_edited_by_both"])' | grep -c pipeline.py)" = 1 ] || fail "the shared edit was not seen"
 ok "bob's overwrite reads as lost discount and tax features, a failed run, and a path both edited"
+
+echo "TEST 5b: separate worktrees meet at the merge; a conflict is recorded and fails the run; the bus stays one bus"
+env VALUE_STUB_MODE=conflict VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks overlap --conditions agentbus --pairings cc --seeds 2 --time-cap 60 --out "$T/conflict" >"$T/log" 2>&1 || { tail -5 "$T/log"; fail "conflict run"; }
+grades "$T/conflict"
+[ "$(field "$T/conflict" '",".join(g["merge_conflicts"])')" = VERSION ] || fail "merge conflicts: $(field "$T/conflict" 'g["merge_conflicts"]')"
+[ "$(field "$T/conflict" 'g["pass"]')" = False ] || fail "a conflicted merge passed"
+[ "$(field "$T/good" '"" if r["task"]!="overlap" or g["merge_conflicts"]==[] else r["id"]' | grep -c .)" = 0 ] || fail "identical lanes must merge clean"
+ok "a real conflict reads as one conflicted file and a failed run; identical lanes merge clean"
 
 echo "TEST 6: an agent that does nothing fails"
 env VALUE_STUB_MODE=lazy VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions ledger --pairings cc --seeds 1 --out "$T/lazy" >"$T/log" 2>&1 || fail "lazy run"

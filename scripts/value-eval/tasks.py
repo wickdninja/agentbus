@@ -6,10 +6,13 @@ hidden tests are never on disk during a run. reference(task, seed) is a correct 
 named wrong ones; tests/test_value_eval.sh proves every hidden test on both, and the stand-in agent plays the
 reference, so the harness runs with no tokens. Only the Python standard library, and Python 3.9.
 """
+import base64
+import json
 import random
 import textwrap
 
 TASKS = ("overlap", "interface", "recovery", "facts", "control")
+RETIRED = ("overlap-shared",)  # kept as a test fixture for lost edits: agents healed every collision in one tree, a ceiling (see the protocol's addenda)
 CONDITIONS = ("none", "ledger", "agentbus", "builtin")
 NOUNS = ("orders", "parcels", "bookings", "rentals", "tickets", "crates", "permits", "tours")
 SKUS = ("bolt", "cable", "valve", "panel", "hinge", "gasket", "bracket", "spring")
@@ -26,12 +29,13 @@ def rng(task, seed):
 
 
 class Task:
-    def __init__(self, name, seed, files, tickets, schedule, features, markers=None, kill=None, same_name=()):
+    def __init__(self, name, seed, files, tickets, schedule, features, markers=None, kill=None, same_name=(), workspace="shared"):
         self.name, self.seed, self.files, self.tickets = name, seed, files, tickets
         self.schedule = schedule    # list of stages, each a list of roles run at the same time
         self.features = features    # hidden test names; a pass needs all of them
         self.markers = markers or {}  # feature -> (path, regex): for lost-edit detection on snapshots
         self.kill = kill            # {"role", "glob", "at"}: kill role once `at` files match glob
+        self.workspace = workspace  # shared: one working tree. worktrees: one per agent, merged by the runner at the end
         self.same_name = same_name  # function names the task itself asks every module to define: not duplicate work
 
 
@@ -103,8 +107,15 @@ def _overlap(seed):
                "amount after any discount. An unknown region raises ValueError. Printed line amounts stay before tax. `tax` is the total tax and "
                "`total` is subtotal plus tax. %s" % (pkg, shared),
     }
-    markers = {"discount": (pkg + "/pipeline.py", r"saved"), "tax": (pkg + "/pipeline.py", r"REGION_TAX\[|\.get\(region|in REGION_TAX")}
-    return Task("overlap", seed, files, tickets, [["alice", "bob"]], ["discount", "tax", "combined", "version"], markers)
+    return Task("overlap", seed, files, tickets, [["alice", "bob"]], ["discount", "tax", "combined", "version"], workspace="worktrees")
+
+
+def _overlap_shared(seed):
+    task = _overlap(seed)
+    pkg = _overlap_params(seed)["pkg"]
+    task.name, task.workspace = "overlap-shared", "shared"
+    task.markers = {"discount": (pkg + "/pipeline.py", r"saved"), "tax": (pkg + "/pipeline.py", r"REGION_TAX\[|\.get\(region|in REGION_TAX")}
+    return task
 
 
 def _overlap_oracle(p, rows):
@@ -387,26 +398,50 @@ def _recovery_params(seed):
             "ticket": r.randint(100, 999)}
 
 
+MIGRATE_TOOL = dedent('''
+    """Hands out legacy modules one at a time: `python3 tools/migrate.py next` prints the first module not yet dealt with."""
+    import base64
+    import json
+    import os
+    import sys
+
+    sys.path.insert(0, os.getcwd())
+    import src
+
+    queue = json.loads(base64.b64decode(open("tools/queue.dat").read()))
+    if sys.argv[1:] != ["next"]:
+        sys.exit("usage: python3 tools/migrate.py next")
+    for name, source in queue:
+        if not os.path.exists("src/%s.py" % name) and name not in src.SKIP:
+            print("next module: %s\\n\\n%s" % (name, source))
+            break
+    else:
+        print("queue empty: every module is ported or skipped")
+''')
+
+
 def _recovery(seed):
     p = _recovery_params(seed)
     mods, skip, changed = p["mods"], p["mods"][4], p["mods"][5]
-    files = {"src/__init__.py": "SKIP = []\n", "tests/__init__.py": "",
+    queue = [[m, "FACTOR = %d\nOFFSET = %d\n\n\ndef old_%s(value):\n    return value * FACTOR + OFFSET\n" % (p["factors"][i], p["offsets"][i], m)] for i, m in enumerate(mods)]
+    files = {"src/__init__.py": "SKIP = []\n", "tests/__init__.py": "", "tools/migrate.py": MIGRATE_TOOL,
+             "tools/queue.dat": base64.b64encode(json.dumps(queue).encode()).decode() + "\n",
              "docs/PORTING.md": dedent('''
                  # Porting a legacy module
 
-                 Each legacy/NAME.py has one function, `old_NAME(value)`. Its port is src/NAME.py, with one function:
+                 The legacy modules come off a queue, one at a time: `python3 tools/migrate.py next` prints the next one. Port it, then ask for the next.
+
+                 Each legacy module NAME has one function, `old_NAME(value)`. Its port is src/NAME.py, with one function:
 
                  `run(values)`, which takes a list and returns a list of the same results, in order, as integers. Negative inputs raise ValueError.
 
-                 Copy the arithmetic; do not import from legacy. Port modules in alphabetical order, one at a time.
+                 Copy the arithmetic; do not import anything legacy.
                  When a legacy module is not to be ported, its name goes in the `SKIP` list in src/__init__.py.
              ''')}
-    for i, m in enumerate(mods):
-        files["legacy/%s.py" % m] = "FACTOR = %d\nOFFSET = %d\n\n\ndef old_%s(value):\n    return value * FACTOR + OFFSET\n" % (p["factors"][i], p["offsets"][i], m)
-    common = "Ticket MIG-%d: port the modules in legacy/ to src/, following docs/PORTING.md." % p["ticket"]
+    common = "Ticket MIG-%d: port the legacy modules to src/, following docs/PORTING.md." % p["ticket"]
     tickets = {
         "alice": "%s Notes from the owner, which are not written down anywhere else: %s is retired, so do not port it, list it in SKIP. "
-                 "For %s, finance changed the factor: its port uses %d, not the value in legacy/." % (common, skip, changed, p["new_factor"]),
+                 "For %s, finance changed the factor: its port uses %d, not the value in the legacy source." % (common, skip, changed, p["new_factor"]),
         "bob": "%s Another agent was on this ticket and its session died partway through. Finish the job." % common,
     }
     return Task("recovery", seed, files, tickets, [["alice"], ["bob"]], ["ports", "skip", "changed"], kill={"role": "alice", "glob": "src/[a-z]*.py", "at": 3}, same_name=("run",))
@@ -594,7 +629,7 @@ def _control_mutants(seed):
     }
 
 
-_BUILD = {"overlap": _overlap, "interface": _interface, "recovery": _recovery, "facts": _facts, "control": _control}
+_BUILD = {"overlap": _overlap, "overlap-shared": _overlap_shared, "interface": _interface, "recovery": _recovery, "facts": _facts, "control": _control}
 _HIDDEN = {"overlap": _overlap_hidden, "interface": _interface_hidden, "recovery": _recovery_hidden, "facts": _facts_hidden, "control": _control_hidden}
 _REFERENCE = {"overlap": _overlap_reference, "interface": _interface_reference, "recovery": _recovery_reference, "facts": _facts_reference, "control": _control_reference}
 _MUTANTS = {"overlap": _overlap_mutants, "interface": _interface_mutants, "recovery": _recovery_mutants, "facts": _facts_mutants, "control": _control_mutants}
@@ -604,17 +639,21 @@ def build(task, seed):
     return _BUILD[task](seed)
 
 
+def _base(task):
+    return "overlap" if task == "overlap-shared" else task
+
+
 def hidden_tests(task, seed):
-    return _HIDDEN[task](seed)
+    return _HIDDEN[_base(task)](seed)
 
 
 def reference(task, seed):
-    return _REFERENCE[task](seed)
+    return _REFERENCE[_base(task)](seed)
 
 
 def mutants(task, seed):
     """{name: (files to change on top of the reference, None deletes; features that must fail)}"""
-    return _MUTANTS[task](seed)
+    return _MUTANTS[_base(task)](seed)
 
 
 # ---- the channel text -----------------------------------------------------------------------------------------------
@@ -640,8 +679,14 @@ def channel_block(condition, name, peer, harness):
 def prompt(task, role, condition, harness):
     peer = "bob" if role == "alice" else "alice"
     together = any(len(stage) > 1 for stage in task.schedule)
-    intro = "You are %s. %s" % (role, "%s is working in this same folder at the same time." % peer.capitalize() if together
-                               else "%s also works on this repository, at a different time." % peer.capitalize())
+    if task.workspace == "worktrees":
+        where = ("%s is working at the same time, in a separate git worktree of this repository. When you have both stopped, your two working "
+                 "trees are committed and merged, alice's first and then bob's, with no one to fix it up afterwards." % peer.capitalize())
+    elif together:
+        where = "%s is working in this same folder at the same time." % peer.capitalize()
+    else:
+        where = "%s also works on this repository, at a different time." % peer.capitalize()
+    intro = "You are %s. %s" % (role, where)
     block = channel_block(condition, role, peer, harness)
     tail = "Work only in this folder. Do not commit; leave your changes in the working tree. When your ticket is finished, stop."
     return "\n\n".join(x for x in (intro, task.tickets[role], block, tail) if x)

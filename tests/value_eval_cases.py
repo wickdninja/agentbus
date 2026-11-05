@@ -72,6 +72,29 @@ def test_seeds():
         check(any(tasks.build(task, s).files != a.files or tasks.build(task, s).tickets != a.tickets for s in (8, 9, 10)), "%s: the seed changes nothing" % task)
 
 
+def test_overlap_runs_in_worktrees():
+    check(tasks.build("overlap", 1).workspace == "worktrees" and tasks.build("overlap-shared", 1).workspace == "shared", "workspaces")
+    check("overlap-shared" not in tasks.TASKS, "the retired task must stay out of the matrix")
+    check(tasks.hidden_tests("overlap-shared", 1) == tasks.hidden_tests("overlap", 1), "the fixture must grade the same way")
+
+
+def test_recovery_queue_gates_the_next_module():
+    """The session can only learn one module ahead, so it cannot port everything at once and die after finishing."""
+    t = tasks.build("recovery", 2)
+    p = tasks._recovery_params(2)
+    d = tempfile.mkdtemp()
+    tree(d, t.files)
+    nxt = lambda: subprocess.run([sys.executable, "-B", "tools/migrate.py", "next"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True).stdout  # noqa: E731
+    check("next module: %s" % p["mods"][0] in nxt(), "the first module: %s" % nxt())
+    check(p["mods"][1] not in nxt(), "the queue shows more than one module")
+    check(not any(k.startswith("legacy/") for k in t.files), "legacy source sits in the repo, readable all at once")
+    tree(d, {"src/%s.py" % p["mods"][0]: "x = 1\n"})
+    check("next module: %s" % p["mods"][1] in nxt(), "the queue did not move on")
+    tree(d, tasks.reference("recovery", 2))
+    check("queue empty" in nxt(), "a finished queue: %s" % nxt())
+    shutil.rmtree(d)
+
+
 def test_prompts_differ_only_in_the_channel():
     for name in tasks.TASKS:
         t = tasks.build(name, 3)
@@ -133,6 +156,17 @@ def test_cost_claude():
     lines2 = lines[:-1] + claude_lines({"type": "result", "total_cost_usd": 0.5, "usage": truth})
     check(grade.cost_of(lines2, "claude", "agentbus")["usage"]["output"] == 40, "the result event's totals must beat the undercounting message events")
     check(grade.cost_of(lines[:-1], "claude", "agentbus")["usage"]["output"] == 4, "a killed session's tokens must still count")
+
+
+def test_script_edits():
+    script = "python3 - <<'E'\\np='pkg/a.py'\\ns=open(p).read()\\nopen(p,'w').write(s)\\nE"
+    read_only = "cat pkg/a.py; python3 -c 'print(1)'"
+    line = lambda c: {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": c}}]}}  # noqa: E731
+    known = {"pkg/a.py", "pkg/b.py"}
+    check(grade.script_edits(claude_lines(line(script)), "claude", known) == [(0, "pkg/a.py")], "a scripted edit went unseen")
+    check(grade.script_edits(claude_lines(line(read_only)), "claude", known) == [], "a read counted as an edit")
+    codex = {"type": "item.started", "item": {"type": "command_execution", "command": script}}
+    check(grade.script_edits(claude_lines(codex), "codex", known) == [(0, "pkg/a.py")], "a Codex scripted edit went unseen")
 
 
 def test_cost_codex():

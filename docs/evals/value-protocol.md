@@ -66,7 +66,7 @@ All from artifacts, never from what an agent says about itself.
 | Hidden test pass, whole task and per feature | hidden tests on the final tree |
 | Lost edit: a feature marker seen in a snapshot and gone at the end | tree snapshots every 5 s |
 | Overlap: paths edited by both agents, and edits interleaved between them | tool trace |
-| Merge conflicts | Not applicable: agents share one tree, so the conflict shows up as a lost edit. See Threats. |
+| Merge conflicts | the runner's merge, in tasks with one worktree per agent (see Addenda) |
 | Rework: edit events beyond one per path | tool trace |
 | Duplicate work: the same function defined in more than one changed file, plus bob parsing the feed himself in `interface` | final tree |
 | Handoff use: `interface` bob's imports exist in alice's module; `recovery` and `facts` exception values are present | final tree |
@@ -157,3 +157,10 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 **2026-11-05, before the pilot.** Claude's per-message usage undercounts output tokens about fivefold, so tokens come from the stream's closing totals. A session killed by the `recovery` task has no closing totals, so its tokens are a lower bound, in every condition alike.
 
 **2026-11-05, before the pilot.** Pilot seeds are 9001 and 9002. The full matrix uses seeds from 1 up, so no pilot run can enter it.
+
+**2026-11-05, after pilot pass 1.** Reading the transcripts invalidated two task designs. Neither fix used a comparison between conditions. Pass 1's runs count for nothing but cost.
+
+- `recovery`: alice wrote every module in one shell command, so the kill always landed after she had finished. Modules now come one at a time from `tools/migrate.py`, so she cannot work ahead and the kill lands midway.
+- `overlap`: agents in one shared tree read each other's diffs and healed every collision, with or without a channel: a ceiling. Each agent now gets its own worktree, and the runner commits and merges the lanes at the end, recording conflicts and leaving their markers for the hidden tests. This also matches how lanes really run, and makes merge conflicts measurable, so the first Threats entry about worktrees no longer applies to this task. `none` may now sit at a floor here. That is acceptable for a task whose primary contrast is the bus against the ledger; a floor in every condition is not. The shared-tree version stays only as a test fixture.
+- Edit detection missed edits made through a Python script with the path in a variable. `script_edits` now catches them.
+- Pass 2 runs on fresh seeds, 9003 and 9004.

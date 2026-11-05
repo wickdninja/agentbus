@@ -24,6 +24,7 @@ import tasks  # noqa: E402
 
 TEXT_SUFFIXES = (".py", ".md", ".txt", ".feed", ".json", ".toml", ".cfg", "")
 HIDDEN_TIMEOUT = 120
+SCRIPT_WRITE = re.compile(r"\.write\(|\.write_text\(|\.write_bytes\(|\.writelines\(")
 
 
 def write_json(path, value):
@@ -140,7 +141,7 @@ def blind_grade(run_dir):
     stops = sorted({a["stop"] for a in run["agents"].values() if a["stop"] and a["stop"] != "task_kill"})
     grade = {"id": run["id"], "features": features, "pass": bool(features) and all(features.get(f) for f in task.features),
              "lost_features": lost_features(snaps, final_files, task.markers), "duplicates": duplicates(final_files, task.files, task.same_name),
-             "stops": stops, "seconds": run["seconds"], "load": run["load"]}
+             "stops": stops, "seconds": run["seconds"], "load": run["load"], "merge_conflicts": (run.get("merge") or {}).get("conflicts")}
     grade.update(edit_metrics(edits))
     if task.kill:
         grade["kill_fired"] = bool(run["kill"].get("fired"))
@@ -201,6 +202,26 @@ def _calls(lines, harness):
             elif item.get("type") == "file_change":
                 calls.append(["file_change", json.dumps(item.get("changes")), ""])
     return calls
+
+
+def script_edits(lines, harness, known_paths):
+    """[(ts, path)] for edits made by a script. Agents edit through `python3 - <<E` with the path in a variable, which
+    normalize.py cannot see: one pilot run showed no edit at all to the file both agents had changed. A call that writes and
+    names a repo path counts as an edit of that path."""
+    found = []
+    for wrapped in lines:
+        obj = _obj(wrapped["line"])
+        commands = []
+        if harness == "claude" and obj.get("type") == "assistant":
+            content = (obj.get("message") or {}).get("content")
+            commands = [(b.get("input") or {}).get("command", "") for b in content if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Bash"] if isinstance(content, list) else []
+        elif harness == "codex" and obj.get("type") == "item.started" and (obj.get("item") or {}).get("type") == "command_execution":
+            command = obj["item"].get("command", "")
+            commands = [" ".join(command) if isinstance(command, list) else command]
+        for command in commands:
+            if SCRIPT_WRITE.search(command):
+                found += [(wrapped["ts"], path) for path in sorted(known_paths) if path in command]
+    return found
 
 
 def cost_of(lines, harness, condition):

@@ -4,7 +4,7 @@ and speaks each harness's stream format, so the whole runner, the isolation chec
 VALUE_STUB_MODE picks a behaviour: good (default), clobber (bob overwrites alice's file with the base), lazy (does nothing),
 hang (never exits), spam (tool calls forever), hook-leak (reports a hook firing), plugin-leak (reports a user plugin),
 env-dump (writes its environment's names to VALUE_STUB_ENV_OUT and plays good), auth-fail (a sign-in error and no tool call),
-settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
+conflict (each role writes its own VERSION), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
 """
 import json
 import os
@@ -128,6 +128,8 @@ if task_name == "recovery" and role == "alice":
     for rel in wanted:
         write(rel, ref[rel])
     time.sleep(60)       # the runner's kill is what ends this session
+elif mode == "conflict":
+    write("VERSION", "9.%s.0\n" % ("1" if role == "alice" else "2"))
 elif mode == "clobber" and role == "bob":
     time.sleep(float(os.environ.get("VALUE_STUB_CLOBBER_AFTER", "1.5")))
     path = [k for k in task.files if k.endswith("pipeline.py")][0]

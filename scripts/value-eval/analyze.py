@@ -148,6 +148,15 @@ def effects(rows):
         k = sum(1 for r in sub if r["grade"]["pass"])
         lo, hi = wilson(k, len(sub))
         print("| %s | %s | %s | %d of %d | %.2f to %.2f | %d |" % (t, c, p, k, len(sub), lo, hi, len(sub)))
+    print("\n| task | condition | pairing | fresh tokens | minutes | tool calls | channel calls | rework | merge conflicts | lost features | duplicates | caps hit |\n" + "| --- " * 12 + "|")
+    for t, c, p in keys:
+        sub = [r for r in rows if (r["task"], r["condition"], r["pairing"]) == (t, c, p)]
+        mean = lambda f: statistics.mean(f(r) for r in sub)  # noqa: E731
+        print("| %s | %s | %s | %.0f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %d |" % (
+            t, c, p, mean(fresh_tokens), mean(lambda r: r["grade"]["seconds"] / 60), mean(lambda r: sum(a["tool_calls"] for a in r["cost"].values())),
+            mean(lambda r: sum(a["channel_calls"] for a in r["cost"].values())), mean(lambda r: r["grade"]["rework_events"]),
+            mean(lambda r: len(r["grade"]["merge_conflicts"] or [])), mean(lambda r: len(r["grade"]["lost_features"])), mean(lambda r: len(r["grade"]["duplicates"])),
+            sum(1 for r in sub if r["grade"]["stops"])))
     print("\nPrimary")
     for name, pairing in (("P1", "cx"), ("P2", "cc")):
         blocks = pair_blocks(rows, "agentbus", "ledger", COORDINATION, pairing, passed)
