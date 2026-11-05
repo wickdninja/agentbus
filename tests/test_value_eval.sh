@@ -169,6 +169,27 @@ rc=0; env TMPDIR="$T/forbidden" VALUE_FORBIDDEN_ROOT="$T/forbidden" VALUE_STUB_D
 [ "$rc" = 2 ] && grep -q "a run lives in mktemp" "$T/log" || { cat "$T/log"; fail "a run root under the forbidden root: rc $rc"; }
 ok "both are refused"
 
+echo "TEST 12b: Codex gets a private copy of its sign-in, and a leak or a refresh stops the batch"
+printf '{"auth_mode":"chatgpt","tokens":{"access_token":"%s"}}' "tok_$(printf 'x%.0s' 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5)" > "$T/auth.json"
+real_auth=$(cksum < "$T/auth.json")
+codex_stub() { rc=0; env VALUE_STUB_MODE="$1" VALUE_STUB_ENV_OUT="$T/authreport" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cx --seeds 1 3 --codex-auth "$T/auth.json" --time-cap 60 --out "$T/cx$RANDOM" >"$T/log" 2>&1 || rc=$?; }
+codex_stub auth-report
+[ "$rc" = 0 ] || { cat "$T/log"; fail "a clean Codex run: rc $rc"; }
+[ "$(cat "$T/authreport")" = "False 600" ] || fail "the sign-in copy: $(cat "$T/authreport")"
+codex_stub leak-token
+[ "$rc" = 5 ] && grep -q 'a Codex credential is in' "$T/log" || { cat "$T/log"; fail "a token in a trace did not stop the batch (rc $rc)"; }
+grep -q 'tok_x' "$T/log" && fail "the check printed the token"
+codex_stub auth-refresh
+[ "$rc" = 5 ] && grep -q 'refreshed its copy' "$T/log" || { cat "$T/log"; fail "a refreshed token did not stop the batch (rc $rc)"; }
+[ "$(cksum < "$T/auth.json")" = "$real_auth" ] || fail "a run changed the real sign-in"
+ok "the copy is private and not a link; a token in a trace or a refresh stops the batch, and the real file never changes"
+
+echo "TEST 12c: the batch halts when Codex use passes the budget"
+rc=0; env VALUE_STUB_QUOTA_FILE="$T/quota" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cx --seeds 1 2 3 4 --time-cap 60 --out "$T/budget" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 6 ] && grep -q 'Codex budget stop' "$T/log" || { cat "$T/log"; fail "no budget stop (rc $rc)"; }
+[ "$(wc -l < "$T/budget/manifest.jsonl" | tr -d ' ')" = 3 ] || fail "the batch went on past the budget: $(wc -l < "$T/budget/manifest.jsonl") runs"
+ok "30 points a run halts on the run that passes 40"
+
 echo "TEST 13: a run leaves nothing behind"
 [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'value-run-*' | grep -v forbidden || true)" ] || fail "run folders left: $(ls "$TMPDIR")"
 ok "the mktemp folders are gone"

@@ -224,6 +224,42 @@ def script_edits(lines, harness, known_paths):
     return found
 
 
+def secret_leaks(auth_path, paths):
+    """Names of the files in `paths` holding a credential from auth_path. Compares in memory and never prints a value."""
+    with open(auth_path) as f:
+        tokens = (json.load(f).get("tokens") or {})
+    secrets = [v for v in tokens.values() if isinstance(v, str) and len(v) >= 20]
+    found = []
+    for path in paths:
+        try:
+            with open(path, errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if any(v in text for v in secrets):
+            found.append(os.path.basename(path))
+    return found
+
+
+def codex_quota(codex_home):
+    """The newest subscription-bucket reading in a CODEX_HOME's rollouts: {"used_percent", "resets_at"} or None. A direct run's
+    usage lands here and not where `codex-lane --quota` looks, so the runner reads it itself."""
+    newest, when = None, -1.0
+    for d, _dirs, files in os.walk(os.path.join(codex_home, "sessions")):
+        for name in files:
+            if not (name.startswith("rollout-") and name.endswith(".jsonl")):
+                continue
+            path = os.path.join(d, name)
+            mtime = os.path.getmtime(path)
+            for line in open(path, errors="replace"):
+                payload = _obj(line).get("payload")
+                limits = payload.get("rate_limits") if isinstance(payload, dict) else None
+                primary = (limits or {}).get("primary") if isinstance(limits, dict) else None
+                if limits and limits.get("limit_id") == "codex" and primary and mtime >= when:
+                    newest, when = {"used_percent": primary.get("used_percent"), "resets_at": primary.get("resets_at")}, mtime
+    return newest
+
+
 def cost_of(lines, harness, condition):
     """Tokens, tool calls and what the channel itself took. Claude's per-message usage carries only the first streamed fragment of
     the output (575 against a true 3,277 in one run), so the result event's totals win. A killed session has no result event: its

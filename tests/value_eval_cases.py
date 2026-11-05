@@ -103,6 +103,65 @@ def test_recovery_queue_gates_the_next_module():
     shutil.rmtree(d)
 
 
+def test_no_channel_has_an_instruction_the_skill_lacks():
+    """Ruling of 2026-11-05: the ledger and peer texts carry no writing advice the shipped skill does not."""
+    for text in (tasks.LEDGER_SKILL, tasks.PEER_SKILL):
+        check("Write what the reader needs" not in text, "a channel text has an instruction the skill lacks")
+    for section in ("If you are waiting for an answer",):
+        check(section in tasks.LEDGER_SKILL and section in tasks.PEER_SKILL, "the rest of the text must stay")
+
+
+def test_secret_leaks():
+    d = tempfile.mkdtemp()
+    auth = os.path.join(d, "auth.json")
+    secret = "tok_" + "x" * 40
+    grade.write_json(auth, {"auth_mode": "chatgpt", "last_refresh": "2026-11-03T02:15:49.433251Z", "tokens": {"access_token": secret, "account_id": "short"}})
+    clean, dirty = os.path.join(d, "clean.txt"), os.path.join(d, "dirty.txt")
+    open(clean, "w").write("nothing here but 2026-11-03T02:15:49.433251Z\n")
+    open(dirty, "w").write("argv: --token %s\n" % secret)
+    check(grade.secret_leaks(auth, [clean]) == [], "a clean file reported as a leak")
+    check(grade.secret_leaks(auth, [clean, dirty]) == ["dirty.txt"], "a token in a trace was not found")
+    shutil.rmtree(d)
+
+
+def test_codex_quota():
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, "sessions", "2026"))
+    path = os.path.join(d, "sessions", "2026", "rollout-a.jsonl")
+    lines = [{"payload": {"rate_limits": {"limit_id": "premium", "primary": None}}},
+             {"payload": {"rate_limits": {"limit_id": "codex", "primary": {"used_percent": 51.0, "resets_at": 9}}}},
+             {"payload": {"rate_limits": {"limit_id": "codex", "primary": {"used_percent": 52.0, "resets_at": 9}}}}, {"payload": {}}]
+    open(path, "w").write("\n".join(json.dumps(x) for x in lines) + "\nnot json\n")
+    check(grade.codex_quota(d) == {"used_percent": 52.0, "resets_at": 9}, "the last codex bucket reading: %s" % grade.codex_quota(d))
+    check(grade.codex_quota(os.path.join(d, "none")) is None, "no rollouts means no reading")
+    shutil.rmtree(d)
+
+
+def test_budget_stop():
+    over = analyze.over_budget
+    check(over(50, 92, 100, 300, 40), "spent alone past the budget halts")
+    check(over(50, 70, 30, 300, 40), "20 points in 30 of 300 runs projects 200")
+    check(not over(50, 53, 30, 300, 40), "3 points in 30 of 300 projects 30")
+    check(not over(50, 51, 2, 300, 40), "too few runs to project: one rounded point is noise")
+    check(not over(50, 10, 40, 300, 40), "a reset window reads as nothing spent")
+    check(not over(None, None, 40, 300, 40), "no reading yet")
+
+
+def test_tool_pin():
+    """Runs test the release: any other bin/agentbus is refused."""
+    import run
+    d = tempfile.mkdtemp()
+    git = ["git", "-c", "user.name=e", "-c", "user.email=e@example.com"]
+    tree(d, {"bin/agentbus": "released\n"})
+    for argv in (["git", "init", "-q"], git + ["add", "."], git + ["commit", "-q", "-m", "x"]):
+        subprocess.run(argv, cwd=d, check=True)
+    check(run.tool_is_release(d, "HEAD"), "the release must match itself")
+    tree(d, {"bin/agentbus": "patched\n"})
+    check(not run.tool_is_release(d, "HEAD"), "a patched tool passed as the release")
+    check(not run.tool_is_release(d, "no-such-ref"), "an unknown release passed")
+    shutil.rmtree(d)
+
+
 def test_prompts_differ_only_in_the_channel():
     for name in tasks.TASKS:
         t = tasks.build(name, 3)

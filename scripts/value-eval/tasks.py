@@ -756,7 +756,7 @@ LEDGER_SKILL = dedent('''
     - Finish: `DONE: RESULT; FILES; CHECKS`
     - Record a lasting fact or decision: `FACT KEY: VALUE`
 
-    Write what the reader needs to act without asking you: exact names, values and files. If you are waiting for an answer, poll with a loop, for example `until grep -q 'ANSWER to alice' COORDINATION.md; do sleep 5; done`, bounded by `timeout` or a counter.
+    If you are waiting for an answer, poll with a loop, for example `until grep -q 'ANSWER to alice' COORDINATION.md; do sleep 5; done`, bounded by `timeout` or a counter.
 
     ## Finish the session
 
@@ -793,7 +793,7 @@ PEER_SKILL = dedent('''
     - Finish: `DONE: RESULT; FILES; CHECKS`
     - Share a lasting fact or decision: `FACT KEY: VALUE`
 
-    Write what the reader needs to act without asking you: exact names, values and files. If you are waiting for an answer, poll with a bounded loop in Bash, for example `for i in $(seq 1 20); do sleep 5; done`, so that messages can arrive between tool rounds.
+    If you are waiting for an answer, poll with a bounded loop in Bash, for example `for i in $(seq 1 20); do sleep 5; done`, so that messages can arrive between tool rounds.
 
     ## Finish the session
 

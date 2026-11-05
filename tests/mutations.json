@@ -4210,5 +4210,59 @@
     "count": 1,
     "run": "tests/test_example.sh",
     "expect": "the example's transcript is not the tour it promises"
+  },
+  {
+    "name": "value eval: messaging tools stay on outside builtin",
+    "file": "scripts/value-eval/run.py",
+    "find": "return BASE_TOOLS \\+ \\(BUILTIN_TOOLS if condition == \"builtin\" else \\[\\]\\)",
+    "replace": "return BASE_TOOLS + BUILTIN_TOOLS",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "tools were"
+  },
+  {
+    "name": "value eval: the Codex budget never halts",
+    "file": "scripts/value-eval/analyze.py",
+    "find": "return spent > budget or \\(done >= min_runs and spent \\* total / done > budget\\)",
+    "replace": "return False",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "spent alone past the budget halts"
+  },
+  {
+    "name": "value eval: no scan for a credential in kept files",
+    "file": "scripts/value-eval/run.py",
+    "find": "            if leaks:\\n                bad.append\\(\\\"a Codex credential is in %s\\\" % leaks\\)\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a token in a trace did not stop the batch"
+  },
+  {
+    "name": "value eval: a contrast prints from a short batch",
+    "file": "scripts/value-eval/analyze.py",
+    "find": "    if short:\\n",
+    "replace": "    if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a short batch"
+  },
+  {
+    "name": "value eval: a patched tool passes the release check",
+    "file": "scripts/value-eval/run.py",
+    "find": "return p\\.returncode == 0 and p\\.stdout == open\\(os\\.path\\.join\\(root, \\\"bin\\\", \\\"agentbus\\\"\\), \\\"rb\\\"\\)\\.read\\(\\)",
+    "replace": "return p.returncode == 0",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a patched tool passed as the release"
+  },
+  {
+    "name": "value eval: a hook in a run without the tool is allowed",
+    "file": "scripts/value-eval/grade.py",
+    "find": "    if condition != \\\"agentbus\\\" and hook_events:\\n        bad\\.append\\(\\\"%d hook events in a %s run\\\" % \\(hook_events, condition\\)\\)\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a hook in a none run"
   }
 ]

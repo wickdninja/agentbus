@@ -17,6 +17,7 @@ import sys
 sys.dont_write_bytecode = True
 RESAMPLES, RNG_SEED, SESOI = 10000, 20261105, 0.15
 COORDINATION = ("overlap", "interface", "recovery", "facts")
+MIN_PROJECTION_RUNS = 30
 
 
 def load(out):
@@ -99,6 +100,16 @@ def bootstrap_ratio(rows, a, b, value, resamples=RESAMPLES, seed=RNG_SEED):
         return (sum(xs) / len(xs)) / (sum(ys) / len(ys)) if xs and sum(ys) else float("nan")
     draws = sorted(x for x in (ratio([rnd.choice(seeds) for _ in seeds]) for _ in range(resamples)) if x == x)
     return ratio(seeds), percentile(draws, 0.025), percentile(draws, 0.975)
+
+
+def over_budget(start, now, done, total, budget, min_runs=MIN_PROJECTION_RUNS):
+    """The protocol's Codex stop rule. Quota moves in whole points and the pool is shared, so a projection from a handful of runs
+    is noise: it needs min_runs first. Points already spent past the budget halt at any time. A reading below the start is a
+    window reset, not a saving, and spends nothing."""
+    if start is None or now is None or now <= start:
+        return False
+    spent = now - start
+    return spent > budget or (done >= min_runs and spent * total / done > budget)
 
 
 def verdict(point, lo, hi):

@@ -147,10 +147,11 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 - **Model and harness versions** move. Results hold for the recorded versions.
 - **Skill versus hooks.** The bus condition includes hooks; the ledger cannot. That is the product as shipped, so hooks are not separated out.
 - **Timing depends on load.** That is why wall time is secondary.
+- **Dead-claim stall** (added 2026-11-05). A session that dies keeps its bus claims until they expire, and nothing the tool shows a fresh agent names the way out, so `recovery` exercises this behaviour of the tool. Runs test the release as shipped, so the stall stays in the numbers and counts against the tool.
 
 ## Open items
 
-- Codex route. `codex-lane -s workspace-write` refuses a project in `mktemp`, and it pins Codex hooks off. The `cx` pairing does not run until this is ruled on.
+- None. The Codex route was ruled on, see Addenda.
 
 ## Addenda
 
@@ -184,3 +185,11 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 - **Three tasks are not piloted:** `interface`, `facts` and `control`. They may hold flaws like the ones the pilot found in the other two.
 - **`cx` has never run.** See Open items.
 
+**2026-11-05, rulings, before any run counts.**
+
+- **Codex route:** `codex exec` directly in `mktemp`, as `scripts/e2e_codex.sh` does, because `codex-lane` refuses a write lane there. Same isolation as the Claude side: a temp HOME, and a scratch CODEX_HOME holding a private copy of the sign-in plus, for `agentbus` only, what `setup codex` writes. The runner stops the batch if a credential appears in anything it keeps, if the real sign-in changes, or if a run refreshes its token.
+- **Parity:** "Write what the reader needs to act without asking you: exact names, values and files." is removed from the ledger and peer-message texts, so no channel has an instruction the skill lacks. The rest stays.
+- **Sample size:** n = 20 seeds per cell, seeds 1 to 20.
+- **Tool under test:** the release, `642009c`. The runner refuses any other `bin/agentbus` and records its hash per run. The dead-claim stall stays and is listed under Threats.
+- **Codex stop rule:** the batch halts if projected Codex use passes 40 quota points, or if 40 are spent outright. Projected use is points spent so far times Codex runs planned, over Codex runs done, read from each run's own quota readings once 30 Codex runs are in, because quota moves in whole points and one rounded point early on would project hundreds. The pool is shared, so other work counts toward the 40, and a halt can come early but not late. A halt is a budget stop under Sample size and stopping: complete seed blocks are analyzed and the shortfall stated.
+- **Pilot runs never count toward results.** Pilot seeds start at 9001; the full matrix uses 1 to 20.

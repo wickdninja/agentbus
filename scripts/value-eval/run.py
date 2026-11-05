@@ -31,6 +31,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "scripts", "agent-eval"))
+import analyze  # noqa: E402
 import grade  # noqa: E402
 import normalize  # noqa: E402
 import tasks  # noqa: E402
@@ -40,6 +41,8 @@ BASE_TOOLS = ["Bash", "Read", "Edit", "Write", "Skill"]
 BUILTIN_TOOLS = ["ListAgents", "SendMessage", "ToolSearch"]
 CLAUDE_MODEL, CODEX_MODEL = "sonnet", "gpt-6.1-sol"
 TIME_CAP, TOOL_CAP, SNAP_EVERY = 2400, 80, 5
+TOOL_RELEASE = "642009c"     # the released tool under test: runs refuse any other bin/agentbus
+CODEX_BUDGET = 40            # quota points; the batch halts when projected use passes this
 CHANNEL_PATHS = (".agentbus", "COORDINATION.md", ".claude", "AGENTS.md", ".git", "__pycache__", "CLAUDE.md")
 CODEX_FEATURE_PINS = ("multi_agent", "plugins", "apps", "browser_use", "computer_use")
 GIT = ["git", "-c", "user.name=eval", "-c", "user.email=eval@example.com"]
@@ -90,6 +93,12 @@ def bus_roster(db):
         con.close()
 
 
+def tool_is_release(root, release):
+    """True when the working copy of bin/agentbus is byte for byte the released one."""
+    p = subprocess.run(["git", "-C", root, "show", "%s:bin/agentbus" % release], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return p.returncode == 0 and p.stdout == open(os.path.join(root, "bin", "agentbus"), "rb").read()
+
+
 def harness_of(pairing, role, seed):
     """cc: both Claude. cx: which harness plays which role alternates by seed."""
     if pairing == "cc":
@@ -121,7 +130,7 @@ def claude_args(prompt, role, model, root, condition):
 
 def codex_args(prompt, workdir, model, condition, shared_dir=None):
     argv = ["exec", "--json", "--skip-git-repo-check", "--color", "never", "-C", workdir, "-m", model, "-s", "workspace-write",
-            "-c", 'model_reasoning_effort="medium"']
+            "-c", 'model_reasoning_effort="medium"', "-c", "sandbox_workspace_write.exclude_slash_tmp=true"]
     for feature in CODEX_FEATURE_PINS:
         argv += ["-c", "features.%s=false" % feature]
     if shared_dir:
@@ -164,6 +173,7 @@ class Run:
         self.seen = {}
         self.loads, self.kill, self.merge = [], {"fired": False}, None
         self.worktrees = self.task.workspace == "worktrees"
+        self.auth_sha = None
         self.real_home = os.environ["HOME"]
         self.real_state = {"settings_sha": sha_file(os.path.join(self.real_home, ".claude", "settings.json")),
                            "bus": bus_roster(os.environ.get("VALUE_REAL_BUS"))}
@@ -179,7 +189,9 @@ class Run:
 
     def base_env(self):
         env = {"HOME": self.home, "PATH": self.path_var(), "TMPDIR": self.tmp, "LANG": "en_US.UTF-8", "TERM": "dumb",
-               "USER": os.environ.get("USER", "eval"), "AGENTBUS_NO_UPDATE_CHECK": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+               "USER": os.environ.get("USER", "eval"), "AGENTBUS_NO_UPDATE_CHECK": "1", "PYTHONDONTWRITEBYTECODE": "1",
+               "XDG_CACHE_HOME": os.path.join(self.tmp, "xdg-cache"), "XDG_STATE_HOME": os.path.join(self.tmp, "xdg-state"),
+               "XDG_CONFIG_HOME": os.path.join(self.tmp, "xdg-config")}
         if self.stub:
             env.update({"VALUE_TASK": self.task_name, "VALUE_SEED": str(self.seed), "VALUE_CONDITION": self.condition,
                         "VALUE_SCRIPTS": HERE})
@@ -215,6 +227,17 @@ class Run:
             self.make_worktrees()
         if not self.stub:
             self.write_claude_shim()
+        self.install_codex_auth()
+
+    def install_codex_auth(self):
+        """A private copy, never a link: a token refresh must not write through to the real sign-in."""
+        source = self.args.codex_auth
+        if "codex" in self.harnesses.values() and source:
+            auth = os.path.join(self.codex_home, "auth.json")
+            fd = os.open(auth, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f, open(source, "rb") as src:
+                f.write(src.read())
+            self.auth_sha = {"source": sha_file(source), "copy": sha_file(auth)}
 
     def make_worktrees(self):
         """One linked worktree per agent. The bus is found through git; the ledger is one file, linked into each worktree, so
@@ -301,10 +324,7 @@ class Run:
         rest = codex_args(prompt, self.workdir(agent.role), args.codex_model, self.condition, self.proj if self.worktrees else None)
         if self.stub:
             return [os.path.join(self.stub, "codex")] + rest, env
-        auth = os.path.join(self.codex_home, "auth.json")
-        if not os.path.lexists(auth):
-            os.symlink(args.codex_auth, auth)
-        return ["codex"] + rest, env
+        return [args.codex_bin] + rest, env
 
     def start(self, agent):
         prompt = tasks.prompt(self.task, agent.role, self.condition, agent.harness)
@@ -430,9 +450,31 @@ class Run:
             bad.append("a second bus exists in a worktree")
         if sha_file(os.path.join(self.real_home, ".claude", "settings.json")) != self.real_state["settings_sha"]:
             bad.append("the real ~/.claude/settings.json changed during the run")
+        if "codex" in self.harnesses.values():
+            bad += self.check_codex()
         roster = bus_roster(os.environ.get("VALUE_REAL_BUS"))
         if roster is not None and (set(roster) - set(self.real_state["bus"] or [])) & {"alice", "bob"}:
             bad.append("a run's agent joined the real bus")
+        return bad
+
+    def check_codex(self):
+        """Scratch CODEX_HOME holds only what this condition needs; the real sign-in did not change; no credential in anything kept."""
+        bad = []
+        allowed = {"auth.json", "sessions", "tmp", "log", "logs", "cache", "memories", "shell_snapshots", "history.jsonl", "version.json", "installation_id", ".personality_migration", "models_cache.json"}
+        allowed |= {"hooks.json", "AGENTS.md", "config.toml"} if self.condition == "agentbus" else set()
+        extra = sorted(n for n in os.listdir(self.codex_home) if n not in allowed and not n.startswith(("state_", "logs_", "goals_", "sqlite")))
+        if extra:
+            bad.append("CODEX_HOME holds %s" % extra)
+        if self.auth_sha:
+            auth = os.path.join(self.codex_home, "auth.json")
+            if sha_file(self.args.codex_auth) != self.auth_sha["source"]:
+                bad.append("the real Codex sign-in changed during the run")
+            if sha_file(auth) != self.auth_sha["copy"]:
+                bad.append("the run refreshed its copy of the Codex token; the real sign-in may now be stale")
+            kept = [os.path.join(self.out, n) for n in os.listdir(self.out) if os.path.isfile(os.path.join(self.out, n))]
+            leaks = grade.secret_leaks(auth, kept)
+            if leaks:
+                bad.append("a Codex credential is in %s" % leaks)
         return bad
 
     def collect(self, agents):
@@ -464,6 +506,8 @@ class Run:
             "kill": self.kill, "merge": self.merge})
         cost = {a.role: grade.cost_of(a.lines, a.harness, self.condition) for a in agents.values()}
         grade.write_json(os.path.join(self.out, "cost.json"), cost)
+        self.quota = grade.codex_quota(self.codex_home) if "codex" in self.harnesses.values() else None
+        grade.write_json(os.path.join(self.out, "quota.json"), self.quota)
         return {a.role: grade.infra_failure(a.lines, a.harness, a.proc.returncode, a.killed_by_task, a.stop_reason) for a in agents.values()}
 
     def execute(self):
@@ -473,7 +517,7 @@ class Run:
             infra = {r: why for r, why in self.collect(agents).items() if why}
             bad = self.isolation(agents)
             row = {"id": self.id, "task": self.task_name, "seed": self.seed, "condition": self.condition, "pairing": self.pairing,
-                   "infra": infra, "isolation": bad, "ts": time.time()}
+                   "infra": infra, "isolation": bad, "ts": time.time(), "tool": sha_file(os.path.join(ROOT, "bin", "agentbus")), "quota": self.quota}
             with open(os.path.join(self.args.out, "manifest.jsonl"), "a") as f:
                 f.write(json.dumps(row) + "\n")
             if bad:
@@ -518,8 +562,11 @@ def main(argv):
     ap.add_argument("--claude-profile", default=os.environ.get("VALUE_CLAUDE_PROFILE"), help="clauth profile; or VALUE_CLAUDE_PROFILE")
     ap.add_argument("--claude-bin", default=os.path.expanduser("~/.local/bin/claude"))
     ap.add_argument("--clauth-bin", default=os.path.expanduser("~/.local/bin/clauth"))
-    ap.add_argument("--codex-route", choices=("none", "exec"), default="none", help="exec: direct codex exec in mktemp; the owner's call")
-    ap.add_argument("--codex-auth", default=os.environ.get("VALUE_CODEX_AUTH"), help="auth.json to link into the scratch CODEX_HOME")
+    ap.add_argument("--codex-route", choices=("none", "exec"), default="none", help="exec: direct codex exec in mktemp, under a scratch CODEX_HOME")
+    ap.add_argument("--codex-auth", default=os.environ.get("VALUE_CODEX_AUTH"), help="auth.json to copy into the scratch CODEX_HOME")
+    ap.add_argument("--codex-bin", default="codex")
+    ap.add_argument("--codex-budget", type=float, default=CODEX_BUDGET, help="quota points; halt when projected use passes this")
+    ap.add_argument("--tool-release", default=TOOL_RELEASE, help="the commit whose bin/agentbus is under test")
     args = ap.parse_args(argv)
     runs = plan(args)
     log("value eval: %d runs" % len(runs))
@@ -542,14 +589,25 @@ def main(argv):
         if not args.codex_auth:
             log("not running: --codex-route exec needs --codex-auth or VALUE_CODEX_AUTH.")
             return 2
+    if not stub and "agentbus" in args.conditions and not tool_is_release(ROOT, args.tool_release):
+        log("not running: bin/agentbus is not the released %s, and runs test the release." % args.tool_release)
+        return 2
     try:
         args.out = assert_outside(args.out if os.path.isabs(args.out) else os.path.abspath(args.out))
         os.makedirs(args.out, exist_ok=True)
-        done = 0
+        done, codex_done, start = 0, 0, None
+        codex_total = sum(1 for r in runs if r[3] == "cx")
         for t, seed, c, p in runs:
             row = Run(t, seed, c, p, args).execute()
             done += 1
             log("run %d of %d: %s%s" % (done, len(runs), row["id"], " infra: %s" % row["infra"] if row["infra"] else ""))
+            if p == "cx" and row["quota"]:
+                codex_done += 1
+                now = row["quota"]["used_percent"]
+                start = now if start is None or now < start else start   # first reading, or a window that reset
+                if analyze.over_budget(start, now, codex_done, codex_total, args.codex_budget):
+                    log("Codex budget stop: %s points in %d of %d Codex runs passes %s projected. Batch halted." % (now - start, codex_done, codex_total, args.codex_budget))
+                    return 6
     except Refused as e:
         log("refused: %s" % e)
         return 2
