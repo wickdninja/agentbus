@@ -11,6 +11,7 @@ import json
 import random
 import textwrap
 
+MERGE_RULE = "The merge is a plain git merge: two different edits to the same line conflict, and so do two versions of one new file, and a conflict fails both tickets."
 TASKS = ("overlap", "interface", "recovery", "facts", "control")
 RETIRED = ("overlap-shared",)  # kept as a test fixture for lost edits: agents healed every collision in one tree, a ceiling (see the protocol's addenda)
 CONDITIONS = ("none", "ledger", "agentbus", "builtin")
@@ -111,7 +112,7 @@ def _overlap(seed):
     shared = ("The summary's last line, once both tickets are in, reads exactly `subtotal=S saved=V tax=T total=X`, in that order. "
               "Every feature that ships bumps the minor number in VERSION by one, so two features bump it twice. "
               "Put your tests in a new file of your own under tests/. "
-              "The merge is a plain git merge: two different edits to the same line conflict, and a conflict fails both tickets.")
+              + MERGE_RULE)
     tickets = {
         "alice": "Ticket: discounts, in %s/pipeline.py. A line may carry an optional fifth field, a whole percent discount. The line's "
                  "amount drops by floor(amount * percent / 100). Lines with quantity %d or more get a further %d percent off, taken the same "
@@ -260,12 +261,12 @@ def _interface(seed):
         "alice": "Ticket: write %s/feed.py, which reads the feed format in data/sample.feed. A record starts with `@NAME%sDATE`; the lines under it "
                  "are ` +SKU:QTYxCENTS` for a sale and ` -SKU:QTYxCENTS` for a refund. Lines starting with # are comments. A customer can appear in more "
                  "than one record, and a record can have no lines. You choose the function names and the data shape. Bob's report module is "
-                 "built on your module, so what it exposes is your call." % (pkg, p["sep"]),
+                 "built on your module, so what it exposes is your call. %s" % (pkg, p["sep"], MERGE_RULE),
         "bob": "Ticket: write %s/report.py, so that `python3 -m %s.report PATH` prints one line per customer, sorted by name: `NAME net=<cents> refunds=<count of refund lines>`. "
                "net is sales minus refunds, across all of that customer's records. Alice owns the feed format and is writing %s/feed.py at the same time; "
-               "she chooses its API. Use her module for all reading of the feed: report.py must not open or parse the file itself." % (pkg, pkg, pkg),
+               "she chooses its API. Use her module for all reading of the feed: report.py must not open or parse the file itself. %s" % (pkg, pkg, pkg, MERGE_RULE),
     }
-    return Task("interface", seed, files, tickets, [["alice", "bob"]], ["e2e", "uses_feed"])
+    return Task("interface", seed, files, tickets, [["alice", "bob"]], ["e2e", "uses_feed"], workspace="worktrees")
 
 
 def _interface_hidden(seed):
@@ -542,12 +543,12 @@ def _facts(seed):
     tickets = {
         "alice": "Ticket: write %s/invoice.py with `number(seq)`, which returns the invoice number for a sequence integer. Finance's decision, from this "
                  "morning's call, is not written down anywhere else: invoice numbers are the prefix %s, a hyphen, and the sequence zero-padded to %d digits. Exports use `%s` as "
-                 "the field delimiter, and show amounts in units with %d decimal places, rounded half %s. Bob does the export ticket after you." % (pkg, p["prefix"], p["width"], p["delim"], p["places"], p["rounding"]),
+                 "the field delimiter, and show amounts in units with %d decimal places, rounded half %s. %s" % (pkg, p["prefix"], p["width"], p["delim"], p["places"], p["rounding"], MERGE_RULE),
         "bob": "Ticket: write %s/export.py with `export(rows)`, where rows is a list of (seq, cents) pairs, returning one string per row: the invoice number, "
-               "the delimiter, the amount. Number the invoices with %s/invoice.py. Finance decided the delimiter and how amounts are shown; alice took that decision on an "
-               "earlier ticket." % (pkg, pkg),
+               "the delimiter, the amount. Number the invoices with %s/invoice.py, which alice is writing. Finance decided the delimiter and how amounts are shown, and alice "
+               "has that decision. %s" % (pkg, pkg, MERGE_RULE),
     }
-    return Task("facts", seed, files, tickets, [["alice"], ["bob"]], ["number", "delimiter", "amount"])
+    return Task("facts", seed, files, tickets, [["alice", "bob"]], ["number", "delimiter", "amount"], workspace="worktrees")
 
 
 def _facts_expected(p, seq, cents):

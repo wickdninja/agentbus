@@ -4218,7 +4218,7 @@
     "replace": "return BASE_TOOLS + BUILTIN_TOOLS",
     "count": 1,
     "run": "tests/test_value_eval.sh",
-    "expect": "tools were"
+    "expect": "path or tools"
   },
   {
     "name": "value eval: the Codex budget never halts",

@@ -72,6 +72,15 @@ def test_seeds():
         check(any(tasks.build(task, s).files != a.files or tasks.build(task, s).tickets != a.tickets for s in (8, 9, 10)), "%s: the seed changes nothing" % task)
 
 
+def test_lanes_cannot_see_each_other_through_one_tree():
+    """Pilot: in one shared tree a README note or a polled file is a channel, so `none` passed facts and interface every time."""
+    for name in ("interface", "facts"):
+        t = tasks.build(name, 1)
+        check(t.workspace == "worktrees" and t.schedule == [["alice", "bob"]], "%s must run as concurrent lanes" % name)
+        check(all("plain git merge" in x for x in t.tickets.values()), "%s must state the merge rule" % name)
+    check("after you" not in tasks.build("facts", 1).tickets["alice"], "alice is told bob needs her decision")
+
+
 def test_overlap_runs_in_worktrees():
     check(tasks.build("overlap", 1).workspace == "worktrees" and tasks.build("overlap-shared", 1).workspace == "shared", "workspaces")
     check("overlap-shared" not in tasks.TASKS, "the retired task must stay out of the matrix")
