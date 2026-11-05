@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `claim` and `release` take several resources in one call, all or none (up to 100). If another agent holds any of them, nothing is claimed and the error names every blocked resource and its holder. `--json` keeps the claim object for one resource and returns `{"claims": [...], "claimed_count": N}` for several; the error gains `conflicts`. `release` refuses the lot, naming every resource you do not hold, unless `--if-held`.
+- A claim conflict says when the holder was last seen. Once the holder has been silent for 30 minutes it also gives the command that clears its claims (`agentbus --as HOLDER leave`; `takeover` in `--json`), so a dead session no longer holds a file for up to two hours with no way out.
+- `agentbus --as NAME wait [--timeout SECONDS]` blocks until you have an unread message, then prints how many and the command that reads them. It marks nothing read and does not hold the bus while it waits. Exit 0 on messages, 124 (`wait_timeout`) when the timeout (600 s by default, at most 1800) ends first. Run it as a background command to be told when work arrives; it does not wake an idle session.
+
 ## 0.2.0 - 2026-11-04
 
 All five versioned things change (see [How versions fit together](docs/explanation/versions.md)): the tool is 0.2.0; the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is now stamped 1, the v0.1.0 shape, so a v0.1.0 bus is adopted with no other change; the skill is rewritten; and the hooks are new.

@@ -147,7 +147,7 @@ want = schema["contract"]
 tool = [*json.loads(os.environ["AB_JSON"])]
 table = {
     "join": ["--as", "delta", "join"], "leave": ["--as", "delta", "leave"], "who": ["who"],
-    "post": ["--as", "alpha", "post", "hello"], "inbox": ["--as", "beta", "inbox", "--peek"], "read": ["read"],
+    "post": ["--as", "alpha", "post", "hello"], "inbox": ["--as", "beta", "inbox", "--peek"], "wait": ["--as", "beta", "wait", "--timeout", "1"], "read": ["read"],
     "ctx set": ["--as", "alpha", "ctx", "set", "k", "v"], "ctx get": ["ctx", "get", "k"], "ctx history": ["ctx", "history", "k"],
     "claim": ["--as", "alpha", "claim", "src/b.py"], "release": ["--as", "alpha", "release", "src/b.py"], "claims": ["claims"],
     "log add": ["--as", "alpha", "log", "add", "act", "detail"], "log show": ["log", "show"], "status": ["status"],

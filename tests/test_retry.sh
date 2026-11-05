@@ -161,6 +161,7 @@ OBSERVED = {
     "who": observe((), ("who",), EVERYTHING),
     "post": observe((), ("--as", "a", "post", "hi"), MESSAGES, tokened=("--as", "a", "post", "hi", "--request-id", "tok")),
     "inbox": observe_inbox(),
+    "wait": observe(POSTED, ("--as", "b", "wait", "--timeout", "5"), EVERYTHING),
     "read": observe(POSTED, ("read",), EVERYTHING),
     "ctx set": observe((), ("--as", "a", "ctx", "set", "k", "v"), {**FACTS}),
     "ctx get": observe((("--as", "a", "ctx", "set", "k", "v"),), ("ctx", "get", "k"), EVERYTHING),

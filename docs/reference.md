@@ -36,9 +36,13 @@ Follow the [skill](../skills/agentbus/SKILL.md): join, check inbox between steps
 
 Every write (`post`, `claim`, `ctx set`, `goal`, `log add`) needs a name on the roster: under a name that has not joined, or has left, it fails with `not_on_roster` and writes nothing. Names are `[A-Za-z0-9._-]{1,40}` (`join` refuses others; a name already on a bus keeps working). `post --to` takes one name; a name not on the roster still gets the message, with a `recipient_not_on_roster` warning that lists close matches. `goal` is the shared goal's reserved fact key: set it with `goal TEXT`, not `ctx set`.
 
-Path claims are relative to the bus's directory. Paths normalise `./`, repeated slashes and `..`; absolute and escaping paths are refused. A path includes its descendants, with or without a trailing slash. Resources compare as given after normalisation, case included. Scheme names such as `issue:17` compare exactly. Claims are advisory, at most 1024 characters, and expire after 120 minutes by default (`--ttl-min`: 1 to 10080). Claim again to renew; omitted `--purpose` preserves the current purpose, and the original `claimed_at` stays unchanged. `release RESOURCE --if-held` succeeds when you do not hold it, for cleanup scripts.
+Path claims are relative to the bus's directory. Paths normalise `./`, repeated slashes and `..`; absolute and escaping paths are refused. A path includes its descendants, with or without a trailing slash. Resources compare as given after normalisation, case included. Scheme names such as `issue:17` compare exactly. Claims are advisory, at most 1024 characters, and expire after 120 minutes by default (`--ttl-min`: 1 to 10080). Claim again to renew; omitted `--purpose` preserves the current purpose, and the original `claimed_at` stays unchanged. `claim` and `release` take up to 100 resources, each once, in one transaction: all of them or none. If any is held by another agent, nothing is claimed and the error names every blocked resource and its holder (`error.conflicts` under `--json`). Under `--json` one resource returns the claim object as always; several return `{"claims": [...], "claimed_count": N}` with one claim object per resource. Releasing several works the same way: if you hold none of one, nothing is released and `not_held` lists them all (`error.resources`); `release RESOURCE... --if-held` skips the ones you do not hold and succeeds, for cleanup scripts. Each resource gets its own log row. A claim conflict says when the holder was last seen (`holder_last_seen`, `holder_idle_min` under `--json`). Once it has not been seen for 30 minutes (the window `join` uses to tell a live session from a gone one) the message adds the command that clears its claims, `agentbus --as HOLDER leave`, and `--json` carries it as `takeover` (null before then). Run it only after asking the holder and getting no answer: it removes the holder from the roster as well, so a session that was only quiet has to join again.
 
 New identities receive older direct messages, but broadcasts only from their first join onward. `read` shows history. Inbox marks returned messages read after stdout writes successfully. This does not confirm that a downstream consumer read or processed them. Do not truncate a consuming inbox with `head`; use `inbox --limit N`. Use `inbox --peek` when inspecting without consuming. Delivery is at least once: a crash or concurrent calls can repeat a message. `--reply-to` links a message without choosing its recipient.
+
+`agentbus --as NAME wait [--timeout SECONDS]` blocks until `inbox` would show you at least one message, then prints how many and the command that reads them, and exits 0. It marks nothing read. `--timeout` is 1 to 1800 seconds, 600 by default; when it ends first, `wait` exits 124 with the `wait_timeout` error. It looks at the bus every 2 seconds, each time opening it, counting and closing it, so it never holds the bus while it sleeps and a writer is never kept waiting behind it. It checks the name is on the roster, and refreshes your last-seen when it starts and again when it ends. Ctrl-C exits 130 as for any command. `--json` prints `{"name", "unread", "waited_s", "next"}`. There is no daemon and no file watcher.
+
+`wait` does not wake an idle session. It is for a command an agent runs in the background: when it exits, a tool that reports a finished background command to its session (Claude Code does) tells the agent mail has arrived. A session with no such command running, and a tool that does not report one, sees mail when it next runs `inbox`.
 
 ## Output
 
@@ -137,11 +141,12 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `who` | `{"items": [Agent], "has_more": boolean, "next": string or null}` |
 | `post` | `{"id": integer, "warnings": [Warning]}` |
 | `inbox` | `{"items": [Message], "has_more": boolean, "next": string or null}` |
+| `wait` | `{"name": string, "unread": integer, "waited_s": integer, "next": string}` |
 | `read` | `{"items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message` |
 | `ctx set` | `Fact` |
 | `ctx get` | `a Fact, or {"items": [Fact], "has_more": boolean, "next": string or null}` |
 | `ctx history` | `{"items": [FactVersion], "has_more": boolean, "next": string or null}` |
-| `claim` | `{"resource": string, "agent": string, "purpose": string or null, "claimed_at": string, "expires_at": string, "auto_released": [{"resource": string, "agent": string}], "auto_released_count": integer, "renewed": boolean}` |
+| `claim` | `for one resource a ClaimResult; for several {"claims": [ClaimResult], "claimed_count": integer}, one per resource, each once, in the order given` |
 | `release` | `{"released": [string], "released_count": integer}` |
 | `claims` | `{"items": [Claim], "has_more": boolean, "next": string or null}` |
 | `log add` | `{"id": integer, "logged": boolean, "agent": string, "action": string, "detail": string}` |
@@ -172,6 +177,7 @@ Shared objects. Nullable fields use JSON `null`; IDs and counts are integers; ti
 | `Agent` | `name`, `tool`, `model`, `cwd`, `branch`, `role`, `joined_at`, `last_seen` |
 | `Message` | `id`, `ts`, `sender`, `recipient`, `kind`, `topic`, `body`, `reply_to`, `body_truncated` (optional) |
 | `Claim` | `resource`, `agent`, `purpose`, `claimed_at`, `expires_at`, `state` |
+| `ClaimResult` | `resource`, `agent`, `purpose`, `claimed_at`, `expires_at`, `auto_released`, `auto_released_count`, `renewed`, `previous_purpose` (optional) |
 | `Fact` | `key`, `value`, `updated_by`, `updated_at`, `unchanged` (optional) |
 | `FactVersion` | `id`, `key`, `value`, `updated_by`, `updated_at` |
 | `LogEntry` | `id`, `ts`, `agent`, `action`, `detail` |
@@ -234,8 +240,8 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 <!-- generated:errors -->
 | Code | Exit | Retryable | Extra fields | Meaning and what to do |
 | --- | --- | --- | --- | --- |
-| `claim_conflict` | 1 | no | `resource`, `holder`, `expires_at`, `purpose` | Another agent holds an overlapping claim. Ask the holder, or work elsewhere. |
-| `not_held` | 1 | no | `resource` | You do not hold that claim. Nothing to release; use release --if-held for cleanup. |
+| `claim_conflict` | 1 | no | `resource`, `holder`, `expires_at`, `purpose`, `holder_last_seen`, `holder_idle_min`, `takeover`, `conflicts` (optional) | Another agent holds an overlapping claim. holder_last_seen is when the holder last ran a command (null when unknown) and holder_idle_min the whole minutes since; takeover is the command that clears its claims, given only when it has not been seen for 30 minutes or more (the window join uses), else null. With several resources, nothing was claimed: resource and holder are the first blocked resource, and conflicts lists every blocked one as {resource, holder, held, expires_at, purpose, holder_last_seen, holder_idle_min, takeover} (held is the claim in the way, the resource itself or a folder above or inside it). Ask the holder, or work elsewhere. If takeover is given and the holder does not answer, run it and claim again. With several resources, leave the blocked ones out and claim the rest. |
+| `not_held` | 1 | no | `resource`, `resources` (optional) | You do not hold that claim. With several resources, none was released, and resources lists every one you do not hold. Nothing to release; use release --if-held for cleanup. |
 | `no_message` | 1 | no | `id` | There is no message with that id. Check the id with read. |
 | `no_context_key` | 1 | no | `key` | There is no fact with that key. List facts with ctx get. |
 | `not_on_roster` | 1 | no | `agent`, `did_you_mean`, `roster` | That name has not joined. did_you_mean lists the roster names closest to it (at most 3, possibly none); roster lists the agents that have joined, by name (the 10 most recently seen at most). If the name is a typo, repeat the command with a name in did_you_mean. Otherwise join first. |
@@ -252,6 +258,7 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `copy_newer` | 1 | no | `directory`, `copy_version`, `tool_version` | The folder's copy of agentbus is newer than this one; it is never downgraded. Run upgrade or init with a newer agentbus. |
 | `bus_unavailable` | 3 | no | `file` (optional), `outcome_unknown` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; committed is then true when that write was the command's own. Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat it only with its request id. |
 | `ack_failed` | 3 | yes | `delivered` | inbox printed its messages but could not mark them read. The output was complete: use it, expect the same messages again, and dedupe by id. |
+| `wait_timeout` | 124 | yes | `waited` | wait ended with no unread message after --timeout seconds (waited). Run wait again to keep waiting, or read inbox. |
 | `output_failed` | 1 | yes | none | stdout could not be written; committed effects stand. Retry with the same token. |
 | `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional), `argv` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun). |
 | `items_failed` | 1 | no | `failed` | Some of the items the command works on failed or were refused (buses of upgrade --all, files of setup, checks of doctor); stdout holds the whole result, and failed lists those items. Read each failed item's error, fix it, then run the command again. |
@@ -288,6 +295,7 @@ The same with and without `--json`. `--version` and `--help` exit `0`. Exit `130
 | `2` | usage: bad arguments, unknown command, missing identity |
 | `3` | the bus is unavailable or unsafe |
 | `4` | internal error |
+| `124` | wait: the timeout ended with no message, as GNU timeout exits |
 | `130` | interrupted (Ctrl-C), the shell convention |
 <!-- /generated:exit-codes -->
 
@@ -303,12 +311,13 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `who` | safe | repeat freely |
 | `post` | needs request id | pass --request-id TOKEN; the same token and payload returns the original id with duplicate true |
 | `inbox` | at least once | repeat; a crash or ack_failed redelivers, so check message ids before acting; with `--peek`: safe (repeat freely) |
+| `wait` | safe | repeat freely; wait marks nothing read |
 | `read` | safe | repeat freely |
 | `ctx set` | idempotent | an unchanged value writes no history row and returns unchanged true |
 | `ctx get` | safe | repeat freely |
 | `ctx history` | safe | repeat freely |
 | `claim` | idempotent | renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, and previous_purpose is set when --purpose changed it |
-| `release` | idempotent with flag | release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent |
+| `release` | idempotent with flag | release RESOURCE... --if-held: a resource you do not hold is skipped (none held returns released [] and released_count 0 with exit 0); release --all is already idempotent |
 | `claims` | safe | repeat freely |
 | `log add` | unsafe | each call appends a row; check log show --limit 1 before retrying |
 | `log show` | safe | repeat freely |

@@ -356,4 +356,170 @@ PY
   agentbus --json claims | "$PY" -c 'import json,sys; r=next(r for r in json.load(sys.stdin)["items"] if r["resource"]=="renew"); assert r["purpose"]==sys.argv[1] and r["claimed_at"]=="2001-02-03T04:05:06Z"' "$want"
 done
 ok "renewal retains purpose and claimed_at; an explicit purpose replaces it in storage, JSON and conflicts"
+echo
+echo "TEST: claim several resources in one call, all or nothing (issue #25)"
+# Bug it catches: claim took one resource per call, so nine files took nine calls; or took the free ones and
+# refused the held one, leaving a half-claimed set.
+for n in ma mb mc; do agentbus --as $n join --tool t >/dev/null; done
+out=$(outof agentbus --as ma claim m/a.py m/b.py m/c.py --purpose "batch")
+grep -q "^claimed 3 resources for 2h" <<<"$out" || fail "claim of 3 said: $out"
+for f in m/a.py m/b.py m/c.py; do grep -qF "$f" <<<"$out" || fail "claim of 3 did not list $f: $out"; done
+held=$(agentbus --json claims | "$PY" -c 'import json,sys; print(" ".join(sorted(r["resource"] for r in json.load(sys.stdin)["items"] if r["agent"]=="ma" and r["resource"].startswith("m/"))))')
+[ "$held" = "m/a.py m/b.py m/c.py" ] || fail "three claimed, held: $held"
+rows=$(agentbus --json log show --limit 200 | "$PY" -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin)["items"] if r["agent"]=="ma" and r["action"]=="claim" and r["detail"].startswith("m/")))')
+[ "$rows" = 3 ] || fail "expected one log row per resource, got $rows"
+o=$(json_ok agentbus --json --as ma claim m/a.py m/d.py)
+"$PY" - "$o" <<'PY' || fail "JSON shape for two resources"
+import json, sys
+d = json.loads(sys.argv[1])
+assert set(d) == {"contract", "claims", "claimed_count"}, d
+assert d["claimed_count"] == 2 and [c["resource"] for c in d["claims"]] == ["m/a.py", "m/d.py"], d
+assert [c["renewed"] for c in d["claims"]] == [True, False], d
+assert all(c["agent"] == "ma" and "expires_at" in c and "auto_released" in c for c in d["claims"]), d
+PY
+o=$(json_ok agentbus --json --as ma claim m/a.py)
+"$PY" - "$o" <<'PY' || fail "JSON shape for one resource"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["resource"] == "m/a.py" and "claims" not in d and "claimed_count" not in d, d
+PY
+o=$(json_ok agentbus --json --as ma claim m/e.py ./m/e.py m//e.py)
+"$PY" - "$o" <<'PY' || fail "JSON shape for duplicate spellings"
+import json, sys
+d = json.loads(sys.argv[1])
+assert [c["resource"] for c in d["claims"]] == ["m/e.py"] and d["claimed_count"] == 1, d
+PY
+agentbus --as ma claim mdir/ mdir/x.py >/dev/null || fail "a batch refused two of the caller's own overlapping resources"
+ok "several resources claimed together, one log row each, JSON list for several and the old object for one"
+
+echo
+echo "TEST: a batch with a held resource claims none and names every holder"
+agentbus --as mb claim n/b.py --purpose "b work" >/dev/null
+agentbus --as mc claim n/dir/ --purpose "dir work" >/dev/null
+err=$(mktemp)
+if agentbus --as ma claim n/a.py n/b.py n/dir/x.py n/c.py 2>"$err"; then fail "a batch with held resources succeeded"; fi
+for w in "nothing claimed" "n/b.py is claimed by mb" "n/dir/x.py overlaps n/dir/, claimed by mc" "b work" "dir work" "Ask mb:"; do
+  grep -qF -- "$w" "$err" || { cat "$err"; fail "the refusal lacks '$w'"; }
+done
+left=$(agentbus --json claims | "$PY" -c 'import json,sys; print(" ".join(sorted(r["resource"] for r in json.load(sys.stdin)["items"] if r["resource"].startswith("n/"))))')
+[ "$left" = "n/b.py n/dir/" ] || fail "a refused batch took something: $left"
+if agentbus --json --as ma claim n/a.py n/b.py n/dir/x.py 2>"$err"; then fail "json batch succeeded"; fi
+"$PY" - "$err" <<'PY' || fail "JSON conflict fields for several holders"
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["code"] == "claim_conflict" and e["resource"] == "n/b.py" and e["holder"] == "mb", e
+assert [(c["resource"], c["holder"], c["held"]) for c in e["conflicts"]] == [("n/b.py", "mb", "n/b.py"), ("n/dir/x.py", "mc", "n/dir/")], e
+assert all(c["expires_at"] and "purpose" in c for c in e["conflicts"]), e
+assert e["next"].endswith("--to mb --kind question"), e
+PY
+if agentbus --json --as ma claim n/b.py 2>"$err"; then fail "single conflict succeeded"; fi
+"$PY" - "$err" <<'PY' || fail "JSON conflict fields for one holder"
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["code"] == "claim_conflict" and "conflicts" not in e and e["holder"] == "mb", e
+PY
+rm -f "$err"
+ok "all or nothing, every holder named, one resource keeps the old error"
+
+echo
+echo "TEST: a refused batch does not release a stale claim it passed"
+# Bug it catches: auto-releasing stale claims while still checking the rest, so a refused batch changed the bus.
+"$PY" - "$AGENTBUS_DB" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("INSERT INTO claims VALUES('s/stale.py','gone','old','2020-01-01T00:00:00Z','2999-01-01T00:00:00Z')")
+c.commit()
+PY
+agentbus --as mb claim s/held.py >/dev/null
+expect_fail "nothing claimed" agentbus --as ma claim s/stale.py s/held.py
+[ "$(agentbus --json claims --stale | "$PY" -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin)["items"] if r["resource"]=="s/stale.py"))')" = 1 ] || fail "a refused batch released the stale claim"
+agentbus --as ma claim s/stale.py s/free.py >/dev/null || fail "stale claim not taken in a batch that succeeds"
+[ "$(agentbus --json claims | "$PY" -c 'import json,sys; print(sorted(r["agent"] for r in json.load(sys.stdin)["items"] if r["resource"] in ("s/stale.py","s/free.py")))')" = "['ma', 'ma']" ] || fail "batch did not take the stale claim"
+ok "a refused batch changes nothing"
+
+echo
+echo "TEST: a batch is capped"
+many=$(seq 1 101 | sed 's|^|cap/f|' | tr '\n' ' ')
+expect_fail "at most 100 resources" agentbus --as ma claim $many
+[ "$(agentbus --json claims | "$PY" -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin)["items"] if r["resource"].startswith("cap/")))')" = 0 ] || fail "over-cap batch took claims"
+ok "101 resources refused"
+
+echo
+echo "TEST: release several resources, all or nothing"
+agentbus --as ma claim r/a.py r/b.py r/c.py >/dev/null
+expect_fail "you do not hold r/x.py, r/y.py" agentbus --as ma release r/a.py r/x.py r/y.py
+[ "$(agentbus --json claims | "$PY" -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin)["items"] if r["agent"]=="ma" and r["resource"].startswith("r/")))')" = 3 ] || fail "a refused release let go of something"
+o=$(json_ok agentbus --json --as ma release r/a.py r/b.py)
+"$PY" - "$o" <<'PY' || fail "JSON release shape for two"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["released"] == ["r/a.py", "r/b.py"] and d["released_count"] == 2, d
+PY
+agentbus --json --as ma release r/c.py r/x.py 2>/dev/null && fail "release of a missing resource succeeded"
+o=$(json_ok agentbus --json --as ma release --if-held r/c.py r/x.py)
+"$PY" - "$o" <<'PY' || fail "JSON release shape with --if-held"
+import json, sys
+d = json.loads(sys.argv[1])
+assert d["released"] == ["r/c.py"] and d["released_count"] == 1, d
+PY
+expect_fail "release needs a resource or --all" agentbus --as ma release
+expect_fail "not allowed with argument" agentbus --as ma release r/a.py --all
+expect_fail "RESOURCE must not contain control characters" agentbus --as ma claim ok/a.py $'bad\nname'
+expect_fail "RESOURCE must not contain control characters" agentbus --as ma release ok/a.py $'bad\nname'
+[ "$(agentbus --json claims | "$PY" -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin)["items"] if r["resource"]=="ok/a.py"))')" = 0 ] || fail "a batch with a bad name took the good one"
+ok "release takes several; a missing one refuses the lot unless --if-held; every name is checked for control characters"
+echo
+echo "TEST: a conflict says how long ago the holder was seen, and past 30 minutes how to clear a gone holder's claims"
+# Bug it catches: a dead session's claim stalled a live agent for up to two hours, and nothing in the refusal said the
+# holder might be gone or what to run.
+seen_ago() { "$PY" -c "import sqlite3,sys; from datetime import datetime,timedelta,timezone; c=sqlite3.connect(sys.argv[1]); t=(datetime.now(timezone.utc)-timedelta(minutes=int(sys.argv[3]))).strftime('%Y-%m-%dT%H:%M:%SZ'); c.execute('UPDATE agents SET last_seen=? WHERE name=?', (t, sys.argv[2])); c.commit()" "$AGENTBUS_DB" "$1" "$2"; }
+for n in dh dg dl dx; do agentbus --as $n join --tool t >/dev/null; done
+agentbus --as dg claim d/gone.py --purpose "gone work" >/dev/null
+agentbus --as dl claim d/live.py --purpose "live work" >/dev/null
+seen_ago dg 180
+seen_ago dl 4
+err=$(mktemp)
+agentbus --as dh claim d/gone.py 2>"$err" && fail "claim of a gone holder's file succeeded"
+for w in "dg was last seen 3h ago." "dg may be gone" "agentbus --as dg leave" "Ask dg:"; do grep -qF -- "$w" "$err" || { cat "$err"; fail "the refusal for a gone holder lacks '$w'"; }; done
+agentbus --as dh claim d/live.py 2>"$err" && fail "claim of a live holder's file succeeded"
+grep -qF "dl was last seen 4m ago." "$err" || { cat "$err"; fail "the refusal for a recent holder lacks its age"; }
+grep -qF "leave" "$err" && { cat "$err"; fail "a holder seen 4 minutes ago was offered a leave"; }
+agentbus --json --as dh claim d/gone.py 2>"$err" && fail "json claim of a gone holder succeeded"
+"$PY" - "$err" <<'PY' || fail "JSON conflict fields for a gone holder"
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["code"] == "claim_conflict" and e["holder"] == "dg", e
+assert e["holder_last_seen"].endswith("Z") and 178 <= e["holder_idle_min"] <= 182, e
+assert e["takeover"] == "agentbus --as dg leave" and e["next"].endswith("--to dg --kind question"), e
+PY
+agentbus --json --as dh claim d/live.py 2>"$err" && fail "json claim of a live holder succeeded"
+"$PY" - "$err" <<'PY' || fail "JSON conflict fields for a recent holder"
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["holder"] == "dl" and 3 <= e["holder_idle_min"] <= 5 and e["takeover"] is None and e["holder_last_seen"], e
+PY
+# the window is join's: 29 minutes is live, 30 is past it
+seen_ago dl 29
+agentbus --json --as dh claim d/live.py 2>"$err" && fail "claim of a holder seen 29 minutes ago succeeded"
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; sys.exit(0 if e["takeover"] is None else 1)' "$err" || fail "a holder seen 29 minutes ago was offered a takeover"
+seen_ago dl 30
+agentbus --json --as dh claim d/live.py 2>"$err" && fail "claim of a holder seen 30 minutes ago succeeded"
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; sys.exit(0 if e["takeover"] == "agentbus --as dl leave" else 1)' "$err" || fail "a holder seen 30 minutes ago was not offered a takeover"
+# several resources: every conflict carries its holder's age, and the message offers the leave for the gone ones only
+agentbus --as dx claim d/dx.py >/dev/null
+agentbus --json --as dh claim d/gone.py d/dx.py 2>"$err" && fail "json batch succeeded"
+"$PY" - "$err" <<'PY' || fail "JSON conflicts carry the holder's age"
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+by = {c["holder"]: c for c in e["conflicts"]}
+assert set(by) == {"dg", "dx"}, e
+assert by["dg"]["takeover"] == "agentbus --as dg leave" and by["dx"]["takeover"] is None, by
+assert by["dg"]["holder_idle_min"] >= 178 and by["dx"]["holder_idle_min"] <= 2, by
+assert "agentbus --as dg leave" in e["message"] and "agentbus --as dx leave" not in e["message"], e["message"]
+PY
+# the command it names works: the gone holder's claim is cleared and the file can be claimed
+agentbus --as dg leave >/dev/null
+agentbus --as dh claim d/gone.py >/dev/null || fail "the file was still held after the holder was cleared"
+rm -f "$err"
+ok "the holder's age is in every conflict; a leave is named only past the live window, and it frees the file"
 echo "All tests passed!"
