@@ -1,0 +1,27 @@
+usage: agentbus upgrade [DIR] [--all] [--depth N] [--dry-run]
+
+Replace a repo's .agentbus/bin/agentbus with this copy and migrate its bus
+(installed tool or clone only)
+
+ARGUMENTS
+  DIR  The folder whose bus to upgrade; default the nearest bus. With --all,
+       the folder to search under.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --all       Upgrade every bus folder under DIR
+  --depth N   With --all: how many levels below DIR to look (default 5)
+  --dry-run   Change nothing; report what would change
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Update one project
+  agentbus upgrade ~/src/app
+  # See what would change under a folder
+  agentbus upgrade --all ~/src --dry-run
+
+JSON result: {"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}. Retry: safe to repeat.

@@ -1,0 +1,30 @@
+usage: agentbus claim RESOURCE [--purpose TEXT] [--request-id TOKEN]
+    [--ttl-min MIN]
+
+Claim a resource (bus-relative path, or issue:N, table:x, area:y)
+
+ARGUMENTS
+  RESOURCE  What to claim: a path relative to the bus folder (a folder covers
+            what is under it), or issue:N, table:NAME, area:NAME.
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --purpose TEXT      Why you hold it; shown to anyone who runs into the
+                      claim.
+  --request-id TOKEN  Retry safely. Accepted so every write retries the same
+                      way; this command already does nothing the second time.
+  --ttl-min MIN       Claim lifetime in minutes: 1-10080; default 120. Claim
+                      again to renew.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Claim a folder before editing it
+  agentbus --as alice claim src/api/ --purpose "rate limiting"
+  # Claim an issue
+  agentbus --as alice claim issue:42
+
+JSON result: {"resource": string, "agent": string, "purpose": string or null, "claimed_at": string, "expires_at": string, "auto_released": [{"resource": string, "agent": string}], "auto_released_count": integer, "renewed": boolean}. Retry: safe to repeat.

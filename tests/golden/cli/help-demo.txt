@@ -1,0 +1,29 @@
+usage: agentbus demo [--no-pause] [--watch]
+
+A hands-off tour for a person, about 30 seconds: two scripted agents join a
+temporary bus, set a goal, post a task, claim a folder, are refused a
+conflicting claim, hand off and release. Each command is printed as it runs,
+so you learn the CLI by watching it. The bus is made outside any repo, never
+touches the bus of the folder you are in, and is removed at the end, on an
+error and on Ctrl-C. With --json it runs the same tour without pauses and
+prints each step's exit status (a quick check that this install works).
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --no-pause  Do not pause between commands, and do not offer watch (for
+              scripts and tests).
+  --watch     Open watch on the demo bus when the tour ends, without asking
+              (needs a terminal).
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Watch two scripted agents hand off work
+  agentbus demo
+  # Without pauses, for a quick check
+  agentbus demo --no-pause
+
+JSON result: {"steps": [{"command": string, "exit": integer}], "cleaned": boolean}. Retry: safe to repeat.

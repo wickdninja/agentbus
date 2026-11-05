@@ -1,0 +1,27 @@
+usage: agentbus release [RESOURCE | --all] [--if-held] [--request-id TOKEN]
+
+Release your claim(s)
+
+ARGUMENTS
+  RESOURCE  Resource to release; use the spelling from claims.
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --all               Release all your claims
+  --if-held           With a resource: succeed (releasing nothing) when you do
+                      not hold it, for cleanup.
+  --request-id TOKEN  Retry safely. Accepted so every write retries the same
+                      way; this command already does nothing the second time.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Release one claim
+  agentbus --as alice release src/api/
+  # Release everything you hold
+  agentbus --as alice release --all
+
+JSON result: {"released": [string], "released_count": integer}. Retry: with --if-held.

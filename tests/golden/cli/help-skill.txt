@@ -1,0 +1,21 @@
+usage: agentbus skill [--agents-md]
+
+Print the bundled skill (the agent protocol); --agents-md prints the Codex
+AGENTS.md block
+
+FLAGS
+  -h, --help   Show this help message and exit.
+  --agents-md  Print the block for an AGENTS.md file instead
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Print the protocol agents follow
+  agentbus skill
+  # The block for a Codex AGENTS.md
+  agentbus skill --agents-md
+
+JSON result: {"text": string}. Retry: safe to repeat.

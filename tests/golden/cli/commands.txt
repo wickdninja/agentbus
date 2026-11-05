@@ -1,0 +1,33 @@
+join
+leave
+who
+post
+inbox
+read
+ctx
+ctx set
+ctx get
+ctx history
+claim
+release
+claims
+log
+log add
+log show
+status
+goal
+watch
+buses
+init
+upgrade
+schema
+help
+completion
+skill
+setup
+update
+hook
+hooks
+doctor
+brief
+demo

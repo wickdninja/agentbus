@@ -1,0 +1,24 @@
+usage: agentbus update [DIR] [--check] [--dry-run] [--all-buses] [--no-buses]
+    [--no-setup]
+
+Install the latest release, then upgrade the bus folders and refresh the skill
+and AGENTS.md block
+
+ARGUMENTS
+  DIR  A bus folder, or a folder that holds repos (remembered for next time);
+       default the known bus folders
+
+FLAGS
+  -h, --help   Show this help message and exit.
+  --check      Only say whether a newer release exists
+  --dry-run    Change nothing; print what would run
+  --all-buses  In an agent session, cover every known bus folder and run setup
+  --no-buses   Skip the bus folders
+  --no-setup   Skip the skill and AGENTS.md refresh
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+JSON result: {"from": string, "to": string, "latest": string or null, "install": {"method": string, "url": string or null}, "tool": {"status": string, "argv": [string] or null, "exit_status": integer or null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null (only when update downloads the release wheel; "install_with" in a dry run)}, "buses": [UpgradeRow], "setup": [SetupResult], "plugin": {"fix": string} or null, "restart": boolean, "scope": {"narrowed": boolean, "why": string or null}}, or with --check {"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, "url": string or null}, "argv": null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null, "notes": string or null}. Retry: safe to repeat.

@@ -1,0 +1,22 @@
+usage: agentbus doctor [--scope {user,project,all}]
+
+Check the installed tool, this folder's bus and your agents' setup; prints the
+command that fixes each problem
+
+FLAGS
+  -h, --help                  Show this help message and exit.
+  --scope {user,project,all}  user: your own config; project: files under the
+                              current directory; all: both (default)
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Check everything
+  agentbus doctor
+  # Only your own config
+  agentbus doctor --scope user
+
+JSON result: {"agentbus": string, "path": string, "contract": integer, "checks": [{"id": string, "status": "ok" | "warn" | "fail" | "n/a", "detail": string, "fix": string or null, "hint": string or null, "scope": string (when it applies)}], "fail": integer, "warn": integer}; exit 1 (items_failed) when fail > 0. Retry: safe to repeat.

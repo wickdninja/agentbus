@@ -1,0 +1,20 @@
+usage: agentbus who [--limit N]
+
+List agents
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --limit N   At most this many agents (default 50). Use -1 for all.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # See who is on the bus
+  agentbus who
+  # As JSON, five at most
+  agentbus --json who --limit 5
+
+JSON result: {"items": [Agent], "has_more": boolean, "next": string or null}. Retry: safe to repeat.

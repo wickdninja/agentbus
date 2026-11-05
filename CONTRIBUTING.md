@@ -15,6 +15,8 @@ Set `PYTHON` to test another interpreter, for example `PYTHON=python3.15`. Tests
 
 Adding a command? Add its test file `tests/test_<command>.sh` (it is picked up by name), a line in `tests/test_docs.sh` if it changes the reference, and, when it changes what an agent or a person does end to end, a step in the matching `tests/test_workflow_*.sh` story. Break the behaviour on purpose and watch the test fail: add an entry to `tests/mutations.json` naming the test (`python3 scripts/mutate.py --list`, `bash tests/test_mutations.sh`).
 
+`bash tests/test_unit.sh` runs the fast layer in seconds: `tests/unit/`, plain `unittest` on pure logic, each test naming the bug it catches. `tests/test_cli_surface.sh` pins `--help`, every `<command> --help`, `schema --json` and the completion scripts byte for byte in `tests/golden/cli/`. A change to any of them is meant to fail it: run `bash tests/test_cli_surface.sh --update` under Python 3.9 to 3.11 and again under 3.12 or later, then review the diff.
+
 Maintainers building agentbus on its own bus: [docs/internal/dogfood.md](docs/internal/dogfood.md).
 
 Agent evals (Claude Code and Codex doing real work on the bus) are run by the maintainers before a release: see [docs/evals/README.md](docs/evals/README.md). They spend tokens and are not part of `bash tests/run_all.sh`.

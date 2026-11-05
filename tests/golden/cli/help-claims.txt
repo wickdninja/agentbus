@@ -1,0 +1,21 @@
+usage: agentbus claims [--stale] [--limit N]
+
+List claims
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --stale     Show claims held by agents not on roster
+  --limit N   At most this many claims (default 50). Use -1 for all.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Who holds what
+  agentbus claims
+  # Claims held by agents that are gone
+  agentbus claims --stale
+
+JSON result: {"items": [Claim], "has_more": boolean, "next": string or null}. Retry: safe to repeat.

@@ -1,0 +1,24 @@
+usage: agentbus log {add,show} ...
+
+Append to or show the activity log
+
+ACTIONS
+  add ACTION DETAIL  Append an activity log entry.
+  show               Show recent activity log entries.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --limit N   At most this many entries (show) (default 50). Use -1 for all.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Record what you did
+  agentbus --as alice log add test "unit suite green"
+  # See the latest entries
+  agentbus log show --limit 10
+
+See: agentbus help log ACTION

@@ -1,0 +1,24 @@
+usage: agentbus completion {bash,zsh,fish}
+
+Print a tab-completion script for your shell
+
+ARGUMENTS
+  {bash,zsh,fish}  The shell to print it for.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Zsh, for this shell
+  source <(agentbus completion zsh)
+  # Bash, for this shell
+  eval "$(agentbus completion bash)"
+  # Fish, for every shell
+  agentbus completion fish > ~/.config/fish/completions/agentbus.fish
+
+JSON result: {"shell": string, "text": string}. Retry: safe to repeat.

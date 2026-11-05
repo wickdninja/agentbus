@@ -1,0 +1,72 @@
+# bash completion for agentbus, written by: agentbus completion bash
+# Load it for this shell: eval "$(agentbus completion bash)"
+_agentbus() {
+    local cur prev cmd="" sub="" key i w flags="" words="" mode=""
+    cur=${COMP_WORDS[COMP_CWORD]}
+    prev=${COMP_WORDS[COMP_CWORD-1]}
+    for ((i = 1; i < COMP_CWORD; i++)); do
+        w=${COMP_WORDS[i]}
+        case $w in
+            --after|--as|--before|--branch|--cwd|--depth|--id|--interval|--kind|--limit|--model|--purpose|--reply-to|--request-id|--role|--scope|--since|--to|--tool|--topic|--ttl-min|--up) i=$((i + 1)) ;;
+            -*) ;;
+            *) if [ -z "$cmd" ]; then cmd=$w; elif [ -z "$sub" ]; then sub=$w; fi ;;
+        esac
+    done
+    case $cmd in
+        ctx|log) key=$cmd${sub:+ $sub} ;;
+        *) key=$cmd ;;
+    esac
+    case "$key $prev" in
+        "post --kind") COMPREPLY=($(compgen -W "note question answer handoff decision alert done" -- "$cur")); return ;;
+        "setup --scope") COMPREPLY=($(compgen -W "user project" -- "$cur")); return ;;
+        "doctor --scope") COMPREPLY=($(compgen -W "user project all" -- "$cur")); return ;;
+    esac
+    case $prev in
+        --after|--as|--before|--branch|--cwd|--depth|--id|--interval|--kind|--limit|--model|--purpose|--reply-to|--request-id|--role|--scope|--since|--to|--tool|--topic|--ttl-min|--up) return ;;
+    esac
+    case "$key" in
+        "") flags="--as --json --up --version --help"; words="join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo" ;;
+        "join") flags="--tool --model --cwd --branch --role --takeover --request-id" ;;
+        "leave") flags="--request-id" ;;
+        "who") flags="--limit" ;;
+        "post") flags="--to --kind --topic --reply-to --request-id" ;;
+        "inbox") flags="--peek --after --limit" ;;
+        "read") flags="--since --topic --before --id --limit" ;;
+        "ctx") flags="--limit"; words="set get history" ;;
+        "ctx set") flags="--request-id" ;;
+        "ctx get") flags="--limit" ;;
+        "ctx history") flags="--limit --before" ;;
+        "claim") flags="--purpose --request-id --ttl-min" ;;
+        "release") flags="--all --if-held --request-id" ;;
+        "claims") flags="--stale --limit" ;;
+        "log") flags="--limit"; words="add show" ;;
+        "log add") flags="" ;;
+        "log show") flags="--limit --before" ;;
+        "status") flags="--limit" ;;
+        "goal") flags="--request-id" ;;
+        "watch") flags="--interval --once" ;;
+        "buses") flags="" ;;
+        "init") flags="--second-bus"; mode="dir" ;;
+        "upgrade") flags="--all --depth --dry-run"; mode="dir" ;;
+        "schema") flags="--index --full"; words="join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo"; case $prev in ctx) words="set get history" ;; log) words="add show" ;; esac ;;
+        "help") flags=""; words="join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo"; case $prev in ctx) words="set get history" ;; log) words="add show" ;; esac ;;
+        "completion") flags=""; words="bash zsh fish" ;;
+        "skill") flags="--agents-md" ;;
+        "setup") flags="--scope --dry-run --uninstall --refresh"; words="claude codex" ;;
+        "update") flags="--check --dry-run --all-buses --no-buses --no-setup"; mode="dir" ;;
+        "hooks") flags=""; words="claude codex" ;;
+        "doctor") flags="--scope" ;;
+        "brief") flags="--limit" ;;
+        "demo") flags="--no-pause --watch" ;;
+    esac
+    flags="$flags --as --json --up --help"
+    if [[ $cur == -* ]]; then
+        COMPREPLY=($(compgen -W "$flags" -- "$cur"))
+    elif [ "$mode" = dir ]; then
+        COMPREPLY=($(compgen -d -- "$cur"))
+        compopt -o filenames 2>/dev/null
+    else
+        COMPREPLY=($(compgen -W "$words" -- "$cur"))
+    fi
+}
+complete -F _agentbus agentbus

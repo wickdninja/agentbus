@@ -1,0 +1,21 @@
+usage: agentbus log show [--limit N] [--before NEXT]
+
+Show recent activity log entries.
+
+FLAGS
+  -h, --help     Show this help message and exit.
+  --limit N      Maximum entries; default 50. Use -1 for all.
+  --before NEXT  Older entries than the previous page (its next value).
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # The latest entries
+  agentbus log show
+  # Only a few
+  agentbus log show --limit 5
+
+JSON result: {"items": [LogEntry], "has_more": boolean, "next": string or null}. Retry: safe to repeat.

@@ -1,0 +1,39 @@
+usage: agentbus setup {claude,codex} [--scope {user,project}] [--dry-run]
+    [--uninstall] [--refresh]
+
+Teach your agent to use agentbus: the skill and hooks for Claude Code, the
+AGENTS.md block and hooks for Codex (Codex runs the hooks only after you
+approve them with /hooks; setup codex starts your login shell once to check
+it)
+
+ARGUMENTS
+  {claude,codex}  claude (skill and hooks) or codex (AGENTS.md block and
+                  hooks, then /hooks in Codex to trust them)
+
+FLAGS
+  -h, --help              Show this help message and exit.
+  --scope {user,project}  user: your own config (default); project: files
+                          under the current directory
+  --dry-run               Show what would change; write nothing
+  --uninstall             Remove what setup added. A skill or AGENTS.md block
+                          you edited stays; hook entries tagged
+                          agentbus:managed go even if edited, after the hooks
+                          file is saved as a .bak (no copy when it held only
+                          unedited agentbus entries)
+  --refresh               Bring what setup installed up to date; add nothing,
+                          keep a skill or AGENTS.md block you edited, and
+                          rewrite hooks tagged agentbus:managed, with a backup
+                          (what agentbus update runs)
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Teach Claude Code
+  agentbus setup claude
+  # See what would change first
+  agentbus setup codex --dry-run
+
+JSON result: {"target": string, "scope": string, "dry_run": boolean, "changes": [{"path": string, "detail": string, "action": string, "backup": string (only when a backup was saved), "info": boolean (true for a report about something that is not a file, such as the login shell)}]}. Retry: safe to repeat.
