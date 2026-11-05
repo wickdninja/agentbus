@@ -8,6 +8,7 @@
 set -u
 DIR="${1:?usage: check_sums.sh DIR EXPECTED}"; EXPECTED="${2:?usage: check_sums.sh DIR EXPECTED}"
 [ -d "$DIR" ] && [ -s "$EXPECTED" ] || { echo "FAIL: $DIR or $EXPECTED is missing or empty" >&2; exit 1; }
+EXPECTED="$(cd "$(dirname "$EXPECTED")" && pwd)/$(basename "$EXPECTED")"   # absolute: the checks below run from inside DIR
 names=$(awk '{print $2}' "$EXPECTED" | sort)
 [ -n "$names" ] || { echo "FAIL: $EXPECTED names no files" >&2; exit 1; }
 for n in $names; do
