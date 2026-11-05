@@ -83,8 +83,8 @@
   {
     "name": "claim takes the free resources of a batch when another is held",
     "file": "bin/agentbus",
-    "find": "        if blocked:\\n            refuse_claim\\(",
-    "replace": "        if blocked and len(a.resource) == 1:\n            refuse_claim(",
+    "find": "    if blocked:  # nothing was changed; the log row is its own short write\\n        log_refusal\\(",
+    "replace": "    if blocked and len(a.resource) == 1:\n        log_refusal(",
     "count": 1,
     "run": "tests/test_claims.sh",
     "expect": "a batch with held resources succeeded"
@@ -106,6 +106,114 @@
     "count": 1,
     "run": "tests/test_claims.sh",
     "expect": "JSON conflict fields for several holders"
+  },
+  {
+    "name": "a claim refusal drops the separate-branch sentence",
+    "file": "bin/agentbus",
+    "find": "SEPARATE_BRANCH = \\\"If you are on a separate branch, post what you are touching; the merge decides\\.\\\"",
+    "replace": "SEPARATE_BRANCH = \"\"",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "the refusal lacks the separate-branch branch"
+  },
+  {
+    "name": "a claim refusal forbids editing outright again",
+    "file": "bin/agentbus",
+    "find": "If you share a checkout with \\{first\\['holder'\\]\\}, wait or ask: \\{ask\\}\\.",
+    "replace": "Do not edit it yet. Ask {first['holder']}: {ask}.",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "the refusal lacks the same-checkout branch"
+  },
+  {
+    "name": "a claim refusal leaves out since when",
+    "file": "bin/agentbus",
+    "find": " since \\{human_time\\(b\\[\\\"claimed_at\\\"\\]\\)\\} until",
+    "replace": " until",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "the refusal lacks since when"
+  },
+  {
+    "name": "a claim refusal leaves claimed_at out of its fields",
+    "file": "bin/agentbus",
+    "find": "holder=b\\[\\\"holder\\\"\\], claimed_at=b\\[\\\"claimed_at\\\"\\], expires_at=b\\[\\\"expires_at\\\"\\]",
+    "replace": "holder=b[\"holder\"], expires_at=b[\"expires_at\"]",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "claimed_at in the single refusal"
+  },
+  {
+    "name": "a claim refusal over undecoded bytes has no claimed_at",
+    "file": "bin/agentbus",
+    "find": "\\\"holder\\\": r\\[\\\"agent\\\"\\], \\\"claimed_at\\\": r\\[\\\"claimed_at\\\"\\],",
+    "replace": "\"holder\": r[\"agent\"], \"claimed_at\": None,",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "claimed_at in the undecoded refusal"
+  },
+  {
+    "name": "a refused claim writes no claim_refused row",
+    "file": "bin/agentbus",
+    "find": "        log_refusal\\(con, name, blocked\\)\\n        refuse_claim",
+    "replace": "        refuse_claim",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "claim_refused rows"
+  },
+  {
+    "name": "a refused claim logs a plain sentence, not structured detail",
+    "file": "bin/agentbus",
+    "find": "log\\(con, name, \\\"claim_refused\\\", json\\.dumps\\(detail, default=repr\\)\\)",
+    "replace": "log(con, name, \"claim_refused\", \"refused\")",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "claim_refused rows"
+  },
+  {
+    "name": "a refused claim's log write counts as the command's change",
+    "file": "bin/agentbus",
+    "find": "with immediate\\(con, record=False\\):  # not the command's change: the error still says committed false",
+    "replace": "with immediate(con):",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "claimed_at in the batch refusal"
+  },
+  {
+    "name": "a busy bus on the claim_refused write replaces the refusal",
+    "file": "bin/agentbus",
+    "find": "json\\.dumps\\(detail, default=repr\\)\\)\\n    except \\(SystemExit, sqlite3\\.Error\\):",
+    "replace": "json.dumps(detail, default=repr))\n    except sqlite3.Error:",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "a busy bus on the log write changed the refusal"
+  },
+  {
+    "name": "a database error on the claim_refused write replaces the refusal",
+    "file": "bin/agentbus",
+    "find": "json\\.dumps\\(detail, default=repr\\)\\)\\n    except \\(SystemExit, sqlite3\\.Error\\):",
+    "replace": "json.dumps(detail, default=repr))\n    except SystemExit:",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "a database error on the log write changed the refusal"
+  },
+  {
+    "name": "a claim_refused row cannot hold a holder's claimed_at that is not text",
+    "file": "bin/agentbus",
+    "find": "json\\.dumps\\(detail, default=repr\\)",
+    "replace": "json.dumps(detail)",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "a claimed_at that is not text broke the refusal"
+  },
+  {
+    "name": "log show prints a claim_refused row as raw JSON",
+    "file": "bin/agentbus",
+    "find": "    if action == \\\"claim_refused\\\":",
+    "replace": "    if action == \"claim_refused_\":",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "log show does not read a claim_refused row as a sentence"
   },
   {
     "name": "claim of one resource returns the list shape",

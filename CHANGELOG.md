@@ -12,6 +12,8 @@
 ### Changed
 
 - The hook note that another name holds a claim on a file now comes once per file per session, not on every edit of it.
+- A claim refusal now says who holds the file, why and since when, then both branches: "If you share a checkout with HOLDER, wait or ask" and "If you are on a separate branch, post what you are touching; the merge decides." It is the same wherever you run it and no longer says "Do not edit it yet" outright. `--json` errors (and each entry of `conflicts`) carry the holder's `claimed_at`.
+- Every refused claim writes a `claim_refused` row to the log, with JSON detail `{"conflicts": [{resource, held, holder, claimed_at}]}`, so refusals can be counted. A busy bus never turns the refusal into another error.
 - `--request-id` replays a write only for `post` and `join`, where the bus stores the token. On `leave`, `claim`, `release`, `ctx set` and `goal` it is accepted and ignored: the help, `schema`, the skill and the reference say what a repeat really does (`ctx set` and `goal` set the value again over a change made since), and an error after one of them saved is `retryable: false`.
 - Every open sets `PRAGMA synchronous=FULL`, so a write is synced before its command reports it, whatever default the SQLite build has.
 - The wait for a busy bus is timed on the monotonic clock; a wall-clock change no longer ends it early or stretches it.

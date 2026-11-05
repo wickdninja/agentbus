@@ -613,15 +613,16 @@ CONTRACT = {
     },
     "errors": {
         "claim_conflict": {"exit": 1, "retryable": False,
-                           "fields": ["resource", "holder", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"],
+                           "fields": ["resource", "holder", "claimed_at", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"],
                            "optional_fields": ["conflicts"],
-                           "meaning": "Another agent holds an overlapping claim. holder_last_seen is when the holder last ran a command (null when unknown) and "
+                           "meaning": "Another agent holds an overlapping claim. claimed_at is when the holder took it. holder_last_seen is when the holder last ran a command (null when unknown) and "
                                       "holder_idle_min the whole minutes since; takeover is the command that clears its claims, given only when it has not "
                                       "been seen for 30 minutes or more (the window join uses), else null. With several resources, nothing was claimed: "
                                       "resource and holder are the first blocked resource, and conflicts lists every blocked one as {resource, holder, held, "
-                                      "expires_at, purpose, holder_last_seen, holder_idle_min, takeover} (held is the claim in the way, the resource "
+                                      "claimed_at, expires_at, purpose, holder_last_seen, holder_idle_min, takeover} (held is the claim in the way, the resource "
                                       "itself or a folder above or inside it).",
-                           "action": "Ask the holder, or work elsewhere. If takeover is given and the holder does not answer, run it and claim again. "
+                           "action": "If you share a checkout with the holder, wait or ask. If you are on a separate branch, post what you are touching; the merge decides. "
+                                     "If takeover is given and the holder does not answer, run it and claim again. "
                                      "With several resources, leave the blocked ones out and claim the rest."},
         "not_held": {"exit": 1, "retryable": False, "fields": ["resource"], "optional_fields": ["resources"],
                      "meaning": "You do not hold that claim. With several resources, none was released, and resources lists every one you do not hold.",
@@ -1239,7 +1240,8 @@ def _test_fail(point):
     """Test hook: AGENTBUS_TEST_FAIL=<point> makes the command fail there, as a real fault would:
     parse (bad arguments), open (the bus cannot be opened), before-emit (a database error after the
     command ran, before any output), emit (stdout cannot be written), ack (inbox cannot mark messages
-    read), touch (the last-seen refresh fails), internal (a bug). tests/test_failure_phases.sh and test_exit_codes.sh use it."""
+    read), touch (the last-seen refresh fails), refusal-log and refusal-log-db (the claim_refused log write finds the bus busy, or fails), internal (a bug).
+    tests/test_failure_phases.sh, test_exit_codes.sh and test_claim_refusal.sh use it."""
     if os.environ.get("AGENTBUS_TEST_FAIL") != point:
         return
     if point == "parse":
@@ -1252,6 +1254,10 @@ def _test_fail(point):
         raise BrokenPipeError(errno.EPIPE, "injected")
     if point in ("ack", "touch"):
         raise sqlite3.OperationalError("injected " + point + " failure")
+    if point == "refusal-log":
+        die("injected busy", "busy")
+    if point == "refusal-log-db":
+        raise sqlite3.OperationalError("injected refusal-log failure")
     raise RuntimeError("injected internal failure")
 
 
@@ -3741,7 +3747,7 @@ def undecoded_overlaps(con, res, name, t):
         return []
     p = res[:res.index("\ufffd")]
     rows = con.execute(f"SELECT CAST(resource AS BLOB) AS _raw, resource, {cut('agent')} AS agent, "
-                       f"{cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
+                       f"{cut('claimed_at')} AS claimed_at, {cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
                        "WHERE resource >= ? AND resource < CAST(? AS TEXT) AND typeof(resource)='text' "
                        "AND agent<>? AND expires_at>? LIMIT ?",
                        (p, p.encode() + b"\xff\xff", name, t, UNDECODED_SCAN)).fetchall()
@@ -4623,10 +4629,10 @@ def holder_seen(con, holder):
 def claim_blocker(con, name, res, t):
     """(the live claim of another agent on the roster that overlaps res, or None; the overlapping claims
     held under bytes that are not UTF-8 and not by anyone on the roster, which the claim will release).
-    The blocker is {same, held, holder, expires_at, purpose, last_seen, idle_min}. Reads only."""
+    The blocker is {same, held, holder, claimed_at, expires_at, purpose, last_seen, idle_min}. Reads only."""
     for where, params in overlap_filters(res):
         r = con.execute(f"SELECT resource={_is_text('?')} AS same, {cut('resource')} AS held, {cut('agent')} AS holder, "
-                        f"{cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
+                        f"{cut('claimed_at')} AS claimed_at, {cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
                         f"WHERE ({where}) AND {_CLAIM_LIVE} AND {_CLAIM_ON_ROSTER} LIMIT 1", [res] + params + [name, t]).fetchone()
         if r:
             return {**dict(r), **dict(zip(("last_seen", "idle_min"), holder_seen(con, r["holder"])))}, []
@@ -4634,7 +4640,8 @@ def claim_blocker(con, name, res, t):
     for raw, r in odd:
         if con.execute("SELECT 1 FROM agents WHERE name=(SELECT agent FROM claims WHERE resource=CAST(? AS TEXT))",
                        (raw,)).fetchone():
-            return {"same": False, "held": r["resource"], "holder": r["agent"], "expires_at": r["expires_at"], "purpose": r["purpose"],
+            return {"same": False, "held": r["resource"], "holder": r["agent"], "claimed_at": r["claimed_at"],
+                    "expires_at": r["expires_at"], "purpose": r["purpose"],
                     **dict(zip(("last_seen", "idle_min"), holder_seen(con, r["agent"])))}, []
     return None, odd
 
@@ -4642,7 +4649,7 @@ def claim_blocker(con, name, res, t):
 def claim_phrase(res, b):
     why = f'purpose: "{b["purpose"]}"' if b["purpose"] else "no purpose given"
     held = f'{res} is claimed by' if b["same"] else f'{res} overlaps {b["held"]}, claimed by'
-    return f'{held} {b["holder"]} until {human_time(b["expires_at"])} ({why})'
+    return f'{held} {b["holder"]} since {human_time(b["claimed_at"])} until {human_time(b["expires_at"])} ({why})'
 
 
 def takeover_command(a, b):
@@ -4655,15 +4662,39 @@ def takeover_command(a, b):
 
 
 def conflict_fields(a, res, b):
-    return dict(resource=res, holder=b["holder"], expires_at=b["expires_at"], purpose=b["purpose"],
+    return dict(resource=res, holder=b["holder"], claimed_at=b["claimed_at"], expires_at=b["expires_at"], purpose=b["purpose"],
                 holder_last_seen=b["last_seen"], holder_idle_min=b["idle_min"], takeover=takeover_command(a, b))
+
+
+SEPARATE_BRANCH = "If you are on a separate branch, post what you are touching; the merge decides."
+
+
+def log_refusal(con, name, blocked):
+    """Log one claim_refused row for a refused claim: detail is JSON {"conflicts": [{resource, held, holder, claimed_at}]}
+    (the first CONFLICTS_SHOWN, and "more": how many were left out), so refusals can be counted and read by holder.
+    A separate short write after the refusal's transaction ended: the refusal changes nothing else. Best effort, like
+    touch: a busy or refused bus must not change the claim_conflict the caller is about to get."""
+    detail = {"conflicts": [{"resource": res, "held": b["held"], "holder": b["holder"], "claimed_at": b["claimed_at"]}
+                            for res, b in blocked[:CONFLICTS_SHOWN]]}
+    if len(blocked) > CONFLICTS_SHOWN:
+        detail["more"] = len(blocked) - CONFLICTS_SHOWN
+    try:
+        _test_fail("refusal-log")
+        _test_fail("refusal-log-db")
+        with immediate(con, record=False):  # not the command's change: the error still says committed false
+            # default=repr: a lane can store any type in a column (a blob claimed_at), and the refusal must still come out
+            log(con, name, "claim_refused", json.dumps(detail, default=repr))
+    except (SystemExit, sqlite3.Error):
+        pass
 
 
 def refuse_claim(a, name, blocked, total, many):
     """Exit claim_conflict. blocked: [(resource, blocker)] in the order asked; total: how many distinct resources were
     asked for; many: more than one was typed. One resource: the one-resource message and fields. Several: nothing was
-    claimed, and every blocked resource and its holder is named. A holder not seen for LIVE_WINDOW_MIN minutes or more
-    may be gone: the message then says what clears its claims, and the fields carry the command."""
+    claimed, and every blocked resource and its holder is named. The message says who holds it, why and since when, then
+    both branches, true wherever the caller runs (a shared checkout waits or asks; a separate branch posts what it
+    touches and the merge decides), never a guess from the working folder. A holder not seen for LIVE_WINDOW_MIN minutes
+    or more may be gone: the message then says what clears its claims, and the fields carry the command."""
     first_res, first = blocked[0]
     ask = next_command(a, "--as", name, "post", "QUESTION", "--to", first["holder"], "--kind", "question", as_=False)
     fields = conflict_fields(a, first_res, first)
@@ -4679,13 +4710,14 @@ def refuse_claim(a, name, blocked, total, many):
         seen += (f" {names} may be gone: ask first, and take over only if no answer comes, by clearing {'its claims' if len(gone) == 1 else 'their claims'} with: "
                  + "; ".join(c for _, c in gone[:CONFLICTS_SHOWN]))
     if not many:
-        die(claim_phrase(first_res, first) + f". Do not edit it yet. Ask {first['holder']}: {ask}, or choose another resource." + seen,
+        die(claim_phrase(first_res, first) + f". If you share a checkout with {first['holder']}, wait or ask: {ask}. {SEPARATE_BRANCH}" + seen,
             "claim_conflict", next=ask, **fields)
     shown = "; ".join(claim_phrase(res, b) for res, b in blocked[:CONFLICTS_SHOWN])
     if len(blocked) > CONFLICTS_SHOWN:
         shown += f"; and {len(blocked) - CONFLICTS_SHOWN} more (--json lists them all)"
-    die(f"nothing claimed: {len(blocked)} of {total} resources are held by other agents. {shown}. Do not edit them yet. "
-        f"Ask {first['holder']}: {ask}, and the other holders the same way, or leave these out and claim the rest." + seen,
+    die(f"nothing claimed: {len(blocked)} of {total} resources are held by other agents. {shown}. "
+        f"If you share a checkout with the holders, wait or ask {first['holder']}: {ask} (and the others the same way), "
+        f"or leave these out and claim the rest. {SEPARATE_BRANCH}" + seen,
         "claim_conflict", next=ask, **fields,
         conflicts=[{**conflict_fields(a, res, b), "held": b["held"]} for res, b in blocked])
 
@@ -4756,9 +4788,10 @@ def cmd_claim(con, a):
             if b:
                 blocked.append((res, b))
             plan.append((res, odd))
-        if blocked:
-            refuse_claim(a, name, blocked, len(wanted), len(a.resource) > 1)
-        done = [take_claim(con, a, name, res, t, exp, odd) for res, odd in plan]
+        done = [] if blocked else [take_claim(con, a, name, res, t, exp, odd) for res, odd in plan]
+    if blocked:  # nothing was changed; the log row is its own short write
+        log_refusal(con, name, blocked)
+        refuse_claim(a, name, blocked, len(wanted), len(a.resource) > 1)
     ttl = a.ttl_min * 60
     if len(a.resource) == 1:
         result = done[0]
@@ -4859,6 +4892,13 @@ def log_detail(action, detail):
     empty ones left out; a claim entry from before the purpose was optional ends in a bare ': '; `1 claims` reads `1 claim`.
     The stored text is unchanged."""
     text = "" if detail is None else str(detail)
+    if action == "claim_refused":
+        try:
+            fields = json.loads(text)
+            shown = [f"{c['resource']} held by {c['holder']}" for c in fields["conflicts"]]
+            return "; ".join(shown) + (f"; and {fields['more']} more" if fields.get("more") else "")
+        except (ValueError, KeyError, TypeError):
+            pass  # not a row this tool wrote: shown as stored
     if action == "join":
         try:
             fields = json.loads(text)
@@ -8545,7 +8585,7 @@ SKILL_TEXT = (
     '\n'
     'Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
     '\n'
-    "Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. The error gives the holder's last-seen: minutes ago is busy; 30 or more may be gone: ask first, take over only if no answer, with the command it gives. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.\n"
+    "If refused, wait or ask first; on a separate branch, post what you're touching. The error also gives the holder's last-seen: minutes ago is busy; 30 or more may be gone: ask first, take over only if no answer, with the command it gives. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.\n"
     '\n'
     '## Communicate\n'
     '\n'
