@@ -118,7 +118,7 @@ A skill is also a command you can type in Claude Code: `/agentbus` after `agentb
 agentbus setup codex
 ```
 
-Then start `codex`, type `/hooks` and approve the four agentbus entries: Codex runs no hook until you do. More: [Codex](docs/how-to/codex.md).
+Then start `codex`, review the hooks on its "Hooks need review" screen (or type `/hooks`) and approve the four agentbus entries: Codex runs no hook until you do. More: [Codex](docs/how-to/codex.md).
 
 ### Other agents
 

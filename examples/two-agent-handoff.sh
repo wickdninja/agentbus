@@ -25,6 +25,8 @@ run() { printf '+ '; printf '%q ' "$@"; printf '\n'; "$@"; }
 printf 'Demo directory: %s\n' "$demo_dir"
 run mkdir "$demo_dir/home"
 export HOME="$demo_dir/home"
+# On Linux the list of known buses and the update cache follow XDG_STATE_HOME / XDG_CACHE_HOME, not HOME.
+unset XDG_STATE_HOME XDG_CACHE_HOME
 run git init -q "$demo_dir/repo"
 run cd "$demo_dir/repo"
 run "${installed_bus[@]}" init .

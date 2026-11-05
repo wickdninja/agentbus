@@ -204,7 +204,7 @@
     "replace": "    if not 0 <= a.timeout <= WAIT_MAX_S:",
     "count": 1,
     "run": "tests/test_wait.sh",
-    "expect": "stderr lacks '--timeout must be at least"
+    "expect": "expected failure but succeeded: agentbus --as w wait --timeout 0"
   },
   {
     "name": "claim ignores claims held inside the folder",
@@ -1550,7 +1550,7 @@
   {
     "name": "setup --refresh fails on a file agentbus did not write",
     "file": "bin/agentbus",
-    "find": "        elif c\\.action == \"refused\":\n            out\\.append\\(Change\\(c\\.path, \"skipped\"",
+    "find": "        elif c\\.action == \"refused\":\\n(?:            #[^\\n]*\\n)?            out\\.append\\(Change\\(c\\.path, \"skipped\"",
     "replace": "        elif False:\n            out.append(Change(c.path, \"skipped\"",
     "count": 1,
     "run": "tests/test_setup_refresh.sh",
@@ -2367,6 +2367,105 @@
     "expect": "busy wait on a jumping wall clock"
   },
   {
+    "name": "init on the home folder prints the cd and join hint that fails",
+    "file": "bin/agentbus",
+    "find": "if\\ root\\ ==\\ os\\.path\\.realpath\\(os\\.path\\.expanduser\\(\"\\~\"\\)\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "init on the home folder"
+  },
+  {
+    "name": "doctor two-buses ignores relative worktree records",
+    "file": "bin/agentbus",
+    "find": "line\\ =\\ os\\.path\\.normpath\\(os\\.path\\.join\\(base,\\ name,\\ line\\)\\)\\ if\\ line\\ else\\ line",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "row two-buses: status warn"
+  },
+  {
+    "name": "doctor hints keep ~ inside quotes",
+    "file": "bin/agentbus",
+    "find": "\\(f\"\\.\\ \\{doctor_fix_text\\(r\\['hint'\\]\\)\\}\"\\ if\\ r\\[\"hint\"\\]\\ else\\ \"\"\\)",
+    "replace": "(f\". {doctor_text(r['hint'])}\" if r[\"hint\"] else \"\")",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "a doctor hint has ~ inside quotes"
+  },
+  {
+    "name": "setup --refresh names a command that refuses for a foreign skill",
+    "file": "bin/agentbus",
+    "find": "kept\\ \\(not\\ written\\ by\\ agentbus,\\ or\\ unreadable\\)\\.\\ To\\ replace\\ it,\\ move\\ it\\ aside,\\ then\\ run:\\ ",
+    "replace": "kept (not written by agentbus, or unreadable). To replace it: ",
+    "count": 1,
+    "run": "tests/test_setup_refresh.sh",
+    "expect": "refresh named a command that refuses"
+  },
+  {
+    "name": "release hint drops --up",
+    "file": "bin/agentbus",
+    "find": "\\(f\"\\ \\-\\-up\\ \\{a\\.up\\}\"\\ if\\ a\\.up\\ else\\ \"\"\\)",
+    "replace": "\"\"",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "stderr lacks 'See: agentbus --as NAME --up 1 claims'"
+  },
+  {
+    "name": "the example keeps the caller's XDG folders",
+    "file": "examples/two-agent-handoff.sh",
+    "find": "unset\\ XDG_STATE_HOME\\ XDG_CACHE_HOME",
+    "replace": "true",
+    "count": 1,
+    "run": "tests/test_example.sh",
+    "expect": "the example wrote to the user's XDG state or cache"
+  },
+  {
+    "name": "SessionStart text is dropped whole at a long path",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ head\\ \\+\\ read\\ \\+\\ tail\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ len\\(text\\)\\ <=\\ HOOK_CONTEXT_MAX:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ return\\ text,\\ notice",
+    "replace": "        text = head + read + tail\n        return (text, notice) if len(text) <= HOOK_CONTEXT_MAX else (None, notice)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the SessionStart text was dropped whole"
+  },
+  {
+    "name": "watch ctx history hint leaves the fact key unquoted",
+    "file": "bin/agentbus",
+    "find": "\\(shlex\\.quote\\(x\\['key'\\]\\)\\ if\\ x\\['key'\\]\\.isprintable\\(\\)\\ else\\ 'KEY'\\)",
+    "replace": "x['key']",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "a watch hint puts a fact key or an agent name into a command unquoted"
+  },
+  {
+    "name": "watch unread hint puts the agent name in unchecked",
+    "file": "bin/agentbus",
+    "find": "plain_word\\(a\\['name'\\],\\ 'NAME'\\)\\ \\+\\ '\\ inbox\\ \\-\\-peek'",
+    "replace": "a['name'] + ' inbox --peek'",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "a watch hint puts a fact key or an agent name into a command unquoted"
+  },
+  {
+    "name": "join refuses the session that owns a hook-joined name",
+    "file": "bin/agentbus",
+    "find": "own\\ =\\ os\\.environ\\.get\\(\"AGENTBUS_AGENT\"\\)\\ ==\\ name",
+    "replace": "own = False",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "join by the session that owns the hook-joined name failed"
+  },
+  {
+    "name": "join under a hook-joined name does not say to skip join",
+    "file": "bin/agentbus",
+    "find": "If\\ a\\ hook\\ gave\\ you\\ \\{name\\},\\ you\\ are\\ already\\ joined:\\ skip\\ join\\ and\\ keep\\ using\\ \\-\\-as\\ \\{name\\}\\.\\ ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "did not name the real next step"
+  },
+  {
     "name": "brief lists my own facts as changed",
     "file": "bin/agentbus",
     "find": "where \\+= \" AND updated_by<>\\?\"",
@@ -2549,7 +2648,7 @@
   {
     "name": "release without a resource does not point at claims",
     "file": "bin/agentbus",
-    "find": "see=\"agentbus\\ \\-\\-as\\ NAME\\ claims\"\\)",
+    "find": "see=\"agentbus --as NAME\" \\+ \\(f\" --up \\{a\\.up\\}\" if a\\.up else \"\"\\) \\+ \" claims\"\\)",
     "replace": "see=None)",
     "count": 1,
     "run": "tests/test_help.sh",
@@ -2918,7 +3017,7 @@
   {
     "name": "setup codex does not say how to trust the hooks",
     "file": "bin/agentbus",
-    "find": "\"Codex ignores hooks until you trust them: start codex, type /hooks, and approve the \"",
+    "find": "\"Codex ignores hooks until you trust them: start codex, open its Hooks need review screen \\(or type /hooks\\), and approve the \"",
     "replace": "\"Start a new Codex session and approve the \"",
     "count": 1,
     "run": "tests/test_setup.sh",
@@ -3314,11 +3413,11 @@
   {
     "name": "setup does not look at the folder chain again before writing",
     "file": "bin/agentbus",
-    "find": "    linked = setup_linked_dir\\(_SETUP_SCOPE, os\\.path\\.dirname\\(path\\)\\)\\n",
-    "replace": "    linked = None\n",
+    "find": "    _test_pause\\(point\\)\\n    setup_check_chain\\(path\\)\\n",
+    "replace": "    _test_pause(point)\n",
     "count": 1,
     "run": "tests/test_setup.sh",
-    "expect": "a folder swapped for a link during setup"
+    "expect": "a swap to a link holding other files was not named a link"
   },
   {
     "name": "the skill piece guards only the config folder, not the folders below it",
@@ -3746,8 +3845,8 @@
   {
     "name": "uninstall removes ~/.codex",
     "file": "bin/agentbus",
-    "find": "                if _SETUP_SCOPE == \"project\" and os\\.path\\.basename",
-    "replace": "                if os.path.basename",
+    "find": "                if _SETUP_SCOPE == \"project\" and os\\.path\\.basename\\(os\\.path\\.dirname\\(path\\)\\) == \"\\.codex\":",
+    "replace": "                if os.path.basename(os.path.dirname(path)) == \".codex\" and setup_pin(os.path.dirname(os.path.dirname(path))) is None:",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "uninstall removed ~/.codex"

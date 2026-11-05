@@ -1,6 +1,6 @@
 ---
 name: agentbus
-description: "Coordinate shared workspace work through agentbus: join at session start, read the inbox between steps, claim before editing, post questions and handoffs, and leave when finished."
+description: "Coordinate agents sharing a workspace through agentbus: join, read inbox, claim before editing, hand off, leave. Use when agents share work."
 ---
 
 # agentbus protocol
@@ -15,15 +15,15 @@ One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` a
 
 ## Start
 
-Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name. `ctx get` reads facts, `ctx history KEY` earlier values.
+Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name. `ctx history KEY` shows earlier values.
 
-Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as. Hooks never claim or replace reading inbox.
+Hooks: with the agentbus plugin or setup, a hook message gives your exact name (already joined); use it with --as and skip `join`. Hooks never claim or replace reading inbox.
 
 ## Before shared work
 
 Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
 
-Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. The error gives the holder's last-seen: minutes ago is busy; 30 or more is probably gone, so ask once, then run the clear command it gives. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.
+Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. The error gives the holder's last-seen: minutes ago is busy; 30 or more may be gone: ask first, take over only if no answer, with the command it gives. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.
 
 ## Communicate
 

@@ -522,4 +522,9 @@ agentbus --as dg leave >/dev/null
 agentbus --as dh claim d/gone.py >/dev/null || fail "the file was still held after the holder was cleared"
 rm -f "$err"
 ok "the holder's age is in every conflict; a leave is named only past the live window, and it frees the file"
+echo
+echo "release with no resource and --up names the claims command for that same bus (the hint carries --up)"
+expect_fail "See: agentbus --as NAME --up 1 claims" agentbus --as me --up 1 release
+expect_fail "See: agentbus --as NAME claims" agentbus --as me release
+ok "the release hint carries --up when it was given"
 echo "All tests passed!"

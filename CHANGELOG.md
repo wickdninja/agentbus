@@ -18,6 +18,15 @@
 ### Fixed
 
 - `setup` can no longer be redirected by a folder swapped for a link while it runs: every write, backup and removal goes through a folder held open with `O_NOFOLLOW`, and a link that appears in the way is refused by name.
+- `agentbus init` on the home folder no longer prints a `cd` and `join` step that fails: discovery never looks in the home folder, so it says to pick a project folder instead.
+- `doctor` finds a second bus above worktrees made with `worktree.useRelativePaths`, and prints a path in its hints as `~/'my dir'`, never `'~/my dir'`.
+- `setup --refresh` names the real step for a skill agentbus did not write: move it aside, then run setup.
+- The hint after `release` with no resource carries `--up N` when you gave it.
+- `examples/two-agent-handoff.sh` leaves `XDG_STATE_HOME` and `XDG_CACHE_HOME` alone, so on Linux the demo bus stays out of your bus list.
+- The SessionStart text is shortened, not dropped, when the bus copy sits at a long path.
+- The `watch` hints quote a fact key and show `NAME` for an agent name that is not a plain word.
+- `join` by the session that already holds a hook-given name (it carries `AGENTBUS_AGENT`) succeeds; for any other caller the error says to skip `join` if a hook named you. The skill says to skip `join` when a hook gave you a name, and has a "Use when" line.
+- The Codex steps say Codex shows a "Hooks need review" screen (or type `/hooks`).
 
 ## 0.2.0 - 2026-11-04
 
