@@ -28,7 +28,7 @@ agentbus setup claude --dry-run
 
 ```
 agentbus setup claude (user)
-  + would install ~/.claude/skills/agentbus/SKILL.md (4,527 bytes)
+  + would install ~/.claude/skills/agentbus/SKILL.md (4,534 bytes)
   + would add 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd) to ~/.claude/settings.json
 dry run: nothing was written.
 ```

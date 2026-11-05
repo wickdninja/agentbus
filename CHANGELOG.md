@@ -8,6 +8,13 @@
 - A claim conflict says when the holder was last seen. Once the holder has been silent for 30 minutes it also gives the command that clears its claims (`agentbus --as HOLDER leave`; `takeover` in `--json`), so a dead session no longer holds a file for up to two hours with no way out.
 - `agentbus --as NAME wait [--timeout SECONDS]` blocks until you have an unread message, then prints how many and the command that reads them. It marks nothing read and does not hold the bus while it waits. Exit 0 on messages, 124 (`wait_timeout`) when the timeout (600 s by default, at most 1800) ends first. Run it as a background command to be told when work arrives; it does not wake an idle session.
 
+### Changed
+
+- `--request-id` replays a write only for `post` and `join`, where the bus stores the token. On `leave`, `claim`, `release`, `ctx set` and `goal` it is accepted and ignored: the help, `schema`, the skill and the reference say what a repeat really does (`ctx set` and `goal` set the value again over a change made since), and an error after one of them saved is `retryable: false`.
+- Every open sets `PRAGMA synchronous=FULL`, so a write is synced before its command reports it, whatever default the SQLite build has.
+- The wait for a busy bus is timed on the monotonic clock; a wall-clock change no longer ends it early or stretches it.
+- The reference says what a second SQLite connection to the bus does to agentbus commands, and the skill says where a batch cut by `inbox | head` can be read again (`read --since ID`).
+
 ### Fixed
 
 - `setup` can no longer be redirected by a folder swapped for a link while it runs: every write, backup and removal goes through a folder held open with `O_NOFOLLOW`, and a link that appears in the way is refused by name.

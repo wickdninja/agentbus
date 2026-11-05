@@ -15,7 +15,7 @@ One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` a
 
 ## Start
 
-Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name (join suggests a free one). `ctx get` reads facts, `ctx history KEY` earlier values.
+Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name. `ctx get` reads facts, `ctx history KEY` earlier values.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as. Hooks never claim or replace reading inbox.
 
@@ -35,13 +35,13 @@ Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewh
 
 Kinds: note, question, answer, handoff, decision, alert, done. Assign work with handoff. Decisions, if used: `read --topic decision`.
 
-Messages to absent names queue (post warns; `who` lists names). Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.
+Messages to absent names queue (post warns; `who` lists names). Without `--to`, a message is broadcast.
 
 ## Read correctly
 
-Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.
+Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or inspect with `inbox --peek`. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.
 
-A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.
+A nonzero exit does not imply rollback. A write may commit before output fails. When a `post` or `join` might be retried, add `--request-id` with a token; a repeat returns the original. Other writes ignore it.
 
 ## Finish the session
 
