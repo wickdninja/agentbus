@@ -1,6 +1,6 @@
 ---
 name: agentbus
-description: "Coordinate shared workspace work through agentbus: join at session start, read the inbox between steps, claim before editing, post questions and handoffs, and leave when finished."
+description: "Coordinate agents sharing a workspace through agentbus: join, read inbox, claim before editing, hand off, leave. Use when agents share work."
 ---
 
 # agentbus protocol
@@ -19,7 +19,7 @@ Discovery finds the nearest ancestor bus. One repo, one bus. Use the one discove
 
 Start with `join`, then `brief` (goal, holders, questions, handoffs, facts, next command), then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name (join suggests a free one). `ctx get` reads facts, `ctx history KEY` earlier values.
 
-Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as. Hooks never claim and never replace reading inbox.
+Hooks: with the agentbus plugin or setup, a hook message gives your exact name (already joined); use it with --as and skip `join`. Hooks never claim and never replace reading inbox.
 
 ## Before shared work
 

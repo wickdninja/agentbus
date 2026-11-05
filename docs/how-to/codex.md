@@ -11,7 +11,7 @@ agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
   + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
   = /bin/zsh   prints nothing at startup (started once as $SHELL -lc)
-done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts '/usr/bin/python3' '/path/to/agentbus' hook codex and ends # agentbus:managed.
+done. Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 4 entries whose command starts '/usr/bin/python3' '/path/to/agentbus' hook codex and ends # agentbus:managed.
 next: cd your-repo && agentbus init .
 ```
 
@@ -19,7 +19,7 @@ Two steps are yours: run `agentbus init .` in each repo, and approve the hooks i
 
 ## Trust the hooks
 
-Codex runs no hook until you approve it. Start `codex`, type `/hooks`, and approve the four entries agentbus added. Installing never trusts them for you.
+Codex runs no hook until you approve it. Start `codex`, review the hooks on its "Hooks need review" screen (or type `/hooks`), and approve the four entries agentbus added. Installing never trusts them for you.
 
 To recognise them: the command starts with the installed `agentbus` (the exact words setup printed) followed by `hook codex EVENT`, and ends with `# agentbus:managed`. Approve only those; an entry that runs something else is not ours. Running `agentbus setup codex` again changes nothing and prints the same reminder while the hooks are in place.
 

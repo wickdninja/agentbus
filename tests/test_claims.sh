@@ -356,4 +356,8 @@ PY
   agentbus --json claims | "$PY" -c 'import json,sys; r=next(r for r in json.load(sys.stdin)["items"] if r["resource"]=="renew"); assert r["purpose"]==sys.argv[1] and r["claimed_at"]=="2001-02-03T04:05:06Z"' "$want"
 done
 ok "renewal retains purpose and claimed_at; an explicit purpose replaces it in storage, JSON and conflicts"
+echo "release with no resource and --up names the claims command for that same bus (the hint carries --up)"
+expect_fail "See: agentbus --as NAME --up 1 claims" agentbus --as me --up 1 release
+expect_fail "See: agentbus --as NAME claims" agentbus --as me release
+ok "the release hint carries --up when it was given"
 echo "All tests passed!"

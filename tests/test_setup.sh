@@ -1040,7 +1040,7 @@ trust_line() {
 import json, sys
 doc = json.load(open(sys.argv[1]))
 cmd = next(h["command"] for g in doc["hooks"]["Stop"] for h in g["hooks"] if h["command"].endswith("# agentbus:managed"))
-line = "Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts " + cmd[:cmd.index(" hook codex")] + " hook codex and ends # agentbus:managed."
+line = "Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 4 entries whose command starts " + cmd[:cmd.index(" hook codex")] + " hook codex and ends # agentbus:managed."
 print(line + (" Codex loads project hooks only for a project you have trusted." if sys.argv[2] == "project" else ""))
 PY
 }
