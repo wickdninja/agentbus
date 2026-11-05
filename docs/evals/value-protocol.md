@@ -177,3 +177,10 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 
 **2026-11-05, after pilot pass 4.** `changed` failed in every condition. In the ledger runs bob read alice's note and still followed `docs/PORTING.md`, because a peer's note is not authority: a sensible call that made the feature impossible. Bob's ticket now says the owner's notes outrank that doc, in every condition. This one is a wording fix only. Bob stopping at a dead agent's claim on the bus was left as it is, since that is the behaviour the eval is there to measure. A way out exists (`--as alice join --takeover`, then `release`), but neither the claim error, the help text nor the skill mentions it. Pass 4 counts only for cost. A last `recovery` pass runs on seeds 9009 and 9010.
 
+**2026-11-05, end of the pilot.** Stopped here, with no full matrix started and no effect read from any of it. 64 runs across five design versions, Claude plus Claude only. Both piloted tasks now vary, and every channel run used its channel. Still open, for a decision before any full run:
+
+- **Possible tilt towards the ledger.** The ledger and peer-message texts say "Write what the reader needs to act without asking you: exact names, values and files." The shipped agentbus skill has no such line. Either it comes out for parity, or it stays as what a careful ledger author would write and the gap counts against the skill. In `recovery`, what alice chose to write down is the whole task, so this choice can move the result.
+- **`recovery` carries more of the tool's specifics than planned.** A dead session's claim stalls a bus agent, with no route surfaced. That is real behaviour, and a reader should know the task exercises it.
+- **Three tasks are not piloted:** `interface`, `facts` and `control`. They may hold flaws like the ones the pilot found in the other two.
+- **`cx` has never run.** See Open items.
+
