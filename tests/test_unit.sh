@@ -5,4 +5,4 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 "$PY" -m unittest discover -s "$TESTS_DIR/unit" -p "${1:-test_*}.py" -t "$TESTS_DIR/unit" -b
-all_passed "ALL UNIT TESTS PASSED"
+all_passed "All unit tests passed"

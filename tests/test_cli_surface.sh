@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The CLI's discoverable surface, pinned byte for byte: `--help`, every `<cmd> --help` (hidden commands and
-# subcommands too), `schema --json` and the bash, zsh and fish completion scripts, plus the command list in the
-# order the parser registers it. The goldens are tests/golden/cli/; any byte change fails with a diff.
+# subcommands too), `schema --json`, the bash, zsh and fish completion scripts, the command list in the order the
+# parser registers it, and the final CONTRACT table. The goldens are tests/golden/cli/; any byte change fails with a diff.
 # A deliberate change: `bash tests/test_cli_surface.sh --update` rewrites the goldens (under Python 3.9 to 3.11, then
 # again under 3.12 or later, see below), then review `git diff`.
 # The version is written as @VERSION@, so a release bump changes no golden.
@@ -45,6 +45,11 @@ def walk(parser, path):
 walk(m["build_parser"](), [])
 PY
 [ -s "$T/out/commands.txt" ] || fail "the parser walk found no commands"
+# The final CONTRACT after every import-time addition, key order kept: a registration moved earlier changes it.
+"$PY" - "$MOD" >"$T/out/contract.json" <<'PY' || fail "could not dump CONTRACT from $MOD"
+import json, runpy, sys
+print(json.dumps(runpy.run_path(sys.argv[1], run_name="agentbus_cli_surface")["CONTRACT"], indent=1, ensure_ascii=False))
+PY
 cli --help >"$T/out/help.txt"
 while IFS= read -r words; do
   read -r -a w <<<"$words"
@@ -107,4 +112,4 @@ rm "$T/bad/schema.json"
 if diff -rq "$T/want" "$T/bad" >/dev/null 2>&1; then fail "a missing golden went unnoticed"; fi
 ok "a changed byte and a missing file both fail"
 
-all_passed "ALL CLI SURFACE TESTS PASSED"
+all_passed "All CLI surface tests passed"

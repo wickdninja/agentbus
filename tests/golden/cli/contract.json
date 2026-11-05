@@ -1,0 +1,3497 @@
+{
+ "contract": 1,
+ "objects": {
+  "Agent": {
+   "type": "object",
+   "required": [
+    "name",
+    "tool",
+    "model",
+    "cwd",
+    "branch",
+    "role",
+    "joined_at",
+    "last_seen"
+   ],
+   "properties": {
+    "name": {
+     "type": "string"
+    },
+    "tool": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "model": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "cwd": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "branch": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "role": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "joined_at": {
+     "type": "string"
+    },
+    "last_seen": {
+     "type": "string"
+    }
+   }
+  },
+  "Message": {
+   "type": "object",
+   "required": [
+    "id",
+    "ts",
+    "sender",
+    "recipient",
+    "kind",
+    "topic",
+    "body",
+    "reply_to"
+   ],
+   "properties": {
+    "id": {
+     "type": "integer"
+    },
+    "ts": {
+     "type": "string"
+    },
+    "sender": {
+     "type": "string"
+    },
+    "recipient": {
+     "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "topic": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "body": {
+     "type": "string"
+    },
+    "reply_to": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "body_truncated": {
+     "type": "boolean"
+    }
+   }
+  },
+  "Claim": {
+   "type": "object",
+   "required": [
+    "resource",
+    "agent",
+    "purpose",
+    "claimed_at",
+    "expires_at",
+    "state"
+   ],
+   "properties": {
+    "resource": {
+     "type": "string"
+    },
+    "agent": {
+     "type": "string"
+    },
+    "purpose": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "claimed_at": {
+     "type": "string"
+    },
+    "expires_at": {
+     "type": "string"
+    },
+    "state": {
+     "type": "string",
+     "enum": [
+      "held",
+      "expired"
+     ]
+    }
+   }
+  },
+  "Fact": {
+   "type": "object",
+   "required": [
+    "key",
+    "value",
+    "updated_by",
+    "updated_at"
+   ],
+   "properties": {
+    "key": {
+     "type": "string"
+    },
+    "value": {
+     "type": "string"
+    },
+    "updated_by": {
+     "type": "string"
+    },
+    "updated_at": {
+     "type": "string"
+    },
+    "unchanged": {
+     "type": "boolean"
+    }
+   }
+  },
+  "FactVersion": {
+   "type": "object",
+   "required": [
+    "id",
+    "key",
+    "value",
+    "updated_by",
+    "updated_at"
+   ],
+   "properties": {
+    "id": {
+     "type": "integer"
+    },
+    "key": {
+     "type": "string"
+    },
+    "value": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "updated_by": {
+     "type": "string"
+    },
+    "updated_at": {
+     "type": "string"
+    }
+   }
+  },
+  "LogEntry": {
+   "type": "object",
+   "required": [
+    "id",
+    "ts",
+    "agent",
+    "action",
+    "detail"
+   ],
+   "properties": {
+    "id": {
+     "type": "integer"
+    },
+    "ts": {
+     "type": "string"
+    },
+    "agent": {
+     "type": "string"
+    },
+    "action": {
+     "type": "string"
+    },
+    "detail": {
+     "type": [
+      "string",
+      "null"
+     ]
+    }
+   }
+  },
+  "Goal": {
+   "type": "object",
+   "required": [
+    "goal",
+    "set_by",
+    "set_at"
+   ],
+   "properties": {
+    "goal": {
+     "type": "string"
+    },
+    "set_by": {
+     "type": "string"
+    },
+    "set_at": {
+     "type": "string"
+    },
+    "unchanged": {
+     "type": "boolean"
+    }
+   }
+  },
+  "BusLevel": {
+   "type": "object",
+   "required": [
+    "level",
+    "directory",
+    "exists",
+    "copy_version",
+    "stale"
+   ],
+   "properties": {
+    "level": {
+     "type": "integer"
+    },
+    "directory": {
+     "type": "string"
+    },
+    "exists": {
+     "type": "boolean"
+    },
+    "copy_version": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "stale": {
+     "type": "boolean"
+    }
+   }
+  },
+  "UpgradeRow": {
+   "type": "object",
+   "required": [
+    "directory",
+    "status",
+    "old",
+    "new",
+    "schema_old",
+    "schema_new",
+    "backup",
+    "error"
+   ],
+   "properties": {
+    "directory": {
+     "type": "string"
+    },
+    "status": {
+     "type": "string",
+     "enum": [
+      "upgraded",
+      "current",
+      "skipped",
+      "failed",
+      "would_upgrade"
+     ]
+    },
+    "old": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "new": {
+     "type": "string"
+    },
+    "schema_old": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "schema_new": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "backup": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "error": {
+     "anyOf": [
+      {
+       "type": "null"
+      },
+      {
+       "type": "object",
+       "required": [
+        "code",
+        "message"
+       ],
+       "properties": {
+        "code": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        },
+        "file": {
+         "type": "string"
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  "SetupResult": {
+   "type": "object",
+   "required": [
+    "target",
+    "scope",
+    "directory",
+    "changes",
+    "error"
+   ],
+   "properties": {
+    "target": {
+     "type": "string"
+    },
+    "scope": {
+     "type": "string"
+    },
+    "directory": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "changes": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": [
+       "path",
+       "detail",
+       "action"
+      ],
+      "properties": {
+       "path": {
+        "type": "string"
+       },
+       "detail": {
+        "type": "string"
+       },
+       "action": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "error": {
+     "anyOf": [
+      {
+       "type": "null"
+      },
+      {
+       "type": "object",
+       "required": [
+        "code",
+        "message"
+       ],
+       "properties": {
+        "code": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        }
+       }
+      }
+     ]
+    }
+   }
+  },
+  "DoctorCheck": {
+   "type": "object",
+   "required": [
+    "id",
+    "status",
+    "detail",
+    "fix",
+    "hint"
+   ],
+   "properties": {
+    "id": {
+     "type": "string"
+    },
+    "status": {
+     "type": "string",
+     "enum": [
+      "ok",
+      "warn",
+      "fail",
+      "n/a"
+     ]
+    },
+    "detail": {
+     "type": "string"
+    },
+    "fix": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "hint": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "scope": {
+     "type": "string",
+     "enum": [
+      "user",
+      "project"
+     ]
+    }
+   }
+  },
+  "Warning": {
+   "type": "object",
+   "required": [
+    "code"
+   ],
+   "properties": {
+    "code": {
+     "type": "string"
+    },
+    "name": {
+     "type": "string"
+    },
+    "did_you_mean": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "roster": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "roster_total": {
+     "type": "integer"
+    },
+    "agentbus_db": {
+     "type": "string"
+    },
+    "discovered": {
+     "type": "string"
+    }
+   }
+  },
+  "Envelope": {
+   "type": "object",
+   "required": [
+    "items",
+    "has_more",
+    "next"
+   ],
+   "properties": {
+    "items": {
+     "type": "array",
+     "items": {}
+    },
+    "has_more": {
+     "type": "boolean"
+    },
+    "next": {
+     "type": [
+      "string",
+      "null"
+     ]
+    }
+   }
+  },
+  "BriefGoal": {
+   "type": "object",
+   "required": [
+    "goal",
+    "set_by",
+    "set_at",
+    "truncated"
+   ],
+   "properties": {
+    "goal": {
+     "type": "string"
+    },
+    "set_by": {
+     "type": "string"
+    },
+    "set_at": {
+     "type": "string"
+    },
+    "truncated": {
+     "type": "boolean"
+    }
+   }
+  },
+  "BriefMessage": {
+   "type": "object",
+   "required": [
+    "id",
+    "ts",
+    "sender",
+    "recipient",
+    "kind",
+    "topic",
+    "body",
+    "reply_to",
+    "body_truncated"
+   ],
+   "properties": {
+    "id": {
+     "type": "integer"
+    },
+    "ts": {
+     "type": "string"
+    },
+    "sender": {
+     "type": "string"
+    },
+    "recipient": {
+     "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "topic": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "body": {
+     "type": "string"
+    },
+    "reply_to": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "body_truncated": {
+     "type": "boolean"
+    }
+   }
+  },
+  "BriefClaim": {
+   "type": "object",
+   "required": [
+    "resource",
+    "purpose",
+    "expires_at"
+   ],
+   "properties": {
+    "resource": {
+     "type": "string"
+    },
+    "purpose": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "expires_at": {
+     "type": "string"
+    }
+   }
+  },
+  "BriefAgent": {
+   "type": "object",
+   "required": [
+    "name",
+    "role",
+    "tool",
+    "last_seen",
+    "claims",
+    "claims_omitted"
+   ],
+   "properties": {
+    "name": {
+     "type": "string"
+    },
+    "role": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "tool": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "last_seen": {
+     "type": "string"
+    },
+    "claims": {
+     "type": "array",
+     "items": {
+      "$ref": "#/objects/BriefClaim"
+     }
+    },
+    "claims_omitted": {
+     "type": "integer"
+    }
+   }
+  },
+  "BriefFact": {
+   "type": "object",
+   "required": [
+    "key",
+    "value",
+    "updated_by",
+    "updated_at",
+    "value_truncated"
+   ],
+   "properties": {
+    "key": {
+     "type": "string"
+    },
+    "value": {
+     "type": "string"
+    },
+    "updated_by": {
+     "type": "string"
+    },
+    "updated_at": {
+     "type": "string"
+    },
+    "value_truncated": {
+     "type": "boolean"
+    }
+   }
+  }
+ },
+ "warnings": {
+  "recipient_not_on_roster": {
+   "fields": [
+    "name",
+    "did_you_mean",
+    "roster",
+    "roster_total"
+   ],
+   "commands": [
+    "post"
+   ],
+   "meaning": "The message was delivered to --to NAME, but no agent with that name has joined. did_you_mean lists the closest roster names (at most 3, possibly none). roster lists the agents that have joined, by name (the 10 most recently seen at most); roster_total is how many there are.",
+   "action": "If the name is a typo, post again to a name in did_you_mean or roster. The first message waits for the typo."
+  },
+  "bus_env_mismatch": {
+   "fields": [
+    "agentbus_db",
+    "discovered"
+   ],
+   "commands": [
+    "join",
+    "brief"
+   ],
+   "meaning": "AGENTBUS_DB names a bus other than the one this folder finds (the nearest .agentbus above it, or the main checkout's for a linked worktree). The command used AGENTBUS_DB. Given only when discovery finds a bus and the two differ; a worker outside any checkout is never warned.",
+   "action": "One repo, one bus: unset AGENTBUS_DB to use the one discovery finds, or keep it only when the worker cannot discover the bus (a sandbox, or a folder outside the checkout). Run buses to see the chain."
+  }
+ },
+ "errors": {
+  "claim_conflict": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "resource",
+    "holder",
+    "expires_at",
+    "purpose"
+   ],
+   "meaning": "Another agent holds an overlapping claim.",
+   "action": "Ask the holder, or work elsewhere.",
+   "optional_fields": []
+  },
+  "not_held": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "resource"
+   ],
+   "meaning": "You do not hold that claim.",
+   "action": "Nothing to release; use release --if-held for cleanup.",
+   "optional_fields": []
+  },
+  "no_message": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "id"
+   ],
+   "meaning": "There is no message with that id.",
+   "action": "Check the id with read.",
+   "optional_fields": []
+  },
+  "no_context_key": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "key"
+   ],
+   "meaning": "There is no fact with that key.",
+   "action": "List facts with ctx get.",
+   "optional_fields": []
+  },
+  "not_on_roster": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "agent",
+    "did_you_mean",
+    "roster"
+   ],
+   "meaning": "That name has not joined. did_you_mean lists the roster names closest to it (at most 3, possibly none); roster lists the agents that have joined, by name (the 10 most recently seen at most).",
+   "action": "If the name is a typo, repeat the command with a name in did_you_mean. Otherwise join first.",
+   "optional_fields": []
+  },
+  "name_active": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "agent",
+    "last_seen_min",
+    "suggested_name"
+   ],
+   "meaning": "The name was active recently and may be another live session. suggested_name is a free name, or null.",
+   "action": "Join under suggested_name, or join --takeover if it is you. To retry your own join, pass the same --request-id.",
+   "optional_fields": []
+  },
+  "request_id_reused": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "request_id",
+    "agent",
+    "original_id"
+   ],
+   "meaning": "That request id was used with a different message or join. original_id is the message id, or the log id of the join, that first used it.",
+   "action": "Repeat the original request exactly, or use a new token for a different one.",
+   "optional_fields": []
+  },
+  "bad_input": {
+   "exit": 2,
+   "retryable": false,
+   "fields": [],
+   "optional_fields": [
+    "field"
+   ],
+   "meaning": "The arguments are not valid (a usage error). field names the argument when a value is refused: a body, value, detail or text over 64 KB (field body for post).",
+   "action": "Fix the arguments."
+  },
+  "no_bus": {
+   "exit": 3,
+   "retryable": false,
+   "fields": [],
+   "meaning": "There is no bus here or above.",
+   "action": "Run agentbus init DIR, or set AGENTBUS_DB.",
+   "optional_fields": []
+  },
+  "busy": {
+   "exit": 3,
+   "retryable": true,
+   "fields": [
+    "bus"
+   ],
+   "meaning": "Another process held the bus for 15 seconds.",
+   "action": "Retry after a few seconds.",
+   "optional_fields": []
+  },
+  "schema_refused": {
+   "exit": 3,
+   "retryable": false,
+   "fields": [],
+   "meaning": "The bus tables are not agentbus's.",
+   "action": "Stop and tell the user.",
+   "optional_fields": []
+  },
+  "schema_older": {
+   "exit": 3,
+   "retryable": false,
+   "fields": [
+    "bus",
+    "bus_schema",
+    "tool_schema"
+   ],
+   "meaning": "The bus is older than this tool and was opened read-only.",
+   "action": "Run any command that is not watch to upgrade it, or agentbus upgrade DIR.",
+   "optional_fields": []
+  },
+  "schema_newer": {
+   "exit": 3,
+   "retryable": false,
+   "fields": [
+    "bus",
+    "bus_schema",
+    "tool_schema"
+   ],
+   "meaning": "The bus is newer than this copy of the tool.",
+   "action": "Use a newer agentbus.",
+   "optional_fields": []
+  },
+  "schema_corrupt": {
+   "exit": 3,
+   "retryable": false,
+   "fields": [
+    "bus",
+    "bus_schema"
+   ],
+   "meaning": "bus.db records a schema version no agentbus writes; another tool or an agent changed it.",
+   "action": "Stop and tell the user; restore a backup (docs/how-to/upgrade.md).",
+   "optional_fields": []
+  },
+  "backup_failed": {
+   "exit": 3,
+   "retryable": false,
+   "fields": [
+    "bus",
+    "reason"
+   ],
+   "meaning": "The backup before a migration could not be made.",
+   "action": "Free disk space or move the bus.",
+   "optional_fields": []
+  },
+  "copy_newer": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "directory",
+    "copy_version",
+    "tool_version"
+   ],
+   "meaning": "The folder's copy of agentbus is newer than this one; it is never downgraded.",
+   "action": "Run upgrade or init with a newer agentbus.",
+   "optional_fields": []
+  },
+  "bus_unavailable": {
+   "exit": 3,
+   "retryable": false,
+   "fields": [],
+   "optional_fields": [
+    "file",
+    "outcome_unknown"
+   ],
+   "meaning": "The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; committed is then true when that write was the command's own.",
+   "action": "Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat it only with its request id."
+  },
+  "ack_failed": {
+   "exit": 3,
+   "retryable": true,
+   "fields": [
+    "delivered"
+   ],
+   "meaning": "inbox printed its messages but could not mark them read.",
+   "action": "The output was complete: use it, expect the same messages again, and dedupe by id.",
+   "optional_fields": []
+  },
+  "output_failed": {
+   "exit": 1,
+   "retryable": true,
+   "fields": [],
+   "meaning": "stdout could not be written; committed effects stand.",
+   "action": "Retry with the same token.",
+   "optional_fields": []
+  },
+  "interrupted": {
+   "exit": 130,
+   "retryable": true,
+   "fields": [],
+   "optional_fields": [
+    "directory",
+    "backup",
+    "migrations",
+    "rerun",
+    "changed",
+    "argv"
+   ],
+   "meaning": "The command was stopped (Ctrl-C or SIGINT) before it finished.",
+   "action": "Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun)."
+  },
+  "items_failed": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "failed"
+   ],
+   "meaning": "Some of the items the command works on failed or were refused (buses of upgrade --all, files of setup, checks of doctor); stdout holds the whole result, and failed lists those items.",
+   "action": "Read each failed item's error, fix it, then run the command again.",
+   "optional_fields": []
+  },
+  "installer_failed": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "argv",
+    "exit_status",
+    "reason",
+    "recovery"
+   ],
+   "meaning": "The installer update ran did not finish, or finished without moving agentbus to the new release (reason: exit, signal, timeout, version_unchanged, version_mismatch).",
+   "action": "Run agentbus update again (recovery); the installer's own output is above the error.",
+   "optional_fields": []
+  },
+  "download_failed": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "reason",
+    "asset"
+   ],
+   "meaning": "The release's wheel or SHA256SUMS could not be downloaded or did not check out (reason: http, redirect, tls, malformed, too_large, hash_mismatch). Nothing was installed.",
+   "action": "Try again later: agentbus update.",
+   "optional_fields": []
+  },
+  "manual_step": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "commands"
+   ],
+   "meaning": "This copy of agentbus is not one update may replace (a clone, a fork, an install of unknown origin, or no safe installer on PATH); the commands to run are listed.",
+   "action": "Run the listed commands, then agentbus update.",
+   "optional_fields": []
+  },
+  "release_offline": {
+   "exit": 1,
+   "retryable": true,
+   "fields": [
+    "reason"
+   ],
+   "meaning": "GitHub could not be reached to look for a release (reason: offline, timeout).",
+   "action": "Retry when online.",
+   "optional_fields": []
+  },
+  "rate_limited": {
+   "exit": 1,
+   "retryable": true,
+   "fields": [
+    "retry_after"
+   ],
+   "meaning": "GitHub is limiting requests from this network.",
+   "action": "Retry after retry_after seconds.",
+   "optional_fields": []
+  },
+  "release_unknown": {
+   "exit": 1,
+   "retryable": false,
+   "fields": [
+    "reason"
+   ],
+   "meaning": "GitHub's answer about releases could not be used (reason: http, redirect, tls, malformed, too_large).",
+   "action": "Try again later, or read the releases page.",
+   "optional_fields": []
+  },
+  "update_running": {
+   "exit": 1,
+   "retryable": true,
+   "fields": [
+    "lock"
+   ],
+   "meaning": "Another agentbus update is running.",
+   "action": "Wait for it, then retry.",
+   "optional_fields": []
+  },
+  "internal": {
+   "exit": 4,
+   "retryable": false,
+   "fields": [],
+   "meaning": "A bug in agentbus.",
+   "action": "Report it.",
+   "optional_fields": []
+  }
+ },
+ "exit_codes": {
+  "0": "success",
+  "1": "the command ran and refused (conflicts, missing things)",
+  "2": "usage: bad arguments, unknown command, missing identity",
+  "3": "the bus is unavailable or unsafe",
+  "4": "internal error",
+  "130": "interrupted (Ctrl-C), the shell convention"
+ },
+ "error_fields": {
+  "code": {
+   "type": "string",
+   "meaning": "One of the error codes below; branch on this, not on the message."
+  },
+  "message": {
+   "type": "string",
+   "meaning": "What happened and what to do, for a person."
+  },
+  "retryable": {
+   "type": "boolean",
+   "meaning": "Whether running the same command again can succeed. False once the command saved database rows, unless it had a --request-id; a command that changed only files (init, upgrade's copy, setup) stays retryable."
+  },
+  "committed": {
+   "type": "boolean",
+   "meaning": "True when the command's own change had been saved before the failure, so a write must not be repeated without its --request-id unless retryable is true."
+  },
+  "next": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "meaning": "The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A write's request id is not repeated here: reuse the one you sent."
+  }
+ },
+ "env": {
+  "AGENTBUS_DB": {
+   "meaning": "Path of the bus database; overrides discovery and --up.",
+   "default": "the nearest .agentbus/bus.db above the working directory"
+  },
+  "AGENTBUS_AGENT": {
+   "meaning": "Your agent identity; --as overrides it.",
+   "default": "unset"
+  },
+  "NO_COLOR": {
+   "meaning": "Turns colour off in watch.",
+   "default": "unset"
+  },
+  "AGENTBUS_NO_EMOJI": {
+   "meaning": "Turns emoji off in watch.",
+   "default": "unset"
+  },
+  "AGENTBUS_ASCII": {
+   "meaning": "Draws watch's own marks in ASCII, with emoji off (also under TERM=linux).",
+   "default": "unset"
+  },
+  "COLUMNS": {
+   "meaning": "Width human output is wrapped to. Without it, human output wraps to the terminal when stdout is one and is never wrapped when stdout is a pipe or a file.",
+   "default": "the terminal width; no wrapping when piped"
+  },
+  "AGENTBUS_AGENT_SESSION": {
+   "meaning": "Set to anything but 0 to mark a run as an agent's: no release notice, and update covers only the current bus. Use it from an agent harness that agentbus does not recognise.",
+   "default": "unset"
+  },
+  "AGENTBUS_NO_UPDATE_NOTICE": {
+   "meaning": "Set to anything but 0 to silence the release notice and the stale-copy notice.",
+   "default": "unset"
+  },
+  "AGENTBUS_NO_UPDATE_CHECK": {
+   "meaning": "Set to anything but 0 to turn off the once-a-day release check (DO_NOT_TRACK and NO_UPDATE_NOTIFIER do the same).",
+   "default": "unset"
+  }
+ },
+ "hidden": [
+  "hook",
+  "__complete"
+ ],
+ "arg_notes": {
+  "post": {
+   "body": {
+    "required": true
+   },
+   "--kind": {
+    "choices": [
+     "note",
+     "question",
+     "answer",
+     "handoff",
+     "decision",
+     "alert",
+     "done"
+    ]
+   }
+  },
+  "ctx set": {
+   "value": {
+    "required": true
+   }
+  },
+  "log add": {
+   "detail": {
+    "required": true
+   }
+  }
+ },
+ "commands": {
+  "join": {
+   "summary": "Register on the roster",
+   "result": {
+    "type": "object",
+    "required": [
+     "joined",
+     "bus",
+     "goal",
+     "agentbus",
+     "contract"
+    ],
+    "properties": {
+     "joined": {
+      "type": "string"
+     },
+     "bus": {
+      "type": "string"
+     },
+     "goal": {
+      "anyOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/objects/Goal"
+       }
+      ]
+     },
+     "agentbus": {
+      "type": "string"
+     },
+     "contract": {
+      "type": "integer"
+     },
+     "duplicate": {
+      "type": "boolean"
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Warning"
+      }
+     }
+    }
+   },
+   "retry": {
+    "class": "idempotent_with_flag",
+    "short": "with --request-id or --takeover",
+    "how": "join --request-id TOKEN: the same token and flags return the first result with duplicate true instead of name_active; or join --takeover for your own name"
+   },
+   "text": null,
+   "errors": [
+    "name_active",
+    "request_id_reused",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "leave": {
+   "summary": "Leave the roster and release your claims",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "left",
+     "was_joined",
+     "released",
+     "released_count"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "left": {
+      "type": "string"
+     },
+     "was_joined": {
+      "type": "boolean"
+     },
+     "released": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "released_count": {
+      "type": "integer"
+     }
+    }
+   },
+   "retry": {
+    "class": "idempotent",
+    "how": "a second run reports was_joined false and released_count 0 and writes no log row",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "who": {
+   "summary": "List agents, most recently seen first",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "items",
+     "has_more",
+     "next"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Agent"
+      }
+     },
+     "has_more": {
+      "type": "boolean"
+     },
+     "next": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "post": {
+   "summary": "Send a message",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "id",
+     "warnings"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "id": {
+      "type": "integer"
+     },
+     "duplicate": {
+      "type": "boolean"
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Warning"
+      }
+     }
+    }
+   },
+   "retry": {
+    "class": "needs_request_id",
+    "short": "only with --request-id",
+    "how": "pass --request-id TOKEN; the same token and payload returns the original id with duplicate true"
+   },
+   "text": null,
+   "errors": [
+    "no_message",
+    "not_on_roster",
+    "request_id_reused",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "inbox": {
+   "summary": "Unread messages for you, oldest first, then mark them read",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "items",
+     "has_more",
+     "next"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Message"
+      }
+     },
+     "has_more": {
+      "type": "boolean"
+     },
+     "next": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "retry": {
+    "class": "at_least_once",
+    "short": "repeat; dedupe by id",
+    "how": "repeat; a crash or ack_failed redelivers, so check message ids before acting",
+    "with": {
+     "--peek": {
+      "class": "safe",
+      "how": "repeat freely"
+     }
+    }
+   },
+   "text": null,
+   "errors": [
+    "ack_failed",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "read": {
+   "summary": "Recent messages, anyone's; with --id N one message, whole",
+   "result": {
+    "anyOf": [
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "items",
+       "has_more",
+       "next"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/Message"
+        }
+       },
+       "has_more": {
+        "type": "boolean"
+       },
+       "next": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     },
+     {
+      "allOf": [
+       {
+        "$ref": "#/objects/Message"
+       },
+       {
+        "type": "object",
+        "required": [
+         "contract"
+        ],
+        "properties": {
+         "contract": {
+          "type": "integer"
+         }
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": "{\"items\": [Message], \"has_more\": boolean, \"next\": string or null}, or with --id a Message",
+   "errors": [
+    "no_message",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "ctx set": {
+   "summary": "Set a shared fact and record its history",
+   "result": {
+    "allOf": [
+     {
+      "$ref": "#/objects/Fact"
+     },
+     {
+      "type": "object",
+      "required": [
+       "contract"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       }
+      }
+     }
+    ]
+   },
+   "retry": {
+    "class": "idempotent",
+    "short": "safe to repeat",
+    "how": "an unchanged value writes no history row and returns unchanged true"
+   },
+   "text": null,
+   "errors": [
+    "not_on_roster",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "ctx get": {
+   "summary": "Get one fact, or list all facts",
+   "result": {
+    "anyOf": [
+     {
+      "allOf": [
+       {
+        "$ref": "#/objects/Fact"
+       },
+       {
+        "type": "object",
+        "required": [
+         "contract"
+        ],
+        "properties": {
+         "contract": {
+          "type": "integer"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "items",
+       "has_more",
+       "next"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/Fact"
+        }
+       },
+       "has_more": {
+        "type": "boolean"
+       },
+       "next": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": "a Fact, or {\"items\": [Fact], \"has_more\": boolean, \"next\": string or null}",
+   "errors": [
+    "no_context_key",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "ctx history": {
+   "summary": "Show the history of a fact",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "items",
+     "has_more",
+     "next"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/FactVersion"
+      }
+     },
+     "has_more": {
+      "type": "boolean"
+     },
+     "next": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "claim": {
+   "summary": "Claim a resource",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "resource",
+     "agent",
+     "purpose",
+     "claimed_at",
+     "expires_at",
+     "auto_released",
+     "auto_released_count",
+     "renewed"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "resource": {
+      "type": "string"
+     },
+     "agent": {
+      "type": "string"
+     },
+     "purpose": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "claimed_at": {
+      "type": "string"
+     },
+     "expires_at": {
+      "type": "string"
+     },
+     "auto_released": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "resource",
+        "agent"
+       ],
+       "properties": {
+        "resource": {
+         "type": "string"
+        },
+        "agent": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "auto_released_count": {
+      "type": "integer"
+     },
+     "renewed": {
+      "type": "boolean"
+     },
+     "previous_purpose": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "retry": {
+    "class": "idempotent",
+    "how": "renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, and previous_purpose is set when --purpose changed it",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "claim_conflict",
+    "not_on_roster",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "release": {
+   "summary": "Release one claim, or all of yours",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "released",
+     "released_count"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "released": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "released_count": {
+      "type": "integer"
+     }
+    }
+   },
+   "retry": {
+    "class": "idempotent_with_flag",
+    "short": "with --if-held",
+    "how": "release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent"
+   },
+   "text": null,
+   "errors": [
+    "not_held",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "claims": {
+   "summary": "List claims",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "items",
+     "has_more",
+     "next"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Claim"
+      }
+     },
+     "has_more": {
+      "type": "boolean"
+     },
+     "next": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "log add": {
+   "summary": "Append an activity log entry",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "id",
+     "logged",
+     "agent",
+     "action",
+     "detail"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "id": {
+      "type": "integer"
+     },
+     "logged": {
+      "type": "boolean"
+     },
+     "agent": {
+      "type": "string"
+     },
+     "action": {
+      "type": "string"
+     },
+     "detail": {
+      "type": "string"
+     }
+    }
+   },
+   "retry": {
+    "class": "unsafe",
+    "short": "appends each time",
+    "how": "each call appends a row; check log show --limit 1 before retrying"
+   },
+   "text": null,
+   "errors": [
+    "not_on_roster",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "log show": {
+   "summary": "Show recent activity log entries",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "items",
+     "has_more",
+     "next"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/LogEntry"
+      }
+     },
+     "has_more": {
+      "type": "boolean"
+     },
+     "next": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "status": {
+   "summary": "Agents, facts, claims and recent messages",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "bus",
+     "goal",
+     "agents",
+     "context",
+     "claims",
+     "messages",
+     "omitted"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "bus": {
+      "type": "string"
+     },
+     "goal": {
+      "anyOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/objects/Goal"
+       }
+      ]
+     },
+     "agents": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Agent"
+      }
+     },
+     "context": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Fact"
+      }
+     },
+     "claims": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Claim"
+      }
+     },
+     "messages": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Message"
+      }
+     },
+     "omitted": {
+      "type": "object",
+      "required": [
+       "agents",
+       "context",
+       "claims",
+       "messages"
+      ],
+      "properties": {
+       "agents": {
+        "type": "integer"
+       },
+       "context": {
+        "type": "integer"
+       },
+       "claims": {
+        "type": "integer"
+       },
+       "messages": {
+        "type": "integer"
+       }
+      }
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "goal": {
+   "summary": "Show or set the shared goal",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "goal",
+     "set_by",
+     "set_at"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "goal": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "set_by": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "set_at": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "unchanged": {
+      "type": "boolean"
+     }
+    }
+   },
+   "retry": {
+    "class": "idempotent",
+    "short": "safe to repeat",
+    "how": "showing is free; an unchanged goal writes no history row and returns unchanged true"
+   },
+   "text": "a Goal, or {\"goal\": null, \"set_by\": null, \"set_at\": null} when none is set",
+   "errors": [
+    "not_on_roster",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "watch": {
+   "summary": "A live view of the bus; with --json one snapshot",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "bus",
+     "directory",
+     "agents",
+     "claims",
+     "goal",
+     "context",
+     "messages",
+     "unread",
+     "counts",
+     "omitted"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "bus": {
+      "type": "string"
+     },
+     "directory": {
+      "type": "string"
+     },
+     "agents": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "name",
+        "role",
+        "last_seen",
+        "joined_at"
+       ],
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "role": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "last_seen": {
+         "type": "string"
+        },
+        "joined_at": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "claims": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "resource",
+        "agent",
+        "purpose",
+        "expires_at"
+       ],
+       "properties": {
+        "resource": {
+         "type": "string"
+        },
+        "agent": {
+         "type": "string"
+        },
+        "purpose": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "expires_at": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "goal": {
+      "anyOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/objects/Goal"
+       }
+      ]
+     },
+     "context": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Fact"
+      }
+     },
+     "messages": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "id",
+        "ts",
+        "sender",
+        "recipient",
+        "kind",
+        "topic",
+        "body",
+        "reply_to"
+       ],
+       "properties": {
+        "id": {
+         "type": "integer"
+        },
+        "ts": {
+         "type": "string"
+        },
+        "sender": {
+         "type": "string"
+        },
+        "recipient": {
+         "type": "string"
+        },
+        "kind": {
+         "type": "string"
+        },
+        "topic": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "body": {
+         "type": "string"
+        },
+        "reply_to": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        }
+       }
+      }
+     },
+     "unread": {
+      "type": "object",
+      "description": "messages waiting in each listed agent's inbox, by name (integers; cursors are read, never moved)"
+     },
+     "counts": {
+      "type": "object",
+      "required": [
+       "agents",
+       "claims",
+       "messages"
+      ],
+      "properties": {
+       "agents": {
+        "type": "integer"
+       },
+       "claims": {
+        "type": "integer"
+       },
+       "messages": {
+        "type": "integer"
+       }
+      }
+     },
+     "omitted": {
+      "type": "object",
+      "required": [
+       "agents",
+       "context",
+       "claims",
+       "messages"
+      ],
+      "properties": {
+       "agents": {
+        "type": "integer"
+       },
+       "context": {
+        "type": "integer"
+       },
+       "claims": {
+        "type": "integer"
+       },
+       "messages": {
+        "type": "integer"
+       }
+      }
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "buses": {
+   "summary": "List buses from nearest to outermost",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "items",
+     "has_more",
+     "next"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "items": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/BusLevel"
+      }
+     },
+     "has_more": {
+      "type": "boolean"
+     },
+     "next": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "init": {
+   "summary": "Install this tool into DIR/.agentbus/",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "directory",
+     "copy",
+     "old",
+     "new",
+     "exclude_added",
+     "gitignore_rule",
+     "outer"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "directory": {
+      "type": "string"
+     },
+     "copy": {
+      "type": "string"
+     },
+     "old": {
+      "type": "string"
+     },
+     "new": {
+      "type": "string"
+     },
+     "exclude_added": {
+      "type": "boolean"
+     },
+     "gitignore_rule": {
+      "type": "boolean"
+     },
+     "outer": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    }
+   },
+   "retry": {
+    "class": "idempotent",
+    "how": "repeat",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "copy_newer",
+    "schema_newer",
+    "schema_corrupt",
+    "schema_refused",
+    "bad_input",
+    "no_bus",
+    "bus_unavailable",
+    "busy",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "upgrade": {
+   "summary": "Replace a bus folder's copy of the tool with this one and migrate its database",
+   "result": {
+    "anyOf": [
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "directory",
+       "old",
+       "new",
+       "schema_old",
+       "schema_new",
+       "backup"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "directory": {
+        "type": "string"
+       },
+       "old": {
+        "type": "string"
+       },
+       "new": {
+        "type": "string"
+       },
+       "schema_old": {
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "schema_new": {
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "backup": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     },
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "buses",
+       "upgraded",
+       "current",
+       "skipped",
+       "failed"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "buses": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/UpgradeRow"
+        }
+       },
+       "upgraded": {
+        "type": "integer"
+       },
+       "current": {
+        "type": "integer"
+       },
+       "skipped": {
+        "type": "integer"
+       },
+       "failed": {
+        "type": "integer"
+       },
+       "would_upgrade": {
+        "type": "integer"
+       }
+      }
+     }
+    ]
+   },
+   "retry": {
+    "class": "idempotent",
+    "how": "repeat",
+    "short": "safe to repeat"
+   },
+   "text": "{\"directory\": string, \"old\": string, \"new\": string, \"schema_old\": integer or null, \"schema_new\": integer or null, \"backup\": string or null}, or with --all or --dry-run {\"buses\": [UpgradeRow], \"upgraded\": integer, \"current\": integer, \"skipped\": integer, \"failed\": integer, \"would_upgrade\": integer (--dry-run)}",
+   "errors": [
+    "copy_newer",
+    "items_failed",
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "update": {
+   "summary": "Install the latest release, then upgrade the bus folders and refresh the skill and AGENTS.md block",
+   "result": {
+    "anyOf": [
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "from",
+       "to",
+       "latest",
+       "install",
+       "tool",
+       "buses",
+       "setup",
+       "plugin",
+       "restart",
+       "scope"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "from": {
+        "type": "string"
+       },
+       "to": {
+        "type": "string"
+       },
+       "latest": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "install": {
+        "type": "object",
+        "required": [
+         "method",
+         "url"
+        ],
+        "properties": {
+         "method": {
+          "type": "string"
+         },
+         "url": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        }
+       },
+       "tool": {
+        "type": "object",
+        "required": [
+         "status",
+         "argv",
+         "exit_status",
+         "commands"
+        ],
+        "properties": {
+         "status": {
+          "type": "string",
+          "enum": [
+           "updated",
+           "current",
+           "dry_run",
+           "manual"
+          ]
+         },
+         "argv": {
+          "anyOf": [
+           {
+            "type": "null"
+           },
+           {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           }
+          ]
+         },
+         "exit_status": {
+          "type": [
+           "integer",
+           "null"
+          ]
+         },
+         "commands": {
+          "anyOf": [
+           {
+            "type": "null"
+           },
+           {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           }
+          ]
+         },
+         "download": {
+          "anyOf": [
+           {
+            "type": "null"
+           },
+           {
+            "type": "object",
+            "required": [
+             "wheel",
+             "sha256sums"
+            ],
+            "properties": {
+             "wheel": {
+              "type": "string"
+             },
+             "sha256sums": {
+              "type": "string"
+             },
+             "install_with": {
+              "type": "array",
+              "items": {
+               "type": "string"
+              }
+             }
+            }
+           }
+          ]
+         }
+        }
+       },
+       "buses": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/UpgradeRow"
+        }
+       },
+       "setup": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/SetupResult"
+        }
+       },
+       "plugin": {
+        "anyOf": [
+         {
+          "type": "null"
+         },
+         {
+          "type": "object",
+          "required": [
+           "fix"
+          ],
+          "properties": {
+           "fix": {
+            "type": "string"
+           }
+          }
+         }
+        ]
+       },
+       "restart": {
+        "type": "boolean"
+       },
+       "scope": {
+        "type": "object",
+        "required": [
+         "narrowed",
+         "why"
+        ],
+        "properties": {
+         "narrowed": {
+          "type": "boolean"
+         },
+         "why": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        }
+       }
+      }
+     },
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "running",
+       "latest",
+       "update_available",
+       "install",
+       "argv",
+       "commands",
+       "notes"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "running": {
+        "type": "string"
+       },
+       "latest": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "update_available": {
+        "type": "boolean"
+       },
+       "install": {
+        "type": "object",
+        "required": [
+         "method",
+         "url"
+        ],
+        "properties": {
+         "method": {
+          "type": "string"
+         },
+         "url": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        }
+       },
+       "argv": {
+        "anyOf": [
+         {
+          "type": "null"
+         },
+         {
+          "type": "array",
+          "items": {
+           "type": "string"
+          }
+         }
+        ]
+       },
+       "commands": {
+        "anyOf": [
+         {
+          "type": "null"
+         },
+         {
+          "type": "array",
+          "items": {
+           "type": "string"
+          }
+         }
+        ]
+       },
+       "download": {
+        "anyOf": [
+         {
+          "type": "null"
+         },
+         {
+          "type": "object",
+          "required": [
+           "wheel",
+           "sha256sums"
+          ],
+          "properties": {
+           "wheel": {
+            "type": "string"
+           },
+           "sha256sums": {
+            "type": "string"
+           },
+           "install_with": {
+            "type": "array",
+            "items": {
+             "type": "string"
+            }
+           }
+          }
+         }
+        ]
+       },
+       "notes": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     }
+    ]
+   },
+   "retry": {
+    "class": "idempotent",
+    "how": "repeat",
+    "short": "safe to repeat"
+   },
+   "text": "{\"from\": string, \"to\": string, \"latest\": string or null, \"install\": {\"method\": string, \"url\": string or null}, \"tool\": {\"status\": string, \"argv\": [string] or null, \"exit_status\": integer or null, \"commands\": [string] or null, \"download\": {\"wheel\": string, \"sha256sums\": string, \"install_with\": [string]} or null (only when update downloads the release wheel; \"install_with\" in a dry run)}, \"buses\": [UpgradeRow], \"setup\": [SetupResult], \"plugin\": {\"fix\": string} or null, \"restart\": boolean, \"scope\": {\"narrowed\": boolean, \"why\": string or null}}, or with --check {\"running\": string, \"latest\": string or null, \"update_available\": boolean, \"install\": {\"method\": string, \"url\": string or null}, \"argv\": null, \"commands\": [string] or null, \"download\": {\"wheel\": string, \"sha256sums\": string, \"install_with\": [string]} or null, \"notes\": string or null}",
+   "errors": [
+    "installer_failed",
+    "manual_step",
+    "release_offline",
+    "rate_limited",
+    "release_unknown",
+    "download_failed",
+    "update_running",
+    "items_failed",
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "schema": {
+   "summary": "Result shapes, errors, exit codes and retry rules",
+   "result": {
+    "anyOf": [
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "agentbus",
+       "commands",
+       "objects",
+       "error_fields",
+       "errors",
+       "warnings"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "agentbus": {
+        "type": "string"
+       },
+       "commands": {
+        "type": "object"
+       },
+       "global_args": {
+        "type": "array",
+        "items": {
+         "type": "object"
+        }
+       },
+       "objects": {
+        "type": "object"
+       },
+       "error_fields": {
+        "type": "object"
+       },
+       "errors": {
+        "type": "object"
+       },
+       "warnings": {
+        "type": "object"
+       },
+       "exit_codes": {
+        "type": "object"
+       },
+       "env": {
+        "type": "object"
+       },
+       "common_errors": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "more": {
+        "type": "string"
+       }
+      }
+     },
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "agentbus",
+       "commands",
+       "global_args",
+       "common_errors"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "agentbus": {
+        "type": "string"
+       },
+       "commands": {
+        "type": "object"
+       },
+       "global_args": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       },
+       "common_errors": {
+        "type": "array",
+        "items": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ]
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": "the full schema {\"contract\": integer, \"agentbus\": string, \"commands\": object, \"global_args\": [object], \"objects\": object, \"errors\": object, \"warnings\": object, \"exit_codes\": object, \"error_fields\": object, \"env\": object}; with COMMAND only that command's commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env and every error it can raise); with --index {\"contract\": integer, \"agentbus\": string, \"commands\": {NAME: {\"args\": [string], \"errors\": [string]}}, \"global_args\": [string], \"common_errors\": [string]}",
+   "errors": [
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "skill": {
+   "summary": "Print the bundled skill, or with --agents-md the AGENTS.md block",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "text"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "text": {
+      "type": "string"
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "hooks": {
+   "summary": "Print the hooks an agent harness needs (claude, codex)",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "hooks"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "hooks": {
+      "type": "object"
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": "{\"hooks\": {EVENT: [{\"matcher\": string (optional), \"hooks\": [{\"type\": string, \"timeout\": integer, \"command\": string}]}]}}",
+   "errors": [
+    "bad_input",
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "help": {
+   "summary": "Show help for a command, the same text as COMMAND --help",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "command",
+     "text"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "command": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "text": {
+      "type": "string"
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "completion": {
+   "summary": "Print a tab-completion script for bash, zsh or fish",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "shell",
+     "text"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "shell": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "setup": {
+   "summary": "Install the skill and hooks for Claude Code, or the AGENTS.md block and hooks for Codex",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "target",
+     "scope",
+     "dry_run",
+     "changes"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "target": {
+      "type": "string"
+     },
+     "scope": {
+      "type": "string"
+     },
+     "dry_run": {
+      "type": "boolean"
+     },
+     "changes": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "path",
+        "detail",
+        "action"
+       ],
+       "properties": {
+        "path": {
+         "type": "string"
+        },
+        "detail": {
+         "type": "string"
+        },
+        "action": {
+         "type": "string",
+         "enum": [
+          "installed",
+          "updated",
+          "replaced_link",
+          "unchanged",
+          "removed",
+          "skipped",
+          "refused"
+         ]
+        },
+        "backup": {
+         "type": "string"
+        },
+        "info": {
+         "type": "boolean"
+        }
+       }
+      }
+     }
+    }
+   },
+   "retry": {
+    "class": "idempotent",
+    "short": "safe to repeat",
+    "how": "a second run reports every change unchanged and writes nothing; a refusal exits 1 with the same object"
+   },
+   "text": "{\"target\": string, \"scope\": string, \"dry_run\": boolean, \"changes\": [{\"path\": string, \"detail\": string, \"action\": string, \"backup\": string (only when a backup was saved), \"info\": boolean (true for a report about something that is not a file, such as the login shell)}]}",
+   "errors": [
+    "items_failed",
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "doctor": {
+   "summary": "Check the installed tool, the bus, the skill and the AGENTS.md block; each problem names its fix",
+   "result": {
+    "type": "object",
+    "required": [
+     "agentbus",
+     "path",
+     "contract",
+     "checks",
+     "fail",
+     "warn"
+    ],
+    "properties": {
+     "agentbus": {
+      "type": "string"
+     },
+     "path": {
+      "type": "string"
+     },
+     "contract": {
+      "type": "integer"
+     },
+     "checks": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/DoctorCheck"
+      }
+     },
+     "fail": {
+      "type": "integer"
+     },
+     "warn": {
+      "type": "integer"
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": "{\"agentbus\": string, \"path\": string, \"contract\": integer, \"checks\": [{\"id\": string, \"status\": \"ok\" | \"warn\" | \"fail\" | \"n/a\", \"detail\": string, \"fix\": string or null, \"hint\": string or null, \"scope\": string (when it applies)}], \"fail\": integer, \"warn\": integer}; exit 1 (items_failed) when fail > 0",
+   "errors": [
+    "items_failed",
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "brief": {
+   "summary": "What is going on: the goal, who holds what, open questions, unread handoffs and alerts, changed facts, and the next command",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "bus",
+     "me",
+     "goal",
+     "agents",
+     "questions",
+     "unread",
+     "pending_others",
+     "facts",
+     "omitted",
+     "next"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "bus": {
+      "type": "string"
+     },
+     "me": {
+      "anyOf": [
+       {
+        "type": "null"
+       },
+       {
+        "type": "object",
+        "required": [
+         "name",
+         "joined"
+        ],
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "joined": {
+          "type": "boolean"
+         }
+        }
+       }
+      ]
+     },
+     "goal": {
+      "anyOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/objects/BriefGoal"
+       }
+      ]
+     },
+     "agents": {
+      "type": "object",
+      "required": [
+       "items"
+      ],
+      "properties": {
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/BriefAgent"
+        }
+       }
+      }
+     },
+     "questions": {
+      "type": "object",
+      "required": [
+       "items"
+      ],
+      "properties": {
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/BriefMessage"
+        }
+       }
+      }
+     },
+     "unread": {
+      "type": "object",
+      "required": [
+       "total",
+       "items"
+      ],
+      "properties": {
+       "total": {
+        "type": "integer"
+       },
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/BriefMessage"
+        }
+       }
+      }
+     },
+     "pending_others": {
+      "type": "object",
+      "required": [
+       "items",
+       "next"
+      ],
+      "properties": {
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/BriefMessage"
+        }
+       },
+       "next": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     },
+     "facts": {
+      "type": "object",
+      "required": [
+       "since",
+       "items"
+      ],
+      "properties": {
+       "since": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/BriefFact"
+        }
+       }
+      }
+     },
+     "omitted": {
+      "type": "object",
+      "required": [
+       "agents",
+       "questions",
+       "unread",
+       "pending_others",
+       "facts"
+      ],
+      "properties": {
+       "agents": {
+        "type": "integer"
+       },
+       "questions": {
+        "type": "integer"
+       },
+       "unread": {
+        "type": "integer"
+       },
+       "pending_others": {
+        "type": "integer"
+       },
+       "facts": {
+        "type": "integer"
+       }
+      }
+     },
+     "next": {
+      "type": "string"
+     },
+     "warnings": {
+      "type": "array",
+      "items": {
+       "$ref": "#/objects/Warning"
+      }
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "demo": {
+   "summary": "A hands-off 30-second tour on a temporary bus; with --json the same tour without pauses",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "steps",
+     "cleaned"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "steps": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "command",
+        "exit"
+       ],
+       "properties": {
+        "command": {
+         "type": "string"
+        },
+        "exit": {
+         "type": "integer"
+        }
+       }
+      }
+     },
+     "cleaned": {
+      "type": "boolean"
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "bad_input",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  }
+ }
+}
