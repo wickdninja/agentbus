@@ -540,6 +540,78 @@
     "expect": "second unclaimed nudge for the same path"
   },
   {
+    "name": "PreToolUse says a held file on every edit",
+    "file": "bin/agentbus",
+    "find": "or hook_nudge_once\\(payload\\[\"session_id\"\\], \"held:\" \\+ rel\\)\\]",
+    "replace": "or True]",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "the held note fired twice for one file in one session"
+  },
+  {
+    "name": "PreToolUse says a held file on every patch (Codex)",
+    "file": "bin/agentbus",
+    "find": "or hook_nudge_once\\(payload\\[\"session_id\"\\], \"held:\" \\+ rel\\)\\]",
+    "replace": "or True]",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "the held note fired twice for one file in one session"
+  },
+  {
+    "name": "PreToolUse nudges a held file to be claimed",
+    "file": "bin/agentbus",
+    "find": "^            elif not own:\\n                unclaimed\\.append\\(rel\\)$",
+    "replace": "            if not own:\n                unclaimed.append(rel)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a held file noted once was then nudged as having no claim"
+  },
+  {
+    "name": "PreToolUse unread counts every broadcast kind",
+    "file": "bin/agentbus",
+    "find": "recipient='\\*' AND id>\\? AND kind IN \\(\\{marks\\}\\)",
+    "replace": "recipient='*' AND id>? AND (1 OR kind IN ({marks}))",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12f: broadcast notes and handoffs, another name's mail or my own post were counted"
+  },
+  {
+    "name": "PreToolUse unread counts mail to other names",
+    "file": "bin/agentbus",
+    "find": "\\(\"recipient=\\? AND id>\\?\", \\(name, last\\)\\)",
+    "replace": "(\"recipient<>'*' AND id>? AND ?<>''\", (last, name))",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12f: broadcast notes and handoffs, another name's mail or my own post were counted"
+  },
+  {
+    "name": "PreToolUse unread ignores the inbox cursor",
+    "file": "bin/agentbus",
+    "find": "\\(\"recipient=\\? AND id>\\?\", \\(name, last\\)\\)",
+    "replace": "(\"recipient=? AND id>?\", (name, 0))",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12f: read messages were still counted"
+  },
+  {
+    "name": "PreToolUse unread note on every edit",
+    "file": "bin/agentbus",
+    "find": "if sid and newest and hook_nudge_once\\(sid, f\"unread:\\{name\\}:\\{newest\\}\"\\):",
+    "replace": "if sid and newest:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12f: the same unread message was announced twice"
+  },
+  {
+    "name": "PreToolUse unread note on every patch (Codex)",
+    "file": "bin/agentbus",
+    "find": "if sid and newest and hook_nudge_once\\(sid, f\"unread:\\{name\\}:\\{newest\\}\"\\):",
+    "replace": "if sid and newest:",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "12f: the same unread messages were announced twice"
+  },
+  {
     "name": "a message of an unknown kind is counted under its own name",
     "file": "bin/agentbus",
     "find": "key = kind if isinstance\\(kind, str\\) and kind in KINDS else \"other\"",
