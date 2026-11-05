@@ -101,8 +101,9 @@ The smallest effect worth the tool: **+15 points** of hidden pass rate over the 
 
 | Result for P1 and P2 | Reported as |
 | --- | --- |
-| 95% CI lower bound above 0 and point estimate at least +15 | Value over a flat file |
-| CI lower bound above 0, point estimate under +15 | Real but small: little value |
+| CI upper bound under 0 | **Flat file better** (added 2026-11-05) |
+| Above 0 after Holm, and point estimate at least +15 | Value over a flat file |
+| Above 0 after Holm, point estimate under +15 | Real but small: little value |
 | CI upper bound under +15 | **No meaningful value** over a flat file |
 | Anything else | Inconclusive, which means no evidence of value. It is not a soft win. |
 
@@ -145,7 +146,7 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 - **Author bias.** The tool's builders wrote this protocol and the ledger text. The ledger text and the prompts need a read by someone who wants the ledger to win.
 - **Prompted use.** Every channel is named in the prompt. Unprompted adoption is not measured.
 - **Model and harness versions** move. Results hold for the recorded versions.
-- **Skill versus hooks.** The bus condition includes hooks; the ledger cannot. That is the product as shipped, so hooks are not separated out.
+- **Skill versus hooks.** Both the bus and the ledger run with hooks (see the addenda), so hooks are not separated out. The ledger's were written for this eval and the bus's shipped with the tool.
 - **Timing depends on load.** That is why wall time is secondary.
 - **Dead-claim stall** (added 2026-11-05). A session that dies keeps its bus claims until they expire, and nothing the tool shows a fresh agent names the way out, so `recovery` exercises this behaviour of the tool. Runs test the release as shipped, so the stall stays in the numbers and counts against the tool.
 
@@ -202,4 +203,21 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 - Claude plus Codex ran on real agents, five runs, one per task, with both role orders. Codex hooks fired, and the bus and the ledger both worked from a Codex lane.
 - A Codex session killed by `recovery` has its tokens read from its own session log, since its stream reports nothing until the end of a turn.
 - The full matrix is 700 runs on seeds 1 to 20, and may be sharded by seed. Each shard projects from its own share of runs against the pool's total, so a shared budget stays correctly projected.
+
+**2026-11-05, ledger-advocate review, before any run counts.** A read arguing the ledger's side found tilts toward the tool. Each fix below came with a test written first. All pilot runs before this entry count only for cost.
+
+1. **Hooks are a harness feature, not the tool's.** The ledger now has hooks on the same events, with the same timeout and wrapper, in both harnesses: at session start, the entry count and the entries addressed to you; before an edit, a warning on someone else's open CLAIM, and one nudge per path with no claim. `none` and `builtin` stay hookless. This replaces the Threats entry that said the ledger cannot have hooks.
+2. **Holm is implemented.** P1 to P3 were registered as one Holm-corrected family, and the code did not correct. It does now: one-sided bootstrap p values at alpha 0.025, the lower end of a two-sided 95% interval. "Above 0" in the verdict table means the Holm decision. Reported intervals stay unadjusted.
+3. **P3 is on total tokens, as registered.** The code had used fresh tokens. Fresh tokens print as a secondary row.
+4. **The verdict table gains "flat file better"** for an interval wholly below 0, and the combined rule under the table is now code. P3 failing, or the flat file better on pass rate, or no meaningful value at a token ratio whose lower bound is above 1, reports the flat file as the better choice. An inconclusive pass rate is not a match.
+5. **Ledger format.** Entries may span lines, appended through a quoted heredoc, with a blank line between entries. The latest `FACT KEY` wins.
+6. **Poll recipe.** Its `timeout` does not exist on macOS. Superseded by A: the recipe is gone.
+7. **Channel paths.** A path counts as a channel path if any part names one, so a ledger reached through a worktree's link is not rework and never reaches a grader. After each run, every worktree's `COORDINATION.md` must still be a link. A broken link is a recorded failure mode, not a dropped run.
+8. **Ledger text.** Compared section by section with the skill and checked by a test: paths relative to the repo root, spelled as git shows them; reading the whole file; JOIN entries showing who is here; what hooks do and do not do. Four protocol steps (read before the first edit, claim before the first edit, release, finish) are now measured per agent in every channel run, as a manipulation check.
+9. **Hook failures.** A hook that ran and failed is an outcome: the run stays and the failure is recorded. A hook that printed nothing at session start counts as failed. Only hooks that never loaded are infrastructure, and that run is replaced, as for a failed sign-in. This holds for the bus and the ledger alike.
+10. **Sensitivity.** P1 and P2 also print with `overlap` left out, outside the family, because the task's two shared points were tuned during the pilot.
+11. **Reported measures.** `channel_bytes_back`, `channel_writes`, hook failures, broken ledger links and S8 now print.
+
+- **A. Waiting.** `wait` exists only in an unreleased branch, and runs use `642009c`, so the bus has no wait primitive. The poll lines are removed from the ledger and peer texts. Each channel's agents wait as they see fit.
+- **B. Counting.** Skill calls are not channel calls, in any condition. A channel write is a real write subcommand of the bus, an append to the ledger, or a sent message, not a stray word in a command.
 

@@ -5,7 +5,7 @@ VALUE_STUB_MODE picks a behaviour: good (default), clobber (bob overwrites alice
 hang (never exits), spam (tool calls forever), hook-leak (reports a hook firing), plugin-leak (reports a user plugin),
 env-dump (writes its environment's names to VALUE_STUB_ENV_OUT and plays good), auth-fail (a sign-in error and no tool call),
 conflict (each role writes its own VERSION), leak-token, auth-refresh, auth-report (Codex sign-in faults and a report on the copy), codex-hooks, codex-skill, codex-state
-(a planted hook or skill, and the state Codex makes for itself), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
+(a planted hook or skill, and the state Codex makes for itself), no-hooks, hook-fail (hook outcomes), settings-report (hook install), break-link (bob replaces his ledger link), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
 """
 import json
 import os
@@ -39,8 +39,10 @@ def init():
     if mode == "plugin-leak":
         plugins.append({"name": "agentbus", "path": "/home/user/plugin"})
     emit({"type": "system", "subtype": "init", "model": "stub-model", "tools": tools, "skills": skills, "plugins": plugins, "mcp_servers": []})
-    if condition == "agentbus" or mode == "hook-leak":
-        emit({"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:startup"})
+    if (condition in ("agentbus", "ledger") and mode != "no-hooks") or mode == "hook-leak":
+        emit({"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:startup", "hook_event": "SessionStart"})
+        emit({"type": "system", "subtype": "hook_response", "hook_event": "SessionStart", "exit_code": "1" if mode == "hook-fail" else "0",
+              "outcome": "error" if mode == "hook-fail" else "success", "stdout": "" if mode == "hook-fail" else "{}"})
 
 
 def bash(command):
@@ -119,6 +121,10 @@ if harness == "codex" and os.environ.get("VALUE_STUB_QUOTA_FILE"):
     os.makedirs(os.path.join(os.environ["CODEX_HOME"], "sessions"), exist_ok=True)
     with open(os.path.join(os.environ["CODEX_HOME"], "sessions", "rollout-stub.jsonl"), "w") as f:
         f.write(json.dumps({"payload": {"rate_limits": {"limit_id": "codex", "primary": {"used_percent": used, "resets_at": 1}}}}) + "\n")
+if harness == "codex" and condition in ("agentbus", "ledger") and mode != "no-hooks":
+    os.makedirs(os.path.join(os.environ["CODEX_HOME"], "sessions"), exist_ok=True)
+    with open(os.path.join(os.environ["CODEX_HOME"], "sessions", "rollout-hooks.jsonl"), "w") as f:
+        f.write(json.dumps({"payload": {"text": "agentbus: you are on this folder's bus as x" if condition == "agentbus" else "ledger: COORDINATION.md has 0 entries"}}) + "\n")
 if harness == "codex" and os.environ.get("VALUE_STUB_ROLLOUT"):
     os.makedirs(os.path.join(os.environ["CODEX_HOME"], "sessions"), exist_ok=True)
     with open(os.path.join(os.environ["CODEX_HOME"], "sessions", "rollout-tokens.jsonl"), "w") as f:
@@ -141,6 +147,15 @@ if harness == "codex" and mode == "auth-report":
     auth = os.path.join(os.environ["CODEX_HOME"], "auth.json")
     with open(os.environ["VALUE_STUB_ENV_OUT"], "w") as f:
         f.write("%s %o\n" % (os.path.islink(auth), os.stat(auth).st_mode & 0o777))
+if mode == "settings-report":
+    hooks = json.load(open(".claude/settings.json"))["hooks"] if os.path.exists(".claude/settings.json") else {}
+    home = sorted(os.listdir(os.environ["CODEX_HOME"])) if harness == "codex" else []
+    with open(os.environ["VALUE_STUB_ENV_OUT"], "a") as f:
+        f.write(json.dumps({"role": role, "harness": harness, "events": sorted(hooks), "ledger_hook": "ledger_hook.py" in json.dumps(hooks),
+                            "name": os.environ.get("LEDGER_NAME"), "codex_home": home, "argv_trust": "--dangerously-bypass-hook-trust" in argv}) + "\n")
+if mode == "break-link" and role == "bob":
+    os.remove("COORDINATION.md")
+    open("COORDINATION.md", "w").write("10:00 bob NOTE: my own copy\n")
 if mode == "hang":
     time.sleep(3600)
 if mode == "spam":

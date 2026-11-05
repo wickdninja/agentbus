@@ -20,8 +20,16 @@ import tempfile
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent-eval"))  # last: it has a run.py too
+import normalize  # noqa: E402
 import tasks  # noqa: E402
 
+CHANNEL_PATHS = (".agentbus", "COORDINATION.md", ".claude", "AGENTS.md", ".git", "__pycache__", "CLAUDE.md")
+HOOKED = ("agentbus", "ledger")    # conditions whose harness hooks are part of the channel
+BUS_WRITES = {"post", "claim", "release", "goal", "join", "leave"}
+LEDGER_WRITE = re.compile(r"""(?:>>|\btee\s+-a)\s*['"]?(?:[^\s'";&|]*/)?COORDINATION\.md""")
+LEDGER_READ = re.compile(r"\b(?:cat|grep|egrep|tail|head|sed|awk|less|more|wc|nl)\b[^;&|\n]*COORDINATION\.md")
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 TEXT_SUFFIXES = (".py", ".md", ".txt", ".feed", ".json", ".toml", ".cfg", "")
 HIDDEN_TIMEOUT = 120
 SCRIPT_WRITE = re.compile(r"\.write\(|\.write_text\(|\.write_bytes\(|\.writelines\(")
@@ -47,6 +55,12 @@ def read_tree(root, skip):
             except OSError:
                 pass
     return found
+
+
+def is_channel_path(path):
+    """True for a path inside or naming a channel file: any part of it, not just the first, so a ledger reached through a worktree's
+    link (../proj/COORDINATION.md) is the ledger and never project work."""
+    return any(part in CHANNEL_PATHS for part in path.replace("\\", "/").split("/"))
 
 
 # ---- blind ----------------------------------------------------------------------------------------------------------
@@ -191,7 +205,9 @@ def _calls(lines, harness):
                     continue
                 if b.get("type") == "tool_use":
                     by_id[b.get("id")] = len(calls)
-                    calls.append([b.get("name", ""), json.dumps(b.get("input") or {}), ""])
+                    inp = b.get("input") or {}
+                    text = inp.get("command", "") if b.get("name") == "Bash" else json.dumps(inp)
+                    calls.append([b.get("name", ""), text, ""])
                 elif b.get("type") == "tool_result" and b.get("tool_use_id") in by_id:
                     calls[by_id[b["tool_use_id"]]][2] = json.dumps(b.get("content"))
         elif obj.get("type") == "item.completed":
@@ -306,12 +322,91 @@ def cost_of(lines, harness, condition):
         usage["cache_read"] += u.get("cache_read_input_tokens", 0)
         usage["output"] += u.get("output_tokens", 0)
     calls = _calls(lines, harness)
-    channel = [c for c in calls if c[0] in ("ListAgents", "SendMessage") or _is_channel(c[1], condition)]
-    if condition == "builtin":
-        channel = [c for c in calls if c[0] in ("ListAgents", "SendMessage")]
+    channel = [c for c in calls if is_channel_call(c[0], c[1], condition)]
     return {"model": model, "usage": usage, "cost_usd": cost_usd, "complete": complete, "tool_calls": len(calls),
             "channel_calls": len(channel), "channel_bytes_back": sum(len(c[2]) for c in channel),
-            "channel_writes": sum(1 for c in channel if re.search(r"post|claim|ctx set|>>|SendMessage|\"message\"", c[0] + c[1]))}
+            "channel_writes": sum(1 for c in channel if is_channel_write(c[0], c[1], condition)),
+            "hooks": hook_report(lines) if harness == "claude" else None, "protocol": protocol_steps(lines, harness, condition)}
+
+
+def is_channel_call(name, text, condition):
+    """A call that uses the channel. Loading a skill is not one, in any condition."""
+    if name == "Skill":
+        return False
+    if condition == "builtin":
+        return name in ("ListAgents", "SendMessage")
+    return _is_channel(text, condition)
+
+
+def is_channel_write(name, text, condition):
+    """A call that writes to the channel: a real write subcommand of the bus, an append to the ledger, a sent message."""
+    if condition == "agentbus":
+        return any(verb in BUS_WRITES or (verb == "ctx" and arg == "set") for verb, arg in normalize.bus_commands(text))
+    if condition == "ledger":
+        return bool(LEDGER_WRITE.search(text)) or (name in EDIT_TOOLS and "COORDINATION.md" in text)
+    return name == "SendMessage"
+
+
+def protocol_steps(lines, harness, condition):
+    """Did the session follow the protocol it was given? The same four steps for every channel: read it before the first edit,
+    claim before the first edit, release, and finish with a done or handoff. A manipulation check, read from the trace."""
+    steps, edited, claimed_first, read_first = {"read": False, "claim": False, "release": False, "finish": False}, False, None, None
+    for name, text, _result in _calls(lines, harness):
+        is_edit = (name in EDIT_TOOLS and not is_channel_path(text)) or (name == "file_change" and not is_channel_path(text)) or (
+            name == "Bash" and any(not is_channel_path(p) and not p.startswith("/dev/") for p in normalize.written_paths(text)))
+        if condition == "ledger":
+            write = is_channel_write(name, text, condition)
+            steps["read"] |= bool(LEDGER_READ.search(text)) or (name == "Read" and "COORDINATION.md" in text)
+            steps["claim"] |= write and "CLAIM:" in text
+            steps["release"] |= write and "RELEASE:" in text
+            steps["finish"] |= write and ("DONE:" in text or "HANDOFF" in text)
+        elif condition == "agentbus":
+            verbs = [v for v, _a in normalize.bus_commands(text)] if name == "Bash" else []
+            steps["read"] |= any(v in ("inbox", "brief", "status", "read") for v in verbs)
+            steps["claim"] |= "claim" in verbs
+            steps["release"] |= "release" in verbs or "leave" in verbs
+            steps["finish"] |= "post" in verbs and bool(re.search(r"--kind[= ]+['\"]?(?:done|handoff)", text))
+        elif condition == "builtin":
+            steps["read"] |= name == "ListAgents"
+            steps["claim"] |= name == "SendMessage"
+            steps["release"] = True
+            steps["finish"] |= name == "SendMessage" and ("DONE" in text or "HANDOFF" in text)
+        if is_edit and not edited:
+            edited, read_first, claimed_first = True, steps["read"], steps["claim"]
+    return {"read_first": steps["read"] if read_first is None else read_first, "claim_first": True if claimed_first is None else claimed_first,
+            "released": steps["release"], "finished": steps["finish"]}
+
+
+def hook_report(lines):
+    """{"started", "failed"} for a Claude session's hooks. A hook fails when it exits non-zero or errors, or when a SessionStart hook,
+    which always has something to say, prints nothing."""
+    started = failed = 0
+    for wrapped in lines:
+        obj = _obj(wrapped["line"])
+        if obj.get("type") != "system":
+            continue
+        if obj.get("subtype") == "hook_started":
+            started += 1
+        elif obj.get("subtype") == "hook_response":
+            bad = str(obj.get("exit_code", "0")) != "0" or obj.get("outcome") not in (None, "success")
+            silent = obj.get("hook_event") == "SessionStart" and not (obj.get("stdout") or obj.get("output") or "").strip()
+            failed += 1 if bad or silent else 0
+    return {"started": started, "failed": failed}
+
+
+def hook_infra(lines, condition):
+    """True when a condition's hooks never loaded: no hook started at all. That is infrastructure. A hook that ran is an outcome."""
+    return condition in HOOKED and hook_report(lines)["started"] == 0
+
+
+def codex_hooks_loaded(codex_home, condition):
+    """A Codex session's SessionStart hook text in its own session log, since Codex's stream does not report hooks."""
+    marker = {"agentbus": re.compile(r"on this folder's bus as"), "ledger": re.compile(r"ledger: (?:COORDINATION\.md has|there is no COORDINATION\.md)")}[condition]
+    for d, _dirs, files in os.walk(os.path.join(codex_home, "sessions")):
+        for name in files:
+            if name.startswith("rollout-") and marker.search(open(os.path.join(d, name), errors="replace").read()):
+                return True
+    return False
 
 
 def check_claude_init(lines, condition, tools):
@@ -341,10 +436,8 @@ def check_claude_init(lines, condition, tools):
             bad.append("the %s skill loaded in a %s run" % (skill, condition))
     if condition in own and own[condition] not in skills:
         bad.append("the %s skill did not load" % own[condition])
-    if condition != "agentbus" and hook_events:
+    if condition not in HOOKED and hook_events:
         bad.append("%d hook events in a %s run" % (hook_events, condition))
-    if condition == "agentbus" and not hook_events:
-        bad.append("no hook fired in an agentbus run")
     return bad
 
 

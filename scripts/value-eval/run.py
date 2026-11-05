@@ -44,7 +44,7 @@ TIME_CAP, TOOL_CAP, SNAP_EVERY = 2400, 80, 5
 CODEX_PLANTED = {"auth.json", "hooks.json", "AGENTS.md", "config.toml"}   # all a scratch CODEX_HOME may hold before launch; Codex adds its own state after
 TOOL_RELEASE = "642009c"     # the released tool under test: runs refuse any other bin/agentbus
 CODEX_BUDGET = 40            # usage points; the batch halts when projected use passes this
-CHANNEL_PATHS = (".agentbus", "COORDINATION.md", ".claude", "AGENTS.md", ".git", "__pycache__", "CLAUDE.md")
+CHANNEL_PATHS = grade.CHANNEL_PATHS
 CODEX_FEATURE_PINS = ("multi_agent", "plugins", "apps", "browser_use", "computer_use")
 GIT = ["git", "-c", "user.name=eval", "-c", "user.email=eval@example.com"]
 
@@ -136,7 +136,7 @@ def codex_args(prompt, workdir, model, condition, shared_dir=None):
         argv += ["-c", "features.%s=false" % feature]
     if shared_dir:
         argv += ["--add-dir", shared_dir]   # a worktree lane still has to reach the bus or the ledger in the main checkout
-    if condition == "agentbus":
+    if condition in grade.HOOKED:
         argv.append("--dangerously-bypass-hook-trust")  # hooks in a scratch CODEX_HOME, as scripts/e2e_codex.sh runs them
     return argv + [prompt]
 
@@ -285,6 +285,7 @@ class Run:
         codex = "codex" in self.harnesses.values()
         if self.condition == "ledger":
             self.write(".claude/skills/ledger/SKILL.md", tasks.LEDGER_SKILL)
+            self.install_ledger_hooks(codex)
             if codex:
                 self.write("AGENTS.md", tasks.LEDGER_AGENTS_BLOCK)
         elif self.condition == "builtin":
@@ -301,6 +302,31 @@ class Run:
             if codex:
                 self.sh([shim, "setup", "codex"], env=dict(env, CODEX_HOME=self.codex_home))
 
+    def install_ledger_hooks(self, codex):
+        """The ledger's hooks, on the events agentbus setup uses, with the same timeout and the same never-fail wrapper."""
+        folder = os.path.join(self.root, "ledger")
+        os.makedirs(folder)
+        hook = os.path.join(folder, "ledger_hook.py")
+        shutil.copy(os.path.join(HERE, "ledger_hook.py"), hook)
+
+        def entry(harness, event, matcher):
+            command = "%s %s %s %s 2>/dev/null || true" % (shlex.quote(sys.executable), shlex.quote(hook), harness, event)
+            group = {"hooks": [{"type": "command", "timeout": 5, "command": command}]}
+            if matcher:
+                group["matcher"] = matcher
+            return [group]
+        claude = {"hooks": {"SessionStart": entry("claude", "SessionStart", "startup|resume|clear|compact|fork"),
+                            "PreToolUse": entry("claude", "PreToolUse", "Edit|Write|MultiEdit|NotebookEdit")}}
+        self.write(".claude/settings.json", json.dumps(claude, indent=2) + "\n")
+        if codex:
+            with open(os.path.join(self.codex_home, "hooks.json"), "w") as f:
+                json.dump({"hooks": {"SessionStart": entry("codex", "SessionStart", None),
+                                     "PreToolUse": entry("codex", "PreToolUse", "apply_patch|Edit|Write")}}, f, indent=2)
+
+    def channel_name(self, role):
+        """How each tool learns the agent's name before it starts, so hooks and prompt agree."""
+        return {"agentbus": {"AGENTBUS_AGENT": role}, "ledger": {"LEDGER_NAME": role}}.get(self.condition, {})
+
     def write_claude_shim(self):
         """The launcher runs `claude` from PATH: this shim is that `claude`. It replaces the whole environment with the allowlist and
         the temp HOME, keeping only the config folder the launcher made. For `builtin`, both sessions must share one config folder, so
@@ -312,7 +338,7 @@ class Run:
             shared = os.path.join(self.root, "shared-cfg")
             lines += ['if mkdir "%s.lock" 2>/dev/null; then cp -RP "$CLAUDE_CONFIG_DIR" "%s.tmp" && mv "%s.tmp" "%s"; fi' % (shared, shared, shared, shared),
                       'while [ ! -d "%s" ]; do sleep 0.2; done' % shared, 'CFG="%s"' % shared]
-        name = ' AGENTBUS_AGENT="$VALUE_ROLE"' if self.condition == "agentbus" else ""   # the documented way to name a lane, so hooks and prompt agree
+        name = "".join(' %s="$VALUE_ROLE"' % k for k in self.channel_name("x"))   # the documented way to name a lane, so hooks and prompt agree
         lines.append('exec /usr/bin/env -i %s%s CLAUDE_CONFIG_DIR="$CFG" %s "$@"' % (env, name, shlex.quote(real)))
         path = os.path.join(self.shim, "claude")
         with open(path, "w") as f:
@@ -328,13 +354,11 @@ class Run:
         if agent.harness == "claude":
             rest = claude_args(prompt, agent.role, args.claude_model, self.root, self.condition)
             if self.stub:
-                return [os.path.join(self.stub, "claude")] + rest, dict(env, VALUE_ROLE=agent.role)
+                return [os.path.join(self.stub, "claude")] + rest, dict(env, VALUE_ROLE=agent.role, **self.channel_name(agent.role))
             return (shlex.split(args.claude_launcher) + rest,
                     {"HOME": self.real_home, "USER": env["USER"], "LANG": env["LANG"], "TERM": env["TERM"], "VALUE_ROLE": agent.role,
                      "PATH": os.pathsep.join([self.shim, "/usr/bin", "/bin"])})
-        env = dict(env, CODEX_HOME=self.codex_home, VALUE_ROLE=agent.role)
-        if self.condition == "agentbus":
-            env["AGENTBUS_AGENT"] = agent.role
+        env = dict(env, CODEX_HOME=self.codex_home, VALUE_ROLE=agent.role, **self.channel_name(agent.role))
         rest = codex_args(prompt, self.workdir(agent.role), args.codex_model, self.condition, self.proj if self.worktrees else None)
         if self.stub:
             return [os.path.join(self.stub, "codex")] + rest, env
@@ -474,8 +498,8 @@ class Run:
     def check_codex(self):
         """Scratch CODEX_HOME holds only what this condition needs; the real sign-in did not change; no credential in anything kept."""
         bad = []
-        if self.condition != "agentbus":
-            bad += ["%s in a %s run" % (n, self.condition) for n in ("hooks.json", "AGENTS.md") if os.path.exists(os.path.join(self.codex_home, n))]
+        own = {"agentbus": ("hooks.json", "AGENTS.md"), "ledger": ("hooks.json",)}.get(self.condition, ())
+        bad += ["%s in a %s run" % (n, self.condition) for n in ("hooks.json", "AGENTS.md") if n not in own and os.path.exists(os.path.join(self.codex_home, n))]
         skills = os.path.join(self.codex_home, "skills")
         extra = sorted(set(os.listdir(skills)) - {".system"}) if os.path.isdir(skills) else []
         if extra:
@@ -504,7 +528,7 @@ class Run:
             for ts, path in found:
                 if os.path.isabs(path):
                     path = os.path.relpath(os.path.realpath(path), base)
-                if path.split(os.sep)[0] not in CHANNEL_PATHS:
+                if not grade.is_channel_path(path):
                     events.append({"ts": ts, "agent": a.role, "path": path})
         grade.write_json(os.path.join(self.out, "edits.json"), sorted(events, key=lambda e: e["ts"]))
         final = os.path.join(self.out, "final")
@@ -523,12 +547,21 @@ class Run:
             "kill": self.kill, "merge": self.merge})
         cost = {a.role: grade.cost_of(a.lines, a.harness, self.condition) for a in agents.values()}
         for a in agents.values():
+            link = os.path.join(self.workdir(a.role), "COORDINATION.md")
+            cost[a.role]["ledger_link_broken"] = self.condition == "ledger" and self.worktrees and not os.path.islink(link)
+            if a.harness == "codex":
+                cost[a.role]["hooks_loaded"] = grade.codex_hooks_loaded(self.codex_home, self.condition) if self.condition in grade.HOOKED else None
             if a.harness == "codex" and not cost[a.role]["complete"]:
                 cost[a.role]["usage"] = grade.codex_rollout_usage(self.codex_home) or cost[a.role]["usage"]
         grade.write_json(os.path.join(self.out, "cost.json"), cost)
         self.quota = grade.codex_quota(self.codex_home) if "codex" in self.harnesses.values() else None
         grade.write_json(os.path.join(self.out, "quota.json"), self.quota)
-        return {a.role: grade.infra_failure(a.lines, a.harness, a.proc.returncode, a.killed_by_task, a.stop_reason) for a in agents.values()}
+        infra = {a.role: grade.infra_failure(a.lines, a.harness, a.proc.returncode, a.killed_by_task, a.stop_reason) for a in agents.values()}
+        for a in agents.values():   # hooks that never loaded are infrastructure; a hook that ran and failed is an outcome, kept in cost.json
+            unloaded = grade.hook_infra(a.lines, self.condition) if a.harness == "claude" else cost[a.role]["hooks_loaded"] is False
+            if unloaded and not infra[a.role]:
+                infra[a.role] = "hooks did not load"
+        return infra
 
     def execute(self):
         try:

@@ -209,6 +209,50 @@ rc=0; env VALUE_STUB_QUOTA_FILE="$T/quota" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --
 [ "$(wc -l < "$T/budget/manifest.jsonl" | tr -d ' ')" = 3 ] || fail "the batch went on past the budget: $(wc -l < "$T/budget/manifest.jsonl") runs"
 ok "30 points a run halts on the run that passes 40"
 
+echo "TEST 14: the ledger gets hooks on the same events, in both harnesses; none and builtin get none"
+: > "$T/hooks"
+for c in ledger none builtin; do env VALUE_STUB_MODE=settings-report VALUE_STUB_ENV_OUT="$T/hooks" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions $c --pairings cc --seeds 1 --out "$T/h-$c" >"$T/log" 2>&1 || { cat "$T/log"; fail "$c settings run"; }; done
+env VALUE_STUB_MODE=settings-report VALUE_STUB_ENV_OUT="$T/hooks" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks overlap --conditions ledger --pairings cx --seeds 1 --codex-auth "$T/auth.json" --out "$T/h-cx" >"$T/log" 2>&1 || { cat "$T/log"; fail "cx ledger settings run"; }
+"$PY" -B - "$T/hooks" <<'CHECK' || fail "ledger hooks"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1])]
+claude = [r for r in rows if r["harness"] == "claude"]
+led = [r for r in claude if r["ledger_hook"]]
+assert len(led) == 3 and all(r["events"] == ["PreToolUse", "SessionStart"] for r in led), led
+assert all(r["name"] == r["role"] for r in led), "LEDGER_NAME"
+assert sum(1 for r in claude if not r["events"]) == 4, "none and builtin must have no hooks: %s" % claude
+codex = [r for r in rows if r["harness"] == "codex"]
+assert codex and "hooks.json" in codex[0]["codex_home"] and codex[0]["argv_trust"] and codex[0]["name"] == codex[0]["role"], codex
+CHECK
+ok "ledger hooks install for Claude and Codex, named; none and builtin stay hookless"
+
+echo "TEST 15: a hook that ran and failed is an outcome; hooks that never loaded are infrastructure"
+env VALUE_STUB_MODE=hook-fail VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions ledger --pairings cc --seeds 1 --out "$T/hf" >"$T/log" 2>&1 || { cat "$T/log"; fail "hook-fail run"; }
+[ "$(field "$T/hf" 'r["infra"]')" = "{}" ] && [ "$(field "$T/hf" 'r["isolation"]')" = "[]" ] || fail "a failed hook was excused: $(field "$T/hf" 'r')"
+"$PY" -B -c "import glob,json,sys; c=json.load(open(glob.glob(sys.argv[1]+'/r*/cost.json')[0])); assert c['alice']['hooks']['failed']==1, c" "$T/hf" || fail "a failed hook was not recorded"
+rc=0; env VALUE_STUB_MODE=no-hooks VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions agentbus --pairings cc --seeds 1 3 --out "$T/nh" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 0 ] && grep -q 'hooks did not load' "$T/nh/manifest.jsonl" && [ "$(wc -l < "$T/nh/manifest.jsonl" | tr -d ' ')" = 2 ] || { cat "$T/log"; fail "hooks that never loaded (rc $rc)"; }
+ok "a failed hook is recorded and the run counts; unloaded hooks are infrastructure and the batch goes on"
+
+echo "TEST 16: ledger edits are not project edits, and a broken ledger link is recorded"
+env VALUE_STUB_MODE=break-link VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks overlap --conditions ledger --pairings cc --seeds 1 --out "$T/bl" >"$T/log" 2>&1 || { cat "$T/log"; fail "break-link run"; }
+grades "$T/bl"
+"$PY" -B - "$T/bl" <<'CHECK' || fail "ledger link"
+import glob, json, sys
+d = glob.glob(sys.argv[1] + "/r*/")[0]
+cost = json.load(open(d + "cost.json"))
+assert cost["bob"]["ledger_link_broken"] is True and cost["alice"]["ledger_link_broken"] is False, cost
+assert not [e for e in json.load(open(d + "edits.json")) if "COORDINATION" in e["path"]], "a ledger edit reached the graders"
+CHECK
+ok "bob's broken link is a recorded failure mode; ledger writes never count as edits"
+
+echo "TEST 17: the analysis prints the registered corrections and every measure"
+out=$("$PY" -B "$SCRIPTS/analyze.py" "$T/good" --n 1)
+for want in "Holm" "without overlap" "channel bytes back" "channel writes" "S8" "fresh tokens, secondary" "hook failures" "Protocol steps"; do
+  grep -q "$want" <<<"$out" || fail "the analysis lacks: $want"
+done
+ok "Holm, the sensitivity rows, channel cost, S8 and protocol steps all print"
+
 echo "TEST 13: a run leaves nothing behind"
 [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'value-run-*' | grep -v forbidden || true)" ] || fail "run folders left: $(ls "$TMPDIR")"
 ok "the mktemp folders are gone"

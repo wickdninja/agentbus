@@ -116,8 +116,9 @@ def test_no_channel_has_an_instruction_the_skill_lacks():
     """Ruling of 2026-11-05: the ledger and peer texts carry no writing advice the shipped skill does not."""
     for text in (tasks.LEDGER_SKILL, tasks.PEER_SKILL):
         check("Write what the reader needs" not in text, "a channel text has an instruction the skill lacks")
-    for section in ("If you are waiting for an answer",):
-        check(section in tasks.LEDGER_SKILL and section in tasks.PEER_SKILL, "the rest of the text must stay")
+    for text in (tasks.LEDGER_SKILL, tasks.PEER_SKILL):
+        check("If you are waiting" not in text and "timeout" not in text and "sleep" not in text, "a channel text tells agents how to wait")
+    check("## Communicate" in tasks.LEDGER_SKILL and "## Communicate" in tasks.PEER_SKILL, "the rest of the text must stay")
 
 
 def test_secret_leaks():
@@ -182,6 +183,139 @@ def test_tool_pin():
     check(not run.tool_is_release(d, "HEAD"), "a patched tool passed as the release")
     check(not run.tool_is_release(d, "no-such-ref"), "an unknown release passed")
     shutil.rmtree(d)
+
+
+def test_ledger_text_covers_what_the_skill_covers():
+    """Item 8: each instruction the agentbus skill gives has its ledger counterpart."""
+    text = tasks.LEDGER_SKILL
+    for needle, what in (("relative to the repo root", "how to spell a path"), ("git ls-files", "exact spelling"),
+                         ("Read the whole file", "reading all of it"), ("latest FACT", "which fact wins"),
+                         ("<<'EOF'", "multi-line entries by heredoc"), ("blank line", "entry separator"),
+                         ("Hooks:", "what the hooks do"), ("never replace reading", "hooks do not replace reading"),
+                         ("JOIN entries", "who is here"), ("Claim new files before creating them", "new files"),
+                         ("covers everything in it", "folder claims"), ("release your claims", "finish")):
+        check(needle in text, "the ledger text lacks %s (%r)" % (what, needle))
+
+
+def test_ledger_parser():
+    import ledger_hook as lh
+    text = ("# notes\n\n10:01:00 alice JOIN: porting\n\n10:02:00 alice CLAIM: src/ (porting)\n\n"
+            "10:03:00 alice HANDOFF to bob: state\nline two\nline three\n\n"
+            "10:04:00 alice FACT delimiter: ;\n10:05:00 bob FACT delimiter: |\n10:06:00 bob CLAIM: VERSION, CHANGELOG.md (bump)\n"
+            "10:07:00 bob RELEASE: CHANGELOG.md\n10:08:00 alice QUESTION to bob: which?\n")
+    entries = lh.parse(text)
+    check([e["kind"] for e in entries] == ["JOIN", "CLAIM", "HANDOFF", "FACT", "FACT", "CLAIM", "RELEASE", "QUESTION"], [e["kind"] for e in entries])
+    check(entries[2]["to"] == "bob" and entries[2]["text"] == "state\nline two\nline three", "a multi-line entry: %r" % entries[2]["text"])
+    check(lh.facts(entries) == {"delimiter": "|"}, "the latest FACT must win: %s" % lh.facts(entries))
+    check(lh.open_claims(entries) == {("alice", "src"): "porting", ("bob", "VERSION"): "bump"}, "open claims: %s" % lh.open_claims(entries))
+    check(lh.covers("src", "src/a.py") and not lh.covers("src", "srcx/a.py"), "folder cover")
+
+
+def _hook(event, payload, name, cwd, tmp):
+    p = subprocess.run([sys.executable, "-B", os.path.join(os.path.abspath(sys.argv[1]), "ledger_hook.py"), "claude", event], input=json.dumps(payload),
+                       cwd=cwd, env={"LEDGER_NAME": name, "TMPDIR": tmp, "PATH": "/usr/bin:/bin"}, stdout=subprocess.PIPE, universal_newlines=True)
+    return json.loads(p.stdout)["hookSpecificOutput"]["additionalContext"] if p.stdout.strip() else None
+
+
+def test_ledger_hook():
+    d, tmp = tempfile.mkdtemp(), tempfile.mkdtemp()
+    tree(d, {"COORDINATION.md": "10:01 bob CLAIM: pkg/a.py (tax)\n\n10:02 bob QUESTION to alice: API?\n10:03 bob NOTE: hi\n", "pkg/a.py": "", "sub/x": ""})
+    got = _hook("SessionStart", {"cwd": os.path.join(d, "sub"), "session_id": "s1"}, "alice", d, tmp)
+    check("has 3 entries, 1 addressed to alice" in got and "QUESTION to alice: API?" in got, "session start: %s" % got)
+    warn = _hook("PreToolUse", {"cwd": d, "session_id": "s1", "tool_input": {"file_path": os.path.join(d, "pkg/a.py")}}, "alice", d, tmp)
+    check(warn and "claimed by bob" in warn and "(tax)" in warn, "no warning on another's claim: %s" % warn)
+    check(_hook("PreToolUse", {"cwd": d, "session_id": "s1", "tool_input": {"file_path": os.path.join(d, "pkg/a.py")}}, "bob", d, tmp) is None, "the holder was warned")
+    payload = {"cwd": d, "session_id": "s1", "tool_input": {"file_path": "pkg/b.py"}}
+    first = _hook("PreToolUse", payload, "alice", d, tmp)
+    check(first and "has no CLAIM" in first, "no nudge on an unclaimed path: %s" % first)
+    check(_hook("PreToolUse", payload, "alice", d, tmp) is None, "the nudge repeated")
+    patch = {"cwd": d, "session_id": "s2", "tool_input": {"command": "*** Begin Patch\n*** Update File: pkg/a.py\n@@\n*** End Patch"}}
+    check("claimed by bob" in (_hook("PreToolUse", patch, "alice", d, tmp) or ""), "a Codex patch path was not seen")
+    check(_hook("PreToolUse", {"cwd": d, "session_id": "s3", "tool_input": {"file_path": "COORDINATION.md"}}, "alice", d, tmp) is None, "the ledger itself was nudged")
+    empty = tempfile.mkdtemp()
+    check("no COORDINATION.md here yet" in _hook("SessionStart", {"cwd": empty}, "alice", empty, tmp), "a missing ledger")
+    for x in (d, tmp, empty):
+        shutil.rmtree(x)
+
+
+def test_hook_rules_per_condition():
+    tools = ["Bash", "Read"]
+    init = {"type": "system", "subtype": "init", "tools": tools, "skills": ["ledger"], "plugins": [], "mcp_servers": []}
+    started = {"type": "system", "subtype": "hook_started"}
+    failed = {"type": "system", "subtype": "hook_response", "hook_event": "PreToolUse", "exit_code": "1", "outcome": "error", "stdout": ""}
+    empty_start = {"type": "system", "subtype": "hook_response", "hook_event": "SessionStart", "exit_code": "0", "outcome": "success", "stdout": ""}
+    good = {"type": "system", "subtype": "hook_response", "hook_event": "SessionStart", "exit_code": "0", "outcome": "success", "stdout": "{}"}
+    check(grade.check_claude_init(claude_lines(init, started), "ledger", tools) == [], "hooks must be allowed in a ledger run")
+    check(any("hook" in x for x in grade.check_claude_init(claude_lines(dict(init, skills=[]), started), "none", tools)), "a hook in none")
+    check(grade.check_claude_init(claude_lines(dict(init, skills=["agentbus"])), "agentbus", tools) == [], "missing hooks are infra, not isolation")
+    check(grade.hook_report(claude_lines(init, started, good)) == {"started": 1, "failed": 0}, "a clean hook")
+    check(grade.hook_report(claude_lines(init, started, failed, empty_start)) == {"started": 1, "failed": 2}, "a failed and a silent SessionStart hook")
+    check(grade.hook_infra(claude_lines(init), "ledger") and grade.hook_infra(claude_lines(init), "agentbus"), "settings that did not load are infra")
+    check(not grade.hook_infra(claude_lines(init, started, failed), "agentbus"), "a hook that ran and failed is an outcome")
+    check(not grade.hook_infra(claude_lines(init), "none"), "none has no hooks to load")
+
+
+def test_channel_counting():
+    def call(name, payload):
+        return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": name + str(len(payload)), "name": name, "input": payload}]}}
+    bus = claude_lines(call("Skill", {"skill": "agentbus"}), call("Bash", {"command": "agentbus --as a inbox"}),
+                       call("Bash", {"command": "agentbus --as a claim src --purpose x && agentbus --as a post hi"}),
+                       call("Bash", {"command": "echo 'nothing about a claim here'"}))
+    got = grade.cost_of(bus, "claude", "agentbus")
+    check(got["channel_calls"] == 2 and got["channel_writes"] == 1, "a Skill call or a stray word counted: %s" % got)
+    led = claude_lines(call("Skill", {"skill": "ledger"}), call("Bash", {"command": "cat COORDINATION.md | grep claim"}),
+                       call("Bash", {"command": "printf '%s\\n' x >> COORDINATION.md"}), call("Read", {"file_path": "/w/COORDINATION.md"}))
+    got = grade.cost_of(led, "claude", "ledger")
+    check(got["channel_calls"] == 3 and got["channel_writes"] == 1, "ledger counting: %s" % got)
+
+
+def test_channel_paths():
+    for path in ("../proj/COORDINATION.md", "COORDINATION.md", "a/.claude/x", "pkg/__pycache__/m.pyc", ".agentbus/bus.db", "sub/AGENTS.md"):
+        check(grade.is_channel_path(path), "%s must count as a channel path" % path)
+    for path in ("pkg/a.py", "docs/COORDINATION.txt", "claude/x.py"):
+        check(not grade.is_channel_path(path), "%s is project work" % path)
+
+
+def test_protocol_steps():
+    def bash(c):
+        return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": c[:9] + str(len(c)), "name": "Bash", "input": {"command": c}}]}}
+    edit = {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "e1", "name": "Write", "input": {"file_path": "/w/pkg/a.py"}}]}}
+    good = claude_lines(bash("cat COORDINATION.md"), bash("printf x >> COORDINATION.md # CLAIM: pkg/a.py"), edit,
+                        bash("printf x >> COORDINATION.md # RELEASE: pkg/a.py"), bash("printf x >> COORDINATION.md # DONE: ok"))
+    check(grade.protocol_steps(good, "claude", "ledger") == {"read_first": True, "claim_first": True, "released": True, "finished": True},
+          "a compliant ledger session: %s" % grade.protocol_steps(good, "claude", "ledger"))
+    bad = claude_lines(edit, bash("printf x >> COORDINATION.md # DONE: ok"))
+    check(grade.protocol_steps(bad, "claude", "ledger") == {"read_first": False, "claim_first": False, "released": False, "finished": True}, "an edit first")
+    bus = claude_lines(bash("agentbus --as a join; agentbus --as a brief"), bash("agentbus --as a claim pkg/a.py"), edit,
+                       bash("agentbus --as a post 'r' --kind done"), bash("agentbus --as a leave"))
+    check(grade.protocol_steps(bus, "claude", "agentbus") == {"read_first": True, "claim_first": True, "released": True, "finished": True},
+          "a compliant bus session: %s" % grade.protocol_steps(bus, "claude", "agentbus"))
+
+
+def test_holm_and_verdicts():
+    adj = analyze.holm({"P1": 0.01, "P2": 0.04, "P3": 0.03})
+    check(all(math.isclose(adj[k], v) for k, v in {"P1": 0.03, "P3": 0.06, "P2": 0.06}.items()), "holm: %s" % adj)
+    check(analyze.holm({"P1": 0.5}) == {"P1": 0.5}, "one hypothesis")
+    check(analyze.boot_p([0.1, 0.2, -0.1, 0.3], 0.0, "above") == (1 + 1) / 5, "one-sided p above zero")
+    check(analyze.boot_p([1.1, 1.3, 1.2, 1.4], 1.25, "below") == (1 + 2) / 5, "one-sided p below the margin")
+    check(analyze.verdict(-0.20, -0.35, -0.05, False) == "flat file better", "an interval wholly below zero")
+    check(analyze.verdict(0.20, 0.05, 0.35, False).startswith("inconclusive"), "a Holm miss is not a win, whatever the raw interval says")
+    check(analyze.verdict(0.20, 0.05, 0.35, True) == "value over a flat file", "value")
+    check(analyze.verdict(0.08, 0.01, 0.12, True).startswith("real but small"), "small")
+    check(analyze.flat_file_better(p3_within=False, pass_verdict="value over a flat file", ledger_cheaper=False), "P3 failing alone decides")
+    check(analyze.flat_file_better(True, "no meaningful value over a flat file", True), "a match on pass rate at lower cost")
+    check(not analyze.flat_file_better(True, "no meaningful value over a flat file", False), "a match at no lower cost")
+    check(not analyze.flat_file_better(True, "inconclusive: no evidence of value", True), "an inconclusive pass rate is not a match")
+    check(analyze.flat_file_better(True, "flat file better", False), "flat file better on pass rate")
+
+
+def test_p3_counts_every_token():
+    rows = []
+    for s in range(12):
+        rows.append({"seed": s, "condition": "agentbus", "cost": {"a": {"usage": {"input": 10, "cache_write": 0, "cache_read": 990, "output": 0}}}})
+        rows.append({"seed": s, "condition": "ledger", "cost": {"a": {"usage": {"input": 10, "cache_write": 0, "cache_read": 490, "output": 0}}}})
+    point, _lo, _hi, _draws = analyze.p3(rows, resamples=200)
+    check(math.isclose(point, 2.0), "P3 must be on total tokens as registered: %s" % point)
 
 
 def test_prompts_differ_only_in_the_channel():
@@ -282,7 +416,7 @@ def test_check_claude_init():
     check(run(good) == [], "a clean none run: %s" % run(good))
     hook = {"type": "system", "subtype": "hook_started"}
     check(any("hook" in x for x in run(good, "none", [hook])), "a hook in a none run")
-    check(any("no hook" in x for x in run(dict(good, skills=["agentbus"]), "agentbus")), "an agentbus run with no hook")
+    check(grade.hook_infra(claude_lines(dict(good, skills=["agentbus"])), "agentbus"), "an agentbus run with no hook")   # infrastructure since the 2026-11-05 ruling
     check(run(dict(good, skills=["agentbus"]), "agentbus", [hook]) == [], "a clean agentbus run")
     check(any("skill" in x for x in run(dict(good, skills=["agentbus"]))), "the bus skill in a none run")
     check(any("skill" in x for x in run(good, "ledger")), "a ledger run missing its skill")

@@ -4264,5 +4264,68 @@
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "a hook in a none run"
+  },
+  {
+    "name": "value eval: Holm adjusts nothing",
+    "file": "scripts/value-eval/analyze.py",
+    "find": "running = max\\(running, min\\(1\\.0, \\(m - i\\) \\* pvals\\[k\\]\\)\\)",
+    "replace": "running = pvals[k]",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "holm:"
+  },
+  {
+    "name": "value eval: no flat-file verdict",
+    "file": "scripts/value-eval/analyze.py",
+    "find": "    if hi < 0:\\n        return \\\"flat file better\\\"\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "an interval wholly below zero"
+  },
+  {
+    "name": "value eval: P3 on fresh tokens",
+    "file": "scripts/value-eval/analyze.py",
+    "find": "value or tokens, resamples",
+    "replace": "value or fresh_tokens, resamples",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "P3 must be on total tokens"
+  },
+  {
+    "name": "value eval: a Skill call counts as channel use",
+    "file": "scripts/value-eval/grade.py",
+    "find": "    if name == \\\"Skill\\\":\\n        return False\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a Skill call or a stray word counted"
+  },
+  {
+    "name": "value eval: only a path's first part is checked",
+    "file": "scripts/value-eval/grade.py",
+    "find": "return any\\(part in CHANNEL_PATHS for part in path\\.replace\\(\\\"\\\\\\\\\\\", \\\"/\\\"\\)\\.split\\(\\\"/\\\"\\)\\)",
+    "replace": "return path.split(\"/\")[0] in CHANNEL_PATHS",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "must count as a channel path"
+  },
+  {
+    "name": "value eval: a hook in a ledger run stops the batch",
+    "file": "scripts/value-eval/grade.py",
+    "find": "if condition not in HOOKED and hook_events:",
+    "replace": "if condition != \"agentbus\" and hook_events:",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "hooks must be allowed in a ledger run"
+  },
+  {
+    "name": "value eval: the ledger's FACT keeps its first value",
+    "file": "scripts/value-eval/ledger_hook.py",
+    "find": "            out\\[e\\[\\\"key\\\"\\]\\] = e\\[\\\"text\\\"\\]",
+    "replace": "            out.setdefault(e[\"key\"], e[\"text\"])",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "the latest FACT must win"
   }
 ]
