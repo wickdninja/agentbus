@@ -13,7 +13,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
     --allow-skip) ALLOW=1 ;;
-    --sums) shift; SUMS="${1:?--sums needs a file}" ;;
+    --sums) shift; SUMS="${1:?--sums needs a file}"; [ -f "$SUMS" ] && SUMS="$(cd "$(dirname "$SUMS")" && pwd)/$(basename "$SUMS")" ;;   # absolute: the script moves to its temp folder
     *) echo "FAIL: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
