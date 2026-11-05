@@ -2792,8 +2792,8 @@
   {
     "name": "output: the claim confirmation says until ISO",
     "file": "bin/agentbus",
-    "find": "\"renewed \\{\\} \\{\\}\" if result\\[\"renewed\"\\] else \"claimed \\{\\} \\{\\}\", res, until_phrase\\(ttl, exp\\)\\)",
-    "replace": "\"renewed {} {}\" if result[\"renewed\"] else \"claimed {} until {}\", res, exp)",
+    "find": "emit\\(a, result, \"claimed \\{\\} \\{\\}\", res, until_phrase\\(ttl, exp\\)\\)",
+    "replace": "emit(a, result, \"claimed {} until {}\", res, exp)",
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "claim does not say `for 2h (until HH:MM)`"
