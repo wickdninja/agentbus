@@ -467,7 +467,7 @@ def _recovery(seed):
     tickets = {
         "alice": "%s Notes from the owner, which are not written down anywhere else: %s is retired, so do not port it, list it in SKIP. "
                  "For %s, finance changed the factor: its port uses %d, not the value in the legacy source." % (common, skip, changed, p["new_factor"]),
-        "bob": "%s Another agent was on this ticket and its session died partway through. It will not come back, and anything it held is yours to take over. "
+        "bob": "%s Alice was on this ticket and her session died partway through. She will not come back, and anything she held is yours to take over. "
                "Finish the job." % common,
     }
     return Task("recovery", seed, files, tickets, [["alice"], ["bob"]], ["ports", "skip", "changed"], kill={"role": "alice", "glob": "src/[a-z]*.py", "at": 3}, same_name=("run",))

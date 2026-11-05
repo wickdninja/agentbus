@@ -173,3 +173,5 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 - `agentbus` lanes now start with `AGENTBUS_AGENT` set, the way the tool's docs say to name a lane, so hooks and prompt agree on the name. Before this, the harness gave an agent two names, which was the harness's fault, not the tool's.
 - Pass 3 runs on fresh seeds, 9005 and 9006.
 
+**2026-11-05, after pilot pass 3.** `overlap` and the `recovery` kill are now sound. One wording bug remained: bob's ticket said "another agent" died while the intro named alice as a colleague, so bob took alice for someone alive and waited on her claim, in the ledger and the bus alike. The ticket now names alice. Pass 3's `overlap` runs stand as the harness check for that task; its `recovery` runs count only for cost. `recovery` reruns on seeds 9007 and 9008.
+
