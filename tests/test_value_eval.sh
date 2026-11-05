@@ -39,8 +39,8 @@ grep -q 'builtin cx' <<<"$out" && fail "a builtin cx cell was planned"
 [ "$("${RUN[@]}" --out "$T/p" --dry-run --seeds 1 2 --order-seed 9)" != "$out" ] || fail "the order seed changes nothing"
 rc=0; out=$("${RUN[@]}" --out "$T/p" --tasks control --conditions none --pairings cc 2>&1) || rc=$?
 [ "$rc" = 3 ] && grep -q -- '--go' <<<"$out" || fail "no --go: rc $rc: $out"
-rc=0; out=$("${RUN[@]}" --out "$T/p" --go --claude-profile x --tasks control --conditions none --pairings cx 2>&1) || rc=$?
-[ "$rc" = 2 ] && grep -q "codex-lane refuses" <<<"$out" || fail "Codex with no route must refuse before any run: rc $rc: $out"
+rc=0; out=$("${RUN[@]}" --out "$T/p" --go --claude-launcher /bin/false --tasks control --conditions none --pairings cx 2>&1) || rc=$?
+[ "$rc" = 2 ] && grep -q "Codex needs --codex-route exec" <<<"$out" || fail "Codex with no route must refuse before any run: rc $rc: $out"
 [ ! -e "$T/p" ] || fail "a refused batch made its output folder"
 ok "plans are counted, repeatable and paired; a real run needs --go; Codex with no route never starts"
 
@@ -176,6 +176,9 @@ codex_stub() { rc=0; env VALUE_STUB_MODE="$1" VALUE_STUB_ENV_OUT="$T/authreport"
 codex_stub auth-report
 [ "$rc" = 0 ] || { cat "$T/log"; fail "a clean Codex run: rc $rc"; }
 [ "$(cat "$T/authreport")" = "False 600" ] || fail "the sign-in copy: $(cat "$T/authreport")"
+env VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cx --seeds 1 --codex-auth "$T/auth.json" --time-cap 60 --keep-tree --out "$T/kept" >"$T/log" 2>&1 || { cat "$T/log"; fail "a kept Codex run"; }
+[ -z "$(find "$TMPDIR" -path '*/codex-home/auth.json' | head -1)" ] || fail "a kept tree holds a copy of the sign-in"
+find "$TMPDIR" -maxdepth 1 -name 'value-run-*' -exec rm -rf {} +
 codex_stub leak-token
 [ "$rc" = 5 ] && grep -q 'a Codex credential is in' "$T/log" || { cat "$T/log"; fail "a token in a trace did not stop the batch (rc $rc)"; }
 grep -q 'tok_x' "$T/log" && fail "the check printed the token"

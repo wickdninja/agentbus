@@ -5,9 +5,9 @@ One run builds a seeded repo in mktemp, installs one condition's channel, runs t
 time and tool caps, then keeps the traces, the final tree and snapshots in --out. Nothing here grades: grade.py does,
 blind to condition, from what this collected.
 
-A real agent never sees the caller's environment or config. Claude is the first-party binary launched by
-`clauth start --isolated` (a throwaway runtime with the owner's sign-in), through a shim that swaps in a temp HOME and an
-allowlisted environment. Every run ends in isolation checks, and one failure stops the batch.
+A real agent never sees the caller's environment or config. Claude is the first-party binary, started by --claude-launcher (a command
+that gives it a throwaway config folder and an existing sign-in, and runs `claude` from PATH), through a shim that swaps in a temp HOME
+and an allowlisted environment. Every run ends in isolation checks, and one failure stops the batch.
 """
 import argparse
 import fnmatch
@@ -42,7 +42,7 @@ BUILTIN_TOOLS = ["ListAgents", "SendMessage", "ToolSearch"]
 CLAUDE_MODEL, CODEX_MODEL = "sonnet", "gpt-6.1-sol"
 TIME_CAP, TOOL_CAP, SNAP_EVERY = 2400, 80, 5
 TOOL_RELEASE = "642009c"     # the released tool under test: runs refuse any other bin/agentbus
-CODEX_BUDGET = 40            # quota points; the batch halts when projected use passes this
+CODEX_BUDGET = 40            # usage points; the batch halts when projected use passes this
 CHANNEL_PATHS = (".agentbus", "COORDINATION.md", ".claude", "AGENTS.md", ".git", "__pycache__", "CLAUDE.md")
 CODEX_FEATURE_PINS = ("multi_agent", "plugins", "apps", "browser_use", "computer_use")
 GIT = ["git", "-c", "user.name=eval", "-c", "user.email=eval@example.com"]
@@ -227,7 +227,18 @@ class Run:
             self.make_worktrees()
         if not self.stub:
             self.write_claude_shim()
+            if "codex" in self.harnesses.values():
+                self.write_codex_shim()
         self.install_codex_auth()
+
+    def write_codex_shim(self):
+        """codex is a node script outside the allowlisted PATH. The agent keeps that PATH: only this launch names node and codex."""
+        js = os.path.realpath(shutil.which(self.args.codex_bin))
+        node = os.path.realpath(shutil.which("node"))
+        path = os.path.join(self.shim, "codex")
+        with open(path, "w") as f:
+            f.write('#!/bin/sh\nexec %s %s "$@"\n' % (shlex.quote(node), shlex.quote(js)))
+        os.chmod(path, 0o755)
 
     def install_codex_auth(self):
         """A private copy, never a link: a token refresh must not write through to the real sign-in."""
@@ -288,9 +299,9 @@ class Run:
                 self.sh([shim, "setup", "codex"], env=dict(env, CODEX_HOME=self.codex_home))
 
     def write_claude_shim(self):
-        """clauth execs `claude` from PATH: this shim is that `claude`. It replaces the whole environment with the allowlist and
-        the temp HOME, keeping only the runtime clauth made. For `builtin`, both sessions must share one config folder, so the
-        first copy of clauth's runtime in this run's own folder serves both, and it outlives either clauth."""
+        """The launcher runs `claude` from PATH: this shim is that `claude`. It replaces the whole environment with the allowlist and
+        the temp HOME, keeping only the config folder the launcher made. For `builtin`, both sessions must share one config folder, so
+        the first copy of it in this run's own folder serves both, and it outlives either launcher."""
         real = os.path.realpath(self.args.claude_bin)
         env = " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in self.base_env().items())
         lines = ["#!/bin/sh", 'echo $$ > "%s/$VALUE_ROLE.pid"' % self.tmp, 'CFG="$CLAUDE_CONFIG_DIR"']
@@ -308,14 +319,14 @@ class Run:
     # ---- agents -----------------------------------------------------------------------------------------------------
 
     def command(self, agent, prompt):
-        """(argv, env) for one agent. A real Claude goes through clauth; a stand-in runs straight from VALUE_STUB_DIR."""
+        """(argv, env) for one agent. A real Claude goes through the launcher; a stand-in runs straight from VALUE_STUB_DIR."""
         args = self.args
         env = self.base_env()
         if agent.harness == "claude":
             rest = claude_args(prompt, agent.role, args.claude_model, self.root, self.condition)
             if self.stub:
                 return [os.path.join(self.stub, "claude")] + rest, dict(env, VALUE_ROLE=agent.role)
-            return ([args.clauth_bin, "start", "--isolated", args.claude_profile] + rest,
+            return (shlex.split(args.claude_launcher) + rest,
                     {"HOME": self.real_home, "USER": env["USER"], "LANG": env["LANG"], "TERM": env["TERM"], "VALUE_ROLE": agent.role,
                      "PATH": os.pathsep.join([self.shim, "/usr/bin", "/bin"])})
         env = dict(env, CODEX_HOME=self.codex_home, VALUE_ROLE=agent.role)
@@ -324,7 +335,7 @@ class Run:
         rest = codex_args(prompt, self.workdir(agent.role), args.codex_model, self.condition, self.proj if self.worktrees else None)
         if self.stub:
             return [os.path.join(self.stub, "codex")] + rest, env
-        return [args.codex_bin] + rest, env
+        return [os.path.join(self.shim, "codex")] + rest, env
 
     def start(self, agent):
         prompt = tasks.prompt(self.task, agent.role, self.condition, agent.harness)
@@ -361,7 +372,7 @@ class Run:
         sig = signal.SIGKILL if hard else signal.SIGTERM
         try:
             if os.path.exists(pidfile):
-                os.kill(int(open(pidfile).read().strip()), sig)   # the real agent first, so clauth stays up and cleans its runtime
+                os.kill(int(open(pidfile).read().strip()), sig)   # the real agent first, so the launcher stays up and cleans its folder
                 time.sleep(2)
             if agent.proc.poll() is None:
                 os.killpg(agent.proc.pid, sig)
@@ -525,6 +536,9 @@ class Run:
             return row
         finally:
             self.stop_threads.set()
+            auth = os.path.join(self.codex_home, "auth.json")
+            if os.path.exists(auth):
+                os.remove(auth)   # a kept tree never keeps a credential
             if self.args.keep_tree:
                 log("kept %s" % self.root)
             else:
@@ -559,13 +573,13 @@ def main(argv):
     ap.add_argument("--keep-tree", action="store_true")
     ap.add_argument("--claude-model", default=CLAUDE_MODEL)
     ap.add_argument("--codex-model", default=CODEX_MODEL)
-    ap.add_argument("--claude-profile", default=os.environ.get("VALUE_CLAUDE_PROFILE"), help="clauth profile; or VALUE_CLAUDE_PROFILE")
+    ap.add_argument("--claude-launcher", default=os.environ.get("VALUE_CLAUDE_LAUNCHER"),
+                    help="command that starts claude from PATH in a throwaway config folder, with a sign-in; or VALUE_CLAUDE_LAUNCHER")
     ap.add_argument("--claude-bin", default=os.path.expanduser("~/.local/bin/claude"))
-    ap.add_argument("--clauth-bin", default=os.path.expanduser("~/.local/bin/clauth"))
     ap.add_argument("--codex-route", choices=("none", "exec"), default="none", help="exec: direct codex exec in mktemp, under a scratch CODEX_HOME")
     ap.add_argument("--codex-auth", default=os.environ.get("VALUE_CODEX_AUTH"), help="auth.json to copy into the scratch CODEX_HOME")
     ap.add_argument("--codex-bin", default="codex")
-    ap.add_argument("--codex-budget", type=float, default=CODEX_BUDGET, help="quota points; halt when projected use passes this")
+    ap.add_argument("--codex-budget", type=float, default=CODEX_BUDGET, help="usage points; halt when projected use passes this")
     ap.add_argument("--tool-release", default=TOOL_RELEASE, help="the commit whose bin/agentbus is under test")
     args = ap.parse_args(argv)
     runs = plan(args)
@@ -578,13 +592,12 @@ def main(argv):
     if not stub and not args.go:
         log("not running: this spends tokens on real agents. Re-run with --go.")
         return 3
-    if not stub and not args.claude_profile:
-        log("not running: name a clauth profile with --claude-profile or VALUE_CLAUDE_PROFILE.")
+    if not stub and not args.claude_launcher:
+        log("not running: name a launcher with --claude-launcher or VALUE_CLAUDE_LAUNCHER.")
         return 2
     if not stub and "cx" in args.pairings:   # before any run: in cx a real Claude may start first
         if args.codex_route != "exec":
-            log("not running: Codex has no route. codex-lane refuses a write lane in mktemp, and --codex-route exec is the owner's call "
-                "(docs/evals/value-protocol.md, Open items).")
+            log("not running: Codex needs --codex-route exec, the route the protocol's addenda set.")
             return 2
         if not args.codex_auth:
             log("not running: --codex-route exec needs --codex-auth or VALUE_CODEX_AUTH.")

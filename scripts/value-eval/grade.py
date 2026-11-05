@@ -243,7 +243,7 @@ def secret_leaks(auth_path, paths):
 
 def codex_quota(codex_home):
     """The newest subscription-bucket reading in a CODEX_HOME's rollouts: {"used_percent", "resets_at"} or None. A direct run's
-    usage lands here and not where `codex-lane --quota` looks, so the runner reads it itself."""
+    usage lands in that scratch folder and nowhere else, so the runner reads it itself."""
     newest, when = None, -1.0
     for d, _dirs, files in os.walk(os.path.join(codex_home, "sessions")):
         for name in files:
