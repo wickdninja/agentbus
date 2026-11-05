@@ -49,6 +49,22 @@ The `git+https://github.com/wickdninja/agentbus@vX.Y.Z` form stays documented on
 7. **Look.** `uv tool install git+https://github.com/wickdninja/agentbus@vX.Y.Z`, then `agentbus --version`.
 8. **Launch** (see `docs/launch/`). Drafts are shown to the owner whole before anything is posted.
 
+## Verify the published wheel's provenance
+
+After the tag, from an empty folder (the `publish` job attests `dist/*.whl`, `dist/*.tar.gz` and `dist/SHA256SUMS`):
+
+```bash
+gh release download vX.Y.Z --repo wickdninja/agentbus --pattern '*.whl' --pattern SHA256SUMS
+gh attestation verify agentbus-X.Y.Z-py3-none-any.whl --repo wickdninja/agentbus --signer-workflow wickdninja/agentbus/.github/workflows/release.yml
+gh attestation verify SHA256SUMS --repo wickdninja/agentbus --signer-workflow wickdninja/agentbus/.github/workflows/release.yml
+```
+
+Each exits 0 on success (the command prints nothing when stdout is not a terminal) and 1 with an `HTTP 404` for bytes that were never attested. Run against the real v0.2.0 wheel: exit 0, signer `release.yml@refs/tags/v0.2.0`, run 42036813085; a copy with one byte appended exits 1. v0.2.0's `SHA256SUMS` was not attested (404); X.Y.Z releases after it are.
+
+## Rehearse the publish step
+
+`.github/workflows/release-dry-run.yml` (a pull request that touches the release files, or Actions, Run workflow) builds, uploads the same artifact as `release.yml`'s build job, downloads it and runs `scripts/check_sums.sh`, the way the `publish` job starts. A step that has never run cannot be the first thing the tag finds out (v0.2.0's publish broke on the artifact's layout). `tests/test_workflows.sh` keeps the two upload blocks identical. It does not create a release or an attestation.
+
 ## Time to first handoff
 
 `bash scripts/ttfh.sh` installs into a throwaway home, runs `agentbus init .` and `agentbus setup claude`, and times the path to a second agent's `inbox` showing the first agent's handoff. CI records the number on the summary of each `package` run. It has no pass or fail time (it mostly measures the network); put the latest number in the release notes.

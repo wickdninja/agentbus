@@ -36,3 +36,18 @@ bypass-selection = true
 
 [tool.hatch.build.targets.sdist]
 include = ["bin/agentbus", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "RELEASING.md", "pyproject.toml", "skills/", ".claude-plugin/", "hooks/", "scripts/", "docs/", "examples/", "tests/"]
+
+# Static checks: `uvx ruff@0.17.4 check bin/agentbus scripts tests` (the "static" job in .github/workflows/test.yml).
+# Real errors only (pyflakes, bugbear, syntax); no style rules. bin/agentbus has no .py suffix, so it is named on the command line.
+# The per-file ignores are the hits that existed when the check was added (counts in the comments); new code gets none.
+[tool.ruff]
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["F", "B", "E9"]
+
+[tool.ruff.lint.per-file-ignores]
+"bin/agentbus" = ["B007", "B904", "F811"]  # B007 x5, B904 x13, F811 x1
+"scripts/agent-eval/run.py" = ["B904"]  # x1
+"scripts/release_check.py" = ["F541"]  # x1
+"tests/watch_live_cases.py" = ["B023", "B904", "F841"]  # B023 x10, B904 x1, F841 x1
