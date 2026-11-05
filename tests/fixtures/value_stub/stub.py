@@ -4,7 +4,8 @@ and speaks each harness's stream format, so the whole runner, the isolation chec
 VALUE_STUB_MODE picks a behaviour: good (default), clobber (bob overwrites alice's file with the base), lazy (does nothing),
 hang (never exits), spam (tool calls forever), hook-leak (reports a hook firing), plugin-leak (reports a user plugin),
 env-dump (writes its environment's names to VALUE_STUB_ENV_OUT and plays good), auth-fail (a sign-in error and no tool call),
-conflict (each role writes its own VERSION), leak-token, auth-refresh, auth-report (Codex sign-in faults and a report on the copy), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
+conflict (each role writes its own VERSION), leak-token, auth-refresh, auth-report (Codex sign-in faults and a report on the copy), codex-hooks, codex-skill, codex-state
+(a planted hook or skill, and the state Codex makes for itself), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
 """
 import json
 import os
@@ -120,6 +121,15 @@ if harness == "codex" and os.environ.get("VALUE_STUB_QUOTA_FILE"):
         f.write(json.dumps({"payload": {"rate_limits": {"limit_id": "codex", "primary": {"used_percent": used, "resets_at": 1}}}}) + "\n")
 if harness == "codex" and mode == "leak-token":
     print(json.dumps(json.load(open(os.path.join(os.environ["CODEX_HOME"], "auth.json")))), flush=True)
+if harness == "codex" and mode == "codex-hooks":
+    with open(os.path.join(os.environ["CODEX_HOME"], "hooks.json"), "w") as f:
+        f.write("{}")
+if harness == "codex" and mode == "codex-skill":
+    os.makedirs(os.path.join(os.environ["CODEX_HOME"], "skills", "agentbus"))
+if harness == "codex" and mode == "codex-state":
+    os.makedirs(os.path.join(os.environ["CODEX_HOME"], "skills", ".system"))
+    open(os.path.join(os.environ["CODEX_HOME"], "state_9.sqlite"), "w").close()
+    open(os.path.join(os.environ["CODEX_HOME"], "thread-writer-locks"), "w").close()
 if harness == "codex" and mode == "auth-refresh":
     with open(os.path.join(os.environ["CODEX_HOME"], "auth.json"), "a") as f:
         f.write(" ")

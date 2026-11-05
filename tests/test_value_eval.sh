@@ -187,6 +187,14 @@ codex_stub auth-refresh
 [ "$(cksum < "$T/auth.json")" = "$real_auth" ] || fail "a run changed the real sign-in"
 ok "the copy is private and not a link; a token in a trace or a refresh stops the batch, and the real file never changes"
 
+codex_stub codex-hooks
+[ "$rc" = 5 ] && grep -q 'hooks.json in a none run' "$T/log" || { cat "$T/log"; fail "a planted Codex hook did not stop the batch (rc $rc)"; }
+codex_stub codex-skill
+[ "$rc" = 5 ] && grep -q 'a Codex skill beyond its own' "$T/log" || { cat "$T/log"; fail "a planted Codex skill did not stop the batch (rc $rc)"; }
+codex_stub codex-state
+[ "$rc" = 0 ] || { cat "$T/log"; fail "Codex's own state stopped the batch (rc $rc)"; }
+ok "a planted hook or skill in CODEX_HOME stops the batch; Codex's own state does not"
+
 echo "TEST 12c: the batch halts when Codex use passes the budget"
 rc=0; env VALUE_STUB_QUOTA_FILE="$T/quota" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cx --seeds 1 2 3 4 --time-cap 60 --out "$T/budget" >"$T/log" 2>&1 || rc=$?
 [ "$rc" = 6 ] && grep -q 'Codex budget stop' "$T/log" || { cat "$T/log"; fail "no budget stop (rc $rc)"; }

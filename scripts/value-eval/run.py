@@ -41,6 +41,7 @@ BASE_TOOLS = ["Bash", "Read", "Edit", "Write", "Skill"]
 BUILTIN_TOOLS = ["ListAgents", "SendMessage", "ToolSearch"]
 CLAUDE_MODEL, CODEX_MODEL = "sonnet", "gpt-6.1-sol"
 TIME_CAP, TOOL_CAP, SNAP_EVERY = 2400, 80, 5
+CODEX_PLANTED = {"auth.json", "hooks.json", "AGENTS.md", "config.toml"}   # all a scratch CODEX_HOME may hold before launch; Codex adds its own state after
 TOOL_RELEASE = "642009c"     # the released tool under test: runs refuse any other bin/agentbus
 CODEX_BUDGET = 40            # usage points; the batch halts when projected use passes this
 CHANNEL_PATHS = (".agentbus", "COORDINATION.md", ".claude", "AGENTS.md", ".git", "__pycache__", "CLAUDE.md")
@@ -174,6 +175,7 @@ class Run:
         self.loads, self.kill, self.merge = [], {"fired": False}, None
         self.worktrees = self.task.workspace == "worktrees"
         self.auth_sha = None
+        self.codex_at_launch = set()
         self.real_home = os.environ["HOME"]
         self.real_state = {"settings_sha": sha_file(os.path.join(self.real_home, ".claude", "settings.json")),
                            "bus": bus_roster(os.environ.get("VALUE_REAL_BUS"))}
@@ -249,6 +251,7 @@ class Run:
             with os.fdopen(fd, "wb") as f, open(source, "rb") as src:
                 f.write(src.read())
             self.auth_sha = {"source": sha_file(source), "copy": sha_file(auth)}
+        self.codex_at_launch = set(os.listdir(self.codex_home))
 
     def make_worktrees(self):
         """One linked worktree per agent. The bus is found through git; the ledger is one file, linked into each worktree, so
@@ -471,11 +474,14 @@ class Run:
     def check_codex(self):
         """Scratch CODEX_HOME holds only what this condition needs; the real sign-in did not change; no credential in anything kept."""
         bad = []
-        allowed = {"auth.json", "sessions", "tmp", "log", "logs", "cache", "memories", "shell_snapshots", "history.jsonl", "version.json", "installation_id", ".personality_migration", "models_cache.json"}
-        allowed |= {"hooks.json", "AGENTS.md", "config.toml"} if self.condition == "agentbus" else set()
-        extra = sorted(n for n in os.listdir(self.codex_home) if n not in allowed and not n.startswith(("state_", "logs_", "goals_", "sqlite")))
+        if self.condition != "agentbus":
+            bad += ["%s in a %s run" % (n, self.condition) for n in ("hooks.json", "AGENTS.md") if os.path.exists(os.path.join(self.codex_home, n))]
+        skills = os.path.join(self.codex_home, "skills")
+        extra = sorted(set(os.listdir(skills)) - {".system"}) if os.path.isdir(skills) else []
         if extra:
-            bad.append("CODEX_HOME holds %s" % extra)
+            bad.append("a Codex skill beyond its own: %s" % extra)
+        if self.codex_at_launch - CODEX_PLANTED:
+            bad.append("CODEX_HOME held %s before launch" % sorted(self.codex_at_launch - CODEX_PLANTED))
         if self.auth_sha:
             auth = os.path.join(self.codex_home, "auth.json")
             if sha_file(self.args.codex_auth) != self.auth_sha["source"]:
