@@ -1040,7 +1040,7 @@ trust_line() {
 import json, sys
 doc = json.load(open(sys.argv[1]))
 cmd = next(h["command"] for g in doc["hooks"]["Stop"] for h in g["hooks"] if h["command"].endswith("# agentbus:managed"))
-line = "Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts " + cmd[:cmd.index(" hook codex")] + " hook codex and ends # agentbus:managed."
+line = "Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 4 entries whose command starts " + cmd[:cmd.index(" hook codex")] + " hook codex and ends # agentbus:managed."
 print(line + (" Codex loads project hooks only for a project you have trusted." if sys.argv[2] == "project" else ""))
 PY
 }
@@ -1407,6 +1407,21 @@ ln -s "$T/out" "$W/.codex"
 ok "the chain is checked again right before the write: a swap after planning is refused"
 
 echo
+echo "TEST: a folder swapped for a link to a folder that already holds files is refused as a link, not as a changed file"
+# Bug it catches: without the chain check in the guard, the guard read the file through the link, saw other content and
+# reported "changed while setup ran", so the user was never told a link was the cause.
+reset; P="$T/pause3"; mkdir -p "$P" "$T/out"; rm -rf "$T/out"/*
+for f in hooks.json config.toml AGENTS.md; do echo "other" >"$T/out/$f"; done; h1=$(hash_tree "$T/out")
+(set +e; cd "$W"; AGENTBUS_TEST_PAUSE="setup-before-write-entries=$P" "${AB[@]}" setup codex --scope project >"$T/race3.out" 2>&1; echo $? >"$T/race3.rc") &
+RACE=$!
+wait_for "$P/setup-before-write-entries.reached"
+ln -s "$T/out" "$W/.codex"
+: >"$P/setup-before-write-entries.go"; wait "$RACE" || true
+[ "$(cat "$T/race3.rc")" = 1 ] && grep -qF "is a link, so setup would write outside this project" "$T/race3.out" || fail "a swap to a link holding other files was not named a link: exit $(cat "$T/race3.rc"): $(cat "$T/race3.out")"
+[ "$h1" = "$(hash_tree "$T/out")" ] || fail "setup changed the folder a swapped link points at"
+ok "a swap to a link is named a link even when the link's folder holds files"
+
+echo
 echo "TEST: setup codex looks at the login shell once; a read-only check never starts it"
 printf '#!/bin/sh\nprintf "%%s" "$AGENTBUS_SHELL_PROBE" >"%s"\nexit 0\n' "$T/probe.env" >"$T/shells/spy/sh"; chmod +x "$T/shells/spy/sh"
 printf '#!/bin/sh\necho "welcome back, fortune of the day"\nexit 0\n' >"$T/shells/noisy/sh"; chmod +x "$T/shells/noisy/sh"
@@ -1489,6 +1504,9 @@ run_setup codex --scope project >/dev/null; : >"$W/.codex/mine.txt"; run_setup c
 # the user's own ~/.codex is never removed, empty or not
 reset; mkdir -p "$HOME/.codex"; run_setup codex >/dev/null; run_setup codex --uninstall >/dev/null
 [ -d "$HOME/.codex" ] || fail "uninstall removed ~/.codex, which is the user's folder"
+# and when the hooks file is the last thing in it: whatever order the pieces run in, hooks.json going last must not take the folder
+reset; mkdir -p "$HOME/.codex"; run_setup codex >/dev/null; rm -f "$HOME/.codex/AGENTS.md"; run_setup codex --uninstall >/dev/null
+[ ! -e "$HOME/.codex/hooks.json" ] && [ -d "$HOME/.codex" ] || fail "uninstall removed ~/.codex after hooks.json was the last file in it"
 reset
 out=$(cd "$W" && env -u COLUMNS "${AB[@]}" setup codex --dry-run | cat)
 grep -qxF "  + would add 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop) to ~/.codex/hooks.json" <<<"$out" || { echo "$out" >&2; fail "setup output was wrapped in a pipe"; }

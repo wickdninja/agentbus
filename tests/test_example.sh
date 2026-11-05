@@ -45,3 +45,17 @@ cp "$BIN" "$T/clone/bin/agentbus"; cp "$EXAMPLE" "$T/clone/examples/"
 out=$(cd "$T/clone" && AGENTBUS="$PY bin/agentbus" bash examples/two-agent-handoff.sh 2>&1) || fail "the relative AGENTBUS form failed: $out"
 grep -q '^Messages  2' <<<"$out" || fail "the relative AGENTBUS form did not finish the tour: $out"
 ok "a relative AGENTBUS (python3 bin/agentbus) works"
+# The demo touches only its temp dir. XDG_STATE_HOME / XDG_CACHE_HOME decide where the bus list and the cache go on
+# Linux (macOS follows HOME), so the demo runs through a wrapper that reports the platform as linux, with both set elsewhere.
+cat > "$T/as-linux.py" <<'PY'
+import runpy, sys
+sys.platform = "linux"
+bin_path = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(bin_path, run_name="__main__")
+PY
+mkdir -p "$T/xdg-state" "$T/xdg-cache"
+out=$(XDG_STATE_HOME="$T/xdg-state" XDG_CACHE_HOME="$T/xdg-cache" AGENTBUS="$PY $T/as-linux.py $BIN" bash "$EXAMPLE" 2>&1) || fail "the example failed under a Linux XDG layout: $out"
+left=$(find "$T/xdg-state" "$T/xdg-cache" -mindepth 1)
+[ -z "$left" ] || fail "the example wrote to the user's XDG state or cache: $left"
+ok "the example leaves the user's XDG state and cache folders alone"

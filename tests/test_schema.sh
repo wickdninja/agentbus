@@ -391,6 +391,71 @@ finally:
 PY
 ok "busy_wait 0.3 gives busy in under a second, for writes and reads alike"
 
+echo "TEST 7b: the busy wait runs on the monotonic clock: a wall clock that jumps forward or back neither ends it early nor extends it"
+mkdir -p "$T/busy7b"; seed "$T/busy7b" x
+"$PY" - "$T/busy7b/bus.db" "$T" <<'PY' || fail "busy wait on a jumping wall clock"
+import os, sqlite3, subprocess, sys, time, h
+db, T = sys.argv[1:]
+m = h.load()
+def hold(seconds, mark):
+    code = ("import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None); c.execute('BEGIN EXCLUSIVE'); "
+            "open(sys.argv[2],'w').close(); time.sleep(float(sys.argv[3]))")
+    p = subprocess.Popen([sys.executable, "-c", code, db, mark, str(seconds)])
+    for _ in range(200):
+        if os.path.exists(mark):
+            return p
+        time.sleep(0.05)
+    p.kill(); raise AssertionError("the holder never took the bus")
+real = time.time
+def jumping(offset):
+    """time.time() that reads true on its first call and `offset` seconds off on every call after."""
+    calls = [0]
+    def fake():
+        calls[0] += 1
+        return real() if calls[0] == 1 else real() + offset
+    return fake
+try:
+    # forward an hour: a wall-clock deadline is past at once and the open gives up busy, with the bus free in 1.5 s
+    p = hold(1.5, T + "/h-fwd"); time.time = jumping(3600); t0 = real()
+    con = m.open_bus(db, busy_wait=8.0, hold=4.0)
+    took = real() - t0; con.close()
+    assert 1.0 < took < 6.0, took
+    p.wait()
+    # back an hour: a wall-clock deadline never comes and the open waits for the 3 s holder; busy_wait 0.3 must give up busy
+    p = hold(3, T + "/h-back"); time.time = jumping(-3600); t0 = real()
+    r = h.refused(lambda: m.open_bus(db, busy_wait=0.3, hold=1.0).close())
+    took = real() - t0
+    assert r and r[0] == "busy" and took < 1.0, (r, took)
+    p.kill(); p.wait()
+finally:
+    time.time = real
+PY
+ok "the busy wait counts monotonic time: an hour's jump of the wall clock, either way, changes nothing"
+
+echo "TEST 7c: every open sets PRAGMA synchronous=FULL itself, whatever default the SQLite build has"
+mkdir -p "$T/sync7c"; seed "$T/sync7c" x
+"$PY" - "$T/sync7c/bus.db" <<'PY' || fail "synchronous pragma"
+import sqlite3, sys, h
+db = sys.argv[1]
+m = h.load()
+seen = []
+execute = sqlite3.Connection.execute
+def spy(self, sql, *a, **k):
+    if isinstance(sql, str) and sql.upper().startswith("PRAGMA SYNCHRONOUS"):
+        seen.append(sql)
+    return execute(self, sql, *a, **k)
+m.Bus.execute = spy
+for kw in ({}, {"read_only": True}):
+    del seen[:]
+    con = m.open_bus(db, **kw)
+    try:
+        assert seen == ["PRAGMA synchronous=FULL"], (kw, seen)
+        assert con.execute("PRAGMA synchronous").fetchone()[0] == 2, kw
+    finally:
+        con.close()
+PY
+ok "a write open and a read-only open both set synchronous=FULL"
+
 echo "TEST 8: hold bounds how long an open may keep the bus"
 "$PY" - "$T/busy/bus.db" <<'PY' || fail "hold"
 import subprocess, sys, time, h

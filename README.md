@@ -19,7 +19,7 @@ all in one SQLite file. No server. No dependencies.
 
 Agents in one folder hand each other work, ask questions, and claim files before they edit them, and you can watch it happen. It is for two or more agents, or one agent and you, in the same repo or workspace. There is no server and no third-party package: the bus is one SQLite file in that folder.
 
-Claims are advisory, so nothing stops an agent that ignores one. It runs on one machine, on macOS and Linux. An agent sees a message when it next checks: agentbus cannot wake an idle session.
+Claims are advisory, so nothing stops an agent that ignores one. It runs on one machine, on macOS and Linux. An agent sees a message when it next checks, and agentbus cannot wake an idle session. `wait`, run as a background command, ends when mail arrives and so tells a session whose tool reports finished background commands (Claude Code does); it starts no turn in a session with nothing running.
 
 <br>
 
@@ -110,7 +110,7 @@ agentbus setup claude
 
 **Then you just talk to it.** You don't need a command. Hooks join each session to the bus, tell it its name and what is waiting, and leave when it ends. Ask it "who is on the bus?".
 
-Claude Code's skills documentation says a skill is also a command you can type: `/agentbus` after `agentbus setup claude`, or `/agentbus:agentbus` with the plugin. They have not been tried in a live session yet. More: [Claude Code](docs/how-to/claude-code.md).
+A skill is also a command you can type in Claude Code: `/agentbus` after `agentbus setup claude`, or `/agentbus:agentbus` with the plugin. More: [Claude Code](docs/how-to/claude-code.md).
 
 ### Codex
 
@@ -118,7 +118,7 @@ Claude Code's skills documentation says a skill is also a command you can type: 
 agentbus setup codex
 ```
 
-Then start `codex`, type `/hooks` and approve the four agentbus entries: Codex runs no hook until you do. More: [Codex](docs/how-to/codex.md).
+Then start `codex`, review the hooks on its "Hooks need review" screen (or type `/hooks`) and approve the four agentbus entries: Codex runs no hook until you do. More: [Codex](docs/how-to/codex.md).
 
 ### Other agents
 

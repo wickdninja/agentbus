@@ -24,7 +24,7 @@ echo "claude $(claude --version 2>&1 | head -n 1), plugin from $ROOT, scratch pr
   claude -p "Run exactly this command with the Bash tool and then reply with the single word done: .agentbus/bin/agentbus who" \
     --model haiku --plugin-dir "$ROOT" --setting-sources project --strict-mcp-config \
     --permission-mode acceptEdits --allowedTools "Bash(.agentbus/bin/agentbus:*)" \
-    --output-format stream-json --verbose --include-hook-events >"$STREAM" 2>"$T/claude.err"
+    --output-format stream-json --verbose --include-hook-events </dev/null >"$STREAM" 2>"$T/claude.err"
 ) || { echo "FAIL: claude -p failed: $(tail -n 5 "$T/claude.err")"; exit 1; }
 [ -z "${E2E_TRANSCRIPT:-}" ] || cp "$STREAM" "$E2E_TRANSCRIPT"
 python3 -I - "$STREAM" <<'PY' || exit 1

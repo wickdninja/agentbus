@@ -857,4 +857,25 @@ print("watch --up cases passed")
 PY
 ok "goal and join hints and the copied reply carry --up 1; with no --up they are as before"
 
+echo "TEST 26: the older-versions hint quotes a fact key with a space, and the unread hint shows NAME for an agent name that is not a plain word"
+# Bug it catches: "agentbus ctx history my key" (two arguments) and "--as co dex! inbox --peek" pasted as printed.
+"$PY" - <<'PY' || fail "a watch hint puts a fact key or an agent name into a command unquoted"
+import json, os, re, shlex, sys
+sys.path.insert(0, os.environ["TESTS_DIR"])
+from watch_case import W
+src = W.fx["detail"]["context_history"]["baseline_sha"]
+W.fx["detail"]["context_history"]["my key"] = [dict(src[0], value="v%d" % i) for i in range(W.g["THREAD_MAX"] + 3)]
+snap = json.loads(json.dumps(W.snaps["sample"]).replace("baseline_sha", "my key"))
+t = W.text_of(100, 30, {"mode": "detail", "detail": {"section": "facts", "key": "my key"}}, snapshot=snap)
+line = next(l for l in t if "older" in l)
+assert shlex.split(line.split("·", 1)[1].strip()) == ["agentbus", "ctx", "history", "my key"], line
+snap = json.loads(json.dumps(W.snaps["sample"]).replace('"codex"', '"co dex!"'))
+t = W.text_of(100, 30, {"mode": "detail", "detail": {"section": "agents", "key": "co dex!"}}, snapshot=snap)
+line = next(l for l in t if "unread" in l)
+cmd = re.search(r"· (agentbus .*?) shows them", line).group(1)
+assert shlex.split(cmd) == ["agentbus", "--as", "NAME", "inbox", "--peek"], line
+print("watch hints are shell safe")
+PY
+ok "the ctx history hint quotes the key; the unread hint names NAME for an unsafe agent name"
+
 echo "All watch key tests passed"

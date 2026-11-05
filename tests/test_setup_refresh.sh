@@ -93,6 +93,8 @@ reset; mkdir -p "$(dirname "$SK")"; printf 'someone else wrote this\n' >"$SK"
 run setup claude; [ "$RC" = 1 ] || fail "the control failed: plain setup should refuse a skill agentbus did not write (rc $RC)"
 run setup claude --refresh
 [ "$RC" = 0 ] && grep -qF "kept (" <<<"$OUT" && [ "$(cat "$SK")" = "someone else wrote this" ] || fail "a foreign skill file was not kept by refresh (rc $RC): $OUT"
+grep -qF "To replace it, move it aside, then run: agentbus setup claude" <<<"$OUT" || fail "refresh named a command that refuses, not the move-aside step first: $OUT"
+mv "$SK" "$SK.mine"; run setup claude; [ "$RC" = 0 ] && [ -f "$SK" ] || fail "the printed step (move it aside, then setup claude) did not install (rc $RC): $OUT"
 reset; mkdir -p "$HOME/.claude/skills" "$T/target"; ln -s "$T/target" "$HOME/.claude/skills/agentbus"
 run setup claude --refresh
 [ "$RC" = 0 ] && [ -L "$HOME/.claude/skills/agentbus" ] || fail "a skill folder that is a link was changed or refused by refresh (rc $RC): $OUT"

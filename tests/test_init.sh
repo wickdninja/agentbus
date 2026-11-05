@@ -240,4 +240,11 @@ QM="$T/qm dir;touch CANARY"; mkrepo "$QM"; git -C "$QM" worktree add -q "$T/qm-w
 runs "$(jnext "$T/qm-err")" "the linked worktree refusal's next" init "$(rl "$QM")"
 ok "init, upgrade, schema, stale-copy, doctor and worktree recovery commands name the folder as one shell word"
 
+echo "TEST 23: init on the home folder prints no cd or join hint (discovery never looks there), only what works"
+HH="$T/hh"; mkdir -p "$HH"
+(cd "$T" && HOME="$HH" agentbus init "$HH" > "$T/home-init")
+! grep -q '^next: cd \|YOUR_NAME join' "$T/home-init" && grep -q 'never searched for a bus' "$T/home-init" || fail "init on the home folder: $(cat "$T/home-init")"
+(cd "$HH" && HOME="$HH" expect_fail "no bus here" agentbus --as x join)
+ok "home folder init names no join that fails"
+
 echo "All init tests passed"

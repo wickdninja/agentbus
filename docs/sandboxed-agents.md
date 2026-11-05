@@ -426,8 +426,8 @@ The brain runs the CLI unsandboxed, in a folder the lane can write. The CLI:
   15 s of retries can run out first. If the stop comes while a write is being saved, whether it was
   saved is not known, since the commit record may already be on disk. The error then says so
   (`outcome_unknown: true` under `--json`), counts the write as possibly saved (`committed: true`,
-  `retryable: false`), and tells the caller to check the bus or to repeat only with the write's
-  `--request-id`;
+  `retryable: false`), and tells the caller to check the bus or to repeat a post or join only with
+  its `--request-id`;
 - re-checks inside every write transaction that the path still names the file it holds.
 
 `init` and `upgrade` refuse the same links. They write `bin/agentbus` and `VERSION` only through

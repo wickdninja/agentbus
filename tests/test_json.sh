@@ -156,6 +156,16 @@ for after in (False, True):
         array(snap['messages'], **message)  # topic too (watch v2, additive)
         assert snap['unread'] == {'b': 0}, snap['unread']
         assert any(m['body'] == 'ans' and m['reply_to'] == qid for m in snap['messages'])
+j('--as', 'a', 'join', '--tool', 't')   # a left earlier: it is back for wait and the several-resource claim, then leaves again
+j('--as', 'a', 'post', 'wait wake', '--to', 'b')
+waited = shape(j('--as', 'b', 'wait', '--timeout', '5'), name=str, unread=int, waited_s=int, next=str)
+assert waited['name'] == 'b' and waited['unread'] >= 1 and waited['next'] == 'agentbus --as b inbox', waited
+j('--as', 'b', 'inbox')   # wait marks nothing read: consume what it counted
+several = shape(j('--as', 'a', 'claim', 'sev/a.py', 'sev/b.py'), claims=list, claimed_count=int)
+array(several['claims'], resource=str, agent=str, purpose=(str, null), claimed_at=str, expires_at=str, auto_released=list, auto_released_count=int, renewed=bool)
+assert several['claimed_count'] == 2, several
+j('--as', 'a', 'release', 'sev/a.py', 'sev/b.py')
+j('--as', 'a', 'leave')
 visible = inventory(parser) - {(h,) for h in json_module['CONTRACT']['hidden']}  # hidden commands (hook) have no JSON result
 assert seen == visible, ('untested parser commands', visible - seen, 'extra', seen - visible)
 print('PASS: every parser subcommand prints one JSON value with exact keys and types')

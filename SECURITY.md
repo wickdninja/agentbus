@@ -17,3 +17,14 @@ It never runs in CI, with `--json`, in an agent session (`CLAUDECODE`, a Codex s
 **Installing from source** (`uv tool install git+https://github.com/wickdninja/agentbus@vX.Y.Z`, the pipx form, or `@main`; documented in `docs/how-to/upgrade.md` for forks and `main`) builds on your machine. It clones the tag (a git tag can be moved; the release workflow only checks that the tag still points at the commit it built), fetches the build backend (`hatchling`, pinned to an exact version but without a hash) from PyPI, and any dependency of it that is not pinned. A fork, a clone or an install of unknown origin gets the commands printed for you to run; `update` runs none of them.
 
 Nothing is installed by package name, because the name `agentbus` on PyPI belongs to an unrelated project (`pip install agentbus` installs that project, not this one). A repository that was renamed answers with a redirect, which the check refuses, so installs that predate a rename stay silent until you reinstall from the new name.
+
+## Verifying a release's provenance
+
+The release workflow attests the wheel, the sdist and `SHA256SUMS` (GitHub build provenance, signed by the workflow that built them). `agentbus update` does not check it; you can, with the GitHub CLI. In a folder of your own:
+
+```bash
+gh release download vX.Y.Z --repo wickdninja/agentbus --pattern '*.whl'
+gh attestation verify agentbus-X.Y.Z-py3-none-any.whl --repo wickdninja/agentbus --signer-workflow wickdninja/agentbus/.github/workflows/release.yml
+```
+
+Exit code 0 means the file is byte-for-byte what `release.yml` built from that repository; a changed file exits 1 (`HTTP 404` from the attestations API: no attestation for those bytes). It proves where the file was built, not that the code is free of bugs. The v0.2.0 wheel and sdist verify this way; its `SHA256SUMS` was published before it was attested, so the same command on that file fails with a 404. The next release attests all three.

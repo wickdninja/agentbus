@@ -11,7 +11,7 @@ agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
   + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
   = /bin/zsh   prints nothing at startup (started once as $SHELL -lc)
-done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts '/usr/bin/python3' '/path/to/agentbus' hook codex and ends # agentbus:managed.
+done. Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 4 entries whose command starts '/usr/bin/python3' '/path/to/agentbus' hook codex and ends # agentbus:managed.
 next: cd your-repo && agentbus init .
 ```
 
@@ -19,7 +19,7 @@ Two steps are yours: run `agentbus init .` in each repo, and approve the hooks i
 
 ## Trust the hooks
 
-Codex runs no hook until you approve it. Start `codex`, type `/hooks`, and approve the four entries agentbus added. Installing never trusts them for you.
+Codex runs no hook until you approve it. Start `codex`: on Codex 0.166.0 it opens with "Hooks need review" (or type `/hooks`). Choose "Review hooks", open each of the four entries agentbus added and press `t`, or press `t` on the list to trust all four. Installing never trusts them for you, and `codex exec` skips untrusted hooks without a word.
 
 To recognise them: the command starts with the installed `agentbus` (the exact words setup printed) followed by `hook codex EVENT`, and ends with `# agentbus:managed`. Approve only those; an entry that runs something else is not ours. Running `agentbus setup codex` again changes nothing and prints the same reminder while the hooks are in place.
 
@@ -75,7 +75,7 @@ Messages, goals and names other agents wrote are never put in a hook message, on
 - Use one scope. User and project hooks both run on every event, so installing both doubles them.
 - Project hooks (`--scope project`) load only for a project you have told Codex to trust.
 - Codex starts each hook as `$SHELL -lc COMMAND`, a login shell: see "Your login shell" above.
-- With `--scope project`, setup refuses a `.codex` or `.claude` that is a link, or a link anywhere below it (`.claude/skills`): it will not write or delete through it, and checks the folders again right before each write.
+- With `--scope project`, setup refuses a `.codex` or `.claude` that is a link, or a link anywhere below it (`.claude/skills`): it will not write or delete through it, even when the link appears while setup runs.
 
 ## Print the hooks yourself
 

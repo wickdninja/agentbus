@@ -89,7 +89,7 @@ say "agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
   + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
   = /bin/sh   prints nothing at startup (started once as \$SHELL -lc)
-done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts TOOL hook codex and ends # agentbus:managed.
+done. Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 4 entries whose command starts TOOL hook codex and ends # agentbus:managed.
 next: cd your-repo && agentbus init ." agentbus setup codex
 head -c "$(wc -c <"$T/agents.orig")" "$X/AGENTS.md" | cmp -s - "$T/agents.orig" || fail "the user's AGENTS.md text was changed"
 [ "$(grep -c '^<!-- agentbus:begin -->$' "$X/AGENTS.md")" = 1 ] && [ "$(grep -c '^<!-- agentbus:end -->$' "$X/AGENTS.md")" = 1 ] || fail "markers: $(cat "$X/AGENTS.md")"

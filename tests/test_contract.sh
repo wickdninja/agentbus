@@ -71,7 +71,7 @@ print("PASS: schema --json has an entry for every subcommand in the parser and n
 
 # ---- the registry's own tables equal the design (written out here, not read from the registry) ----
 EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
-    "claim_conflict": (1, False, ["resource", "holder", "expires_at", "purpose"]),
+    "claim_conflict": (1, False, ["resource", "holder", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"]),
     "not_held": (1, False, ["resource"]),
     "no_message": (1, False, ["id"]),
     "no_context_key": (1, False, ["key"]),
@@ -100,11 +100,14 @@ EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
     "release_unknown": (1, False, ["reason"]),
     "update_running": (1, True, ["lock"]),
     "internal": (4, False, []),
+    "wait_timeout": (124, True, ["waited"]),
 }
 assert set(doc["errors"]) == set(EXPECTED_ERRORS), sorted(set(doc["errors"]) ^ set(EXPECTED_ERRORS))
 # fields every error of the code may carry, when they apply (a refused bus file names itself)
 # outcome_unknown: the hold watchdog stopped the command during a COMMIT, so the write may or may not have been saved
 EXPECTED_OPTIONAL = {"bus_unavailable": ["file", "outcome_unknown"],
+                     # several resources: every blocked one, and every one not held
+                     "claim_conflict": ["conflicts"], "not_held": ["resources"],
                      # an identifier with a control character: the argument that held it
                      "bad_input": ["field"],
                      # upgrade stopped once a migration committed: what was migrated, its backup, how to finish
@@ -115,13 +118,13 @@ for code, (status, retryable, fields) in EXPECTED_ERRORS.items():
     assert (e["exit"], e["retryable"], e["fields"]) == (status, retryable, fields), (code, e)
     assert e["optional_fields"] == EXPECTED_OPTIONAL.get(code, []), (code, e)
     assert e["action"] and e["meaning"], code
-assert {int(k): v for k, v in doc["exit_codes"].items()}.keys() == {0, 1, 2, 3, 4, 130}, doc["exit_codes"]
+assert {int(k): v for k, v in doc["exit_codes"].items()}.keys() == {0, 1, 2, 3, 4, 124, 130}, doc["exit_codes"]
 assert {"AGENTBUS_DB", "AGENTBUS_AGENT"} <= set(doc["env"]), doc["env"]
 RETRY = {"safe", "at_least_once", "idempotent", "idempotent_with_flag", "needs_request_id", "unsafe"}
 for name, c in commands.items():
     assert c["summary"] and c["retry"]["class"] in RETRY and c["retry"]["how"], name
     assert set(c["errors"]) <= set(EXPECTED_ERRORS) and "internal" in c["errors"], (name, c["errors"])
-    assert c["exit_codes"] and set(c["exit_codes"]) <= {0, 1, 2, 3, 4, 130}, name
+    assert c["exit_codes"] and set(c["exit_codes"]) <= {0, 1, 2, 3, 4, 124, 130}, name
     assert check_schema(c["result"], objects) == [], (name, check_schema(c["result"], objects))
 for name, o in objects.items():
     assert check_schema(o, objects) == [], (name, check_schema(o, objects))
@@ -236,7 +239,14 @@ for n in ("a", "b"):
 ok("--as", "a", "claim", "src/api/", "--purpose", "refactor", db=db)
 e = expect("claim_conflict", "--as", "b", "claim", "src/api/x.py", db=db)
 assert (e["resource"], e["holder"], e["purpose"]) == ("src/api/x.py", "a", "refactor"), e
+assert e["holder_idle_min"] in (0, 1) and e["takeover"] is None and "conflicts" not in e, ("one resource: the old fields plus the holder's age", e)
+e = expect("claim_conflict", "--as", "b", "claim", "src/api/x.py", "src/api/y.py", "free.py", db=db)
+assert [c["resource"] for c in e["conflicts"]] == ["src/api/x.py", "src/api/y.py"] and {c["holder"] for c in e["conflicts"]} == {"a"}, e
+assert all(set(c) == {"resource", "holder", "held", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"} for c in e["conflicts"]), e
 expect("not_held", "--as", "b", "release", "src/api/", db=db)
+e = expect("not_held", "--as", "b", "release", "src/api/", "other/", db=db)
+assert e["resources"] == ["src/api/", "other/"], e
+expect("wait_timeout", "--as", "a", "wait", "--timeout", "1", db=db)
 expect("no_message", "--as", "a", "post", "hi", "--reply-to", "99", db=db)
 expect("no_context_key", "ctx", "get", "nope", db=db)
 expect("not_on_roster", "--as", "ghost", "claim", "x", db=db)
@@ -425,6 +435,10 @@ step("claim", "--as", "a", "claim", "src/a.py", "--purpose", "p")
 step("claim", "--as", "a", "claim", "issue:1")
 step("release", "--as", "a", "release", "src/a.py")
 step("release", "--as", "a", "release", "--all")
+step("claim", "--as", "a", "claim", "src/m1.py", "src/m2.py")   # several: the second shape of the claim result
+step("release", "--as", "a", "release", "src/m1.py", "src/m2.py")
+ok("--as", "a", "post", "for wait", "--to", "b", db=wf)
+step("wait", "--as", "b", "wait", "--timeout", "5")
 step("log add", "--as", "a", "log", "add", "note", "detail")
 step("status", "status")
 step("watch", "watch")

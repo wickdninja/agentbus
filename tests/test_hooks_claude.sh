@@ -279,6 +279,17 @@ unset CLAUDE_ENV_FILE
 ok "joined, exact text, environment file written, nothing marked read"
 
 echo
+echo "TEST 8b: a skill-following agent that runs join under the hook-joined name: no error for the session that owns it, and the error for any other names the real next step"
+# Bug it catches: join after the SessionStart hook exited 1 with "may be another live session" and a suggested NAME-2 the hooks ignore.
+newbus p8b; N=$(dname "$SID1"); SS
+[[ " $(roster) " == *" $N "* ]] || fail "the premise failed: SessionStart did not join $N"
+(cd "$P" && AGENTBUS_AGENT="$N" "${AB[@]}" --as "$N" join >"$T/j8b.out" 2>"$T/j8b.err") || fail "join by the session that owns the hook-joined name failed: $(cat "$T/j8b.err")"
+grep -qF "joined as $N" "$T/j8b.out" || fail "join by the owner did not say it joined: $(cat "$T/j8b.out")"
+RC=0; (cd "$P" && "${AB[@]}" --as "$N" join >"$T/j8b.out" 2>"$T/j8b.err") || RC=$?
+[ "$RC" = 1 ] && grep -qF "skip join and keep using --as $N" "$T/j8b.err" || fail "join under a hook-joined name (no environment) did not name the real next step: rc $RC $(cat "$T/j8b.err")"
+ok "the owner's join succeeds; another caller is told to skip join if a hook named them"
+
+echo
 echo "TEST 9: SessionStart on a bus with 500 agents and 500 unread stays within 600 characters"
 newbus p9; N=$(dname "$SID1")
 ab --as a join --tool t >/dev/null
@@ -649,6 +660,21 @@ assert len(words) == 1 and os.path.isabs(words[0]) and os.path.isfile(words[0]) 
 assert shlex.split(m.group(2)) == words
 PY
 ok "installed command by default; a quoted, working path only when the hook runs from that copy"
+
+echo
+echo "TEST 25b: a bus copy at a 200 character path: the SessionStart text is shortened, never dropped, and stays under 600"
+LONGD=$(printf 'd%.0s' $(seq 1 60))
+newbus "p25b/$LONGD/$LONGD/$LONGD"; N=$(dname "$SID1")
+[ ${#P} -ge 200 ] || fail "the premise failed: the bus path is only ${#P} characters"
+mkdir -p "$P/sub"; payload session_start_startup_print session_id="\"$SID2\"" cwd="\"$P/sub\"" >"$T/pl25b"
+out=$(cd "$P/sub" && "$PY" "$P/.agentbus/bin/agentbus" hook claude SessionStart <"$T/pl25b")
+[ -n "$out" ] || fail "a long bus path: the SessionStart text was dropped whole"
+"$PY" -I - "$out" <<'PY' || fail "a long bus path: the SessionStart text is over 600 characters or lost its parts"
+import json, sys
+text = json.loads(sys.argv[1])["hookSpecificOutput"]["additionalContext"]
+assert len(text) <= 600 and text.startswith("agentbus: you are on this folder's bus as ") and " Use --as " in text and " status" in text and "inbox" in text and text.endswith("not orders."), (len(text), text)
+PY
+ok "a long path shortens the text and keeps it"
 
 echo
 echo "TEST 26: a session alone on the bus is not nudged to claim, and the path is not used up"

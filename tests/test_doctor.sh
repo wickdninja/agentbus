@@ -926,4 +926,35 @@ mkdir -p "$GONE"; rc=0; (cd "$GONE" && rmdir "$GONE" && AGENTBUS_DB="$GB/bus.db"
 grep -qE "^\| \`folder\` \|" "$(cd "$TESTS_DIR/.." && pwd)/docs/how-to/doctor.md" || fail "docs/how-to/doctor.md has no row for folder"
 ok "one folder row, the bus still checked, no crash rows, in text and JSON"
 
+echo "TEST 27: two-buses finds the second bus when the worktrees were made with worktree.useRelativePaths (their git files hold relative paths)"
+world
+mkrepo "$W/main"; "${DOC[@]}" init "$W/main" >/dev/null 2>&1
+mkdir -p "$W/lanes"; git -C "$W/main" -c worktree.useRelativePaths=true worktree add -q "$W/lanes/a" -b rel-a
+RELGD=$(cat "$W/main/.git/worktrees/a/gitdir")
+case "$RELGD" in /*)  # a git older than 2.48 writes absolute paths: write what the setting writes
+  "$PY" - "$W/main/.git/worktrees/a" "$W/lanes/a" <<'PY'
+import os, sys
+gd, wt = sys.argv[1:]
+open(os.path.join(gd, "gitdir"), "w").write(os.path.relpath(os.path.join(wt, ".git"), gd) + "\n")
+open(os.path.join(wt, ".git"), "w").write("gitdir: " + os.path.relpath(gd, wt) + "\n")
+PY
+  ;; esac
+case "$(cat "$W/main/.git/worktrees/a/gitdir")" in /*) fail "the premise failed: the worktree record is still an absolute path";; esac
+"${DOC[@]}" init "$W/lanes" --second-bus >/dev/null 2>&1
+doc "$W/lanes/a" doctor --json
+row two-buses warn "$W/lanes/.agentbus sits directly above this repo's worktrees, but they use $W/main/.agentbus" "" "" "The other bus may serve other repos"
+ok "two-buses reads relative worktree records"
+
+echo "TEST 28: no doctor hint puts the home folder's ~ inside quotes (the shell does not expand it there)"
+world
+H="$HOME/my ws"; mkdir -p "$H"
+mkrepo "$H/main"; "${DOC[@]}" init "$H/main" >/dev/null 2>&1
+git -C "$H/main" worktree add -q "$H/lanes/a" -b sp-a
+"${DOC[@]}" init "$H/lanes" --second-bus >/dev/null 2>&1
+doc "$H/lanes/a" doctor
+grep -qF "two-buses" <<<"$OUT" || { echo "$OUT" >&2; fail "the premise failed: no two-buses row"; }
+! grep -qE "'~|~'" <<<"$OUT" || { echo "$OUT" >&2; fail "a doctor hint has ~ inside quotes"; }
+grep -qF "AGENTBUS_DB=~/'my ws/lanes/.agentbus/bus.db' agentbus read" <<<"$OUT" || { echo "$OUT" >&2; fail "the doctor hint does not name the bus as a word that runs"; }
+ok "the hint prints ~ outside the quotes"
+
 all_passed "All doctor tests passed"
