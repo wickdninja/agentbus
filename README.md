@@ -19,7 +19,7 @@ all in one SQLite file. No server. No dependencies.
 
 Agents in one folder hand each other work, ask questions, and claim files before they edit them, and you can watch it happen. It is for two or more agents, or one agent and you, in the same repo or workspace. There is no server and no third-party package: the bus is one SQLite file in that folder.
 
-Claims are advisory, so nothing stops an agent that ignores one. It runs on one machine, on macOS and Linux. An agent sees a message when it next checks: agentbus cannot wake an idle session.
+Claims are advisory, so nothing stops an agent that ignores one. It runs on one machine, on macOS and Linux. An agent sees a message when it next checks, and agentbus cannot wake an idle session. `wait`, run as a background command, ends when mail arrives and so tells a session whose tool reports finished background commands (Claude Code does); it starts no turn in a session with nothing running.
 
 <br>
 

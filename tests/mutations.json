@@ -45,6 +45,168 @@
     "expect": "expected failure but succeeded: agentbus --as f2 claim pkg/tests"
   },
   {
+    "name": "a conflict offers a takeover for a holder seen minutes ago",
+    "file": "bin/agentbus",
+    "find": "    if b\\[\\\"idle_min\\\"\\] is None or b\\[\\\"idle_min\\\"\\] < LIVE_WINDOW_MIN:",
+    "replace": "    if b[\"idle_min\"] is None:",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "a holder seen 4 minutes ago was offered a leave"
+  },
+  {
+    "name": "a holder seen exactly 30 minutes ago is still live",
+    "file": "bin/agentbus",
+    "find": "b\\[\\\"idle_min\\\"\\] < LIVE_WINDOW_MIN",
+    "replace": "b[\"idle_min\"] <= LIVE_WINDOW_MIN",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "a holder seen 30 minutes ago was not offered a takeover"
+  },
+  {
+    "name": "a conflict leaves out how long ago the holder was seen",
+    "file": "bin/agentbus",
+    "find": "    if ages:\\n        seen = \\(",
+    "replace": "    if False:\n        seen = (",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "the refusal for a gone holder lacks 'dg was last seen 3h ago.'"
+  },
+  {
+    "name": "a JSON conflict leaves out the holder's last-seen",
+    "file": "bin/agentbus",
+    "find": "holder_last_seen=b\\[\\\"last_seen\\\"\\], ",
+    "replace": "holder_last_seen=None, ",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "JSON conflict fields for a gone holder"
+  },
+  {
+    "name": "claim takes the free resources of a batch when another is held",
+    "file": "bin/agentbus",
+    "find": "        if blocked:\\n            refuse_claim\\(",
+    "replace": "        if blocked and len(a.resource) == 1:\n            refuse_claim(",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "a batch with held resources succeeded"
+  },
+  {
+    "name": "a refused batch names only its first holder",
+    "file": "bin/agentbus",
+    "find": "for res, b in blocked\\[:CONFLICTS_SHOWN\\]\\)",
+    "replace": "for res, b in blocked[:1])",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "the refusal lacks 'n/dir/x.py overlaps n/dir/"
+  },
+  {
+    "name": "a refused batch lists only the first conflict in JSON",
+    "file": "bin/agentbus",
+    "find": "for res, b in blocked\\]\\)",
+    "replace": "for res, b in blocked[:1]])",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "JSON conflict fields for several holders"
+  },
+  {
+    "name": "claim of one resource returns the list shape",
+    "file": "bin/agentbus",
+    "find": "    if len\\(a\\.resource\\) == 1:\\n        result = done\\[0\\]",
+    "replace": "    if False:\n        result = done[0]",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "--ttl-min 7 did not expire in 7 minutes"
+  },
+  {
+    "name": "claim repeats a resource named twice",
+    "file": "bin/agentbus",
+    "find": "wanted = list\\(dict\\.fromkeys\\(norm_resource\\(r, a=a\\) for r in a\\.resource\\)\\)",
+    "replace": "wanted = [norm_resource(r, a=a) for r in a.resource]",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "JSON shape for duplicate spellings"
+  },
+  {
+    "name": "claim has no limit on a batch",
+    "file": "bin/agentbus",
+    "find": "    if len\\(a\\.resource\\) > MAX_CLAIM_BATCH:\\n        die\\(f\\\"claim takes",
+    "replace": "    if False:\n        die(f\"claim takes",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "expected failure but succeeded: agentbus --as ma claim cap/f1"
+  },
+  {
+    "name": "release lets go of the held ones when another is not held",
+    "file": "bin/agentbus",
+    "find": "        if missing and not a\\.if_held:",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "expected failure but succeeded: agentbus --as ma release r/a.py r/x.py r/y.py"
+  },
+  {
+    "name": "a second resource may hold a control character",
+    "file": "bin/agentbus",
+    "find": "        for one in v if isinstance\\(v, list\\) else \\[v\\]:\\n            refuse_control\\(name, one\\)",
+    "replace": "        refuse_control(name, v)",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "expected failure but succeeded: agentbus --as ma claim ok/a.py"
+  },
+  {
+    "name": "wait marks the messages read",
+    "file": "bin/agentbus",
+    "find": "            return watch_unread\\(con, \\[name\\]\\)\\[name\\]",
+    "replace": "            n = watch_unread(con, [name])[name]\n            if first:\n                con.execute(\"UPDATE cursors SET last_read_id=(SELECT COALESCE(MAX(id),0) FROM messages) WHERE agent=?\", (name,))\n                con.commit()\n            return n",
+    "count": 1,
+    "run": "tests/test_wait.sh",
+    "expect": "wait changed what is unread"
+  },
+  {
+    "name": "wait timeout exits 1",
+    "file": "bin/agentbus",
+    "find": "\\\"wait_timeout\\\": \\{\\\"exit\\\": 124,",
+    "replace": "\"wait_timeout\": {\"exit\": 1,",
+    "count": 1,
+    "run": "tests/test_wait.sh",
+    "expect": "timeout exit was 1"
+  },
+  {
+    "name": "wait sleeps with the bus open",
+    "file": "bin/agentbus",
+    "find": "            return watch_unread\\(con, \\[name\\]\\)\\[name\\]",
+    "replace": "            n = watch_unread(con, [name])[name]\n            if not n:\n                time.sleep(wait_poll_s())\n            return n",
+    "count": 1,
+    "run": "tests/test_wait.sh",
+    "expect": "while wait slept"
+  },
+  {
+    "name": "wait does not refresh last-seen when it ends",
+    "file": "bin/agentbus",
+    "find": "    if looks > 1:  # it was away",
+    "replace": "    if False:  # it was away",
+    "count": 1,
+    "run": "tests/test_wait.sh",
+    "expect": "wait left last_seen at its old value"
+  },
+  {
+    "name": "wait waits for a name that never joined",
+    "file": "bin/agentbus",
+    "find": "                require_joined\\(con, name, a\\)\\n                touch\\(con, name\\)",
+    "replace": "                touch(con, name)",
+    "count": 1,
+    "run": "tests/test_wait.sh",
+    "expect": "ghost: exit 124"
+  },
+  {
+    "name": "wait accepts a timeout of 0",
+    "file": "bin/agentbus",
+    "find": "    if not 1 <= a\\.timeout <= WAIT_MAX_S:",
+    "replace": "    if not 0 <= a.timeout <= WAIT_MAX_S:",
+    "count": 1,
+    "run": "tests/test_wait.sh",
+    "expect": "stderr lacks '--timeout must be at least"
+  },
+  {
     "name": "claim ignores claims held inside the folder",
     "file": "bin/agentbus",
     "find": "    out\\.append\\(\\(\"resource >= \\? AND resource < \\?\", \\[s \\+ \"/\", s \\+ \"0\"\\]\\)\\)",
@@ -74,8 +236,8 @@
   {
     "name": "claim keeps claims held by names off the roster",
     "file": "bin/agentbus",
-    "find": "            n_released \\+= con\\.execute\\(f\"DELETE FROM claims WHERE \\{stale\\}\", params \\+ \\[name, t\\]\\)\\.rowcount",
-    "replace": "            pass",
+    "find": "        n_released \\+= con\\.execute\\(f\"DELETE FROM claims WHERE \\{stale\\}\", params \\+ \\[name, t\\]\\)\\.rowcount",
+    "replace": "        pass",
     "count": 1,
     "run": "tests/test_workflow_crash_recovery.sh",
     "expect": "does not list the auto-release"
@@ -2369,8 +2531,8 @@
   {
     "name": "a claim conflict shows its purpose bare",
     "file": "bin/agentbus",
-    "find": "why\\ =\\ f'purpose:\\ \"\\{r\\[\"purpose\"\\]\\}\"'\\ if\\ r\\[\"purpose\"\\]\\ else\\ \"no\\ purpose\\ given\"",
-    "replace": "why = r[\"purpose\"] or \"no purpose given\"",
+    "find": "why = f'purpose: \"\\{b\\[\"purpose\"\\]\\}\"' if b\\[\"purpose\"\\] else \"no purpose given\"",
+    "replace": "why = b[\"purpose\"] or \"no purpose given\"",
     "count": 1,
     "run": "tests/test_help.sh",
     "expect": "does not show purpose"
@@ -2486,8 +2648,8 @@
   {
     "name": "output: the claim confirmation says until ISO",
     "file": "bin/agentbus",
-    "find": "\"claimed\\ \\{\\}\\ \\{\\}\",\\ res,\\ until_phrase\\(a\\.ttl_min\\ \\*\\ 60,\\ exp\\)\\)",
-    "replace": "\"claimed {} until {}\", res, exp)",
+    "find": "\"renewed \\{\\} \\{\\}\" if result\\[\"renewed\"\\] else \"claimed \\{\\} \\{\\}\", res, until_phrase\\(ttl, exp\\)\\)",
+    "replace": "\"renewed {} {}\" if result[\"renewed\"] else \"claimed {} until {}\", res, exp)",
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "claim does not say `for 2h (until HH:MM)`"
@@ -3278,8 +3440,8 @@
   {
     "name": "dx2: not_held names another command as next",
     "file": "bin/agentbus",
-    "find": "next=next_command\\(a,\\ \"claims\",\\ as_=False\\),\\ resource=a\\.resource",
-    "replace": "next=next_command(a, \"who\", as_=False), resource=a.resource",
+    "find": "next=claims_cmd, resource=names\\[0\\]",
+    "replace": "next=next_command(a, \"who\", as_=False), resource=names[0]",
     "count": 1,
     "run": "tests/test_dx2.sh",
     "expect": "not held: next does not match the message"
@@ -3323,8 +3485,8 @@
   {
     "name": "dx2: claim never says it renewed",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ renewed\\ =\\ bool\\(own\\)\\ and\\ isinstance\\(own\\[\"expires_at\"\\],\\ str\\)\\ and\\ own\\[\"expires_at\"\\]\\ >\\ t",
-    "replace": "        renewed = False",
+    "find": "    renewed = bool\\(own\\) and isinstance\\(own\\[\"expires_at\"\\], str\\) and own\\[\"expires_at\"\\] > t",
+    "replace": "    renewed = False",
     "count": 1,
     "run": "tests/test_dx2.sh",
     "expect": "a repeat claim must say renewed"
@@ -3332,8 +3494,8 @@
   {
     "name": "dx2: claim hides a purpose change",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ purpose_changed\\ =\\ renewed\\ and\\ a\\.purpose\\ is\\ not\\ None\\ and\\ own\\[\"purpose\"\\]\\ !=\\ a\\.purpose",
-    "replace": "        purpose_changed = False",
+    "find": "    purpose_changed = renewed and a\\.purpose is not None and own\\[\"purpose\"\\] != a\\.purpose",
+    "replace": "    purpose_changed = False",
     "count": 1,
     "run": "tests/test_dx2.sh",
     "expect": "renewed must show the new purpose"
@@ -3341,8 +3503,8 @@
   {
     "name": "dx2: an expired claim counts as renewed",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ renewed\\ =\\ bool\\(own\\)\\ and\\ isinstance\\(own\\[\"expires_at\"\\],\\ str\\)\\ and\\ own\\[\"expires_at\"\\]\\ >\\ t",
-    "replace": "        renewed = bool(own)",
+    "find": "    renewed = bool\\(own\\) and isinstance\\(own\\[\"expires_at\"\\], str\\) and own\\[\"expires_at\"\\] > t",
+    "replace": "    renewed = bool(own)",
     "count": 1,
     "run": "tests/test_dx2.sh",
     "expect": "d[\"renewed\"] is False"
@@ -3649,7 +3811,7 @@
     "file": "bin/agentbus",
     "find": "ask = next_command\\(a, \"--as\", name, \"post\", \"QUESTION\"",
     "replace": "ask = next_command(None, \"--as\", name, \"post\", \"QUESTION\"",
-    "count": 2,
+    "count": 1,
     "run": "tests/test_brief.sh",
     "expect": "claim_conflict next lost --up"
   },
@@ -3962,8 +4124,8 @@
   {
     "name": "the bad-path hint loses --up",
     "file": "bin/agentbus",
-    "find": "res = norm_resource\\(a\\.resource, a=a\\)",
-    "replace": "res = norm_resource(a.resource)",
+    "find": "norm_resource\\((r(?:aw)?), a=a\\)",
+    "replace": "norm_resource(\\1)",
     "count": 2,
     "run": "tests/test_discovery.sh",
     "expect": "the bad-path hint lost --up"
