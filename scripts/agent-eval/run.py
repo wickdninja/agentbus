@@ -95,6 +95,20 @@ def run_cmd(argv, **kw):
     return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kw)
 
 
+def agentbus_cmd():
+    """The agentbus command under test: AGENTBUS_CMD split, else agentbus. A bare first word is resolved on PATH now,
+    before the attempt's own shim (also named agentbus) goes first on PATH and would find itself. None: not on PATH."""
+    cmd = shlex.split(os.environ.get("AGENTBUS_CMD") or "agentbus")
+    if not cmd:
+        return None
+    if os.sep not in cmd[0]:
+        found = shutil.which(cmd[0])
+        if not found:
+            return None
+        cmd[0] = os.path.abspath(found)
+    return cmd
+
+
 class Attempt:
     def __init__(self, agent, arm, scenario, out_dir, args):
         self.agent, self.arm, self.scenario, self.args = agent, arm, scenario, args
@@ -104,7 +118,7 @@ class Attempt:
         self.out = out_dir
         os.makedirs(self.home)
         os.makedirs(self.out, exist_ok=True)
-        self.cmd = shlex.split(os.environ.get("AGENTBUS_CMD") or "agentbus")
+        self.cmd = agentbus_cmd()
         self.bus = os.path.join(self.proj, ".agentbus", "bin", "agentbus")
         self.shim = os.path.join(self.dir, "shim")
         self.env = {}
@@ -355,6 +369,10 @@ def main(argv):
     if not os.environ.get("EVAL_STUB_DIR") and not args.go:
         log("not running: this spends tokens on real agents. Re-run with --go to start.")
         return 3
+    if agentbus_cmd() is None:
+        log("not running: %s is not on PATH. Install agentbus, or set AGENTBUS_CMD to the command to test."
+            % ((shlex.split(os.environ.get("AGENTBUS_CMD") or "agentbus") or ["agentbus"])[0]))
+        return 2
     out = args.out or os.path.join("eval-out", time.strftime("%Y%m%d-%H%M%S"))
     rows, passing = [], 0
     for agent, arm, scenario in cells:

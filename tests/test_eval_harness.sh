@@ -56,4 +56,12 @@ ok "hooks arm handled"
 echo "TEST 5: nothing the harness gives an agent names the project copy; the tool under test is on the agent's PATH"
 ! grep -qF '.agentbus/bin/agentbus' "$(cd "$TESTS_DIR/.." && pwd)/scripts/agent-eval/run.py" || fail "scripts/agent-eval/run.py tells an agent to run the project copy"
 ok "the stub agents above reached the bus through agentbus on PATH"
+echo "TEST 6: with AGENTBUS_CMD unset, the agentbus on PATH is found before the harness's own agentbus shim goes first on PATH"
+# Bug it catches: the shim was `exec agentbus "$@"` placed first on PATH, so it ran itself until the setup step timed out.
+mkdir -p "$T/abbin"; printf '#!/bin/sh\nexec %s "$@"\n' "$AGENTBUS_CMD" >"$T/abbin/agentbus"; chmod 755 "$T/abbin/agentbus"
+rc=0; env -u AGENTBUS_CMD PATH="/usr/bin:/bin" EVAL_STUB_DIR="$STUB" "${EVAL[@]}" --cell claude skill handoff --attempts 1 --out "$T/nopath" >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 2 ] && grep -qF "agentbus is not on PATH" "$T/out" && ! grep -q "timed out" "$T/out" || { cat "$T/out"; fail "with no agentbus on PATH and no AGENTBUS_CMD the harness did not refuse plainly (rc $rc)"; }
+rc=0; env -u AGENTBUS_CMD PATH="$T/abbin:$PATH" EVAL_STUB_DIR="$STUB" "${EVAL[@]}" --cell claude skill handoff --attempts 1 --out "$T/onpath" >"$T/out" 2>&1 || rc=$?
+[ "$rc" = 0 ] && [ "$(tail -n 1 "$T/out")" = "eval complete: 1 of 1 cells pass" ] || { cat "$T/out"; fail "with AGENTBUS_CMD unset the harness did not run the agentbus on PATH (rc $rc)"; }
+ok "a bare agentbus is resolved on PATH first; none on PATH is a plain refusal"
 echo "All eval harness tests passed"

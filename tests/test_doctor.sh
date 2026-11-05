@@ -913,4 +913,17 @@ echo "TEST 25: bus-env and two-buses have rows in docs/how-to/doctor.md"
 for id in bus-env two-buses; do grep -qE "^\| \`$id\` \|" "$(cd "$TESTS_DIR/.." && pwd)/docs/how-to/doctor.md" || fail "docs/how-to/doctor.md has no row for $id"; done
 ok "bus-env and two-buses are in the checks table"
 
+echo "TEST 26: doctor run from a folder that was deleted, with AGENTBUS_DB set, says so in one row and reports no crash"
+# Bug it catches: every check that reads the current folder raised FileNotFoundError, so doctor printed four rows saying
+# "this check could not run ... This is a bug in agentbus".
+GONE="$T/gone-cwd"; GB="$T/gone-bus"; mkdir -p "$GONE" "$GB"; AGENTBUS_DB="$GB/bus.db" "${AB[@]}" who >/dev/null
+rc=0; (cd "$GONE" && rmdir "$GONE" && AGENTBUS_DB="$GB/bus.db" "${AB[@]}" doctor >"$T/gone.out" 2>&1) || rc=$?
+! grep -qF "This is a bug in agentbus" "$T/gone.out" && ! grep -qF "could not run" "$T/gone.out" || fail "doctor from a deleted folder printed crash rows: $(cat "$T/gone.out")"
+[ "$(grep -c "^  fail  folder " "$T/gone.out")" = 1 ] && grep -qF "the folder doctor runs in no longer exists" "$T/gone.out" || fail "doctor from a deleted folder did not say so in one folder row: $(cat "$T/gone.out")"
+[ "$rc" = 1 ] && grep -qE "^  ok    bus " "$T/gone.out" || fail "doctor from a deleted folder: rc $rc, or the bus named by AGENTBUS_DB was not still checked: $(cat "$T/gone.out")"
+mkdir -p "$GONE"; rc=0; (cd "$GONE" && rmdir "$GONE" && AGENTBUS_DB="$GB/bus.db" "${AB[@]}" --json doctor >"$T/gone.json" 2>/dev/null) || rc=$?
+"$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); rows=[c for c in d["checks"] if c["status"]=="fail"]; assert [c["id"] for c in rows]==["folder"] and rows[0]["fix"] is None and rows[0]["hint"], rows' "$T/gone.json" || fail "doctor --json from a deleted folder: $(cat "$T/gone.json")"
+grep -qE "^\| \`folder\` \|" "$(cd "$TESTS_DIR/.." && pwd)/docs/how-to/doctor.md" || fail "docs/how-to/doctor.md has no row for folder"
+ok "one folder row, the bus still checked, no crash rows, in text and JSON"
+
 all_passed "All doctor tests passed"

@@ -110,7 +110,7 @@ agentbus setup claude
 
 **Then you just talk to it.** You don't need a command. Hooks join each session to the bus, tell it its name and what is waiting, and leave when it ends. Ask it "who is on the bus?".
 
-To make a session follow the protocol again, type `/agentbus` after `agentbus setup claude`, or `/agentbus:agentbus` with the plugin. More: [Claude Code](docs/how-to/claude-code.md).
+Claude Code's skills documentation says a skill is also a command you can type: `/agentbus` after `agentbus setup claude`, or `/agentbus:agentbus` with the plugin. They have not been tried in a live session yet. More: [Claude Code](docs/how-to/claude-code.md).
 
 ### Codex
 

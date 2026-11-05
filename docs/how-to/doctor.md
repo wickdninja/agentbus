@@ -32,6 +32,7 @@ Run it from the folder you work in. Every line that is not `ok` ends with the co
 | `agents-md` | the agentbus block in Codex's `AGENTS.md`: missing, current, older, edited, or damaged markers | `agentbus setup codex` |
 | `bus-env` | `AGENTBUS_DB` against the bus this folder finds. Shown only when the variable names another bus | `unset AGENTBUS_DB` |
 | `two-buses` | bus folders directly above this repo's linked worktrees that are not the bus the worktrees use. Says which bus they use and how to look at the other. That one may serve other repos, so doctor names no command: what to do with it is your call | none |
+| `folder` | whether the folder you run doctor in still exists. Shown only when it was deleted (a shell still in it): the checks that start from it are skipped | `cd` to a folder that exists, then run `doctor` again |
 | `hooks` | the hook entries `agentbus setup claude` wrote, and the agentbus they run (its path and version). With the Claude Code plugin installed, it says the plugin provides the hooks. Says so when there are none to check | `agentbus setup claude` |
 
 A status is `ok`, `warn`, `fail` or `n/a` (nothing to check on this machine). A warning is something to tidy; a `fail` is something that stops agents from working. The last line counts both. The exit status is 0 unless a check failed, then 1.

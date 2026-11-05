@@ -1138,6 +1138,29 @@ reset; run_setup codex >/dev/null; run_setup codex --uninstall >/dev/null
 ok "tagged entries gone, everything else (including the edit) kept"
 
 echo
+echo "TEST: codex hooks: uninstall of a hooks.json that holds only agentbus entries, one of them edited, saves it as a .bak before deleting it"
+# Bug it catches: every entry was tagged agentbus:managed, so uninstall deleted the file, edit and all, with no copy, while
+# help and the docs said edited files stay.
+reset; run_setup codex >/dev/null; CH="$HOME/.codex/hooks.json"
+"$PY" -I - "$CH" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+h = d["hooks"]["Stop"][0]["hooks"][0]; h["command"] = h["command"].replace(" # agentbus:managed", " --my-flag # agentbus:managed"); h["timeout"] = 99
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+cp "$CH" "$T/ch.edited-ours"
+run_setup codex --uninstall
+[ "$RC" = 0 ] || fail "uninstall of an edited, all-agentbus hooks.json: exit $RC: $OUT"
+bak=$(ls "$HOME/.codex" 2>/dev/null | grep '^hooks.json.agentbus-.*\.bak$' | tail -1 || true)
+[ -n "$bak" ] && cmp -s "$T/ch.edited-ours" "$HOME/.codex/$bak" || fail "uninstall deleted an edited hooks.json with no backup: $(ls -a "$HOME/.codex" 2>/dev/null) $OUT"
+has "  - ~/.codex/hooks.json   removed the agentbus hooks, and the file, which held nothing else; the file as it was is saved as $bak"
+[ ! -e "$CH" ] || fail "the edited all-agentbus hooks.json was not removed"
+reset; run_setup codex >/dev/null; run_setup codex --uninstall --dry-run
+has "  - would remove the agentbus hooks and the file ~/.codex/hooks.json, which holds nothing else"
+lacks "saved as"
+ok "an edited all-agentbus hooks.json is saved before it is deleted; an unedited one goes with no copy"
+
+echo
 echo "TEST: codex hooks: an invalid hooks.json is refused and nothing is written; AGENTS.md past 32 KiB is refused with its message"
 reset; mkdir -p "$HOME/.codex"; printf '{ not json' >"$HOME/.codex/hooks.json"; cp "$HOME/.codex/hooks.json" "$T/ch.bad"
 run_setup codex

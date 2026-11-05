@@ -1,6 +1,6 @@
 # Launch claims
 
-Every factual statement about another tool in the README comparison and the launch post has one row. Sources are primary (the project's own repo, package page or docs). First checked 2026-11-01 by fetching each URL. On 2026-11-04 every row was re-read from a raw download of its source and each quote grepped from that copy; rows that changed carry that date. The claim-gate lanes still re-read the quoted phrase at the source before the final bytes ship. A claim not marked `ok` is cut. No star counts anywhere.
+Every factual statement about another tool in the README comparison and the launch post has one row. Sources are primary (the project's own repo, package page or docs). First checked 2026-11-01 by fetching each URL. On 2026-11-04 every row was re-read from a raw download of its source and each quote grepped from that copy, except row 15: its site refuses a direct fetch (TLS), so its quote is from Exa's copy of the page, as the row says. Rows that changed carry that date. The claim-gate lanes still re-read the quoted phrase at the source before the final bytes ship. A claim not marked `ok` is cut. No star counts anywhere.
 
 Status: `ok` = source says it on the date checked. `cut` = unverified, stale or contradicted; do not use.
 

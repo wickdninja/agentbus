@@ -41,6 +41,7 @@ make_project() {
   mkdir -p "$w/home/src/app" "$w/bin"
   cp "$ROOT/bin/agentbus" "$w/bin/agentbus"; chmod +x "$w/bin/agentbus"
   export HOME="$w/home" PATH="$w/bin:$PATH" AGENTBUS_NO_UPDATE_CHECK=1 GIT_CONFIG_NOSYSTEM=1
+  export XDG_STATE_HOME="$w/home/.local/state" XDG_CONFIG_HOME="$w/home/.config" XDG_CACHE_HOME="$w/home/.cache"   # not the caller's
   unset AGENTBUS_DB AGENTBUS_AGENT CODEX_HOME CLAUDE_CONFIG_DIR CLAUDE_CODE_MESSAGING_SOCKET TMUX
   cd "$HOME/src/app"
   git init -q -b main

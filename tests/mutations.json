@@ -4147,5 +4147,68 @@
     "count": 1,
     "run": "tests/test_watch_keys.sh",
     "expect": "a watch on an outer bus showed or copied a command without --up"
+  },
+  {
+    "name": "setup codex --uninstall deletes an edited all-agentbus hooks.json with no backup",
+    "file": "bin/agentbus",
+    "find": "^            keep = self\\.merge\\(\\{\\}, self\\.entries_for\\(scope\\)\\) != doc$",
+    "replace": "            keep = False",
+    "count": 1,
+    "run": "tests/test_setup.sh",
+    "expect": "uninstall deleted an edited hooks.json with no backup"
+  },
+  {
+    "name": "record_demo keeps the caller's XDG folders",
+    "file": "scripts/record_demo.sh",
+    "find": "^  export XDG_STATE_HOME=\"\\$w/home/\\.local/state\" XDG_CONFIG_HOME=\"\\$w/home/\\.config\" XDG_CACHE_HOME=\"\\$w/home/\\.cache\"   # not the caller.s\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_record_demo.sh",
+    "expect": "the demo's agentbus ran with the caller's XDG folders"
+  },
+  {
+    "name": "eval: no agentbus on PATH is not refused up front",
+    "file": "scripts/agent-eval/run.py",
+    "find": "^    if agentbus_cmd\\(\\) is None:$",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_eval_harness.sh",
+    "expect": "with no agentbus on PATH and no AGENTBUS_CMD the harness did not refuse plainly"
+  },
+  {
+    "name": "eval: a bare agentbus is left for the shim to find (itself)",
+    "file": "scripts/agent-eval/run.py",
+    "find": "^        cmd\\[0\\] = os\\.path\\.abspath\\(found\\)$",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_eval_harness.sh",
+    "expect": "with AGENTBUS_CMD unset the harness did not run the agentbus on PATH"
+  },
+  {
+    "name": "doctor: a deleted working folder is reported as crash rows",
+    "file": "bin/agentbus",
+    "find": "^            if doctor_cwd_gone\\(\\):",
+    "replace": "            if False:",
+    "count": 1,
+    "run": "tests/test_doctor.sh",
+    "expect": "doctor from a deleted folder printed crash rows"
+  },
+  {
+    "name": "docs: claude-code.md's SessionStart text drops --as",
+    "file": "docs/how-to/claude-code.md",
+    "find": "Read with: agentbus --as claude-a1b2c3d4 status ; agentbus --as claude-a1b2c3d4 inbox\\.",
+    "replace": "Read with: agentbus status ; agentbus inbox.",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "docs/how-to/claude-code.md does not show the real SessionStart text"
+  },
+  {
+    "name": "example runs a command through the project copy",
+    "file": "examples/two-agent-handoff.sh",
+    "find": "^run \"\\$\\{installed_bus\\[@\\]\\}\" claims$",
+    "replace": "run .agentbus/bin/agentbus claims",
+    "count": 1,
+    "run": "tests/test_example.sh",
+    "expect": "the example's transcript is not the tour it promises"
   }
 ]

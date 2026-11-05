@@ -94,4 +94,4 @@ Every command in them names the installed tool by absolute path and ends with `#
 agentbus setup codex --uninstall
 ```
 
-Only the entries and the block setup added are removed; anything you edited stays. A `hooks.json` or `AGENTS.md` that held nothing else is deleted with them, and so is the `.codex` folder setup made when nothing else is in it. `--dry-run` shows the plan first.
+Only the entries and the block setup added are removed. An `AGENTS.md` block you edited stays. Hook entries tagged `agentbus:managed` go even if you edited them, so `hooks.json` is first saved as `hooks.json.agentbus-<date and time>.bak`, unless it held only the entries setup wrote, unedited. A `hooks.json` or `AGENTS.md` that held nothing else is deleted with them, and so is the `.codex` folder setup made when nothing else is in it. `--dry-run` shows the plan first.

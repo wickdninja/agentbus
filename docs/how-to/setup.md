@@ -92,7 +92,7 @@ refreshes the project's own files; it cannot be combined with `--uninstall`.
 agentbus setup claude --uninstall
 ```
 
-Uninstall removes only what setup added. A skill you edited stays and is reported as `modified; not removed`. For `AGENTS.md`, only the marked block goes; your other text, and any edits you made since, stay.
+Uninstall removes only what setup added. A skill you edited stays and is reported as `modified; not removed`. For `AGENTS.md`, only the marked block goes, and a block you edited stays; your other text stays. Hook entries tagged `agentbus:managed` go even if you edited them, so the hooks file is first saved as `<name>.agentbus-<date and time>.bak`; a `hooks.json` that held only the entries setup wrote, unedited, is deleted with no copy.
 
 ## For agents
 

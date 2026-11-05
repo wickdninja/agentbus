@@ -9130,8 +9130,17 @@ class JsonEntriesPiece:
             newline = text.endswith("\n")
         new = self.merge(doc, desired)
         if uninstall and self.remove_empty and st is not None and new == {} and doc != {}:
-            def gone():  # every entry in the file was ours: leave no empty file behind, and no copy of what was only ours
+            # Every entry in the file was ours: leave no empty file behind. A copy only when the entries are not the ones
+            # setup writes (edited, or another version's): the file as it was is saved first, as every other uninstall does.
+            keep = self.merge({}, self.entries_for(scope)) != doc
+            gone_hint = os.path.basename(path) + ".agentbus-<date and time>.bak"
+            gone_note = "; the file as it was is saved as {backup}" if keep else ""
+
+            def gone():
                 setup_guard(path, raw, "setup-before-write-entries")
+                if keep:
+                    removal.backup = setup_backup_write(path, raw)
+                    setup_test_fail("after-backup")
                 os.unlink(path)
                 setup_sync_dir(os.path.dirname(path))
                 if _SETUP_SCOPE == "project" and os.path.basename(os.path.dirname(path)) == ".codex":
@@ -9139,8 +9148,10 @@ class JsonEntriesPiece:
                         os.rmdir(os.path.dirname(path))  # the project's folder setup made for it, when nothing else is in it (never ~/.codex)
                     except OSError:
                         pass
-            return [Change(path, "removed", "", line="{path}   removed the agentbus hooks, and the file, which held nothing else",
-                           would="would remove the agentbus hooks and the file {path}, which holds nothing else", write=gone)]
+            removal = Change(path, "removed", "", line="{path}   removed the agentbus hooks, and the file, which held nothing else" + gone_note,
+                             would="would remove the agentbus hooks and the file {path}, which holds nothing else" + gone_note,
+                             write=gone, backup_hint=gone_hint if keep else "")
+            return [removal]
         if st is not None and new == doc:
             return [Change(path, "unchanged", "" if not uninstall else "not installed",
                            line="{path}   " + ("unchanged" if not uninstall else "not installed"))]
@@ -9355,7 +9366,9 @@ def register_setup(sub):
     s.add_argument("--scope", choices=("user", "project"), default="user",
                    help="user: your own config (default); project: files under the current directory")
     s.add_argument("--dry-run", action="store_true", help="Show what would change; write nothing")
-    s.add_argument("--uninstall", action="store_true", help="Remove what setup added; edited files stay")
+    s.add_argument("--uninstall", action="store_true", help="Remove what setup added. A skill or AGENTS.md block you edited stays; hook entries tagged "
+                        "agentbus:managed go even if edited, after the hooks file is saved as a .bak (no copy when it "
+                        "held only unedited agentbus entries)")
     s.add_argument("--refresh", action="store_true",
                    help="Bring what setup installed up to date; add nothing, keep a skill or AGENTS.md block you edited, "
                         "and rewrite hooks tagged agentbus:managed, with a backup (what agentbus update runs)")
@@ -13283,12 +13296,28 @@ for _id, _fn in (("tool", doctor_check_tool), ("bus", doctor_check_bus), ("copy"
 
 # ---- the command ----
 
+def doctor_cwd_gone():
+    """True when the folder doctor runs in no longer exists (deleted under the shell that is still in it)."""
+    try:
+        os.getcwd()
+        return False
+    except FileNotFoundError:
+        return True
+
+
 def doctor_run(ctx):
-    results = []
+    results, gone = [], False
     for id, fn in DOCTOR_CHECKS:
         try:
             results.extend(fn(ctx))
         except Exception as e:  # a check that breaks is a finding, not a crash: the others still report
+            if doctor_cwd_gone():  # not a bug: a check that starts from the current folder cannot; one row says why
+                if not gone:
+                    gone = True
+                    results.append(doctor_result("folder", "fail", "the folder doctor runs in no longer exists, so the checks "
+                                                 "that start from it did not run",
+                                                 hint="cd to a folder that exists, then run agentbus doctor again."))
+                continue
             results.append(doctor_result(id, "fail", f"this check could not run ({type(e).__name__})",
                                          hint="This is a bug in agentbus: report it at the agentbus repository."))
     return results
