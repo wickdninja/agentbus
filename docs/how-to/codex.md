@@ -75,7 +75,7 @@ Messages, goals and names other agents wrote are never put in a hook message, on
 - Use one scope. User and project hooks both run on every event, so installing both doubles them.
 - Project hooks (`--scope project`) load only for a project you have told Codex to trust.
 - Codex starts each hook as `$SHELL -lc COMMAND`, a login shell: see "Your login shell" above.
-- With `--scope project`, setup refuses a `.codex` or `.claude` that is a link, or a link anywhere below it (`.claude/skills`): it will not write or delete through it, and checks the folders again right before each write.
+- With `--scope project`, setup refuses a `.codex` or `.claude` that is a link, or a link anywhere below it (`.claude/skills`): it will not write or delete through it, even when the link appears while setup runs.
 
 ## Print the hooks yourself
 

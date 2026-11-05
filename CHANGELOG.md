@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `setup` can no longer be redirected by a folder swapped for a link while it runs: every write, backup and removal goes through a folder held open with `O_NOFOLLOW`, and a link that appears in the way is refused by name.
+
 ## 0.2.0 - 2026-11-04
 
 All five versioned things change (see [How versions fit together](docs/explanation/versions.md)): the tool is 0.2.0; the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is now stamped 1, the v0.1.0 shape, so a v0.1.0 bus is adopted with no other change; the skill is rewritten; and the hooks are new.
