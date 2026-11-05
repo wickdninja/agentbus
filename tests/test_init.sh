@@ -174,4 +174,70 @@ agentbus init "$FW/sub" >/dev/null || fail "re-running init on a worktree subfol
 mkdir -p "$FM/sub"; agentbus init "$FM/sub" >/dev/null || fail "with worktrees, a subfolder of the main checkout was refused: discovery does find a bus there"
 ok "refused with the repo's bus named, or the checkout to init when it has none; nothing made; --second-bus and a re-run work; the main checkout's subfolder stays allowed"
 
+echo "TEST 22: a recovery command that names a folder holding a space and a ; runs as one command on that folder"
+# Bug it catches: hints pasted the path in as it is (`agentbus init {root}`), so a folder named "q dir;touch CANARY" gave a
+# command that, run in a shell, ran agentbus on "q" and then touch. Each printed or JSON command below is run through sh -c in
+# an empty folder, with agentbus on PATH a recorder of its arguments: it must get exactly the folder, and nothing else may run.
+Q="$T/q dir;touch CANARY"; mkdir -p "$Q"; QR=$(rl "$Q")
+QH="$HOME/q dir;touch CANARY"; mkdir -p "$QH"
+REC="$T/rec-bin"; mkdir -p "$REC"
+printf '#!/bin/sh\nfor w in "$@"; do printf "%%s\\n" "$w"; done >"$ARGS"\n' >"$REC/agentbus"; chmod 755 "$REC/agentbus"
+# runs CMD WHAT WORD...: CMD through sh -c in an empty folder; agentbus got exactly WORD... and no CANARY was made anywhere.
+runs() {
+  local cmd=$1 what=$2 box; shift 2; box=$(mktemp -d); rm -f "$T/args"
+  (cd "$box" && ARGS="$T/args" PATH="$REC:$PATH" sh -c "$cmd") >/dev/null 2>&1 || fail "$what: the command failed in sh: $cmd"
+  [ -z "$(find "$T" "$box" -name CANARY)" ] || fail "$what: the command ran a second one (CANARY made): $cmd"
+  printf '%s\n' "$@" | cmp -s - "$T/args" || fail "$what: agentbus got other words than the folder: $cmd -> $(cat "$T/args" 2>/dev/null)"
+}
+jnext() { "$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["error"]["next"])' "$1"; }
+runline() { sed -n "s/.*$1//p" "$2" | head -1; }   # the text after a marker (Run: , next: ) on the first line holding it
+# upgrade of a folder with no bus: the JSON next and the message's Run: are both agentbus init <the folder>
+(cd "$T" && agentbus --json upgrade "$Q" >/dev/null 2>"$T/q-err") && fail "upgrade of a folder with no bus succeeded"
+runs "$(jnext "$T/q-err")" "upgrade's JSON next" init "$QR"
+(cd "$T" && agentbus upgrade "$Q" >/dev/null 2>"$T/q-err2") && fail "upgrade of a folder with no bus succeeded (text)"
+runs "$(runline 'Run: ' "$T/q-err2")" "upgrade's Run: line" init "$QR"
+# the real command, run as printed, makes the bus in that folder and nowhere else
+SHIMREAL="$T/real-bin"; mkdir -p "$SHIMREAL"; printf '#!/bin/sh\nexec %s "$@"\n' "$(printf '%q ' "${AB[@]}")" >"$SHIMREAL/agentbus"; chmod 755 "$SHIMREAL/agentbus"
+box=$(mktemp -d); (cd "$box" && PATH="$SHIMREAL:$PATH" sh -c "$(jnext "$T/q-err")") >/dev/null 2>&1 || fail "the printed init did not run"
+[ -x "$Q/.agentbus/bin/agentbus" ] && [ ! -e "$box/q dir" ] && [ ! -e "$box/q" ] && [ -z "$(find "$T" "$box" -name CANARY)" ] || fail "the printed init did not make the bus in the folder it names, or ran something else"
+# init's next: cd line, for a folder under HOME (shown with ~)
+(cd "$T" && agentbus init "$QH" >"$T/qh-init") || fail "init of a folder under HOME failed"
+cdline=$(runline 'next: cd ' "$T/qh-init"); [ -n "$cdline" ] || fail "init printed no next: cd line: $(cat "$T/qh-init")"
+got=$(cd "$T" && sh -c "cd $cdline && pwd -P") || fail "init's next: cd line does not run in sh: cd $cdline"
+[ "$got" = "$(rl "$QH")" ] && [ -z "$(find "$T" -name CANARY)" ] || fail "init's next: cd line does not reach the folder as one word: cd $cdline -> $got"
+# a bus that is newer than this agentbus: schema_newer's next and the stale-copy notice
+(cd "$Q" && agentbus who >/dev/null) || fail "the first command on the new bus failed"
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=99"); c.commit()' "$Q/.agentbus/bus.db"
+(cd "$Q" && agentbus --json who >/dev/null 2>"$T/q-new") && fail "a newer bus was not refused"
+runs "$(jnext "$T/q-new")" "schema_newer's JSON next" upgrade "$QR"
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=1"); c.commit()' "$Q/.agentbus/bus.db"
+"$PY" - "$BIN" "$QR" "$T/q-old" <<'PY' || fail "schema_older's next could not be read"
+import importlib.machinery, importlib.util, os, sys
+bin_, root, out = sys.argv[1:4]
+bin_ = os.environ.get("AGENTBUS_BIN") or bin_
+loader = importlib.machinery.SourceFileLoader("agentbus_mod", bin_)
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("agentbus_mod", loader)); loader.exec_module(m)
+try:
+    m.schema_older(os.path.join(root, ".agentbus", "bus.db"), 0)
+except SystemExit as e:
+    open(out, "w").write(e.code.next + "\n")
+PY
+runs "$(cat "$T/q-old")" "schema_older's next" upgrade "$QR"
+printf '0.1.0\n' >"$Q/.agentbus/VERSION"   # the copy's recorded release, older than this agentbus
+(cd "$Q" && AGENTBUS_NO_UPDATE_NOTICE= agentbus status >/dev/null 2>"$T/q-stale") || fail "status beside a stale copy failed"
+runs "$(runline 'Run: ' "$T/q-stale")" "the stale-copy notice's Run: line" upgrade "$QR"
+# doctor's fix for a missing copy, in JSON and as shown (~ for HOME)
+(cd "$T" && agentbus init "$QH" >/dev/null); (cd "$QH" && agentbus who >/dev/null); rm -f "$QH/.agentbus/bin/agentbus"
+(cd "$QH" && agentbus --json doctor >"$T/qh-doc" 2>/dev/null) || true
+fix=$("$PY" -c 'import json,sys; print(next(r["fix"] for r in json.load(open(sys.argv[1]))["checks"] if r["id"]=="copy"))' "$T/qh-doc") || fail "doctor --json has no copy fix: $(cat "$T/qh-doc")"
+runs "$fix" "doctor's JSON copy fix" init "$(rl "$QH")"
+(cd "$QH" && agentbus doctor >"$T/qh-doc2" 2>/dev/null) || true
+shown=$(grep -F 'has no copy of agentbus' "$T/qh-doc2" | sed -n 's/.*Run: //p'); [ -n "$shown" ] || fail "doctor shows no copy fix: $(cat "$T/qh-doc2")"
+runs "$shown" "doctor's shown copy fix" init "$HOME/q dir;touch CANARY"
+# init --second-bus in a linked worktree of a checkout in such a folder: the main checkout to init instead
+QM="$T/qm dir;touch CANARY"; mkrepo "$QM"; git -C "$QM" worktree add -q "$T/qm-wt" -b qm-wt
+(cd "$T" && agentbus --json init --second-bus "$T/qm-wt" >/dev/null 2>"$T/qm-err") && fail "init --second-bus of a linked worktree was not refused"
+runs "$(jnext "$T/qm-err")" "the linked worktree refusal's next" init "$(rl "$QM")"
+ok "init, upgrade, schema, stale-copy, doctor and worktree recovery commands name the folder as one shell word"
+
 echo "All init tests passed"

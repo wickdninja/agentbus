@@ -69,6 +69,22 @@ done
 [ ! -s "$STUB_LOG" ] || fail "the installer in the current linked worktree ran: $(cat "$STUB_LOG")"
 ok "skipped from the worktree's top and from a subfolder"
 
+echo "TEST 3c: a link in an outside PATH folder that leads to an installer in the current worktree is skipped too"
+# Bug it catches: only the PATH entry's folder was checked, so outside/uv -> <worktree>/bin/uv ran the worktree's file.
+new_case wtlink uv
+WM="$C/wl-main"; WL="$C/wl-lane"; mkrepo "$WM"; git -C "$WM" worktree add -q "$WL" -b wl-lane
+mkdir -p "$WL/bin" "$WM/bin" "$C/outside" "$C/outside2"; cp "$C/stubs/uv" "$WL/bin/uv"; cp "$C/stubs/uv" "$WM/bin/uv"; chmod 755 "$WL/bin" "$WM/bin" "$C/outside" "$C/outside2"
+ln -s "$WL/bin/uv" "$C/outside/uv"; ln -s "$WM/bin/uv" "$C/outside2/uv"
+(cd "$WL" && PATH="$C/outside:/usr/bin:/bin" "$ENTRY" update --no-buses --no-setup --json 2>"$C/err" >/dev/null) && fail "a link to an installer in the current worktree was used"
+[ "$(errof <"$C/err")" = manual_step ] || fail "link into the current worktree: $(cat "$C/err")"
+(cd "$WL" && PATH="$C/outside2:/usr/bin:/bin" "$ENTRY" update --no-buses --no-setup --json 2>"$C/err" >/dev/null) && fail "a link to an installer in the main checkout of the current worktree was used"
+[ "$(errof <"$C/err")" = manual_step ] || fail "link into the main checkout: $(cat "$C/err")"
+[ ! -s "$STUB_LOG" ] || fail "an installer reached through a link into the worktree ran: $(cat "$STUB_LOG")"
+cp "$C/stubs/uv" "$C/outside2/real-uv"; rm "$C/outside2/uv"; ln -s real-uv "$C/outside2/uv"
+(cd "$WL" && PATH="$C/outside2:/usr/bin:/bin" "$ENTRY" update --no-buses --no-setup >/dev/null 2>&1) || fail "a link to an installer outside every worktree (control) did not run"
+[ -s "$STUB_LOG" ] || fail "the control installer behind a link left no log"
+ok "a link into the current worktree or its main checkout is skipped; a link to a file outside them (control) runs"
+
 echo "TEST 3b: a group-writable installer folder is trusted only for the admin group (owner the caller or root); world-writable, another group and a group-writable installer file stay refused"
 new_case admin uv
 chmod 775 "$C/stubs"   # like /opt/homebrew/bin: drwxrwxr-x, owned by the caller, in a group that is not the admin group here

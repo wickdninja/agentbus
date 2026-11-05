@@ -241,6 +241,18 @@ def tilde(path):
     return path
 
 
+def shell_word(path):
+    """path as one shell word, for a command a person copies: shell-quoted (shlex.quote), with the home folder shown
+    as ~ outside the quotes (~/'my repo'), so the word still names the folder and runs nothing else. path is absolute,
+    or already shortened by tilde()."""
+    t = path if path == "~" or path.startswith("~/") else tilde(path)
+    if t == "~" or t == "~/":
+        return t
+    if t.startswith("~/"):
+        return "~/" + shlex.quote(t[2:])
+    return shlex.quote(path)
+
+
 def char_width(c):
     """Columns one character is counted as when wrapping: 1 for printable ASCII, 2 for everything
     else. Never an undercount: no terminal draws one character wider than 2 columns, and terminals
@@ -1840,7 +1852,7 @@ def cmd_init(a):
     if info and os.path.realpath(info[0]) != root:
         top = git(["rev-parse", "--show-toplevel"], cwd=root)
         if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root:
-            die(f"{root} is a linked worktree; its commands use the main checkout's bus. Run: agentbus init {info[0]}", "bad_input", next=f"agentbus init {info[0]}")
+            die(f"{root} is a linked worktree; its commands use the main checkout's bus. Run: agentbus init {shlex.quote(info[0])}", "bad_input", next=f"agentbus init {shlex.quote(info[0])}")
     # Only a checkout's top level gets an exclude rule; an arbitrary directory is a workspace.
     top = git(["rev-parse", "--show-toplevel"], cwd=root) if info else None
     exclude = info[1] if top and top.returncode == 0 and os.path.realpath(top.stdout.strip()) == root else None
@@ -1849,7 +1861,7 @@ def cmd_init(a):
     folder = os.path.join(root, ".agentbus")
     say = (lambda *x, **k: None) if a.json else show
     global _RERUN
-    _RERUN = "agentbus init " + root
+    _RERUN = "agentbus init " + shlex.quote(root)
     old, new = install_copy(root)
     db = os.path.join(folder, "bus.db")
     if not os.path.lexists(db):
@@ -1874,7 +1886,7 @@ def cmd_init(a):
         say("optional: add `.agentbus/` to .gitignore to share that rule")
     if outer:
         say("outer bus: {}", tilde(outer))
-    say("next: cd {}", tilde(root))
+    say("next: cd {}", shell_word(root))
     # The command an agent runs is always the installed agentbus (on PATH, the skill's rule). From a clone it may not be
     # installed yet, and an agent then only asks for it, so this says that first.
     say("next: {}agentbus --as YOUR_NAME join", "" if install_entry_script() else "install agentbus so your agents have it on PATH (see the README), then ")
@@ -1910,9 +1922,9 @@ def cmd_upgrade(a):
         where = [bus_directory(u.bus) for u in done]
         last = copies[-1] if copies else where[-1]
         if a.all and a.repo:
-            again = "agentbus upgrade --all " + os.path.realpath(os.path.abspath(os.path.expanduser(a.repo)))
+            again = "agentbus upgrade --all " + shlex.quote(os.path.realpath(os.path.abspath(os.path.expanduser(a.repo))))
         else:
-            again = "agentbus upgrade " + last
+            again = "agentbus upgrade " + shlex.quote(last)
         said = []
         if done:
             what = "; ".join(f"{d} ({u.summary})" for d, u in zip(where, done))
@@ -1954,7 +1966,7 @@ def _cmd_upgrade(a):
         root = selected_bus(getattr(a, "up", 0))
     if not (check_node(os.path.join(root, ".agentbus"), "dir") and check_node(os.path.join(root, ".agentbus", "bin"), "dir")
             and check_node(os.path.join(root, ".agentbus", "bin", "agentbus"), "file")):
-        die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}", "no_bus", next=f"agentbus init {root}")
+        die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {shlex.quote(root)}", "no_bus", next=f"agentbus init {shlex.quote(root)}")
     if a.dry_run:
         report_upgrades(a, [upgrade_one(root, True)])
         return
@@ -2031,7 +2043,8 @@ def install_after_migration(root, schema_old, schema_new, backup):
             r = refusal(e)
         done = f"schema {schema_old} -> {schema_new}" + (f", backup {backup}" if backup else "")
         die(f"{root}: the bus was migrated ({done}), but its copy of agentbus could not be replaced: {r['message']}. "
-            f"Run: agentbus upgrade {root} again", r["code"], directory=root, backup=backup)
+            f"Run: agentbus upgrade {shlex.quote(root)} again", r["code"], directory=root, backup=backup,
+            next=f"agentbus upgrade {shlex.quote(root)}")
 
 
 def read_copy(root):
@@ -2103,7 +2116,7 @@ def upgrade_one(root, dry_run=False, top=None):
             check_still_under(top, root)
         if not (check_node(folder, "dir") and check_node(os.path.join(folder, "bin"), "dir")
                 and check_node(os.path.join(folder, "bin", "agentbus"), "file")):
-            die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {root}", "no_bus", next=f"agentbus init {root}")
+            die(f"{root} has no .agentbus/bin/agentbus. Run: agentbus init {shlex.quote(root)}", "no_bus", next=f"agentbus init {shlex.quote(root)}")
         vfile = os.path.join(folder, "VERSION")
         old = read_small(vfile).strip() if check_node(vfile, "file") else "none"
         row["old"] = shown_version(old)
@@ -2245,7 +2258,7 @@ def stale_copy_notice(a, db_path):
     copy, stale = stale_copy(db_path)
     if stale:
         note(f"this bus's copy is {copy}; the installed agentbus is {__version__}. "
-             f"Run: agentbus upgrade {bus_directory(db_path)}")
+             f"Run: agentbus upgrade {shlex.quote(bus_directory(db_path))}")
 
 
 # ---------- opening the bus ----------
@@ -2629,14 +2642,14 @@ def bus_directory(path):
 
 def schema_older(path, have):
     die(f"this bus is older than this agentbus (schema {have}, needs {SCHEMA_VERSION}). Any agentbus command "
-        f"that is not watch upgrades it after taking a backup, or run: agentbus upgrade {bus_directory(path)}",
-        "schema_older", next=f"agentbus upgrade {bus_directory(path)}", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
+        f"that is not watch upgrades it after taking a backup, or run: agentbus upgrade {shlex.quote(bus_directory(path))}",
+        "schema_older", next=f"agentbus upgrade {shlex.quote(bus_directory(path))}", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
 
 
 def schema_newer(path, have):
     die(f"this bus is newer than this copy of agentbus (schema {have}, this copy knows {SCHEMA_VERSION}). "
-        f"Use a newer agentbus: agentbus upgrade {bus_directory(path)} from an up-to-date install",
-        "schema_newer", next=f"agentbus upgrade {bus_directory(path)}", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
+        f"Use a newer agentbus: agentbus upgrade {shlex.quote(bus_directory(path))} from an up-to-date install",
+        "schema_newer", next=f"agentbus upgrade {shlex.quote(bus_directory(path))}", bus=path, bus_schema=have, tool_schema=SCHEMA_VERSION)
 
 
 def user_version(con):
@@ -3762,11 +3775,11 @@ def roster_view(con, name):
     return close, shown, total
 
 
-def roster_text(shown, total):
-    """On the roster: alpha, gamma. With more agents than are named: ... (+4 more: agentbus who)."""
+def roster_text(shown, total, a=None):
+    """On the roster: alpha, gamma. With more agents than are named: ... (+4 more: agentbus who). a keeps --up N."""
     if not shown:
         return "Nobody has joined yet."
-    more = f" (+{total - len(shown)} more: agentbus who)" if total > len(shown) else ""
+    more = f" (+{total - len(shown)} more: {next_command(a, 'who', as_=False)})" if total > len(shown) else ""
     return "On the roster: " + ", ".join(shown) + more + "."
 
 
@@ -3790,7 +3803,7 @@ def require_joined(con, name, a=None):
     close, shown, total = roster_view(con, name)
     join = next_command(a, "--as", name, "join", as_=False)
     if close:
-        die(f"{name} is not on the roster. Did you mean {or_list(close)}? {roster_text(shown, total)} To join as {name}: {join}",
+        die(f"{name} is not on the roster. Did you mean {or_list(close)}? {roster_text(shown, total, a)} To join as {name}: {join}",
             "not_on_roster", next=join, agent=name, did_you_mean=close, roster=shown)
     die(f"{name} is not on the roster. Run: {join}", "not_on_roster", next=join, agent=name, did_you_mean=[], roster=shown)
 
@@ -3805,12 +3818,12 @@ def roster_warnings(con, to):
     return [{"code": "recipient_not_on_roster", "name": to, "did_you_mean": close, "roster": shown, "roster_total": total}]
 
 
-def warn_text(w):
-    """A warning as one stderr line."""
+def warn_text(w, a=None):
+    """A warning as one stderr line. a keeps --up N in the command it names."""
     text = f"{w['name']} is not on the roster; the message waits for that name."
     if w["did_you_mean"]:
         text += f" Did you mean {or_list(w['did_you_mean'])}?"
-    return text + " " + roster_text(w["roster"], w["roster_total"])
+    return text + " " + roster_text(w["roster"], w["roster_total"], a)
 
 
 def bus_env_warnings(up):
@@ -3987,8 +4000,9 @@ def make_cursor_text(body):
 def read_cursor(a, text, flag):
     """The row id inside a cursor, refusing (bad_input) any that is not from this command with these filters."""
     def refuse(why):
-        first = {"read": "agentbus --json read", "inbox": "agentbus --as NAME --json inbox --peek",
-                 "ctx history": "agentbus --json ctx history KEY", "log show": "agentbus --json log show"}.get(cursor_command(a), "agentbus --json")
+        first = next_command(a, *{"read": ("--json", "read"), "inbox": ("--as", "NAME", "--json", "inbox", "--peek"),
+                                  "ctx history": ("--json", "ctx", "history", "KEY"),
+                                  "log show": ("--json", "log", "show")}.get(cursor_command(a), ("--json",)), as_=False)
         die(f"{flag} needs the next value from a previous page of this same command and filters ({why}). "
             f"Get one with: {first}, and pass the next it prints", "bad_input", next=first)
     m = CURSOR_RE.fullmatch(text)
@@ -4313,14 +4327,17 @@ def read_inputs(a):
     elif a.cmd == "ctx" and a.action == "set":
         me(a)
         a._body = read_body(a.value, "ctx set KEY",
-                            'ctx set KEY needs a value. Use: agentbus --as NAME ctx set KEY "VALUE", or pipe text to ctx set KEY -.')
+                            f'ctx set KEY needs a value. Use: {next_command(a, "--as", "NAME", "ctx", "set", "KEY", as_=False)} "VALUE", '
+                            'or pipe text to ctx set KEY -.')
     elif a.cmd == "log" and a.action == "add":
         me(a)
         a._body = read_body(a.detail, "log add ACTION",
-                            'log add ACTION needs a detail. Use: agentbus --as NAME log add ACTION "DETAIL", or pipe text to log add ACTION -.')
+                            f'log add ACTION needs a detail. Use: {next_command(a, "--as", "NAME", "log", "add", "ACTION", as_=False)} "DETAIL", '
+                            'or pipe text to log add ACTION -.')
     elif a.cmd == "goal" and a.text:
         me(a)
-        a._body = read_body(a.text, "goal", 'the goal is empty. Use: agentbus --as NAME goal "TEXT", or pipe text to goal -.')
+        a._body = read_body(a.text, "goal", f'the goal is empty. Use: {next_command(a, "--as", "NAME", "goal", as_=False)} "TEXT", '
+                            'or pipe text to goal -.')
 
 
 def cmd_post(con, a):
@@ -4336,7 +4353,7 @@ def cmd_post(con, a):
                     request_reused(a.request_id, name, old['id'], f"#{old['id']}", "message", "body")
                 warnings = roster_warnings(con, a.to)
                 for w in warnings:
-                    note(warn_text(w))
+                    note(warn_text(w, a))
                 emit(a, {"id": old['id'], "duplicate": True, "warnings": warnings},
                      "posted #{} to {} [{}] (already posted)", old['id'], "everyone" if a.to == "*" else a.to, a.kind)
                 return
@@ -4347,14 +4364,14 @@ def cmd_post(con, a):
             (now(), name, a.to, a.kind, a.topic, body, a.reply_to, a.request_id))
         warnings = roster_warnings(con, a.to)
     for w in warnings:
-        note(warn_text(w))
+        note(warn_text(w, a))
     emit(a, {"id": cur.lastrowid, "warnings": warnings}, "posted #{} to {} [{}]", cur.lastrowid,
          "everyone" if a.to == "*" else a.to, a.kind)
 
 
-def fmt_msg(r):
+def fmt_msg(r, a=None):
     """A message header (marked HEAD: agentbus wrote `#<id> `, and the id is the integer rowid),
-    then the body, every line indented."""
+    then the body, every line indented. a keeps --up N in the read --id command a cut body names."""
     mid = r["id"]
     head = (HEAD + "#%d" % mid if isinstance(mid, int) and not isinstance(mid, bool) else f"{INDENT}#{mid}")
     head += f" {r['sender']} -> {'everyone' if r['recipient'] == '*' else r['recipient']} [{r['kind']}]"
@@ -4365,7 +4382,7 @@ def fmt_msg(r):
     head += f" · {human_time(r['ts'])}"  # a hostile or malformed stored time shows as it is (already cleaned)
     text = f"{head}\n{INDENT}" + str(r["body"]).replace("\n", "\n" + INDENT)
     if r.get("body_truncated") is True:
-        text += f"\n{INDENT}... cut at 2 KB. Full text: agentbus read --id {r['id']}"
+        text += f"\n{INDENT}... cut at 2 KB. Full text: {next_command(a, 'read', '--id', r['id'], as_=False)}"
     return text
 
 
@@ -4388,7 +4405,7 @@ def cmd_inbox(con, a):
     rows = [cut_body(r) for r in rows]
     page = ("--limit", page_size(a, INBOX_LIMIT))
     # Consuming, the rows shown are marked read, so the same command continues; peeking leaves them unread, so the cursor does.
-    out(a, rows, fmt_msg, more, unread=True, cursor=nxt,
+    out(a, rows, lambda r: fmt_msg(r, a), more, unread=True, cursor=nxt,
         next_cmd=next_command(a, "inbox", "--peek", "--after", nxt, *page) if nxt else next_command(a, "inbox", *page))
     if not a.peek and (rows or not row):
         upto = rows[-1]["id"] if rows else None
@@ -4432,7 +4449,7 @@ def cmd_read(con, a):
         if a.json:
             print_json(dict(r))
         else:
-            out(a, [r], fmt_msg)
+            out(a, [r], lambda r: fmt_msg(r, a))
         return
     rows, more = q_read_page(con, a.since, a.topic, a.limit, a._before_id)
     # Walking back (no --since): the cursor is the oldest id shown. With --since, has_more means more
@@ -4445,7 +4462,7 @@ def cmd_read(con, a):
         cont = next_command(a, "read", *topic, "--before", nxt, *page) if nxt else None
     else:
         cont = next_command(a, "read", "--since", rows[-1]["id"], *topic, *page) if rows else None
-    out(a, rows, fmt_msg, more, empty="no messages", earlier=a.since is None, cursor=nxt, next_cmd=cont)
+    out(a, rows, lambda r: fmt_msg(r, a), more, empty="no messages", earlier=a.since is None, cursor=nxt, next_cmd=cont)
 
 
 def glimpse(text, n=60):
@@ -4544,14 +4561,14 @@ def cmd_goal(con, a):
         show("goal: {}", g["goal"])
         show("set by {} at {}", g["set_by"], human_time(g["set_at"]), row=True)
     else:
-        show("no goal yet. Set one with: agentbus --as NAME goal \"what we are shipping\"")
+        show("no goal yet. Set one with: {} \"what we are shipping\"", next_command(a, "--as", "NAME", "goal", as_=False))
 
 
 def cmd_claim(con, a):
     name = me(a)
     if a.ttl_min < 1 or a.ttl_min > MAX_TTL_MIN:
-        die(f"--ttl-min must be at least 1 and at most {MAX_TTL_MIN} (a week). For example: agentbus --as NAME claim PATH --ttl-min 120", "bad_input",
-            next="agentbus --as NAME claim PATH --ttl-min 120")
+        example = next_command(a, "--as", "NAME", "claim", "PATH", "--ttl-min", "120", as_=False)
+        die(f"--ttl-min must be at least 1 and at most {MAX_TTL_MIN} (a week). For example: {example}", "bad_input", next=example)
     res = norm_resource(a.resource, a=a)
     exp = datetime.fromtimestamp(clock().timestamp() + a.ttl_min * 60, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     released, n_released = [], 0
@@ -4751,7 +4768,7 @@ def cmd_status(con, a):
     if g:
         show("== goal: {}", g["goal"])
     else:
-        show("== no goal yet (agentbus --as NAME goal \"...\")")
+        show("== no goal yet ({} \"...\")", next_command(a, "--as", "NAME", "goal", as_=False))
     later(print)
     show("== agents")
     out(a, agents, fmt_who, m1, empty=f"no agents. Join with: {next_command(a, '--as', 'NAME', 'join', as_=False)}",
@@ -4762,7 +4779,7 @@ def cmd_status(con, a):
     for title, rows, fmt, more, empty, nxt in (
             ("facts", ctx, fmt_ctx, m2, "no facts", next_command(a, "ctx", "get", "--limit", len(ctx) + m2)),
             ("claims", claims, fmt_claim, m3, "no claims", next_command(a, "claims", "--limit", len(claims) + m3)),
-            ("recent messages", msgs, fmt_msg, m4, "no messages", older)):
+            ("recent messages", msgs, lambda r: fmt_msg(r, a), m4, "no messages", older)):
         later(print)  # a blank line between sections
         show("== {}", title)
         out(a, rows, fmt, more, empty=empty, earlier=(title == "recent messages"), next_cmd=nxt)
@@ -6498,13 +6515,18 @@ def copy_text(v):
     return v
 
 
-def reply_command(m, name="NAME"):
+def watch_command(up, rest):
+    """A command watch shows or copies: `agentbus [--up N] rest`, so it reaches the bus watch was started on (--up N)."""
+    return "agentbus " + (f"--up {int(up)} " if up else "") + rest
+
+
+def reply_command(m, name="NAME", up=0):
     """The command that replies to m, shown in its detail and copied by y. Every word is a plain word
     (plain_word): a name or sender that is not one is shown as NAME or SENDER for the person to fill in (the
     detail shows the sender above), so the command means the same, and runs nothing else, in every shell, and
-    holds no control byte. name: $AGENTBUS_AGENT or --as when set, else the word NAME."""
+    holds no control byte. name: $AGENTBUS_AGENT or --as when set, else the word NAME. up: watch's --up N."""
     kind = " --kind answer" if m["kind"] == "question" else ""
-    return (f"agentbus --as {plain_word(name, 'NAME')} post --to {plain_word(m['sender'], 'SENDER')} "
+    return watch_command(up, f"--as {plain_word(name, 'NAME')} post --to {plain_word(m['sender'], 'SENDER')} "
             f"--reply-to {int(m['id'])}{kind} \"...\"")
 
 
@@ -6531,6 +6553,7 @@ class View:
         self.copied = None
         self.help_from = None
         self.me = None
+        self.up = 0  # watch's --up N: the commands it shows and copies carry it
         self.effects = []
 
     def copy(self):
@@ -6567,6 +6590,7 @@ class _Frame:
                   "detail": view.detail, "scroll": view.scroll, "copied": view.copied, "fresh": fresh,
                   "error": error, "stale": stale}
         self.me = view.me or "NAME"
+        self.up = getattr(view, "up", 0) or 0
         self.data = detail
         self.cur, self.where, self.t_cur = snap, where, t_now
         held = held if held is not None else (view.frozen or {}).get("snap")
@@ -6674,7 +6698,7 @@ class _Frame:
                 row.add("  " + tail, "2")
             return row
         lead = "  🎯 " if self.E else "  " + self.g["nogoal"]
-        return Row((lead + self.fit(self.tx('no goal yet · agentbus --as NAME goal "..."'), W - text_width(lead)), "2"))
+        return Row((lead + self.fit(self.tx('no goal yet · ' + watch_command(self.up, '--as NAME goal "..."')), W - text_width(lead)), "2"))
 
     def title(self, name, count, right_variants=(), right_sgr="2"):
         left = Row(((SECTION_EMOJI.get(name, "") + " " if self.E and name in SECTION_EMOJI else "") + name, "1"),
@@ -6853,7 +6877,7 @@ class _Frame:
         secs = []
         for name, key, items, rowf, empty, cmd in (
                 ("Agents", "agents", snap["agents"], self.agent_row,
-                 "no one yet. Join with: agentbus --as NAME join", "who"),
+                 "no one yet. Join with: " + watch_command(self.up, "--as NAME join"), "who"),
                 ("Claims", "claims", snap["claims"], self.claim_row, "nothing claimed", "claims"),
                 ("Facts", "facts", snap["context"], self.fact_row, "none yet", "ctx get")):
             keyf = SECTION_KEY[key]
@@ -6905,7 +6929,7 @@ class _Frame:
                 out.append(self.title(name, "n/a", [f"{s['na']}: is for messages", ""]))
                 continue
             count = (f"{n} of newest {s['held']}" if s["beyond"] else f"{n} of {total}") if filtering else str(total)
-            older_row = self.more_row(f"… {s['beyond']} older not searched · agentbus {s['cmd']}")
+            older_row = self.more_row(f"… {s['beyond']} older not searched · {watch_command(self.up, s['cmd'])}")
             if filtering and n == 0:
                 out.append(self.title(name, count, ["no match"]))
                 if s["older"] and share:
@@ -6925,14 +6949,14 @@ class _Frame:
                 out.append(self.title(name, count, hint))
                 out.extend(rows_)
                 if extra:
-                    out.append(self.more_row(f"… {extra} more · agentbus {s['cmd']}"))
+                    out.append(self.more_row(f"… {extra} more · {watch_command(self.up, s['cmd'])}"))
             elif avail >= 2:
                 k = avail - 1
                 start = self.window(nr, k, si, bottom=False)
                 hidden = nr - k + extra
                 out.append(self.title(name, count, hint))
                 out.extend(rows_[start:start + k])
-                out.append(self.more_row(f"… {hidden} more" + (f" · agentbus {s['cmd']}" if extra else "")))
+                out.append(self.more_row(f"… {hidden} more" + (f" · {watch_command(self.up, s['cmd'])}" if extra else "")))
             elif avail <= 0:  # no row at all: the title says how many are hidden (never 0)
                 out.append(self.title(name, count, [f"… {nr + extra} more"]))
             else:  # one row: the selected one, and the title says how many are hidden
@@ -6972,7 +6996,7 @@ class _Frame:
                 fsgr = "33"
             rhs = follow
         count = (f"{len(keep)} of newest {len(msgs)}" if capped else f"{len(keep)} of {total}") if filtering else str(total)
-        older_row = self.more_row(f"… {total - len(msgs)} older not searched · agentbus read")
+        older_row = self.more_row(f"… {total - len(msgs)} older not searched · {watch_command(self.up, 'read')}")
         if filtering and not keep:
             out.append(self.title("Messages", count, ["no match"]))
             if older_m:
@@ -6999,7 +7023,7 @@ class _Frame:
         k = min(k, n)
         out += pre
         if earlier:
-            out.append(self.more_row(f"… {earlier} earlier" + (" · agentbus read" if beyond else "")))
+            out.append(self.more_row(f"… {earlier} earlier" + (" · " + watch_command(self.up, "read") if beyond else "")))
         out += rows_[start:start + k]
         if later > 0:
             out.append(self.more_row(f"… {later} later"))
@@ -7159,7 +7183,7 @@ class _Frame:
             body.append(Row())
             body += self.wrap(m["body"], W - 4, "    ")
             body.append(Row())
-            body += self.label_rows("reply", reply_command(m, self.me), "1", shell=True)
+            body += self.label_rows("reply", reply_command(m, self.me, self.up), "1", shell=True)
             if d.get("thread", True):
                 body.append(Row())
                 if data is None:
@@ -7177,7 +7201,7 @@ class _Frame:
                                                   f"to go further up"))
                     body += [self.msg_row(x, sel=sel == ("messages", x["id"]), here=x["id"] == m["id"]) for x in thread]
                     if n_more > 0:
-                        body.append(self.more_row(f"… {n_more} more replies · agentbus read --since {m['id']}"))
+                        body.append(self.more_row(f"… {n_more} more replies · " + watch_command(self.up, "read --since " + str(m["id"]))))
         elif sec == "agents":
             a = rec
             body += self.pack([[(self.g["off"] if self.idle(a) else self.g["on"],
@@ -7188,7 +7212,7 @@ class _Frame:
                                       f" · joined {self.hhmm(a['joined_at'])}"), W - 2, "  ")
             n = (self.snap.get("unread") or {}).get(a["name"], 0)
             if n:
-                body += self.wrap(self.tx(f"{n} unread · agentbus --as {a['name']} inbox --peek shows them"), W - 2, "  ")
+                body += self.wrap(self.tx(f"{n} unread · {watch_command(self.up, '--as ' + a['name'] + ' inbox --peek')} shows them"), W - 2, "  ")
             body.append(Row())
             cl = [c for c in self.snap["claims"] if c["agent"] == a["name"]]
             body.append(self.title("Claims", str(len(cl)), hint if cl else []))
@@ -7239,7 +7263,7 @@ class _Frame:
                                 (self.fit(h["updated_by"], 12), self.ac(h["updated_by"])), (" ", ""), (lines[0], "")))
                 body += [Row((" " * (W - vw) + l, "")) for l in lines[1:]]
             if nh > THREAD_MAX:
-                body.append(self.more_row(f"… {nh - THREAD_MAX} older · agentbus ctx history {x['key']}"))
+                body.append(self.more_row(f"… {nh - THREAD_MAX} older · {watch_command(self.up, 'ctx history ' + x['key'])}"))
         stack = d.get("stack") or []
         back = "back"
         if stack:
@@ -7259,7 +7283,7 @@ class _Frame:
         held = [m["id"] for m in self.snap["messages"]]
         if held and data["first"] is not None and data["first"] >= min(held):
             return f"… {older} older · /{word} lists them"
-        return f"… {older} older · agentbus read"
+        return f"… {older} older · {watch_command(self.up, 'read')}"
 
     def page(self, rows, footer, keep=2):
         """Rows above the footer, scrolled by view.scroll and moved so the selected row shows; rows hidden
@@ -7415,7 +7439,7 @@ class _Frame:
     def error_frame(self):
         e, W, E = self.v["error"], self.W, self.E
         code = e["code"]
-        where = e.get("directory") or self.where  # the folder `agentbus upgrade` and `init` take
+        where = shell_word(e.get("directory") or self.where)  # the folder `agentbus upgrade` and `init` take, as one shell word
         unreadable = ("not readable", "1;31", "🚧", "This bus could not be read, so the sections are not drawn.")
         label, sgr, icon, head, lines = {
             "schema_refused": unreadable + ([("Run: ", f"agentbus upgrade {where}")],),
@@ -7648,7 +7672,7 @@ def _copy_text(view, snap, data):
         if d["section"] == "messages":
             m = (data or {}).get("record") if data and data.get("key") == d["key"] else None
             m = m or next((x for x in shown["messages"] if x["id"] == d["key"]), None)
-            return reply_command(m, view.me or "NAME") if m else None
+            return reply_command(m, view.me or "NAME", getattr(view, "up", 0) or 0) if m else None
         if d["section"] == "facts":
             rec = next((x for x in shown["context"] if x["key"] == d["key"]), None) or (data or {}).get("record")
             return copy_text(rec["value"]) if rec else None
@@ -8040,7 +8064,9 @@ def cmd_watch(a, strict):
     if a.once or not tty_out or dumb:
         snap = watch_snapshot(a._db, strict, HELD, body_head=BODY_HEAD)
         size = shutil.get_terminal_size((100, 40))
-        frame = render(View(), snap, where, (size.columns, size.lines), clock(), paint, live=False)
+        once = View()
+        once.up = getattr(a, "up", 0) or 0
+        frame = render(once, snap, where, (size.columns, size.lines), clock(), paint, live=False)
         write_out("\n".join(l.rstrip() for l in frame) + "\n")
         if dumb:
             note(DUMB_LINE if term == "dumb" else "TERM is not set, printing one frame. Use a terminal for the live view.")
@@ -8183,6 +8209,7 @@ def _watch_loop(a, where, paint, out, stdin, wake_r, stop, reader, select, ttymo
     me_name = getattr(a, "as_", None) or os.environ.get("AGENTBUS_AGENT") or None
     view = View()
     view.me = me_name
+    view.up = getattr(a, "up", 0) or 0
     snap, error, stale, last_good = empty_snapshot(), None, None, None
     first_seen = {}
     cache = {}  # (section, key) -> detail data, read on open and on r
@@ -9638,24 +9665,27 @@ def detect_install():
 
 def find_tool(name):
     """The absolute path of the executable `name` on PATH after a filter, or None. Skipped: an entry that is
-    relative, inside the working directory's worktree or its main checkout or a bus folder, or world-writable or owned by someone
-    else but root (the file as well as its folder); the file may not be group-writable, the folder may be only when
-    its group is the admin group (see installer_folder_ok)."""
+    relative, inside the working directory's worktree or its main checkout or a bus folder (the PATH folder, and the
+    folder of the file a link there leads to), or world-writable or owned by someone else but root (the file as well as
+    its folder); the file may not be group-writable, the folder may be only when its group is the admin group (see
+    installer_folder_ok)."""
     cwd_repo = repo_root()
     trees = {os.path.realpath(cwd_repo)} if cwd_repo else set()
     top = git(["rev-parse", "--show-toplevel"]) if cwd_repo else None  # repo_root is the main checkout, also from a linked worktree
     if top is not None and top.returncode == 0 and top.stdout.strip():
         trees.add(os.path.realpath(top.stdout.strip()))
     uid = os.getuid() if hasattr(os, "getuid") else None
+    def excluded(folder):
+        return os.sep + ".agentbus" + os.sep in folder + os.sep or any(folder == t or folder.startswith(t + os.sep) for t in trees)
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry or not os.path.isabs(entry):
             continue
         folder = os.path.realpath(entry)
-        if os.sep + ".agentbus" + os.sep in folder + os.sep:
-            continue
-        if any(folder == t or folder.startswith(t + os.sep) for t in trees):
+        if excluded(folder):
             continue
         path = os.path.join(folder, name)
+        if excluded(os.path.dirname(os.path.realpath(path))):  # a link here to a file in the worktree or a bus folder
+            continue
         try:
             fst, dst = os.stat(path), os.stat(folder)
         except OSError:
@@ -11762,9 +11792,12 @@ def hook_main_checkout_path(target):
 
 def hook_edit_targets(payload, db):
     """The files a tool call edits, relative to the bus directory: those that lie inside it (and not inside
-    .agentbus itself), at most HOOK_TARGETS_MAX, each once. A file inside a linked worktree counts as the same file
-    of the main checkout, wherever the worktree lies."""
-    out = []
+    .agentbus itself), at most HOOK_TARGETS_MAX, each once, as [(name, paths)]. A file inside a linked worktree is
+    named by the same file of the main checkout, wherever the worktree lies; when the worktree lies inside the bus
+    directory too, its own path there is one of `paths` as well, so a claim on either covers the file."""
+    out = {}
+    def inside(rel):
+        return not (rel in (".", "..", ".agentbus") or rel.startswith("../") or rel.startswith(".agentbus/"))
     for raw in hook_dialect()["paths"](payload)[:HOOK_TARGETS_MAX]:
         if "\0" in raw:
             continue
@@ -11777,14 +11810,16 @@ def hook_edit_targets(payload, db):
         # directory. A main checkout the bus does not cover (a bus inside the worktree, or in a folder that only holds it)
         # leaves the path as it is.
         mapped = os.path.relpath(hook_main_checkout_path(target), base)
+        name = rel
         if mapped != ".." and not mapped.startswith("../"):
-            rel = mapped
-        if rel in (".", "..", ".agentbus") or rel.startswith("../") or rel.startswith(".agentbus/"):
+            name = mapped
+        if not inside(name):
             continue
-        rel = norm_resource(rel, strict=False)
-        if rel not in out:
-            out.append(rel)
-    return out
+        paths = out.setdefault(norm_resource(name, strict=False), [norm_resource(name, strict=False)])
+        own = norm_resource(rel, strict=False)
+        if inside(rel) and own not in paths:
+            paths.append(own)
+    return list(out.items())
 
 
 def hook_pre_tool_use(payload):
@@ -11801,9 +11836,9 @@ def hook_pre_tool_use(payload):
     try:
         held, unclaimed = False, []
         peers = con.execute("SELECT 1 FROM agents WHERE name<>? AND last_seen>=? LIMIT 1", (name, hook_cutoff())).fetchone() is not None
-        for rel in rels:
+        for rel, paths in rels:
             own = False
-            for where, params in overlap_filters(rel):
+            for where, params in (f for path in paths for f in overlap_filters(path)):
                 if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent<>? AND {on_roster} LIMIT 1",
                                (*params, t, name)).fetchone():
                     held = True
@@ -12813,6 +12848,16 @@ def doctor_text(text):
     return text
 
 
+def doctor_fix_text(fix):
+    """A fix command for people: as doctor_text, but a shell-quoted word that starts with the home folder keeps its
+    quotes after the ~ ('/home/me/my repo' is shown ~/'my repo'), so the shown command runs as the JSON one does."""
+    for home in home_names():
+        fix = re.sub(r"(^|(?<=\s))'" + re.escape(home) + r"(?=[/'])", "~'", fix)
+    fix = re.sub(r"(^|(?<=\s))~'/", "~/'", fix)
+    fix = re.sub(r"(^|(?<=\s))~''(?=\s|$)", "~", fix)
+    return doctor_text(fix)
+
+
 def doctor_executable_info(path):
     """What a recorded executable (a hook command's path) is, by reading it as text: (exists, version) where
     version is the `__version__ = "X"` line, or None. The file is opened without following a link and never
@@ -12918,7 +12963,7 @@ def doctor_check_bus(ctx):
     if early:
         return [early]
     where = ctx.directory
-    upgrade = f"agentbus upgrade {ctx.directory}" if os.path.lexists(os.path.join(ctx.directory, ".agentbus", "bin", "agentbus")) \
+    upgrade = f"agentbus upgrade {shlex.quote(ctx.directory)}" if os.path.lexists(os.path.join(ctx.directory, ".agentbus", "bin", "agentbus")) \
         and ctx.db == os.path.join(ctx.directory, ".agentbus", "bus.db") else ""
     restore = "Restore a backup (docs/how-to/upgrade.md in the agentbus repository), or inspect " + ctx.db + "."
     try:
@@ -12934,7 +12979,7 @@ def doctor_check_bus(ctx):
                 return [doctor_result("bus", "ok", f"{where} (no database yet; the first command creates it)")]
             ctx.bus_state = "none"
             if os.path.basename(os.path.dirname(ctx.db)) == ".agentbus" and os.path.isdir(ctx.directory):
-                return [doctor_result("bus", "n/a", f"no bus at {ctx.db}", f"agentbus init {ctx.directory}")]
+                return [doctor_result("bus", "n/a", f"no bus at {ctx.db}", f"agentbus init {shlex.quote(ctx.directory)}")]
             return [doctor_result("bus", "n/a", f"no bus at {ctx.db}",
                                   hint="AGENTBUS_DB names a bus that does not exist yet: any agentbus command creates it there, or unset AGENTBUS_DB.")]
         if code == "busy":
@@ -12989,10 +13034,10 @@ def doctor_check_copy(ctx):
     copy_path = os.path.join(folder, "bin", "agentbus")
     if not os.path.lexists(copy_path):
         return [doctor_result("copy", "warn", f"{folder} has no copy of agentbus (bin/agentbus is missing); agents cannot run it",
-                              f"agentbus init {ctx.directory}")]
+                              f"agentbus init {shlex.quote(ctx.directory)}")]
     if os.path.realpath(copy_path) == self_path():
         return [doctor_result("copy", "n/a", "this is the folder's own copy; run the installed agentbus doctor to compare it", hint="Run: agentbus doctor")]
-    upgrade = f"agentbus upgrade {ctx.directory}"
+    upgrade = f"agentbus upgrade {shlex.quote(ctx.directory)}"
     copy = bus_copy_version(ctx.db)
     mine = release_key(ctx.version)
     label = copy_label(ctx.directory) if copy is None else copy
@@ -13275,7 +13320,7 @@ def cmd_doctor(a):
                 continue  # the header line above is the tool's ok
             line = doctor_text(r["detail"]).rstrip(".")
             if r["status"] != "ok":
-                line += f". Run: {doctor_text(r['fix'])}" if r["fix"] else (f". {doctor_text(r['hint'])}" if r["hint"] else "")
+                line += f". Run: {doctor_fix_text(r['fix'])}" if r["fix"] else (f". {doctor_text(r['hint'])}" if r["hint"] else "")
             show("{}{}{}", r["status"].ljust(6), r["id"].ljust(DOCTOR_ID_WIDTH), line, row=True)
         show("{}", doctor_summary(fail, warn, ctx), path_first=True)
     if fail:

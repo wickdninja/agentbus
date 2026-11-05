@@ -73,4 +73,27 @@ env AGENTBUS_DB="$WS_DB" "${AB[@]}" --json claims | python3 -c '
 import json, sys
 assert [c["resource"] for c in json.load(sys.stdin)["items"]] == ["y.txt"]' || fail "AGENTBUS_DB did not select the workspace bus"
 ok "AGENTBUS_DB wins over the folder the command runs in"
+
+echo "STEP 5: the commands read and goal print from inside the repo with --up 1 keep --up 1, and run on the workspace bus"
+# Bug it catches: a cut body said "Full text: agentbus read --id N" and status said "agentbus --as NAME goal", which from
+# inside the repo read and set the repo's own bus, not the workspace bus the listing came from.
+cd "$R/app/src"
+SHIM="$T/up-bin"; mkdir -p "$SHIM"; printf '#!/bin/sh\nexec %s "$@"\n' "$(printf '%q ' "${AB[@]}")" >"$SHIM/agentbus"; chmod 755 "$SHIM/agentbus"
+long=$(python3 -c 'print("w" * 3000 + " END-OF-LONG")')
+agentbus --up 1 --as a post "$long" >/dev/null || fail "the long post to the workspace bus failed"
+full=$(agentbus --up 1 read | sed -n 's/.*Full text: //p' | tail -1)
+is_equal "the cut body's command" "agentbus --up 1 read --id 2" "$full"
+got=$(PATH="$SHIM:$PATH" sh -c "$full") || fail "the printed read --id command failed: $full"
+grep -qF "END-OF-LONG" <<<"$got" || fail "the printed read --id command did not reach the workspace bus's whole message: $got"
+hint=$(agentbus --up 1 goal | sed -n 's/.*Set one with: //p')
+is_equal "goal's hint with no goal" 'agentbus --up 1 --as NAME goal "what we are shipping"' "$hint"
+grep -qF 'no goal yet · agentbus --up 1 --as NAME goal "..."' <<<"$(COLUMNS=160 agentbus --up 1 watch --once)" || fail "watch --up 1 --once showed a goal hint without --up 1"
+st=$(agentbus --up 1 status | sed -n 's/^== no goal yet (\(.*\))$/\1/p')
+is_equal "status's goal hint" 'agentbus --up 1 --as NAME goal "..."' "$st"
+PATH="$SHIM:$PATH" sh -c "$(sed 's/NAME/a/; s/"\.\.\."/"ship the workspace"/' <<<"$st")" >/dev/null || fail "status's goal hint did not run: $st"
+is_equal "the hint set the workspace bus's goal" "ship the workspace" "$(sql -d "$WS_DB" "SELECT value FROM context WHERE key='goal'")"
+is_equal "the repo bus has no goal" "" "$(sql -d "$APP_DB" "SELECT value FROM context WHERE key='goal'")"
+(agentbus --up 1 --as a goal "  " >/dev/null 2>"$T/goal-err") && fail "an empty goal was accepted"
+grep -qF 'the goal is empty. Use: agentbus --up 1 --as NAME goal "TEXT"' "$T/goal-err" || fail "the empty-goal hint lost --up 1: $(cat "$T/goal-err")"
+ok "read --id and the goal hints carry --up 1 and act on the workspace bus"
 echo "All workflow nested buses tests passed"

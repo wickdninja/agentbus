@@ -1928,8 +1928,8 @@
   {
     "name": "identity: ctx set goal allowed",
     "file": "bin/agentbus",
-    "find": "a\\.key == GOAL_KEY:\\n        die\\(f\\\"\\{GOAL_KEY\\} is reserved",
-    "replace": "a.key == GOAL_KEY + \"x\":\n        die(f\"{GOAL_KEY} is reserved",
+    "find": "a\\.key == GOAL_KEY:\\n        goal_cmd = next_command\\(a, \\\"goal\\\", \\\"TEXT\\\", as_=False\\)\\n        die\\(f\\\"\\{GOAL_KEY\\} is reserved",
+    "replace": "a.key == GOAL_KEY + \"x\":\n        goal_cmd = next_command(a, \"goal\", \"TEXT\", as_=False)\n        die(f\"{GOAL_KEY} is reserved",
     "count": 1,
     "run": "tests/test_identity.sh",
     "expect": "expected bad_input but succeeded"
@@ -2486,8 +2486,8 @@
   {
     "name": "output: read --id cuts the body",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ print_json\\(dict\\(r\\)\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ else:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ out\\(a,\\ \\[r\\],\\ fmt_msg\\)",
-    "replace": "            print_json(cut_body(r))\n        else:\n            out(a, [r], fmt_msg)",
+    "find": "            print_json\\(dict\\(r\\)\\)\\n        else:\\n            out\\(a, \\[r\\], lambda r: fmt_msg\\(r, a\\)\\)",
+    "replace": "            print_json(cut_body(r))\n        else:\n            out(a, [r], lambda r: fmt_msg(r, a))",
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "a body of exactly 64 KB must be accepted whole"
@@ -2868,7 +2868,25 @@
     "replace": "    return (f\"agentbus: this file has no claim. If you are editing it: \"",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
-    "expect": "first unclaimed nudge"
+    "expect": "the nudge for a relative patch path in a worktree under the checkout did not name the mapped path"
+  },
+  {
+    "name": "hook claims: a worktree file ignores a claim on its own bus path (Claude)",
+    "file": "bin/agentbus",
+    "find": "^        if inside\\(rel\\) and own not in paths:$",
+    "replace": "        if False and inside(rel) and own not in paths:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a claim on the worktree's own path under the checkout was missed: rc"
+  },
+  {
+    "name": "hook claims: a worktree file ignores a claim on its own bus path (Codex)",
+    "file": "bin/agentbus",
+    "find": "^        if inside\\(rel\\) and own not in paths:$",
+    "replace": "        if False and inside(rel) and own not in paths:",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a claim on the worktree's own path under the checkout was missed for a patch"
   },
   {
     "name": "the no-claim note prints any path",
@@ -3170,7 +3188,7 @@
   {
     "name": "dx2: the --to warning drops the roster from its text",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ return\\ text\\ \\+\\ \"\\ \"\\ \\+\\ roster_text\\(w\\[\"roster\"\\],\\ w\\[\"roster_total\"\\]\\)",
+    "find": "    return text \\+ \" \" \\+ roster_text\\(w\\[\"roster\"\\], w\\[\"roster_total\"\\], a\\)",
     "replace": "    return text",
     "count": 1,
     "run": "tests/test_dx2.sh",
@@ -3985,5 +4003,149 @@
     "count": 1,
     "run": "tests/test_eval_harness.sh",
     "expect": "a good stand-in failed a cell"
+  },
+  {
+    "name": "recovery: upgrade's no-bus next pastes the folder unquoted",
+    "file": "bin/agentbus",
+    "find": "next=f\"agentbus init \\{shlex\\.quote\\(root\\)\\}\"\\)\\n    if a\\.dry_run:",
+    "replace": "next=f\"agentbus init {root}\")\n    if a.dry_run:",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "upgrade's JSON next"
+  },
+  {
+    "name": "recovery: schema_newer's next pastes the folder unquoted",
+    "file": "bin/agentbus",
+    "find": "\"schema_newer\", next=f\"agentbus upgrade \\{shlex\\.quote\\(bus_directory\\(path\\)\\)\\}\"",
+    "replace": "\"schema_newer\", next=f\"agentbus upgrade {bus_directory(path)}\"",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "schema_newer's JSON next"
+  },
+  {
+    "name": "recovery: schema_older's next pastes the folder unquoted",
+    "file": "bin/agentbus",
+    "find": "\"schema_older\", next=f\"agentbus upgrade \\{shlex\\.quote\\(bus_directory\\(path\\)\\)\\}\"",
+    "replace": "\"schema_older\", next=f\"agentbus upgrade {bus_directory(path)}\"",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "schema_older's next"
+  },
+  {
+    "name": "recovery: the stale-copy notice pastes the folder unquoted",
+    "file": "bin/agentbus",
+    "find": "f\"Run: agentbus upgrade \\{shlex\\.quote\\(bus_directory\\(db_path\\)\\)\\}\"\\)",
+    "replace": "f\"Run: agentbus upgrade {bus_directory(db_path)}\")",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "the stale-copy notice's Run: line"
+  },
+  {
+    "name": "recovery: init's next: cd pastes the folder unquoted",
+    "file": "bin/agentbus",
+    "find": "say\\(\"next: cd \\{\\}\", shell_word\\(root\\)\\)",
+    "replace": "say(\"next: cd {}\", tilde(root))",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "init's next: cd line does not reach the folder as one word"
+  },
+  {
+    "name": "recovery: doctor shows a quoted fix with ~ inside the quotes",
+    "file": "bin/agentbus",
+    "find": "line \\+= f\\\"\\. Run: \\{doctor_fix_text\\(r\\['fix'\\]\\)\\}\\\"",
+    "replace": "line += f\". Run: {doctor_text(r['fix'])}\"",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "doctor's shown copy fix"
+  },
+  {
+    "name": "recovery: doctor's missing-copy fix pastes the folder unquoted",
+    "file": "bin/agentbus",
+    "find": "^                              f\"agentbus init \\{shlex\\.quote\\(ctx\\.directory\\)\\}\"\\)\\]",
+    "replace": "                              f\"agentbus init {ctx.directory}\")]",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "doctor's JSON copy fix"
+  },
+  {
+    "name": "recovery: the linked-worktree init refusal pastes the main checkout unquoted",
+    "file": "bin/agentbus",
+    "find": "next=f\"agentbus init \\{shlex\\.quote\\(info\\[0\\]\\)\\}\"\\)\\n    # Only a checkout",
+    "replace": "next=f\"agentbus init {info[0]}\")\n    # Only a checkout",
+    "count": 1,
+    "run": "tests/test_init.sh",
+    "expect": "the linked worktree refusal's next"
+  },
+  {
+    "name": "recovery: watch's error frame pastes the folder unquoted",
+    "file": "bin/agentbus",
+    "find": "where = shell_word\\(e\\.get\\(\"directory\"\\) or self\\.where\\)",
+    "replace": "where = e.get(\"directory\") or self.where",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "the error frame's Run: command is not one command on the folder"
+  },
+  {
+    "name": "update: a PATH link into the current worktree reaches its installer",
+    "file": "bin/agentbus",
+    "find": "^        if excluded\\(os\\.path\\.dirname\\(os\\.path\\.realpath\\(path\\)\\)\\):",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_update.sh",
+    "expect": "a link to an installer in the current worktree was used"
+  },
+  {
+    "name": "--up: a cut body's read --id drops --up",
+    "file": "bin/agentbus",
+    "find": "Full text: \\{next_command\\(a, 'read', '--id', r\\['id'\\], as_=False\\)\\}",
+    "replace": "Full text: agentbus read --id {r['id']}",
+    "count": 1,
+    "run": "tests/test_workflow_nested_buses.sh",
+    "expect": "the cut body's command"
+  },
+  {
+    "name": "--up: goal's no-goal hint drops --up",
+    "file": "bin/agentbus",
+    "find": "show\\(\"no goal yet\\. Set one with: \\{\\} \\\\\"what we are shipping\\\\\"\", next_command\\(a, \"--as\", \"NAME\", \"goal\", as_=False\\)\\)",
+    "replace": "show(\"no goal yet. Set one with: agentbus --as NAME goal \\\"what we are shipping\\\"\")",
+    "count": 1,
+    "run": "tests/test_workflow_nested_buses.sh",
+    "expect": "goal's hint with no goal"
+  },
+  {
+    "name": "--up: status's goal hint drops --up",
+    "file": "bin/agentbus",
+    "find": "show\\(\"== no goal yet \\(\\{\\} \\\\\"\\.\\.\\.\\\\\"\\)\", next_command\\(a, \"--as\", \"NAME\", \"goal\", as_=False\\)\\)",
+    "replace": "show(\"== no goal yet (agentbus --as NAME goal \\\"...\\\")\")",
+    "count": 1,
+    "run": "tests/test_workflow_nested_buses.sh",
+    "expect": "status's goal hint"
+  },
+  {
+    "name": "--up: the empty-goal hint drops --up",
+    "file": "bin/agentbus",
+    "find": "f'the goal is empty\\. Use: \\{next_command\\(a, \\\"--as\\\", \\\"NAME\\\", \\\"goal\\\", as_=False\\)\\} \\\"TEXT\\\", '",
+    "replace": "'the goal is empty. Use: agentbus --as NAME goal \"TEXT\", '",
+    "count": 1,
+    "run": "tests/test_workflow_nested_buses.sh",
+    "expect": "the empty-goal hint lost --up 1"
+  },
+  {
+    "name": "--up: watch --once drops --up from its hints",
+    "file": "bin/agentbus",
+    "find": "^        once\\.up = getattr\\(a, \"up\", 0\\) or 0$",
+    "replace": "        once.up = 0",
+    "count": 1,
+    "run": "tests/test_workflow_nested_buses.sh",
+    "expect": "watch --up 1 --once showed a goal hint without --up 1"
+  },
+  {
+    "name": "--up: watch's commands drop --up",
+    "file": "bin/agentbus",
+    "find": "return \"agentbus \" \\+ \\(f\"--up \\{int\\(up\\)\\} \" if up else \"\"\\) \\+ rest",
+    "replace": "return \"agentbus \" + rest",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "a watch on an outer bus showed or copied a command without --up"
   }
 ]

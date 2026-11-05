@@ -813,4 +813,48 @@ echo "TEST 23: what y copies, pasted into an interactive zsh or bash inside brac
 live paste || fail "paste"
 ok "senders, keys and values carrying ESC [ 201 ~, Ctrl-U and CR are copied without a control byte; pasted into each shell, nothing ran"
 
+echo "TEST 24: the full-screen error's Run: command names the bus folder as one shell word, also one holding a space and a ;"
+# Bug it catches: the frame pasted the folder in as it is (Run: agentbus init {where}), so "q dir;touch CANARY" made two commands.
+"$PY" - <<'PY' || fail "the error frame's Run: command is not one command on the folder"
+import os, shlex, sys
+sys.path.insert(0, os.environ["TESTS_DIR"])
+from watch_case import W
+odd = "/tmp/q dir;touch CANARY"
+home = os.path.join(os.path.expanduser("~"), "q dir;touch CANARY")
+for code, verb in (("no_bus", "init"), ("schema_older", "upgrade"), ("schema_refused", "upgrade"), ("schema_newer", "upgrade")):
+    for where in (odd, home):
+        err = {"code": code, "retry_s": 1, "last_good_s": None, "message": "m", "directory": where}
+        f = W.frame(200, 30, {"error": err})
+        run = next(r for r in f if "Run: " in r).split("Run: ", 1)[1].strip()
+        run = run.removesuffix(" from a newer install")
+        words = shlex.split(run.replace("~/", os.path.expanduser("~") + "/", 1) if run.split(" ")[2].startswith("~/") else run)
+        assert words == ["agentbus", verb, where], (code, where, run, words)
+print("error frame commands passed")
+PY
+ok "no_bus, schema_older, schema_refused and schema_newer frames name the folder as one shell word"
+
+echo "TEST 25: started with --up 1, watch's hints and the reply y copies carry --up 1"
+# Bug it catches: watch --up 1 showed "agentbus --as NAME goal" and copied "agentbus --as NAME post ...", which from the same
+# folder reach the inner bus, not the one on screen.
+"$PY" - <<'PY' || fail "a watch on an outer bus showed or copied a command without --up"
+import os, sys
+sys.path.insert(0, os.environ["TESTS_DIR"])
+from watch_case import W
+g = W.g
+f = "\n".join(W.text_of(120, 30, {"up": 1}, snap="empty"))
+assert 'no goal yet · agentbus --up 1 --as NAME goal "..."' in f, f
+assert "Join with: agentbus --up 1 --as NAME join" in f, f
+f0 = "\n".join(W.text_of(120, 30, {}, snap="empty"))
+assert 'no goal yet · agentbus --as NAME goal "..."' in f0 and "Join with: agentbus --as NAME join" in f0, f0
+S = W.snap("sample")
+v = g["View"](); v.up = 1
+for k in ["Enter", "y"]:
+    v = g["step"](v, k, S, (100, 30), W.when(W.T_NOW), W.detail_for(v, S) if k == "y" else None, None)
+assert v.copied.startswith("agentbus --up 1 --as NAME post --to "), v.copied
+f = "\n".join(W.text_of(100, 30, {"up": 1, "mode": v.mode, "detail": v.detail}))
+assert "agentbus --up 1 --as NAME post --to " in f, f
+print("watch --up cases passed")
+PY
+ok "goal and join hints and the copied reply carry --up 1; with no --up they are as before"
+
 echo "All watch key tests passed"

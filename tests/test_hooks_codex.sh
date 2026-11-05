@@ -375,6 +375,32 @@ unset WT MAIN
 ok "both layouts match the claim and nudge with the mapped path, and the main checkout's own files stay as they were"
 
 echo
+echo "TEST 12e: a claim on the worktree's own path in the bus folder still counts for a patch (file and folder, held and own, both layouts); the nudge names the mapped path"
+# Bug it catches: once a worktree file was mapped to the main checkout, only the mapped path was checked, so a claim on
+# .claude/worktrees/lane/src/auth.py (or feature/src/auth.py, or feature/) was missed and the hook said "has no claim".
+wtpatch() { HCWD="$WT" hook PreToolUse "$(HCWD="$WT" patch "$SID1" "U $1" "+x")"; }
+newbus p12e; N=$(dname "$SID1"); MAIN=$P; WT="$MAIN/.claude/worktrees/lane"
+gitc "$MAIN"; mkdir -p "$MAIN/.claude/worktrees"; git -C "$MAIN" worktree add -q "$WT" -b p12e-wt; mkdir -p "$WT/src"
+HCWD="$WT" SS; [ -n "$OUT" ] || fail "12e: a worktree under the checkout did not reach the bus for SessionStart: rc $RC err $ERR"
+ab --as holder-zq join --tool t >/dev/null; ab --as holder-zq claim .claude/worktrees/lane/src/held.py --purpose p >/dev/null
+ab --as "$N" claim .claude/worktrees/lane/src/mine.py --purpose p >/dev/null; ab --as "$N" claim .claude/worktrees/lane/lib/ --purpose p >/dev/null
+held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. Claims are advisory; ask the holder or work elsewhere."
+wtpatch "$WT/src/held.py"; [ "$(text_of)" = "$held" ] || fail "a claim on the worktree's own path under the checkout was missed for a patch: rc $RC out $OUT err $ERR"
+wtpatch "src/mine.py"; quiet || fail "my claim on the worktree's own path under the checkout was missed for a relative patch path: rc $RC out $OUT err $ERR"
+wtpatch "$WT/lib/deep/x.py"; quiet || fail "my folder claim on the worktree's own path under the checkout was missed for a patch: rc $RC out $OUT err $ERR"
+wtpatch "$WT/src/new12e.py"; [ "$(text_of)" = "agentbus: src/new12e.py has no claim. If you are editing it: agentbus --as $N claim src/new12e.py --purpose WHY" ] || fail "12e: the patch nudge under the checkout did not name the mapped path: rc $RC out $OUT err $ERR"
+W12E="$T/p12e-ws"; mkdir -p "$W12E"; "${AB[@]}" init "$W12E" >/dev/null; git -C "$W12E" init -q app; gitc "$W12E/app"; git -C "$W12E/app" worktree add -q "$W12E/feature" -b p12e-f; mkdir -p "$W12E/feature/src"
+P=$W12E; WT="$W12E/feature"; HCWD="$WT" SS; [ -n "$OUT" ] || fail "12e: a worktree beside the checkout did not reach the workspace bus for SessionStart: rc $RC err $ERR"
+ab --as holder-zq join --tool t >/dev/null; ab --as holder-zq claim feature/src/held.py --purpose p >/dev/null; ab --as "$N" claim feature/lib/ --purpose p >/dev/null
+wtpatch "$WT/src/held.py"; [ "$(text_of)" = "$held" ] || fail "a claim on the worktree's own path under a workspace bus was missed for a patch: rc $RC out $OUT err $ERR"
+wtpatch "$WT/lib/x.py"; quiet || fail "my folder claim on the worktree's own path under a workspace bus was missed for a patch: rc $RC out $OUT err $ERR"
+wtpatch "$WT/src/new12e.py"; [ "$(text_of)" = "agentbus: app/src/new12e.py has no claim. If you are editing it: agentbus --as $N claim app/src/new12e.py --purpose WHY" ] || fail "12e: the patch nudge under a workspace bus did not name the mapped path: rc $RC out $OUT err $ERR"
+ab --as holder-zq release feature/src/held.py >/dev/null; ab --as "$N" claim feature/ --purpose p >/dev/null
+wtpatch "$WT/src/other12e.py"; quiet || fail "my claim on the whole worktree folder under a workspace bus was missed for a patch: rc $RC out $OUT err $ERR"
+unset WT MAIN
+ok "a claim on either path of a worktree file counts for a patch; the nudge names the main checkout's path"
+
+echo
 echo "TEST 12d: with AGENTBUS_DB set, SessionStart does not call it this folder's bus"
 newbus p12d-other; OTHERDB="$P/.agentbus/bus.db"; newbus p12d; N=$(dname "$SID1")
 AGENTBUS_DB="$OTHERDB" SS; got=$(text_of)
