@@ -135,8 +135,6 @@ agentbus skill --agents-md  # the block for an AGENTS.md
 agentbus doctor
 ```
 
-If you installed the skill with the old `mkdir -p ~/.claude/skills && ln -s "$PWD/skill" ~/.claude/skills/agentbus` line, `agentbus setup claude` replaces the link.
-
 ### Terminal
 
 Keep `agentbus watch` open beside your agents. `agentbus watch --json` prints one snapshot, for a tmux status line or a script. More: [Watch your agents](docs/how-to/watch.md).

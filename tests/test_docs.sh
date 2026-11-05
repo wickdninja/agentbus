@@ -248,7 +248,7 @@ for snippet in re.findall(r'`([^`]+)`', skill):
     check(shlex.split(snippet), ('skill', snippet))
 
 readme = (root/'README.md').read_text()
-assert 'ln -s "$PWD/skill" ~/.claude/skills/agentbus' in readme  # valid for the pinned release (v0.1.0); skill/ links to skills/agentbus
+assert 'ln -s "$PWD/skill" ~/.claude/skills/agentbus' in (root/'docs/how-to/setup.md').read_text()  # the old install line: skill/ still links to skills/agentbus, and setup replaces it
 assert 'or copy' not in readme
 blocks = re.findall(r'```bash\n(.*?)```', readme, re.S)
 assert blocks, 'README has no shell examples'
