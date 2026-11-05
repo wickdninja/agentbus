@@ -19,7 +19,7 @@ Two steps are yours: run `agentbus init .` in each repo, and approve the hooks i
 
 ## Trust the hooks
 
-Codex runs no hook until you approve it. Start `codex`, type `/hooks`, and approve the four entries agentbus added. Installing never trusts them for you.
+Codex runs no hook until you approve it. Start `codex`: on Codex 0.166.0 it opens with "Hooks need review". Choose "Review hooks", open each of the four entries agentbus added and press `t`, or press `t` on the list to trust all four. Installing never trusts them for you, and `codex exec` skips untrusted hooks without a word.
 
 To recognise them: the command starts with the installed `agentbus` (the exact words setup printed) followed by `hook codex EVENT`, and ends with `# agentbus:managed`. Approve only those; an entry that runs something else is not ours. Running `agentbus setup codex` again changes nothing and prints the same reminder while the hooks are in place.
 

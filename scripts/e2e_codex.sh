@@ -10,8 +10,9 @@
 # the login shell stays under 250 ms at p95 and the login shell itself prints nothing (it would corrupt the hook's JSON).
 # The trust step itself (/hooks in the TUI) is interactive and is not what this script checks: it runs codex with
 # --dangerously-bypass-hook-trust, which makes Codex treat the hooks as trusted for this one scratch run.
-# NOT RUN by the lane that wrote it (it may not run the real codex binary); the flags are the ones `codex exec --help`
-# listed on 0.166.0, so run it once by hand and fix a flag here if the installed version names it differently.
+# Run by hand on codex-cli 0.166.0 for docs/evals/live-acceptance-0.2.0.md. The prompt forbids shell commands: left free, the
+# model follows the AGENTS.md block, claims the file itself (refused), reads the refusal, answers CLAIMNOTE=yes without any
+# hook note, and runs `leave`, which removes it from the roster the script then checks.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v codex >/dev/null 2>&1 || { echo "FAIL: codex is not on PATH"; exit 2; }
@@ -37,8 +38,8 @@ LAST="$T/last.txt"; LOG="$T/codex.log"
 (
   cd "$P"
   codex exec --dangerously-bypass-hook-trust -s workspace-write -o "$LAST" \
-    "Use the apply_patch tool to create hello.txt containing the word hi. Then reply with exactly one line: NAME=<the agentbus name your context told you to use> CLAIMNOTE=<yes if a hook told you a claim under a different name covers the file, else no>" \
-    >"$LOG" 2>&1
+    "Do not run any shell command. Use the apply_patch tool to create hello.txt containing the word hi. Then reply with exactly one line: NAME=<the agentbus name your context told you to use> CLAIMNOTE=<yes if a hook told you a claim under a different name covers the file, else no>" \
+    </dev/null >"$LOG" 2>&1
 ) || { echo "FAIL: codex exec failed: $(tail -n 5 "$LOG")"; exit 1; }
 [ -z "${E2E_TRANSCRIPT:-}" ] || cp "$LOG" "$E2E_TRANSCRIPT"
 python3 -I - "$LAST" "$P" "$BUS" <<'PY' || exit 1
