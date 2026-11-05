@@ -1,0 +1,63 @@
+name: release-dry-run
+
+# Runs the release's file handling on a pull request that touches it, and by hand: the same artifact upload as
+# release.yml's build job, then the download and scripts/check_sums.sh as its publish job. No release, no tag, no
+# attestation. v0.2.0's publish step had never run before the tag and broke on the artifact's layout; this is that
+# step's rehearsal. tests/test_workflows.sh keeps the upload block identical to release.yml's.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/workflows/release-dry-run.yml
+      - scripts/check_sums.sh
+      - scripts/verify_dist.sh
+      - pyproject.toml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: false
+          version: "0.13.0"
+      - name: Build, and record the sha256s the way scripts/verify_dist.sh does
+        run: |
+          uv build --out-dir dist
+          (cd dist && sha256sum -- *.whl *.tar.gz) > dist/SHA256SUMS
+          cat dist/SHA256SUMS
+          echo "notes" > notes.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            notes.md
+          if-no-files-found: error
+
+  publish-layout:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+      - name: The downloaded files pass the same check as the publish job
+        run: |
+          cp dist/SHA256SUMS expected-sums
+          bash scripts/check_sums.sh dist expected-sums
+          test -s notes.md
+          ls dist

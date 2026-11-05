@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "$BIN")/.." && pwd)"
 import glob, os, re, sys
 root = sys.argv[1]
 files = sorted(glob.glob(os.path.join(root, '.github/workflows/*.yml')))
-assert [os.path.basename(f) for f in files] == ['release.yml', 'test.yml'], files
+assert [os.path.basename(f) for f in files] == ['release-dry-run.yml', 'release.yml', 'test.yml'], files
 text = {os.path.basename(f): open(f).read() for f in files}
 
 # 1. Every action is pinned by a full commit sha with its version in a comment; no moving tag, no branch.
@@ -27,6 +27,14 @@ assert re.search(r'^requires = \["hatchling==\d+\.\d+\.\d+"\]', open(os.path.joi
 for name, t in text.items():
     for m in re.finditer(r'astral-sh/setup-uv@\S+[^\n]*\n(?:\s+with:\n(?:\s+\S[^\n]*\n)*)?', t):
         assert re.search(r'version:\s*"?\d+\.\d+\.\d+"?', m.group(0)), (name, 'setup-uv needs an exact uv version', m.group(0))
+
+# 1b. Checkouts keep no credentials (nothing here pushes), and no job caches (a cache is a way into a release build).
+for name, t_ in text.items():
+    for m in re.finditer(r'actions/checkout@\S+[^\n]*\n((?: {8,}\S[^\n]*\n)*)', t_):
+        assert 'persist-credentials: false' in m.group(1), (name, 'checkout must set persist-credentials: false')
+    for m in re.finditer(r'astral-sh/setup-uv@\S+[^\n]*\n((?: {8,}\S[^\n]*\n)*)', t_):
+        assert 'enable-cache: false' in m.group(1), (name, 'setup-uv must set enable-cache: false')
+    assert 'cache:' not in t_.replace('enable-cache:', ''), (name, 'no actions cache')
 
 rel = text['release.yml']
 # 3. Jobs, and who may write: contents: write only in publish; id-token only where it is used.
@@ -49,6 +57,20 @@ for n in ('publish',):
     # download holds dist/ already. A step that makes dist/ fails there (v0.2.0's first publish).
     assert 'mkdir dist' not in by[n] and 'mv *.whl' not in by[n], (n, 'the downloaded artifact already holds dist/')
     assert 'notes.md' in by['build'] and 'dist/*.whl' in by['build'], ('build', 'the artifact layout publish relies on')
+# The attested files: the wheel, the sdist and SHA256SUMS (docs state the `gh attestation verify` command for them).
+att = re.search(r'attest-build-provenance@\S+[^\n]*\n\s+with:\n\s+subject-path: \|\n((?: {8,}\S[^\n]*\n)*)', by['publish']).group(1).split()
+assert att == ['dist/*.whl', 'dist/*.tar.gz', 'dist/SHA256SUMS'], att
+# The dry run rehearses the publish job's file handling: the same upload block, then the download and check_sums.
+dry = text['release-dry-run.yml']
+def block(s):
+    return re.search(r'actions/upload-artifact@\S+[^\n]*\n((?: {8,}\S[^\n]*\n)*)', s).group(1)
+assert block(dry) == block(rel), 'release-dry-run.yml must upload the same artifact as release.yml'
+assert 'scripts/check_sums.sh dist expected-sums' in dry and 'actions/download-artifact' in dry
+assert 'workflow_dispatch' in dry and 'contents: write' not in dry and 'gh release' not in dry
+# 1c. The static job and Dependabot.
+assert re.search(r'(?m)^  static:', text['test.yml']) and all(x in text['test.yml'] for x in ('ruff@', 'shellcheck-py==', 'zizmor@')), 'test.yml needs the static job with pinned tools'
+dep = open(os.path.join(root, '.github/dependabot.yml')).read()
+assert 'package-ecosystem: github-actions' in dep and 'interval: weekly' in dep and 'groups:' in dep, 'dependabot.yml'
 assert '--verify-tag' in by['publish'], 'gh release create --verify-tag'
 assert 'GITHUB_SHA' in by['publish'], 'the tag must still point at the built commit before the release is created'
 assert 'actions/attest-build-provenance' in by['publish'], 'GitHub artifact attestations for the release assets'
