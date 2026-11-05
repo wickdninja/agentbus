@@ -1,0 +1,167 @@
+#!/bin/bash
+set -euo pipefail
+# The value eval (docs/evals/value-protocol.md) with a stand-in agent: no tokens, no model. Hidden tests, graders and analysis
+# are proved both ways in tests/value_eval_cases.py; here the runner goes end to end, and each leak the isolation checks exist
+# for is planted, to prove the check fires. Real agents are the pilot's job, not this file's.
+. "$(dirname "$0")/lib.sh"
+ROOT="$(cd "$TESTS_DIR/.." && pwd)"
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+export HOME="$T/home"; mkdir -p "$HOME/.claude" "$T/tmp"; export TMPDIR="$T/tmp"
+echo '{}' > "$HOME/.claude/settings.json"
+SCRIPTS="$ROOT/scripts/value-eval"
+RUN=("$PY" -B "$SCRIPTS/run.py")
+STUB="$ROOT/tests/fixtures/value_stub"
+export AGENTBUS_CMD="$(printf '%q ' "${AB[@]}")"
+# stub ARGS...: the runner with the stand-in; output in $T/log, status in $rc.
+stub() { rc=0; env VALUE_STUB_DIR="$STUB" "${RUN[@]}" --time-cap 60 --snap-every 0.2 "$@" >"$T/log" 2>&1 || rc=$?; }
+grades() { "$PY" -B "$SCRIPTS/grade.py" "$1" >/dev/null; }
+# field OUT PY-EXPR: evaluates EXPR for each manifest row with r (the row) and g (its grade), prints one line each
+field() { "$PY" -B - "$1" "$2" <<'PY'
+import json, os, sys
+out, expr = sys.argv[1:3]
+for line in open(os.path.join(out, "manifest.jsonl")):
+    r = json.loads(line)
+    p = os.path.join(out, r["id"], "grade.json")
+    g = json.load(open(p)) if os.path.exists(p) else {}
+    print(eval(expr))
+PY
+}
+
+echo "TEST 1: hidden tests, graders and analysis, each proved on fixtures it must pass and must fail"
+"$PY" -B "$ROOT/tests/value_eval_cases.py" "$SCRIPTS" || fail "value_eval_cases.py"
+ok "cases pass"
+
+echo "TEST 2: the plan is counted first, real runs need --go, and builtin has no Claude plus Codex cell"
+rc=0; out=$("${RUN[@]}" --out "$T/p" --dry-run --seeds 1 2) || rc=$?
+[ "$rc" = 0 ] && [ "$(sed -n 1p <<<"$out")" = "value eval: 70 runs" ] || fail "plan: rc $rc: $(sed -n 1p <<<"$out")"
+grep -q 'builtin cx' <<<"$out" && fail "a builtin cx cell was planned"
+[ "$("${RUN[@]}" --out "$T/p" --dry-run --seeds 1 2)" = "$out" ] || fail "one order seed gave two plans"
+[ "$("${RUN[@]}" --out "$T/p" --dry-run --seeds 1 2 --order-seed 9)" != "$out" ] || fail "the order seed changes nothing"
+rc=0; out=$("${RUN[@]}" --out "$T/p" --tasks control --conditions none --pairings cc 2>&1) || rc=$?
+[ "$rc" = 3 ] && grep -q -- '--go' <<<"$out" || fail "no --go: rc $rc: $out"
+rc=0; out=$("${RUN[@]}" --out "$T/p" --go --claude-profile x --tasks control --conditions none --pairings cx 2>&1) || rc=$?
+[ "$rc" = 2 ] && grep -q "codex-lane refuses" <<<"$out" || fail "Codex with no route must refuse before any run: rc $rc: $out"
+[ ! -e "$T/p" ] || fail "a refused batch made its output folder"
+ok "plans are counted, repeatable and paired; a real run needs --go; Codex with no route never starts"
+
+echo "TEST 3: a good stand-in passes every task in every cell, and each cell really has its channel"
+stub --seeds 1 --out "$T/good"
+[ "$rc" = 0 ] || { tail -5 "$T/log"; fail "good stand-in: rc $rc"; }
+grades "$T/good"
+[ "$(field "$T/good" 'r["id"]' | wc -l | tr -d ' ')" = 35 ] || fail "wanted 35 runs"
+[ -z "$(field "$T/good" '"" if g["pass"] else r["task"]+" "+r["condition"]+" "+r["pairing"]+" "+str(g["features"])' | grep .)" ] || fail "a reference run failed its hidden tests"
+"$PY" -B - "$T/good" <<'PY' || fail "channel use"
+import json, os, sys
+out = sys.argv[1]
+for line in open(os.path.join(out, "manifest.jsonl")):
+    r = json.loads(line)
+    cost = json.load(open(os.path.join(out, r["id"], "cost.json")))
+    used = sum(c["channel_calls"] for c in cost.values())
+    assert (used == 0) == (r["condition"] == "none"), r
+    run = json.load(open(os.path.join(out, r["id"], "run.json")))
+    assert "condition" not in json.dumps(run), "run.json knows the condition"
+    harnesses = set(run["harnesses"].values())
+    assert harnesses == ({"claude"} if r["pairing"] == "cc" else {"claude", "codex"}), (r, harnesses)
+    final = os.path.join(out, r["id"], "final")
+    names = {n for _d, ds, fs in os.walk(final) for n in ds + fs}
+    assert not names & {".agentbus", "COORDINATION.md", ".claude", "AGENTS.md", ".git"}, names
+    assert not any(n.startswith("hidden_") for n in names), names
+PY
+ok "35 cells pass; a channel is used only where one exists; the graders' files never name the condition"
+
+echo "TEST 4: recovery's kill fires on files, and the runner lets the session die"
+[ -z "$(field "$T/good" '"" if r["task"]!="recovery" or (g["kill_fired"] and len(g["killed_with"])>=3) else r["id"]' | grep .)" ] || fail "a recovery kill did not fire on 3 files"
+ok "the kill fires at 3 files in every cell"
+
+echo "TEST 5: a lost edit shows up, whichever agent lost it"
+env VALUE_STUB_MODE=clobber VALUE_STUB_CLOBBER_AFTER=2 VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks overlap --conditions none --pairings cc --seeds 2 --snap-every 0.2 --time-cap 60 --out "$T/lost" >"$T/log" 2>&1 || { tail -5 "$T/log"; fail "clobber run"; }
+grades "$T/lost"
+[ "$(field "$T/lost" 'g["pass"]')" = False ] || fail "the clobbered run passed"
+[ "$(field "$T/lost" '",".join(g["lost_features"])')" = "discount,tax" ] || fail "lost features: $(field "$T/lost" 'g["lost_features"]')"
+[ "$(field "$T/lost" '",".join(g["paths_edited_by_both"])' | grep -c pipeline.py)" = 1 ] || fail "the shared edit was not seen"
+ok "bob's overwrite reads as lost discount and tax features, a failed run, and a path both edited"
+
+echo "TEST 6: an agent that does nothing fails"
+env VALUE_STUB_MODE=lazy VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions ledger --pairings cc --seeds 1 --out "$T/lazy" >"$T/log" 2>&1 || fail "lazy run"
+grades "$T/lazy"
+[ "$(field "$T/lazy" 'g["pass"]')" = False ] || fail "a run with no work passed"
+[ "$(field "$T/lazy" 'r["infra"]')" = "{}" ] || fail "an idle agent was excused as infra"
+ok "no work is a failed run, not an excused one"
+
+echo "TEST 7: every planted leak stops the batch"
+leak() { # MODE CONDITION WANTED
+  rc=0; env VALUE_STUB_MODE="$1" VALUE_STUB_REAL_SETTINGS="$HOME/.claude/settings.json" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions "$2" --pairings cc --seeds 1 3 --out "$T/leak$RANDOM" >"$T/log" 2>&1 || rc=$?
+  [ "$rc" = 5 ] || { cat "$T/log"; fail "$1: the batch did not stop (rc $rc)"; }
+  grep -q "$3" "$T/log" || { cat "$T/log"; fail "$1: stopped for another reason (wanted: $3)"; }
+  grep -q 'run 1 of 2' "$T/log" && fail "$1: the batch went on after a failed check"
+  return 0
+}
+leak hook-leak none "hook events in a none run"
+leak plugin-leak ledger "plugins loaded"
+leak settings-write none "settings.json changed"
+leak bus-in-none none "a bus exists in a none run"
+ok "a hook, a plugin, a change to the real settings and a stray bus each stop the batch"
+
+echo "TEST 8: the agent gets the allowlist and no more; agentbus is on PATH only where it belongs"
+export AUTH0_CLIENT_SECRET=planted CLAUDE_CODE_SESSION_ID=planted GITHUB_TOKEN=planted AGENTBUS_DB=/planted/bus.db
+env VALUE_STUB_MODE=env-dump VALUE_STUB_ENV_OUT="$T/env" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cc --seeds 1 --out "$T/env-out" >"$T/log" 2>&1 || { cat "$T/log"; fail "env run"; }
+unset AUTH0_CLIENT_SECRET CLAUDE_CODE_SESSION_ID GITHUB_TOKEN AGENTBUS_DB
+for planted in AUTH0_CLIENT_SECRET CLAUDE_CODE_SESSION_ID GITHUB_TOKEN AGENTBUS_DB; do grep -qx "$planted" "$T/env" && fail "$planted reached the agent"; done
+grep -qx HOME "$T/env" && grep -qx PATH "$T/env" || fail "the agent has no HOME or PATH"
+"$PY" -B - "$SCRIPTS" <<'PY' || fail "path or tools"
+import sys, types
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import run
+assert "SendMessage" not in run.allowed_tools("none") and "ListAgents" not in run.allowed_tools("agentbus"), "a hidden channel is on"
+assert "SendMessage" in run.allowed_tools("builtin")
+settings = run.claude_settings("/tmp/x", "none")
+assert settings["sandbox"]["enabled"] and settings["sandbox"]["allowUnsandboxedCommands"] is False and settings["autoMemoryEnabled"] is False, settings
+assert "crossSessionInbound" not in settings and run.claude_settings("/tmp/x", "builtin")["crossSessionInbound"] == "accept"
+assert run.harness_of("cc", "bob", 1) == "claude"
+assert {run.harness_of("cx", "alice", 1), run.harness_of("cx", "alice", 2)} == {"claude", "codex"}, "roles do not alternate"
+assert run.harness_of("cx", "alice", 1) != run.harness_of("cx", "bob", 1)
+PY
+ok "planted secrets stay out; messaging tools are off outside builtin; the sandbox cannot be left; roles alternate"
+
+echo "TEST 9: caps end a run, and a capped run still counts"
+rc=0; env VALUE_STUB_MODE=hang VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cc --seeds 1 --time-cap 3 --out "$T/hang" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 0 ] || { cat "$T/log"; fail "hang: rc $rc"; }
+grades "$T/hang"
+[ "$(field "$T/hang" '",".join(g["stops"])')" = time_cap ] && [ "$(field "$T/hang" 'g["pass"]')" = False ] && [ "$(field "$T/hang" 'r["infra"]')" = "{}" ] || fail "a time cap: $(field "$T/hang" 'g')"
+rc=0; env VALUE_STUB_MODE=spam VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cc --seeds 1 --tool-cap 5 --time-cap 60 --out "$T/spam" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 0 ] || { cat "$T/log"; fail "spam: rc $rc"; }
+grades "$T/spam"
+[ "$(field "$T/spam" '",".join(g["stops"])')" = tool_cap ] || fail "a tool cap: $(field "$T/spam" 'g')"
+ok "time and tool caps end the agent; the run is scored and stays in"
+
+echo "TEST 10: a sign-in failure is infrastructure, listed and left out of the numbers"
+env VALUE_STUB_MODE=auth-fail VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cc --seeds 1 --out "$T/auth" >"$T/log" 2>&1 || true
+[ "$(field "$T/auth" 'sorted(r["infra"])')" != "[]" ] || fail "a sign-in failure was not marked"
+grades "$T/auth"
+out=$("$PY" -B "$SCRIPTS/analyze.py" "$T/auth" --cost)
+grep -q 'dropped under the protocol.s rule: 1' <<<"$out" && grep -q '^runs 0' <<<"$out" || fail "analysis: $out"
+ok "marked, listed and dropped"
+
+echo "TEST 11: no contrast prints until every cell has its n runs"
+rc=0; out=$("$PY" -B "$SCRIPTS/analyze.py" "$T/good" --n 2) || rc=$?
+[ "$rc" = 3 ] && grep -q 'Pilot numbers are not results' <<<"$out" || fail "a short batch: rc $rc: $out"
+grep -qE 'minus|P1|P2' <<<"$out" && fail "a contrast printed from a short batch: $out"
+out=$("$PY" -B "$SCRIPTS/analyze.py" "$T/good" --cost)
+grep -qE 'agentbus|ledger|builtin' <<<"$out" && fail "the cost report names a condition: $out"
+out=$("$PY" -B "$SCRIPTS/analyze.py" "$T/good" --n 1)
+grep -q '^P1 agentbus minus ledger, cx' <<<"$out" && grep -q '^P2 ' <<<"$out" && grep -q '^P3 control tokens' <<<"$out" || fail "a full batch prints the primaries: $out"
+ok "short batches print nothing to compare; the cost report splits by no condition; a full batch prints P1, P2 and P3"
+
+echo "TEST 12: a run refuses to live under the checkout or the forbidden root"
+mkdir -p "$T/forbidden"
+rc=0; env VALUE_FORBIDDEN_ROOT="$T/forbidden" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cc --out "$T/forbidden/out" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 2 ] && grep -q "a run lives in mktemp" "$T/log" || { cat "$T/log"; fail "output under the forbidden root: rc $rc"; }
+rc=0; env TMPDIR="$T/forbidden" VALUE_FORBIDDEN_ROOT="$T/forbidden" VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cc --out "$T/fine" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 2 ] && grep -q "a run lives in mktemp" "$T/log" || { cat "$T/log"; fail "a run root under the forbidden root: rc $rc"; }
+ok "both are refused"
+
+echo "TEST 13: a run leaves nothing behind"
+[ -z "$(find "$TMPDIR" -maxdepth 1 -name 'value-run-*' | grep -v forbidden || true)" ] || fail "run folders left: $(ls "$TMPDIR")"
+ok "the mktemp folders are gone"
+echo "All value eval tests passed"

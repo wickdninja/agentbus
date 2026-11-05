@@ -2,6 +2,8 @@
 
 Do Claude Code and Codex agents complete the agentbus protocol? The suite proves the tool works; these evals measure whether agents use it correctly, graded on what they did.
 
+That is compliance, not value. [The value protocol](value-protocol.md) asks the other question: what does the tool add over a flat file? Its harness is `scripts/value-eval/`.
+
 ## Run one
 
 ```bash

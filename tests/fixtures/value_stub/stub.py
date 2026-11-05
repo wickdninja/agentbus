@@ -1,0 +1,143 @@
+"""A stand-in for Claude Code and Codex in the value eval: no tokens. It plays the reference solution from scripts/value-eval/tasks.py
+and speaks each harness's stream format, so the whole runner, the isolation checks and the graders run in CI.
+
+VALUE_STUB_MODE picks a behaviour: good (default), clobber (bob overwrites alice's file with the base), lazy (does nothing),
+hang (never exits), spam (tool calls forever), hook-leak (reports a hook firing), plugin-leak (reports a user plugin),
+env-dump (writes its environment's names to VALUE_STUB_ENV_OUT and plays good), auth-fail (a sign-in error and no tool call),
+settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+harness, argv = sys.argv[1], sys.argv[2:]
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.environ["VALUE_SCRIPTS"])
+import tasks  # noqa: E402
+
+role, task_name, seed = os.environ["VALUE_ROLE"], os.environ["VALUE_TASK"], int(os.environ["VALUE_SEED"])
+condition, mode = os.environ["VALUE_CONDITION"], os.environ.get("VALUE_STUB_MODE", "good")
+if os.environ.get("VALUE_STUB_ONLY_ROLE") not in (None, role):
+    mode = "good"
+tool_id = [0]
+
+
+def emit(obj):
+    print(json.dumps(obj), flush=True)
+
+
+def init():
+    if harness != "claude":
+        emit({"type": "thread.started"})
+        return
+    tools = argv[argv.index("--tools") + 1].split(",")
+    skills = {"ledger": ["ledger"], "agentbus": ["agentbus"], "builtin": ["peer-messages"]}.get(condition, [])
+    plugins = [{"name": "cc-plugin-privacy", "path": "builtin"}]
+    if mode == "plugin-leak":
+        plugins.append({"name": "agentbus", "path": "/home/user/plugin"})
+    emit({"type": "system", "subtype": "init", "model": "stub-model", "tools": tools, "skills": skills, "plugins": plugins, "mcp_servers": []})
+    if condition == "agentbus" or mode == "hook-leak":
+        emit({"type": "system", "subtype": "hook_started", "hook_name": "SessionStart:startup"})
+
+
+def bash(command):
+    tool_id[0] += 1
+    i = "t%d" % tool_id[0]
+    if harness == "claude":
+        emit({"type": "assistant", "message": {"id": "m" + i, "usage": {"input_tokens": 10, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000, "output_tokens": 20},
+                                               "content": [{"type": "tool_use", "id": i, "name": "Bash", "input": {"command": command}}]}})
+    else:
+        emit({"type": "item.started", "item": {"id": i, "type": "command_execution", "command": command}})
+    p = subprocess.run(["/bin/sh", "-c", command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+    if harness == "claude":
+        emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": i, "content": p.stdout, "is_error": p.returncode != 0}]}})
+    else:
+        emit({"type": "item.completed", "item": {"id": i, "type": "command_execution", "command": command, "exit_code": p.returncode, "aggregated_output": p.stdout}})
+
+
+def tool(name, payload):
+    tool_id[0] += 1
+    i = "t%d" % tool_id[0]
+    emit({"type": "assistant", "message": {"id": "m" + i, "usage": {"input_tokens": 1, "output_tokens": 2}, "content": [{"type": "tool_use", "id": i, "name": name, "input": payload}]}})
+    emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": i, "content": "ok"}]}})
+
+
+def write(rel, text):
+    tool_id[0] += 1
+    i = "t%d" % tool_id[0]
+    if text is None:
+        return
+    d = os.path.dirname(rel)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    if harness == "claude":
+        emit({"type": "assistant", "message": {"id": "m" + i, "usage": {"input_tokens": 10, "output_tokens": 20}, "content": [{"type": "tool_use", "id": i, "name": "Write", "input": {"file_path": os.path.abspath(rel), "content": text}}]}})
+    with open(rel, "w") as f:
+        f.write(text)
+    if harness == "claude":
+        emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": i, "content": "written"}]}})
+    else:
+        emit({"type": "item.completed", "item": {"id": i, "type": "file_change", "status": "completed", "changes": [{"path": os.path.abspath(rel), "kind": "add"}]}})
+
+
+def channel(text):
+    if condition == "ledger":
+        bash("printf '%%s\\n' '%s NOTE: %s' >> COORDINATION.md" % (role, text))
+    elif condition == "agentbus":
+        bash("agentbus --as %s join && agentbus --as %s post '%s' && agentbus --as %s leave" % (role, role, text, role))
+    elif condition == "builtin":
+        tool("ListAgents", {})
+        tool("SendMessage", {"to": "peer", "message": text})
+
+
+def finish():
+    if harness == "claude":
+        emit({"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.01, "result": "done"})
+    else:
+        emit({"type": "turn.completed", "usage": {"input_tokens": 500, "cached_input_tokens": 400, "output_tokens": 50}})
+
+
+if mode == "auth-fail":
+    emit({"type": "result", "subtype": "error", "is_error": True, "result": "Not logged in: authentication required"})
+    sys.exit(1)
+init()
+if mode == "env-dump":
+    with open(os.environ["VALUE_STUB_ENV_OUT"], "a") as f:
+        f.write("\n".join(sorted(os.environ)) + "\n")
+if mode == "settings-write":
+    with open(os.environ["VALUE_STUB_REAL_SETTINGS"], "a") as f:
+        f.write("\n")
+if mode == "bus-in-none":
+    os.makedirs(".agentbus")
+if mode == "hang":
+    time.sleep(3600)
+if mode == "spam":
+    while True:
+        bash("true")
+if mode == "lazy":
+    finish()
+    sys.exit(0)
+
+channel("starting")
+ref = tasks.reference(task_name, seed)
+task = tasks.build(task_name, seed)
+if task_name == "recovery" and role == "alice":
+    wanted = sorted(k for k in ref if k.startswith("src/") and not k.endswith("__init__.py"))[:3]
+    for rel in wanted:
+        write(rel, ref[rel])
+    time.sleep(60)       # the runner's kill is what ends this session
+elif mode == "clobber" and role == "bob":
+    time.sleep(float(os.environ.get("VALUE_STUB_CLOBBER_AFTER", "1.5")))
+    path = [k for k in task.files if k.endswith("pipeline.py")][0]
+    write(path, task.files[path])
+elif mode == "clobber":
+    for rel, text in ref.items():
+        write(rel, text)
+    time.sleep(0.5)
+else:
+    for rel, text in ref.items():
+        write(rel, text)
+channel("done")
+finish()
