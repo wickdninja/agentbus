@@ -468,7 +468,7 @@ def _recovery(seed):
         "alice": "%s Notes from the owner, which are not written down anywhere else: %s is retired, so do not port it, list it in SKIP. "
                  "For %s, finance changed the factor: its port uses %d, not the value in the legacy source." % (common, skip, changed, p["new_factor"]),
         "bob": "%s Alice was on this ticket and her session died partway through. She will not come back, and anything she held is yours to take over. "
-               "Finish the job." % common,
+               "She had notes from the owner, and where those notes differ from docs/PORTING.md, the owner's notes win. Finish the job." % common,
     }
     return Task("recovery", seed, files, tickets, [["alice"], ["bob"]], ["ports", "skip", "changed"], kill={"role": "alice", "glob": "src/[a-z]*.py", "at": 3}, same_name=("run",))
 
