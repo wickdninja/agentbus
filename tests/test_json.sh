@@ -110,7 +110,7 @@ ucache.mkdir(parents=True, mode=0o700)
 (ucache/'release-check.json').write_text(json.dumps({'v': 1, 'checked_at': int(__import__('time').time()), 'ok': True, 'reason': None,
                                                      'retry_after': None, 'stable': '0.9.0', 'pre': None, 'notified': None}))
 (ucache/'release-check.json').chmod(0o600)
-upd = shape(j('update', '--check'), running=str, latest=(str, null), update_available=bool, install=dict, argv=null, commands=list, download=(dict, null), notes=(str, null))
+upd = shape(j('update', '--check'), running=str, latest=(str, null), update_available=bool, install=dict, argv=null, commands=(list, null), download=(dict, null), notes=(str, null))
 assert upd['update_available'] is True and upd['latest'] == '0.9.0' and set(upd['install']) == {'method', 'url'}, upd   # a clone here, another method when run installed
 schema = shape(j('schema', keep=True), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 assert schema['contract'] == 1 and 'post' in schema['commands']
