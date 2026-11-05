@@ -15,6 +15,12 @@ s|140|the claim itself is the check
 s|140|Do not truncate a consuming inbox with head
 s|80|A nonzero exit does not imply rollback.
 s|120|tell the user to run agentbus upgrade DIR; never edit the bus.
-s|110|They run it from the installed agentbus, not this copy; on schema_newer, this copy is older than the bus.
+s|110|They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus.
 s|100|With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug.
 s|100|Listings return {items, has_more, next}; if has_more, call again or raise --limit.
+p|200|Hooks: with the agentbus plugin or setup, a hook message gives your exact name
+s|160|Start with `join`, then `brief`
+s|100|Kinds: note, question, answer, handoff, decision, alert, done.
+s|40|Assign work with handoff.
+s|60|Run error.next to recover (fill in capitals).
+s|60|Delivery can repeat; dedupe by message ID.

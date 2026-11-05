@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agentbus"
 dynamic = ["version"]
-description = "A tiny shared SQLite bus so coding agents working on one repo can message, share facts and claim files"
+description = "A shared inbox for the coding agents in your workspace: messages, file claims and shared facts over one SQLite file. No server, no dependencies."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"

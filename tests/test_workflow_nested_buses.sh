@@ -12,24 +12,26 @@ wf_setup      # R is the workspace, with its own bus
 WS_DB="$DB"
 mkrepo "$R/app"
 echo "STEP 1: init in the repo inside the workspace names the outer bus"
-got=$(agentbus init "$R/app" | norm)
+got=$(agentbus init "$R/app" | norm | sed "s#^next: install agentbus so your agents have it on PATH (see the README), then agentbus#next: agentbus#")   # a clone says to install it first: tests/test_init.sh pins each
 is_equal "init output after the version line" "added .agentbus/ to <REPO>/app/.git/info/exclude (local only; the repo stays clean)
 optional: add \`.agentbus/\` to .gitignore to share that rule
 outer bus: <REPO>
 next: cd <REPO>/app
-next: .agentbus/bin/agentbus --as YOUR_NAME join" "$(sed 1d <<<"$got")"
+next: agentbus --as YOUR_NAME join
+next: agentbus setup claude (teaches Claude Code the protocol)
+next: agentbus setup codex (teaches Codex the protocol)" "$(sed 1d <<<"$got")"
 grep -Eq '^installed agentbus .+ into <REPO>/app/\.agentbus/$' <<<"$(sed -n 1p <<<"$got")" || fail "first init line: $(sed -n 1p <<<"$got")"
 APP_DB="$R/app/.agentbus/bus.db"
 mkdir -p "$R/app/src"; cd "$R/app/src"
-say "  0  <REPO>/app  bus.db not created  copy <copy>
-  1  <REPO>  bus.db not created  copy <copy>" agentbus buses
-ok "chain listed nearest first, before any bus file exists"
+say "  0  <REPO>/app  bus.db exists  copy <copy>
+  1  <REPO>  bus.db exists  copy <copy>" agentbus buses
+ok "chain listed nearest first; init made each bus's database"
 
 echo "STEP 2: the same name joins both buses; claims and messages stay on the bus they were made on"
 say "joined as a on <REPO>/app/.agentbus/bus.db" agentbus --as a join
 say "joined as a on <REPO>/.agentbus/bus.db" agentbus --up 1 --as a join
-say "claimed x.txt until <TS>" agentbus --as a claim x.txt
-say "claimed y.txt until <TS>" agentbus --up 1 --as a claim y.txt
+say "claimed x.txt <left>" agentbus --as a claim x.txt
+say "claimed y.txt <left>" agentbus --up 1 --as a claim y.txt
 say "posted #1 to everyone [note]" agentbus --as a post "repo news"
 say "posted #1 to everyone [note]" agentbus --up 1 --as a post "workspace news"
 is_equal "repo bus rows" "x.txt|a" "$(sql -d "$APP_DB" "SELECT resource, agent FROM claims")"
@@ -45,7 +47,7 @@ assert [c["resource"] for c in json.load(sys.stdin)["items"]] == ["y.txt"]' || f
 say "#1 a -> everyone [note] · <time>
   workspace news" agentbus --up 1 read
 # A missing outer bus is "bus unavailable": exit 3 (see `agentbus schema --json`, exit_codes).
-refuse 3 "agentbus: no bus at --up 2; no such outer bus" agentbus --up 2 who
+refuse 3 "agentbus: no bus at --up 2; no such outer bus. See: agentbus buses" agentbus --up 2 who
 ok "claims and messages never cross buses"
 
 echo "STEP 3: a linked worktree of the repo, inside and outside the workspace, shares the repo's bus"
@@ -57,7 +59,7 @@ for W in "$R/wt-in" "$T/wt-out"; do
   say "  a  seen <ago>" agentbus --up 1 who
   say "  0  <REPO>/app  bus.db exists  copy <copy>
   1  <REPO>  bus.db exists  copy <copy>" agentbus buses
-  say "claimed from-$(basename "$W").txt until <TS>" agentbus --as a claim "from-$(basename "$W").txt"
+  say "claimed from-$(basename "$W").txt <left>" agentbus --as a claim "from-$(basename "$W").txt"
 done
 is_equal "worktree claims landed on the repo bus" "from-wt-in.txt
 from-wt-out.txt
@@ -71,4 +73,27 @@ env AGENTBUS_DB="$WS_DB" "${AB[@]}" --json claims | python3 -c '
 import json, sys
 assert [c["resource"] for c in json.load(sys.stdin)["items"]] == ["y.txt"]' || fail "AGENTBUS_DB did not select the workspace bus"
 ok "AGENTBUS_DB wins over the folder the command runs in"
+
+echo "STEP 5: the commands read and goal print from inside the repo with --up 1 keep --up 1, and run on the workspace bus"
+# Bug it catches: a cut body said "Full text: agentbus read --id N" and status said "agentbus --as NAME goal", which from
+# inside the repo read and set the repo's own bus, not the workspace bus the listing came from.
+cd "$R/app/src"
+SHIM="$T/up-bin"; mkdir -p "$SHIM"; printf '#!/bin/sh\nexec %s "$@"\n' "$(printf '%q ' "${AB[@]}")" >"$SHIM/agentbus"; chmod 755 "$SHIM/agentbus"
+long=$(python3 -c 'print("w" * 3000 + " END-OF-LONG")')
+agentbus --up 1 --as a post "$long" >/dev/null || fail "the long post to the workspace bus failed"
+full=$(agentbus --up 1 read | sed -n 's/.*Full text: //p' | tail -1)
+is_equal "the cut body's command" "agentbus --up 1 read --id 2" "$full"
+got=$(PATH="$SHIM:$PATH" sh -c "$full") || fail "the printed read --id command failed: $full"
+grep -qF "END-OF-LONG" <<<"$got" || fail "the printed read --id command did not reach the workspace bus's whole message: $got"
+hint=$(agentbus --up 1 goal | sed -n 's/.*Set one with: //p')
+is_equal "goal's hint with no goal" 'agentbus --up 1 --as NAME goal "what we are shipping"' "$hint"
+grep -qF 'no goal yet · agentbus --up 1 --as NAME goal "..."' <<<"$(COLUMNS=160 agentbus --up 1 watch --once)" || fail "watch --up 1 --once showed a goal hint without --up 1"
+st=$(agentbus --up 1 status | sed -n 's/^== no goal yet (\(.*\))$/\1/p')
+is_equal "status's goal hint" 'agentbus --up 1 --as NAME goal "..."' "$st"
+PATH="$SHIM:$PATH" sh -c "$(sed 's/NAME/a/; s/"\.\.\."/"ship the workspace"/' <<<"$st")" >/dev/null || fail "status's goal hint did not run: $st"
+is_equal "the hint set the workspace bus's goal" "ship the workspace" "$(sql -d "$WS_DB" "SELECT value FROM context WHERE key='goal'")"
+is_equal "the repo bus has no goal" "" "$(sql -d "$APP_DB" "SELECT value FROM context WHERE key='goal'")"
+(agentbus --up 1 --as a goal "  " >/dev/null 2>"$T/goal-err") && fail "an empty goal was accepted"
+grep -qF 'the goal is empty. Use: agentbus --up 1 --as NAME goal "TEXT"' "$T/goal-err" || fail "the empty-goal hint lost --up 1: $(cat "$T/goal-err")"
+ok "read --id and the goal hints carry --up 1 and act on the workspace bus"
 echo "All workflow nested buses tests passed"

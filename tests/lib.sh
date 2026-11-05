@@ -9,6 +9,19 @@ unset AGENTBUS_DB AGENTBUS_AGENT
 # Nor may a test reach the caller's real Claude Code or Codex config: setup honours both variables, so a caller
 # who exported either would get its skill or AGENTS.md block written there. A test that wants one sets it itself.
 unset CODEX_HOME CLAUDE_CONFIG_DIR
+# Nor may the caller's agent or CI signals decide what a test sees: update's release notice is silent for an agent
+# session (CLAUDECODE, a Codex shell's marker, no terminal) and in CI, and off with the switches below, so a test that
+# wants one sets it itself (CI stays: tests/test_package.sh reads it; the update tests unset it in tests/update_lib.sh). CODEX_MARKER_VARS is bin/agentbus's list of the variables a Codex shell carries.
+CODEX_MARKER_VARS="CODEX_THREAD_ID CODEX_SANDBOX CODEX_SANDBOX_NETWORK_DISABLED"
+unset AGENTBUS_AGENT_SESSION CLAUDECODE BUILD_NUMBER RUN_ID NO_UPDATE_NOTIFIER DO_NOT_TRACK AGENTBUS_NO_UPDATE_CHECK AGENTBUS_NO_UPDATE_NOTICE GH_TOKEN GITHUB_TOKEN
+for _v in $CODEX_MARKER_VARS; do unset "$_v"; done
+# The update cache and the list of known bus folders follow HOME, which every test sets to its own folder: a caller's
+# (or tests/run_all.sh's) XDG_CACHE_HOME / XDG_STATE_HOME must not send them somewhere else. run_all.sh pins both under
+# its scratch HOME and fails a file that leaves a cache or bus list there, i.e. one that never set a HOME of its own.
+unset XDG_CACHE_HOME XDG_STATE_HOME
+# Setup asks `claude plugin list --json` whether the plugin is installed. A test never starts the real claude: this names
+# no executable (setup then reads the plugin files), and a test that wants an answer points it at a stub it wrote.
+export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
 # Human output is hard-wrapped to COLUMNS (else the terminal, else 80). Tests that grep long human
 # lines run unwrapped, whatever terminal started them; tests/test_wrap.sh sets COLUMNS per call.
 export COLUMNS=4096
@@ -64,6 +77,49 @@ njson() { local o; o=$("$@") || fail "command failed: $*"; printf '%s' "$o" | py
 outof() { local o; o=$("$@") || fail "command failed: $*"; printf '%s\n' "$o"; }
 # wait_for FILE: until FILE exists (a test pause point was reached), at most 20 s.
 wait_for() { local w=0; while [ ! -e "$1" ]; do sleep 0.05; w=$((w+1)); [ $w -lt 400 ] || fail "never reached: $1"; done; }
+# Every wait on a process or a marker below ends at a deadline and fails naming what it waited for, so a stall
+# fails in seconds with a reason, never at run_all's 600 s cap (issue #17). The deadline is a backstop for a
+# machine too loaded to finish, never the thing a test waits on: the wait ends as soon as the event happens.
+# kill_tree PID: PID and its children (a function run with & leaves its command as a child), by PID only.
+kill_tree() { local c; for c in $(pgrep -P "$1" 2>/dev/null); do kill "$c" 2>/dev/null || true; done; kill "$1" 2>/dev/null || true; }
+# wait_exit PID SECONDS WHAT: until the background job PID has exited, then its status is in WAIT_RC. At the deadline
+# the job is killed and the test fails: "WHAT: still running after N s".
+wait_exit() {
+  local pid=$1 limit=$2 what=$3 end=$((SECONDS + $2))
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$SECONDS" -ge "$end" ]; then kill_tree "$pid"; fail "$what: still running after $limit s"; fi
+    sleep 0.05
+  done
+  WAIT_RC=0; wait "$pid" || WAIT_RC=$?
+}
+# wait_marker FILE PID SECONDS WHAT [STDERR_FILE]: until FILE exists (a test pause point was reached). Fails at once,
+# with the job's stderr, when the job PID exits first (it can never get there), and at the deadline otherwise.
+wait_marker() {
+  local file=$1 pid=$2 limit=$3 what=$4 errf=${5:-/dev/null} end=$((SECONDS + $3))
+  while [ ! -e "$file" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      WAIT_RC=0; wait "$pid" || WAIT_RC=$?
+      [ -e "$file" ] && return 0   # it got there and then finished
+      fail "$what: the command exited (rc $WAIT_RC) before getting there: $(cat "$errf" 2>/dev/null)"
+    fi
+    if [ "$SECONDS" -ge "$end" ]; then kill_tree "$pid"; fail "$what: not reached after $limit s"; fi
+    sleep 0.05
+  done
+}
+# plant_big_messages DB TO N [SENDER]: N messages to TO, 3 KB each, inserted straight into the bus (fast). A listing cuts a
+# body at 2 KB, so N of them are about N * 2.1 KB of output; a test that needs output to outlast a reader's buffer plants
+# enough to pass the pipe (64 KB on Linux, up to 1 MB if it grew) AND the first block a reader may take before it leaves
+# (uutils head and BSD head read 64 KB at once, which made a 126 KB output fit "in the pipe" on CI): N = 600 is 1.2 MB.
+plant_big_messages() {
+  python3 - "$1" "$2" "$3" "${4:-a}" <<'PYPLANT'
+import sqlite3, sys
+db, to, n, sender = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+c = sqlite3.connect(db)
+c.executemany("INSERT INTO messages(ts,sender,recipient,kind,body) VALUES(?,?,?,?,?)",
+              [("2026-01-01T00:00:00Z", sender, to, "note", "m%d " % i + "x" * 3000) for i in range(n)])
+c.commit(); c.close()
+PYPLANT
+}
 mkrepo() { mkdir -p "$1"; git -C "$1" init -q; git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init; }
 
 # expect_fail "text stderr must contain" cmd args...

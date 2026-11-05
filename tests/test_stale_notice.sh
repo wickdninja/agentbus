@@ -79,9 +79,10 @@ order = ["0.1.0", "0.2.0.dev0", "0.2.0.dev1", "0.2.0rc1", "0.2.0", "0.2.0.post1"
 assert [k(v) for v in order] == sorted(k(v) for v in order) and len({k(v) for v in order}) == len(order), [k(v) for v in order]
 # The tree's own version sorts after every release (tests/released_commands.txt): a build of main is never taken
 # for the release before it, so its copies are not flagged stale by that release's tool, nor refused as equal.
+# The one exception is the release-prep commit itself, whose tree IS the newest release: equal to it, after all the others.
 import os, re
 released = re.findall(r"^v(\S+):", open(os.path.join(os.environ["TESTS_DIR"], "released_commands.txt")).read(), re.M)
-assert released and all(k(m["__version__"]) > k(v) for v in released), (m["__version__"], released)
+assert released and all(k(m["__version__"]) > k(v) or m["__version__"] == v == max(released, key=k) for v in released), (m["__version__"], released)
 PY
 sed 's/^__version__ = .*/__version__ = "0.2.0.dev0"/' "$MOD" > "$T/tool/agentbus-dev"
 printf '0.1.0\n' > "$W/proj/.agentbus/VERSION"

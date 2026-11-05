@@ -17,7 +17,7 @@ wf_setup() {
 }
 
 # norm: stdin to stdout with what changes between runs replaced: the repo paths, UTC timestamps and
-# the local time a message header shows ("01:27", "Nov 1 23:40"), time left on a claim, how long ago an agent was seen,
+# the local time a message header shows ("01:27", "Nov 1 23:40"), time left on a claim ("for 2h (until 13:47)"), how long ago an agent was seen,
 # and the copy version a buses row ends with.
 norm() {
   WF_R="$R" WF_RREAL="${RREAL:-$R}" WF_T="$T" python3 -c '
@@ -28,6 +28,10 @@ for k, v in (("WF_RREAL", "<REPO>"), ("WF_R", "<REPO>")):
 s = re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", "<TS>", s)
 s = re.sub(r"· (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d", "· <time>", s)
 s = re.sub(r"\b(?:\d+h \d\dm|\d+m) left\b", "<left>", s)
+# a claim: "for 2h (until 13:47)" is time left, and any other "until 13:47" is an expiry
+s = re.sub(r"\bfor (?:\d+d(?: \d+h)?|\d+h(?: \d+m)?|\d+m|\d+s) \(until (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d\)", "<left>", s)
+s = re.sub(r"\buntil (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d\b", "until <TS>", s)
+s = re.sub(r"(?m)^  (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d (?=\S+: )", "  <TS> ", s)  # a ctx history row starts with its time
 s = re.sub(r"seen (?:just now|\d+[smhd] ago)", "seen <ago>", s)
 s = re.sub(r"active (?:less than a minute|\d+ min) ago", "active <ago> ago", s)
 s = re.sub(r"(?m)  copy \S+(?: \+dirty)?$", "  copy <copy>", s)  # a buses row: the version or commit of the folder copy
@@ -98,7 +102,7 @@ jcall() {
   cat "$T/replies/$n"
 }
 # jis NAME EXPR: the JSON on stdin, as `r`, must satisfy the python expression EXPR. Listings are the envelope
-# `{"v":1,"items":[...],"has_more":...,"next":...}`, so list expressions read r["items"].
+# `{"contract":1,"items":[...],"has_more":...,"next":...}`, so list expressions read r["items"].
 jis() {
   python3 -c '
 import json, sys

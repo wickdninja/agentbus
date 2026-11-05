@@ -15,7 +15,7 @@ for d in "$R/src/deep" "$R2/src"; do
   got=$(cd "$d" && busof)
   [ "$got" = "$(real "$WS")/.agentbus/bus.db" ] || fail "workspace discovery from $d: $got"
 done
-(cd "$R" && agentbus --as a post "shared workspace" >/dev/null)
+(cd "$R" && agentbus --as a join >/dev/null && agentbus --as a post "shared workspace" >/dev/null)
 got=$(cd "$R2" && agentbus --json read | python3 -c 'import json,sys; print("|".join(r["body"] for r in json.load(sys.stdin)["items"]))')
 [ "$got" = "shared workspace" ] || fail "repos did not share messages"
 [ ! -e "$R/.agentbus" ] && [ ! -e "$R2/.agentbus" ] || fail "discovery created a repo bus"
@@ -36,6 +36,7 @@ ok "external worktree maps to the same relative directory"
 echo "TEST 3: nested buses, --up on either side, and a chain that does not create databases"
 agentbus init "$R" > "$T/nested-init"
 grep -qxF "outer bus: $(real "$WS")" "$T/nested-init" || fail "outer bus notice missing"
+rm -f "$R/.agentbus"/bus.db*   # init made the database; this test is about buses, which must never make one
 o=$(cd "$R" && json_ok agentbus buses --json)
 # copy_version: the folder copy's VERSION when it is a release (an installed tool, or a checkout without git),
 # null when it names a source commit (this checkout under git); stale is false either way, the copy being this tool.
@@ -223,4 +224,75 @@ MR="$T/mode"; mkdir -p "$MR"; agentbus init "$MR" >/dev/null
 (cd "$MR" && agentbus --as m join >/dev/null)
 [ "$(mode "$MR/.agentbus/bus.db")" = 600 ] || fail "bus.db is $(mode "$MR/.agentbus/bus.db")"
 ok ".agentbus is 0700 and bus.db 0600"
+echo "TEST 17: AGENTBUS_DB that is not the bus this folder finds: join and brief warn once, in --json too; other commands, the same file and a folder outside any checkout stay quiet"
+# Bug it catches: a brain told lanes to set AGENTBUS_DB to a second bus; every command in a worktree used it and nothing said the
+# repo's own bus was the one discovery finds. Sandboxed workers with an assigned bus outside any checkout must stay quiet.
+MA="$T/mm-app"; mkrepo "$MA"; agentbus init "$MA" >/dev/null
+MW="$T/mm-wt"; git -C "$MA" worktree add -q "$MW" -b mm
+MO="$T/mm-other"; mkdir -p "$MO"; agentbus init "$MO" >/dev/null
+MFREE="$T/mm-free"; mkdir -p "$MFREE"; ln -s "$MA" "$T/mm-link"
+want="AGENTBUS_DB names $MO/.agentbus/bus.db, but this folder's bus is $(real "$MA")/.agentbus/bus.db"
+for c in join brief; do
+  (cd "$MW" && AGENTBUS_DB="$MO/.agentbus/bus.db" agentbus --as mm $c >"$T/mm-out" 2>"$T/mm-err") || fail "$c failed with a mismatched AGENTBUS_DB: $(cat "$T/mm-err")"
+  [ "$(grep -c "AGENTBUS_DB names" "$T/mm-err")" = 1 ] || fail "$c did not warn exactly once about a mismatched AGENTBUS_DB: $(cat "$T/mm-err")"
+  grep -qF "$want" "$T/mm-err" || fail "$c warning lacks both buses: $(cat "$T/mm-err")"
+  (cd "$MW" && AGENTBUS_DB="$MO/.agentbus/bus.db" agentbus --as "mmj-$c" --json $c >"$T/mm-json" 2>/dev/null) || fail "$c --json failed"
+  python3 - "$T/mm-json" "$MO/.agentbus/bus.db" "$(real "$MA")/.agentbus/bus.db" <<'PYT' || fail "$c --json warnings are not one bus_env_mismatch"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["warnings"] == [{"code": "bus_env_mismatch", "agentbus_db": sys.argv[2], "discovered": sys.argv[3]}], d.get("warnings")
+PYT
+done
+n=0
+for env in "$MA/.agentbus/bus.db" "$T/mm-link/.agentbus/bus.db"; do
+  for dir in "$MW" "$MA"; do
+    for c in join brief; do
+      n=$((n+1))
+      (cd "$dir" && AGENTBUS_DB="$env" agentbus --as "same$n" --json $c >"$T/mm-json" 2>"$T/mm-err") || fail "$c failed on the same file: $(cat "$T/mm-err")"
+      [ ! -s "$T/mm-err" ] || fail "the same bus file warned on $c: $(cat "$T/mm-err")"
+      python3 -c 'import json,sys; assert "warnings" not in json.load(open(sys.argv[1]))' "$T/mm-json" || fail "the same bus file put warnings in $c --json"
+    done
+  done
+done
+for c in join brief; do
+  n=$((n+1))
+  (cd "$MFREE" && AGENTBUS_DB="$MO/.agentbus/bus.db" agentbus --as "free$n" $c >"$T/mm-out" 2>"$T/mm-err") || fail "$c failed outside a checkout: $(cat "$T/mm-err")"
+  [ ! -s "$T/mm-err" ] || fail "a worker outside any checkout was warned on $c: $(cat "$T/mm-err")"
+done
+for c in "who" "status" "read" "inbox" "claims" "post hello" "ctx set k v" "buses"; do
+  (cd "$MW" && AGENTBUS_DB="$MO/.agentbus/bus.db" agentbus --as mm $c >/dev/null 2>"$T/mm-err") || fail "$c failed with a mismatched AGENTBUS_DB"
+  [ ! -s "$T/mm-err" ] || fail "$c warned about a mismatched AGENTBUS_DB: $(cat "$T/mm-err")"
+done
+ok "join and brief warn once (text and --json); same file, symlink, no checkout and other commands are silent"
+
+echo "TEST: join and brief with AGENTBUS_DB from a deleted working folder stay quiet and exit 0"
+# Bug it catches: the mismatch check asked for the working folder, and only SystemExit was caught: exit 3, where it exited 0 before.
+GB="$T/gone-bus"; mkdir -p "$GB"; agentbus init "$GB" >/dev/null
+for c in join brief; do
+  GD="$T/gone-$c"; mkdir -p "$GD"
+  rc=0; ( cd "$GD" && rmdir "$GD" && AGENTBUS_DB="$GB/.agentbus/bus.db" agentbus --as gone $c >"$T/gone-out" 2>"$T/gone-err" ) || rc=$?
+  [ "$rc" = 0 ] || fail "$c with AGENTBUS_DB from a deleted folder exited $rc: $(cat "$T/gone-err")"
+  [ ! -s "$T/gone-err" ] || fail "$c with AGENTBUS_DB from a deleted folder said something on stderr: $(cat "$T/gone-err")"
+done
+ok "the deleted folder is not an error when the bus is named"
+
+echo "TEST: what a command tells you to run next keeps --up"
+# Bug it catches: commands printed by these messages ran against the nearest bus, not the outer one the person was on.
+UW="$T/up-ws"; mkdir -p "$UW"; mkrepo "$UW/repo"; agentbus init "$UW" >/dev/null; agentbus init "$UW/repo" >/dev/null
+upcmd() { (cd "$UW/repo" && agentbus --up 1 "$@"); }
+for c in who status; do
+  o=$(upcmd $c 2>&1) || fail "--up 1 $c failed: $o"
+  grep -qF "no agents. Join with: agentbus --up 1 --as NAME join" <<<"$o" || fail "$c's empty hint lost --up: $o"
+done
+upcmd --as ua join >/dev/null
+e=$(upcmd --as ua ctx set goal x 2>&1) && fail "ctx set goal under --up 1 was not refused"
+grep -qF "goal is reserved; use: agentbus --up 1 goal TEXT" <<<"$e" || fail "the reserved-goal hint lost --up: $e"
+e=$(upcmd --as ua claim /abs/path 2>&1) && fail "an absolute claim under --up 1 was not refused"
+grep -qF "For example: agentbus --up 1 --as NAME claim src/app/ --purpose WHY" <<<"$e" || fail "the bad-path hint lost --up: $e"
+upcmd --as ub join >/dev/null
+for i in 1 2 3 4 5 6 7; do upcmd --as ua post "q$i" --kind question >/dev/null; upcmd --as ua post "n$i" --to ub >/dev/null; done
+o=$(upcmd --as ub brief 2>&1) || fail "--up 1 brief failed: $o"
+grep -qF "2 more (agentbus --as ub --up 1 brief --limit 20)" <<<"$o" || fail "brief's more hint lost --up: $o"
+grep -qF "(agentbus --as ub --up 1 inbox)" <<<"$o" || fail "brief's inbox hint lost --up: $o"
+ok "the hints keep --up"
 echo "All discovery tests passed"

@@ -60,26 +60,48 @@ echo "TEST 3: terminal control sequences in bus text are shown escaped, --json u
 ESC=$(printf '\033'); BEL=$(printf '\007')
 evil="${ESC}]52;c;cHduZWQ=${BEL}${ESC}[2J"
 cd "$R"
-agentbus --as "n${ESC}x" join --tool "t${ESC}" --role "r${ESC}" >/dev/null
-agentbus --as "n${ESC}x" post "$evil
-second line" --topic "t${ESC}" --to "u${ESC}" >/dev/null
-agentbus --as "n${ESC}x" ctx set "k${ESC}" "v${ESC}" >/dev/null
-agentbus --as "n${ESC}x" claim "area:x${ESC}" --purpose "p${ESC}" >/dev/null
-agentbus --as "n${ESC}x" log add "a${ESC}" "d${ESC}" >/dev/null
-for c in who read status claims "log show" "ctx get" "ctx history k${ESC}" "ctx get k${ESC}" "--as u${ESC} inbox --peek"; do
+# Identifiers (names, keys, resources, topics) refuse control characters since 0.2, so a hostile one can only
+# come from an older bus: plant the rows with SQLite, as such a bus would hold them (tests/test_control_chars.sh
+# covers the refusals). Free text (bodies, values, purposes, roles) still goes through the CLI where it can.
+T0=2026-01-01T00:00:00Z; FAR=2999-01-01T00:00:00Z
+plant() { "$PY" -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute(sys.argv[2],sys.argv[3:]);c.commit()' "$R/.agentbus/bus.db" "$@"; }
+plant "INSERT INTO agents(name,tool,role,joined_at,last_seen) VALUES(?,?,?,?,?)" "n${ESC}x" "t${ESC}" "r${ESC}" $T0 $T0
+plant "INSERT INTO messages(ts,sender,recipient,kind,topic,body) VALUES(?,?,?,?,?,?)" $T0 "n${ESC}x" "u${ESC}" note "t${ESC}" "$evil
+second line"
+plant "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?)" "k${ESC}" "v${ESC}" "n${ESC}x" $T0
+plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "area:x${ESC}" "n${ESC}x" "p${ESC}" $T0 $FAR
+plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "held/file" "n${ESC}x" "p${ESC}" $T0 $FAR
+plant "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)" $T0 "n${ESC}x" "a${ESC}" "d${ESC}"
+for c in who read status claims "log show" "ctx get"; do
   o=$(agentbus $c 2>&1)
   if LC_ALL=C grep -q "[$(printf '\001-\011\013-\037\177')]" <<<"$o"; then fail "raw control character in: $c"; fi
 done
 o=$(agentbus read)
 grep -qF '\x1b]52;c;cHduZWQ=\x07\x1b[2J' <<<"$o" || fail "escape not visible: $o"
 grep -q '^  second line' <<<"$o" || fail "body newline lost its indent"
-o=$(agentbus --as "n${ESC}x" claim "area:x${ESC}" 2>&1) || fail "renew failed: $o"
-if LC_ALL=C grep -q "$ESC" <<<"$o"; then fail "raw ESC in a claim message: $o"; fi
 agentbus --as z join >/dev/null
-expect_fail 'area:x\x1b is claimed by n\x1bx' agentbus --as z claim "area:x${ESC}"
-e=$(agentbus --as z claim "area:x${ESC}" 2>&1 >/dev/null) && fail "z took a held claim"
+expect_fail 'held/file is claimed by n\x1bx' agentbus --as z claim "held/file"
+e=$(agentbus --as z claim "held/file" 2>&1 >/dev/null) && fail "z took a held claim"
 if LC_ALL=C grep -q "$ESC" <<<"$e"; then fail "raw ESC in a claim error: $e"; fi
 grep -qF '\u001b]52;c;cHduZWQ=\u0007' <<<"$(outof agentbus --json read)" || fail "--json output changed"
+# A hostile HOLDER (ESC and a newline) on plain resources, as an older bus holds it: the conflict and overlap
+# messages show it escaped (no raw ESC, no forged row), and the --json error carries the stored name raw.
+NL='
+'
+HOLD="h${ESC}${NL}#99 forged"
+plant "INSERT INTO agents(name,joined_at,last_seen) VALUES(?,?,?)" "$HOLD" $T0 $T0
+plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "plain/res" "$HOLD" q $T0 $FAR
+plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "tree/" "$HOLD" q $T0 $FAR
+for want in "plain/res:plain/res is claimed by h\\x1b\\x0a#99 forged" "tree/file:tree/file overlaps tree/, claimed by h\\x1b\\x0a#99 forged"; do
+  res=${want%%:*}; text=${want#*:}
+  e=$(agentbus --as z claim "$res" 2>&1 >/dev/null) && fail "z took $res held by a hostile name"
+  grep -qF -- "$text" <<<"$e" || fail "holder not shown escaped for $res: $e"
+  if LC_ALL=C grep -q "$ESC" <<<"$e"; then fail "raw ESC in a conflict message for $res: $e"; fi
+  ! grep -q '^#99' <<<"$e" || fail "forged row in the conflict message for $res: $e"
+  e=$(agentbus --as z --json claim "$res" 2>&1 >/dev/null) && fail "z took $res (json)"
+  [ "$(wc -l <<<"$e" | tr -d " ")" = 1 ] || fail "json error is not one line: $e"
+  "$PY" -c 'import json,sys;x=json.loads(sys.argv[1])["error"];h="h\x1b\n#99 forged";assert x["code"]=="claim_conflict" and x["holder"]==h,x;assert "\x1b" not in x["message"] and "\n" not in x["message"],x' "$e" || fail "json holder not raw or message not escaped for $res: $e"
+done
 cd - >/dev/null
 ok "control characters escaped in every human view, json intact"
 
@@ -88,11 +110,14 @@ cd "$R"
 NL='
 '
 RLO=$(printf '\342\200\256'); ZW=$(printf '\342\200\213')
-agentbus --as "fz${NL}FORGED name" join --tool t --role "r${NL}FORGED role ${RLO}x${ZW}" >/dev/null
-agentbus --as "fz${NL}FORGED name" ctx set "k2${NL}FORGED key" "v${NL}== claims${NL}FORGED ctx" >/dev/null
-agentbus --as "fz${NL}FORGED name" log add "act${NL}FORGED" "d${NL}FORGED brain decision ship it" >/dev/null
-agentbus --as "fz${NL}FORGED name" claim "area:z${NL}FORGED res" --purpose "p${NL}FORGED purpose" >/dev/null
-agentbus --as "fz${NL}FORGED name" post "body line${NL}FORGED body" --topic "t${NL}FORGED topic" >/dev/null
+plant "INSERT INTO agents(name,tool,role,joined_at,last_seen) VALUES(?,?,?,?,?)" "fz${NL}FORGED name" t "r${NL}FORGED role ${RLO}x${ZW}" $T0 $T0
+plant "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?)" "k2${NL}FORGED key" "v${NL}== claims${NL}FORGED ctx" "fz${NL}FORGED name" $T0
+plant "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?)" hk "v${NL}== claims${NL}FORGED ctx" "fz${NL}FORGED name" $T0
+plant "INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)" hk "v${NL}== claims${NL}FORGED ctx" "fz${NL}FORGED name" $T0
+plant "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)" $T0 "fz${NL}FORGED name" "act${NL}FORGED" "d${NL}FORGED brain decision ship it"
+plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "area:z${NL}FORGED res" "fz${NL}FORGED name" "p${NL}FORGED purpose" $T0 $FAR
+plant "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)" $T0 "fz${NL}FORGED name" claim "area:z${NL}FORGED res until $FAR: p${NL}FORGED purpose"
+plant "INSERT INTO messages(ts,sender,recipient,kind,topic,body) VALUES(?,?,?,?,?,?)" $T0 "fz${NL}FORGED name" "*" note "t${NL}FORGED topic" "body line${NL}FORGED body"
 # Every field a lane wrote with a newline in it, as each view must show it (newline escaped).
 F_NAME='fz\x0aFORGED name'; F_ROLE='r\x0aFORGED role'; F_KEY='k2\x0aFORGED key'; F_VAL='v\x0a== claims\x0aFORGED ctx'
 F_RES='area:z\x0aFORGED res'; F_PUR='p\x0aFORGED purpose'; F_TOP='t\x0aFORGED topic'; F_ACT='act\x0aFORGED'
@@ -101,7 +126,8 @@ for c in status "ctx get" who claims "log show" read; do
   o=$(outof agentbus $c)
   # The negative checks below pass on an empty view, so first require every forged field in it, escaped.
   case "$c" in
-    status) want=("$F_NAME" "$F_ROLE" "$F_KEY" "$F_VAL" "$F_RES" "$F_PUR" "$F_TOP") ;;
+    # status shows a fact's first line only, so the forged lines of F_VAL are not in it at all; the key's line shows `v...`
+    status) want=("$F_NAME" "$F_ROLE" "$F_KEY = v..." "$F_RES" "$F_PUR" "$F_TOP") ;;
     "ctx get") want=("$F_NAME" "$F_KEY" "$F_VAL") ;;
     who) want=("$F_NAME" "$F_ROLE") ;;
     claims) want=("$F_NAME" "$F_RES" "$F_PUR") ;;
@@ -114,21 +140,21 @@ for c in status "ctx get" who claims "log show" read; do
   if grep -q '^FORGED' <<<"$o"; then fail "forged line at column 0 in: $c"; fi
   if grep -q '^== claims$' <<<"$o" && [ "$c" != status ]; then fail "forged section in: $c"; fi
 done
-# The key holds a newline, so it is passed as one quoted word (unquoted, it split into "k2" and
-# the check passed on an empty history).
-o=$(outof agentbus ctx history "k2${NL}FORGED key")
+# The hostile key cannot be passed any more (refused), so history and get read a plain key whose value and
+# author are hostile.
+o=$(outof agentbus ctx history hk)
 [ -n "$o" ] || fail "ctx history printed nothing"
 grep -qF 'fz\x0aFORGED name: v\x0a== claims\x0aFORGED ctx' <<<"$o" || fail "ctx history lacks the escaped value: $o"
 if grep -q '^FORGED' <<<"$o"; then fail "forged line at column 0 in: ctx history"; fi
 if grep -q '^== claims$' <<<"$o"; then fail "forged section in: ctx history"; fi
-o=$(agentbus ctx get "k2${NL}FORGED key"); grep -q '^FORGED' <<<"$o" && fail "forged line in ctx get KEY"
+o=$(agentbus ctx get hk); grep -q '^FORGED' <<<"$o" && fail "forged line in ctx get KEY"
 [ "$(outof agentbus status | grep -c '^== claims$')" = 1 ] || fail "status shows a forged == claims section"
 o=$(agentbus who)
 grep -qF "$RLO" <<<"$o" && fail "raw U+202E reached the terminal"
 grep -qF "$ZW" <<<"$o" && fail "raw U+200B reached the terminal"
 grep -qF '\u202ex\u200b' <<<"$o" || fail "bidi/zero-width not shown escaped: $o"
 grep -q '^  FORGED body' <<<"$(outof agentbus read)" || fail "message body lost its indented newline"
-agentbus --json ctx get "k2${NL}FORGED key" | python3 -c 'import json,sys; assert json.load(sys.stdin)["value"]=="v\n== claims\nFORGED ctx"' || fail "--json value changed"
+agentbus --json ctx get hk | python3 -c 'import json,sys; assert json.load(sys.stdin)["value"]=="v\n== claims\nFORGED ctx"' || fail "--json value changed"
 cd - >/dev/null
 ok "only bodies keep newlines, indented; bidi and zero-width escaped"
 
@@ -329,7 +355,8 @@ BS="$T/bs.db"
 AGENTBUS_DB="$BS" agentbus --as seed join --tool t >/dev/null
 AGENTBUS_DB="$BS" agentbus --as seed post '\x23 not a hash' >/dev/null
 AGENTBUS_DB="$BS" agentbus --as seed ctx set bk '\x1b not an escape' >/dev/null
-AGENTBUS_DB="$BS" agentbus --as 'lane\u202e' join --tool t >/dev/null
+# a name with a backslash can only come from an older bus (join no longer accepts it): plant it
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("INSERT INTO agents(name,tool,joined_at,last_seen) VALUES(?,?,?,?)", ("lane\\u202e","t","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z")); c.commit(); c.close()' "$BS"
 for cmd in read "ctx get bk" "ctx get" who; do
   o=$(outof env AGENTBUS_DB="$BS" "${AB[@]}" $cmd)
   case $cmd in

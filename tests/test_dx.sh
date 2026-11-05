@@ -11,8 +11,8 @@ agentbus join --as codex >/dev/null
 [ ! -s "$T/err" ] || fail "on-roster notice"
 [ "$(agentbus post broadcast --as claude --kind answer)" = 'posted #2 to everyone [answer]' ] || fail "broadcast confirmation"
 [ "$(agentbus --as claude post queued --to absent 2>"$T/err")" = 'posted #3 to absent [note]' ] || fail "off-roster confirmation"
-[ "$(cat "$T/err")" = 'agentbus: absent is not on the roster; the message waits for that name.' ] || fail "off-roster notice"
-[ "$(json_ok agentbus --as claude post json --to codex --json | "$PY" -c 'import json,sys; assert json.load(sys.stdin)=={"id":4}; print("ok")')" = ok ] || fail "post JSON changed"
+[ "$(cat "$T/err")" = 'agentbus: absent is not on the roster; the message waits for that name. On the roster: claude, codex.' ] || fail "off-roster notice: $(cat "$T/err")"
+[ "$(json_ok agentbus --as claude post json --to codex --json | "$PY" -c 'import json,sys; assert json.load(sys.stdin)=={"contract":1,"id":4,"warnings":[]}; print("ok")')" = ok ] || fail "post JSON changed"
 ok "post names recipients and kinds; absent names get a stderr notice; JSON retains id"
 
 before=$(agentbus --as codex --json inbox --peek)
@@ -46,9 +46,16 @@ ok "identity and bus level before and after commands, including ctx/log actions"
 
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as claude claim src/api/ --purpose review >/dev/null
-exp=$(agentbus --json claims | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["expires_at"])')
-expect_fail "src/api/ is claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
-expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (review). Do not edit it yet. Ask claude with post --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
+# the message names the expiry in local time (HH:MM today, Mon D HH:MM another day), worked out here from the stored ISO time
+exp=$(agentbus --json claims | "$PY" -c '
+import json, os, sys, time
+from datetime import datetime, timezone
+t = datetime.strptime(json.load(sys.stdin)["items"][0]["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
+pin = os.environ.get("AGENTBUS_TEST_NOW")   # a test-only hook: the clock starts at this UTC time
+today = (datetime.strptime(pin, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone() if pin else datetime.now()).date()
+print(t.strftime("%H:%M") if t.date() == today else t.strftime("%b ") + str(t.day) + t.strftime(" %H:%M"))')
+expect_fail "src/api/ is claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude: agentbus --as codex post QUESTION --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
+expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude: agentbus --as codex post QUESTION --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"
 
 "$PY" - <<'PY'
@@ -65,7 +72,7 @@ def help_(*args):
     return text
 checks = {
     (): ['Coordinate agents in one local workspace: messages, file claims, and shared facts.', 'Your agent identity; overrides AGENTBUS_AGENT.', 'Select the Nth outer bus (default 0). AGENTBUS_DB takes precedence.', 'Print successful command results as JSON. Check exit status; errors use stderr.', 'Start:', 'Loop:', 'Finish:', 'Humans: agentbus watch', 'Env: AGENTBUS_AGENT', 'AGENTBUS_DB'],
-    ('post',): ['Messages wait for that name even if it has not joined.', 'does not choose the recipient.', 'Message kind: note, question, answer, handoff, decision, alert, done. Default: note.', 'Optional topic label, filterable with read --topic.'],
+    ('post',): ['A name not on the roster still gets the message, with a warning.', 'does not choose the recipient.', 'Message kind: note, question, answer, handoff, decision, alert, done. Default: note.', 'Optional topic label, filterable with read --topic.'],
     ('join',): ['Tool running this session.', 'Model running this session.', 'Working directory for this session.', 'Branch for this session.', 'What you do here (shown in who/watch).', 'Rejoin a name active'],
     ('release',): ['Resource to release; use the spelling from claims.'],
     ('ctx','set'): ['Set a shared fact and record its history.'],
@@ -74,9 +81,9 @@ checks = {
     ('log','add'): ['Append an activity log entry.'],
     ('log','show'): ['Show recent activity log entries.'],
     ('claim',): ['Claim lifetime in minutes: 1-10080; default 120. Claim again to renew.'],
-    ('read',): ['Maximum messages; default 30. Use -1 for all.'],
-    ('status',): ['Limit agents, facts, and claims per section; default 500.', 'Recent messages always shows the latest 10.'],
-    ('init',): ['Existing directory to initialize; default current directory. Run from the installed tool or source clone.'],
+    ('read',): ['Maximum messages; default 50. Use -1 for all.', 'Show this one message, whole (a listing cuts a body at 2 KB).'],
+    ('status',): ['At most this many rows in each section (agents, facts, claims, the latest messages); default 20. Use -1 for all.'],
+    ('init',): ['Directory to initialize, created (with its parents) if missing; default current directory. Run from the installed tool or source clone.'],
 }
 for args, expected in checks.items():
     text = help_(*args)
@@ -88,7 +95,8 @@ for args, usage in [(('ctx','set'),'KEY VALUE'), (('ctx','get'),'[KEY]'), (('ctx
 PY
 ok "help describes routing, limits, identity, installation, and action-specific usage"
 
-[ "$(agentbus lgo 2>&1 >/dev/null || true)" = "agentbus: unknown command 'lgo' (did you mean log?). See: agentbus --help" ] || fail "unknown command hint"
+out=$(agentbus lgo 2>&1 >/dev/null || true)
+case "$out" in "agentbus: unknown command 'lgo'. Did you mean log? Commands: join, leave, who, "*", brief, demo. See: agentbus --help") ;; *) fail "unknown command hint: $out" ;; esac
 expect_fail "unknown kind 'fyi'; use one of: note, question, answer, handoff, decision, alert, done" agentbus --as claude post hi --kind fyi
 expect_fail "claude was active less than a minute ago" agentbus --as claude join
 ok "typos get concise suggestions, invalid kinds echo their value, and a recent join reads naturally"

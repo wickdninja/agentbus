@@ -27,15 +27,20 @@ SNIPPET_CAP = 700
 # sha256 of skill/SKILL.md at v0.1.0, the first released skill.
 SEED_HISTORY = ["2af5e4efedd84d7da42da6c4c5ddd02f230cc002e05b733741557dfd38b06156"]
 
-# The Codex AGENTS.md block body. It names the bus copy, per the version policy.
+# The Codex AGENTS.md block body. It names the installed `agentbus` from PATH, never a bus copy (version policy rule 1). The block can
+# sit in a user-wide AGENTS.md and be left behind after an uninstall, so a missing tool must never halt an agent, and what decides
+# whether it applies is discovery (`buses`), which a linked worktree reaches too.
 AGENTS_SNIPPET = (
     "## agentbus\n"
-    "This workspace has a shared agentbus. Run `.agentbus/bin/agentbus skill` for the full protocol; if it says "
-    "`unknown command 'skill'`, the copy is 0.1.x: stop and tell the user to run `agentbus upgrade --all PARENT_DIR`.\n"
-    "Join: `.agentbus/bin/agentbus --as NAME join`. "
-    "Before editing: `.agentbus/bin/agentbus --as NAME claim PATH --purpose WHY`.\n"
-    "Between steps: `.agentbus/bin/agentbus --as NAME inbox --limit 20`. "
-    "Finish: `.agentbus/bin/agentbus --as NAME post RESULT --kind done`, then `leave`.\n"
+    "If `agentbus` is not on PATH: ignore this section unless `.agentbus/` is in this folder or a parent; "
+    "if one is, tell the user to install agentbus, never run the copy in it, and carry on with the task. "
+    "If `agentbus buses` finds no bus, ignore this section. "
+    "Otherwise run `agentbus skill` for the full protocol; if it says "
+    "`unknown command 'skill'`, that agentbus is 0.1.x: stop and tell the user to install the current release and run `agentbus upgrade --all PARENT_DIR`.\n"
+    "Join: `agentbus --as NAME join`. "
+    "Before editing: `agentbus --as NAME claim PATH --purpose WHY`.\n"
+    "Between steps: `agentbus --as NAME inbox`. "
+    "Finish: `agentbus --as NAME post RESULT --kind done`, then `leave`.\n"
 )
 
 
@@ -57,7 +62,7 @@ def block(skill_text, history, agents_history):
 
 
 def split_bin(src):
-    m = re.search(r"^" + re.escape("# BEGIN EMBEDDED SKILL") + r".*\n(.*?)^" + re.escape(END) + r"\n", src, re.S | re.M)
+    m = re.search(r"^" + re.escape("# BEGIN EMBEDDED SKILL") + r"[^\n]*\n(.*?)^" + re.escape(END) + r"\n", src, re.S | re.M)
     if not m:
         sys.exit("embed_skill: bin/agentbus has no '# BEGIN EMBEDDED SKILL' ... '# END EMBEDDED SKILL' block")
     return m

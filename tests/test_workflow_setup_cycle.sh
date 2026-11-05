@@ -25,6 +25,24 @@ for p in sys.argv[1:]:
     print(p, st.st_size, oct(st.st_mode & 0o7777), hashlib.sha256(open(p, "rb").read()).hexdigest())
 PY
 }
+# The hooks piece saves settings.json as it was before every change (settings.json.agentbus-<UTC stamp>.bak): the stamp is not part of the transcript.
+eval "$(declare -f norm | sed '1s/^norm /norm_base /')"
+# The trust line names the installed tool by absolute path, which differs per machine; setup also looks at the login shell once.
+export SHELL=/bin/sh
+norm() { norm_base | sed -E -e 's/\.agentbus-[0-9]{8}T[0-9]{6}\.[0-9]{6}Z\.bak/.agentbus-<stamp>.bak/g' -e 's/command starts .* hook codex and ends/command starts TOOL hook codex and ends/'; }
+# settings_ok: settings.json keeps the user's keys and carries the five tagged hook entries (or, with "bare", only the user's keys).
+settings_ok() { python3 - "$C/settings.json" "$1" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+hooks = d.pop("hooks", None)
+assert d == {"theme": "dark", "permissions": {"allow": ["Bash(ls)"]}}, d
+if sys.argv[2] == "hooks":
+    assert sorted(hooks) == ["PreToolUse", "SessionEnd", "SessionStart", "Stop", "UserPromptSubmit"], hooks
+    assert all(g["hooks"][0]["command"].endswith("# agentbus:managed") for gs in hooks.values() for g in gs), hooks
+else:
+    assert hooks is None, hooks
+PY
+}
 inode() { python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_ino)' "$1"; }
 files_under() { find "$HOME/.claude" "$HOME/.codex" -type f -o -type l 2>/dev/null | sort; }
 
@@ -34,13 +52,14 @@ printf '{\n  "theme": "dark",\n  "permissions": {\n    "allow": ["Bash(ls)"]\n  
 printf -- '---\nname: other\ndescription: mine\n---\nhello\n' > "$C/skills/other/SKILL.md"
 printf '# My notes\n\nbe nice\n' > "$X/AGENTS.md"
 cp "$X/AGENTS.md" "$T/agents.orig"
-MINE=$(snapshot "$C/settings.json" "$C/skills/other/SKILL.md")
+MINE=$(snapshot "$C/skills/other/SKILL.md")
 BEFORE=$(files_under)
 ok "fixture written"
 
 echo "STEP 2: a dry run says what it would do and writes nothing"
 say "agentbus setup claude (user)
   + would install ~/.claude/skills/agentbus/SKILL.md ($bytes bytes)
+  + would add 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd) to ~/.claude/settings.json; the file as it was is saved as settings.json.agentbus-<date and time>.bak
 dry run: nothing was written." agentbus setup claude --dry-run
 is_equal "no file appeared" "$BEFORE" "$(files_under)"
 ok "dry run wrote nothing"
@@ -48,12 +67,14 @@ ok "dry run wrote nothing"
 echo "STEP 3: install leaves the user's own files alone"
 say "agentbus setup claude (user)
   + ~/.claude/skills/agentbus/SKILL.md   installed, $bytes bytes
-done. Start a new Claude Code session to load it.
+  + ~/.claude/settings.json   added 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd); the file as it was is saved as settings.json.agentbus-<stamp>.bak
+done. Start a new Claude Code session to load them.
 next: cd your-repo && agentbus init ." agentbus setup claude
 cmp -s "$SKILL" <(agentbus skill) || fail "the installed skill is not what \`agentbus skill\` prints"
-is_equal "settings.json and the custom skill are byte-identical" "$MINE" "$(snapshot "$C/settings.json" "$C/skills/other/SKILL.md")"
+is_equal "the custom skill is byte-identical" "$MINE" "$(snapshot "$C/skills/other/SKILL.md")"
+settings_ok hooks || fail "settings.json lost the user's keys or lacks the five hook entries"
 [ "$(mode "$SKILL")" = 600 ] || fail "the installed skill is mode $(mode "$SKILL"), want 600"
-ok "skill installed, user files untouched"
+ok "skill and hooks installed, user keys and files untouched"
 
 echo "STEP 4: an unchanged rerun reports unchanged and writes nothing"
 I1=$(inode "$SKILL"); S1=$(snapshot "$SKILL")
@@ -66,7 +87,9 @@ ok "rerun wrote nothing"
 echo "STEP 5: the Codex block is added after the user's text, and the user's later edit outside it survives a rerun"
 say "agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
-done. Start a new Codex session to load it.
+  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
+  = /bin/sh   prints nothing at startup (started once as \$SHELL -lc)
+done. Codex ignores hooks until you trust them: start codex, type /hooks, and approve the 4 entries whose command starts TOOL hook codex and ends # agentbus:managed.
 next: cd your-repo && agentbus init ." agentbus setup codex
 head -c "$(wc -c <"$T/agents.orig")" "$X/AGENTS.md" | cmp -s - "$T/agents.orig" || fail "the user's AGENTS.md text was changed"
 [ "$(grep -c '^<!-- agentbus:begin -->$' "$X/AGENTS.md")" = 1 ] && [ "$(grep -c '^<!-- agentbus:end -->$' "$X/AGENTS.md")" = 1 ] || fail "markers: $(cat "$X/AGENTS.md")"
@@ -114,7 +137,8 @@ ln -s "$R/oldclone/skill" "$C/skills/agentbus"
 say "agentbus setup claude (user)
   ~ ~/.claude/skills/agentbus   replaced the link to <REPO>/oldclone/skill (the old install line)
   + ~/.claude/skills/agentbus/SKILL.md   installed, $bytes bytes
-done. Start a new Claude Code session to load it.
+  = ~/.claude/settings.json   unchanged
+done. Start a new Claude Code session to load them.
 next: cd your-repo && agentbus init ." agentbus setup claude
 [ ! -L "$C/skills/agentbus" ] && [ -d "$C/skills/agentbus" ] || fail "the skill link was not replaced by a directory"
 is_equal "the old clone's skill is untouched" "$OLD" "$(snapshot "$R/oldclone/skill/SKILL.md")"
@@ -124,7 +148,8 @@ echo "STEP 9: uninstall removes only what agentbus added"
 out=$(agentbus setup claude --uninstall)
 grep -qxF "  - removed ~/.claude/skills/agentbus/" <<<"$out" || fail "uninstall: $out"
 [ ! -e "$C/skills/agentbus" ] || fail "the skill directory is still there"
-is_equal "user files after uninstall" "$MINE" "$(snapshot "$C/settings.json" "$C/skills/other/SKILL.md")"
+is_equal "the custom skill after uninstall" "$MINE" "$(snapshot "$C/skills/other/SKILL.md")"
+settings_ok bare || fail "uninstall left a hook entry or changed the user's keys"
 python3 -c '
 import json, sys
 assert json.load(open(sys.argv[1])) == {"theme": "dark", "permissions": {"allow": ["Bash(ls)"]}}' "$C/settings.json" || fail "settings.json parsed differently"

@@ -1,0 +1,19 @@
+{
+  "session_id": "aaaaaaaa-0000-4000-8000-000000000005",
+  "transcript_path": "/home/user/.claude/projects/-home-user-proj/aaaaaaaa-0000-4000-8000-000000000005.jsonl",
+  "cwd": "/home/user/proj",
+  "prompt_id": "ce04e20c-b6fe-4bd5-a8df-8960da1d5196",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/home/user/proj/sub.txt",
+    "old_string": "x",
+    "new_string": "y",
+    "replace_all": false
+  },
+  "tool_use_id": "toolu_01VgLRZCnzx6qKmbCfWFqL3E"
+}

@@ -277,10 +277,12 @@ echo "TEST: --ttl-min counts minutes"
 agentbus --as ttl join --tool t >/dev/null
 o=$(json_ok agentbus --json --as ttl claim ttl/a.py --ttl-min 7)
 python3 -c '
-import json, sys, time
+import json, os, sys, time
 from datetime import datetime, timezone
 e = datetime.strptime(json.loads(sys.argv[1])["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
-d = e - (time.time() + 7 * 60)
+pin = os.environ.get("AGENTBUS_TEST_NOW")  # a test-only hook: the tool'"'"'s clock starts at this UTC time
+now = datetime.strptime(pin, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp() if pin else time.time()
+d = e - (now + 7 * 60)
 sys.exit(0 if abs(d) < 90 else "expires %+.0f s off now + 7 min" % d)' "$o" || fail "--ttl-min 7 did not expire in 7 minutes: $o"
 ok "--ttl-min 7 expires 7 minutes from now"
 
@@ -341,13 +343,16 @@ for purpose in preserve replace; do
   "$PY" - "$o" "$purpose" <<'PY'
 import json, sys
 d = json.loads(sys.argv[1])
-assert set(d) == {'resource', 'agent', 'purpose', 'claimed_at', 'expires_at', 'auto_released', 'auto_released_count'}, d
+base = {'contract', 'resource', 'agent', 'purpose', 'claimed_at', 'expires_at', 'auto_released', 'auto_released_count', 'renewed'}
+assert set(d) == base | (set() if sys.argv[2] == 'preserve' else {'previous_purpose'}), d
+assert d['renewed'] is True, d
+assert d.get('previous_purpose') == (None if sys.argv[2] == 'preserve' else 'original purpose'), d
 assert d['purpose'] == ('original purpose' if sys.argv[2] == 'preserve' else 'new purpose'), d
 assert d['claimed_at'] == '2001-02-03T04:05:06Z', d
 assert d['resource'] == 'renew' and d['agent'] == 'renew', d
 PY
   want='original purpose'; [ "$purpose" = preserve ] || want='new purpose'
-  expect_fail "($want). Do not edit it yet." agentbus --as rival claim renew/sub.py
+  expect_fail "(purpose: \"$want\"). Do not edit it yet." agentbus --as rival claim renew/sub.py
   agentbus --json claims | "$PY" -c 'import json,sys; r=next(r for r in json.load(sys.stdin)["items"] if r["resource"]=="renew"); assert r["purpose"]==sys.argv[1] and r["claimed_at"]=="2001-02-03T04:05:06Z"' "$want"
 done
 ok "renewal retains purpose and claimed_at; an explicit purpose replaces it in storage, JSON and conflicts"

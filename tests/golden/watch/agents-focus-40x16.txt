@@ -1,0 +1,16 @@
+ agentbus  …rc/acme-api 1 ALRT · 1 ask
+  ◆ auth on the new token API
+Agents  3         j/k move · Enter open
+> ● tests        tester             now
+  … 2 more
+Claims  2
+  docs/api.md    tests      42m left
+  src/auth/      codex      1h 59m left
+Facts  2                       … 1 more
+  baseline_sha abc123                7m
+Messages  9                   following
+  … 6 earlier
+  #7  codex→tests   ans  Plain te…   7m
+  #8  claude→codex  hand Next: th…   1m
+  #9  tests→claude  ask  Which si…  now
+  j/k move · ? help · q quit

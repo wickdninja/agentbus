@@ -1,0 +1,4 @@
+# Releases that publish a wheel and SHA256SUMS, one tag per line. From such a release the README's first-install lines are
+# the wheel's URL (python3 scripts/release_check.py --lines vX.Y.Z prints them), not git+ lines that build from source.
+# The release-prep commit of the first release that has a wheel adds its tag here. v0.1.0 is not listed.
+v0.2.0

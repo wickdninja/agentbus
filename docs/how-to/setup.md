@@ -5,11 +5,14 @@
 One command gives an agent the agentbus protocol. No clone, no symlink, no path to type.
 
 ```bash
-agentbus setup claude     # Claude Code: installs the skill
-agentbus setup codex      # Codex: adds the agentbus block to AGENTS.md
+agentbus setup claude     # Claude Code: installs the skill and the hooks
+agentbus setup codex      # Codex: adds the agentbus block to AGENTS.md and the hooks
 ```
 
-Start a new session afterwards so the agent loads it. Then, in each repo or folder of repos:
+Then:
+
+1. Start a new session so the agent loads it. For Codex, also type `/hooks` in Codex and approve the four agentbus entries: Codex runs no hook until you do. Setup prints the exact command to look for (it starts with the installed `agentbus` and ends `# agentbus:managed`). With `--scope project`, Codex also has to trust the project. [Use agentbus with Codex](codex.md) has the details.
+2. In each repo or folder of repos:
 
 ```bash
 agentbus init .
@@ -25,7 +28,8 @@ agentbus setup claude --dry-run
 
 ```
 agentbus setup claude (user)
-  + would install ~/.claude/skills/agentbus/SKILL.md (4,423 bytes)
+  + would install ~/.claude/skills/agentbus/SKILL.md (4,624 bytes)
+  + would add 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd) to ~/.claude/settings.json
 dry run: nothing was written.
 ```
 
@@ -33,8 +37,10 @@ dry run: nothing was written.
 
 | Command | User scope (default) | `--scope project` |
 | --- | --- | --- |
-| `setup claude` | `~/.claude/skills/agentbus/SKILL.md` (or under `CLAUDE_CONFIG_DIR`) | `./.claude/skills/agentbus/SKILL.md` |
-| `setup codex` | `~/.codex/AGENTS.md` (or under `CODEX_HOME`) | `./AGENTS.md` |
+| `setup claude` | `~/.claude/skills/agentbus/SKILL.md` and the `hooks` of `~/.claude/settings.json` (or under `CLAUDE_CONFIG_DIR`) | `./.claude/skills/agentbus/SKILL.md` and `./.claude/settings.json` |
+| `setup codex` | `~/.codex/AGENTS.md` and `~/.codex/hooks.json` (or under `CODEX_HOME`) | `./AGENTS.md` and `./.codex/hooks.json` |
+
+The hooks are five entries, each ending in `# agentbus:managed`; your other hooks and settings stay. If the agentbus plugin is already installed and enabled (setup asks `claude plugin list --json`, and reads Claude Code's plugin files only when there is no `claude` to ask) it provides the hooks, so setup adds only the skill and says `provided by the agentbus plugin; not added`. [Claude Code](claude-code.md) describes what the hooks do. Codex gets four hooks and one step of yours, trusting them with `/hooks`; [Codex](codex.md) has the details.
 
 Nothing else is written. New folders are private (0700) and new files owner-only (0600).
 
@@ -61,16 +67,35 @@ A link to anything that is not an agentbus skill is left alone.
 
 In a clone of the repository, `skill/SKILL.md` is itself a symlink to `skills/agentbus/SKILL.md`, so the old line keeps working. On Windows, a checkout needs `git config core.symlinks true` (and permission to create links) for that file to be a link; otherwise it is a one-line text file. Use `agentbus setup claude` instead, which needs no clone.
 
+## Bring it up to date after a release
+
+```
+agentbus setup claude --refresh
+agentbus setup codex --refresh
+```
+
+`--refresh` is what `agentbus update` runs for you. It rewrites only what setup itself installed, when the
+text it wrote is older: the skill file, the `agentbus` block of `AGENTS.md`, and the hooks tagged
+`agentbus:managed` in Claude Code's `settings.json`. It adds nothing that is not there and removes nothing.
+
+Two rules decide what an edit survives:
+
+- The skill file and the `AGENTS.md` block are kept exactly as you left them, with no backup, when you edited them. They are named: `kept (edited). To replace it: agentbus setup claude`. A file agentbus did not write, or a link, is kept the same way.
+- Hook entries tagged `agentbus:managed` belong to agentbus. Refresh rewrites them to the current text even if you changed them, and saves the file as it was beside it (`settings.json.agentbus-TIMESTAMP.bak`). To change what a hook does, add your own entry without the tag; setup never touches it.
+
+When everything is current it says `done. Nothing to change.` and exits 0. `--scope project`
+refreshes the project's own files; it cannot be combined with `--uninstall`.
+
 ## Remove it
 
 ```bash
 agentbus setup claude --uninstall
 ```
 
-Uninstall removes only what setup added. A skill you edited stays and is reported as `modified; not removed`. For `AGENTS.md`, only the marked block goes; your other text, and any edits you made since, stay.
+Uninstall removes only what setup added. A skill you edited stays and is reported as `modified; not removed`. For `AGENTS.md`, only the marked block goes, and a block you edited stays; your other text stays. Hook entries tagged `agentbus:managed` go even if you edited them, so the hooks file is first saved as `<name>.agentbus-<date and time>.bak`; a `hooks.json` that held only the entries setup wrote, unedited, is deleted with no copy.
 
 ## For agents
 
-An agent in a repo with no skill runs `.agentbus/bin/agentbus skill` and gets the protocol on stdout. `agentbus skill --agents-md` prints the Codex block.
+An agent in a repo with no skill runs `agentbus skill` from `PATH` and gets the protocol on stdout. When `agentbus` is not on `PATH`, an agent in a folder with a bus tells you to install it; it does not run the project's `.agentbus/bin/agentbus`, which may have come with a clone. With no bus folder, the Codex block is ignored, so a block left behind stops nobody. `agentbus skill --agents-md` prints the Codex block.
 
 `setup` runs from the installed `agentbus`, not from a copy inside a project (`.agentbus/bin/agentbus`).

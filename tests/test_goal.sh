@@ -7,10 +7,10 @@ export HOME="$T/home"; mkdir -p "$HOME"
 export AGENTBUS_DB="$T/bus/bus.db"; mkdir -p "$T/bus"
 cd "$T"
 
-echo "TEST 1: no goal yet says how to set one; JSON is null"
+echo "TEST 1: no goal yet says how to set one; JSON is the object with null values"
 o=$(outof agentbus goal)
 grep -qF 'no goal yet. Set one with: agentbus --as NAME goal "what we are shipping"' <<<"$o" || fail "no-goal hint: $o"
-[ "$(json_ok agentbus --json goal)" = "null" ] || fail "no goal is not JSON null"
+[ "$(json_ok agentbus --json goal)" = '{"contract":1,"goal":null,"set_by":null,"set_at":null}' ] || fail "no goal is not the null-valued goal object"
 ok "an unset goal explains itself"
 
 echo "TEST 2: set, show, JSON, history, and who set it"
@@ -26,7 +26,7 @@ assert g["goal"] == "ship v0.1 today" and g["set_by"] == "lead" and g["set_at"].
 agentbus --as lead goal "ship v0.1 and a demo" >/dev/null
 [ "$(json_ok agentbus --json ctx history goal | python3 -c 'import json,sys; print("|".join(r["value"] for r in json.load(sys.stdin)["items"]))')" \
   = "ship v0.1 today|ship v0.1 and a demo" ] || fail "goal history"
-expect_fail "empty message" agentbus --as lead goal "  "
+expect_fail "the goal is empty. Use: agentbus --as NAME goal" agentbus --as lead goal "  "
 ok "set, shown with its author, kept in history, empty refused"
 
 echo "TEST 3: a joining agent is told the goal; status leads with it"
@@ -48,7 +48,7 @@ ok "join and status put the goal first"
 echo "TEST 4: watch pins the goal under its header and keeps it out of Facts"
 agentbus --as lead ctx set api_url "http://x" >/dev/null
 o=$(outof env COLUMNS=100 "${AB[@]}" watch --once)
-[ "$(sed -n 2p <<<"$o")" != "" ] && grep -q '^  ◆ ship v0.1 and a demo .* · lead · ' <<<"$(sed -n 2p <<<"$o")" || fail "goal not pinned on row 2: $o"
+[ "$(sed -n 2p <<<"$o")" != "" ] && grep -q '^  ◆ ship v0.1 and a demo  *lead · [0-9a-z]*$' <<<"$(sed -n 2p <<<"$o")" || fail "goal not pinned on row 2: $o"
 grep -q '^Facts  1$' <<<"$o" || fail "goal counted among facts: $o"
 json_ok agentbus --json watch | python3 -c '
 import json, sys

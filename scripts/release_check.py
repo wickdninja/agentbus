@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """python3 scripts/release_check.py [--tag vX.Y.Z]
+python3 scripts/release_check.py --lines vX.Y.Z [--wheel]      print the two install lines the README shows for the tag
 
 Every check a release needs, in one place; RELEASING.md is the checklist around it. Prints one line per
 problem and exits 1, or prints `release check passed: X.Y.Z`. Checks:
@@ -13,9 +14,23 @@ problem and exits 1, or prints `release check passed: X.Y.Z`. Checks:
     (the newest tag in tests/released_commands.txt) for an rc: main's public README must never point at
     a tag that does not exist yet, so the pin bump and the final tag land in one commit;
   - .claude-plugin/plugin.json has the version and marketplace.json names the plugin with a git source
-    whose ref is the tag, never a ./ source (skipped when the files are absent);
+    whose ref is always a release tag, never main, a branch or a ./ source (skipped when the files are absent):
+    a release or release-candidate tree (and any --tag run) names its own tag; a development build keeps the
+    last published plugin release, the highest final tag that carries .claude-plugin/plugin.json, so a plugin
+    installed from the default branch between releases never runs untagged code. Before any plugin release
+    exists, a development build names the tag being prepared (v0.2.0 for 0.2.0.dev0): that tag does not exist
+    yet, so the install fails until the release, and it never runs main. Only the release-prep commit moves
+    the ref;
+  - the lines that name the pinned release in prose (README.md "Setup in this release (vX.Y.Z)", SECURITY.md
+    "pins vX.Y.Z today") name the release the install lines pin;
   - the current SKILL.md and AGENTS.md block hashes are in SKILL_SHA256_HISTORY and AGENTS_SHA256_HISTORY
     (python3 scripts/embed_skill.py --release);
+  - DIST_NAME in bin/agentbus equals the name in pyproject.toml (the update check names no other project);
+  - a final tag is not below the highest final tag that already exists (git tag --list 'v*', rc tags
+    ignored), so GitHub's "latest release" (the most recent by date) is also the highest final version;
+  - the README's install lines are the ones --lines prints for the pinned release: the release wheel's URL once the
+    release is listed in tests/released_wheels.txt (releases that publish a wheel and SHA256SUMS), the git+ lines
+    before; every wheel URL in README.md and docs/ names the pinned tag in its path and its file name;
   - git status is clean.
 """
 import argparse
@@ -28,6 +43,34 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_URL = r"git\+https://github\.com/wickdninja/agentbus(@[^\s`\"')]*)?"
+WHEEL_URL = r"https://github\.com/wickdninja/agentbus/releases/download/(v[^/\s`\"')]+)/agentbus-([^/\s`\"')]+?)-py3-none-any\.whl"
+
+
+def wheel_tags():
+    """The tags in tests/released_wheels.txt: releases that publish a wheel and SHA256SUMS (one `vX.Y.Z` per line)."""
+    try:
+        return {ln.split()[0] for ln in read("tests", "released_wheels.txt").splitlines() if ln.strip() and not ln.startswith("#")}
+    except OSError:
+        return set()
+
+
+def plugin_release_tags():
+    """The final release tags (vX.Y.Z) whose tree carries .claude-plugin/plugin.json, lowest first: the releases a plugin
+    install can come from."""
+    listed = subprocess.run(["git", "-C", ROOT, "tag", "--list", "v*"], capture_output=True, text=True).stdout.split()
+    finals = [t for t in listed if re.fullmatch(r"v(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})", t)]
+    carries = [t for t in finals if subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{t}:.claude-plugin/plugin.json"],
+                                                  capture_output=True).returncode == 0]
+    return sorted(carries, key=lambda t: tuple(int(x) for x in t[1:].split(".")))
+
+
+def install_lines(tag, wheel):
+    """(the uv line, the pipx line) of the README for the tag. The wheel form installs the release's wheel by URL (no
+    build, no package index; the file `agentbus update` installs); the git form builds from source."""
+    if wheel:
+        url = f"https://github.com/wickdninja/agentbus/releases/download/{tag}/agentbus-{tag[1:]}-py3-none-any.whl"
+        return f"uv tool install {url}", f"pipx install --force {url}"
+    return f"uv tool install git+https://github.com/wickdninja/agentbus@{tag}", f"pipx install --force git+https://github.com/wickdninja/agentbus@{tag}"
 
 
 def read(*parts):
@@ -38,7 +81,14 @@ def read(*parts):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--tag", help="the tag being released, for example v0.2.0 or v0.2.0rc1")
+    ap.add_argument("--lines", metavar="TAG", help="print the README install lines for TAG (wheel URL if TAG is in tests/released_wheels.txt or with --wheel)")
+    ap.add_argument("--wheel", action="store_true", help="with --lines: the wheel-URL form even before the tag is listed")
     a = ap.parse_args()
+    if a.lines:
+        if not re.fullmatch(r"v\d+\.\d+\.\d+", a.lines):
+            sys.exit(f"release_lines: {a.lines} is not a final release tag like v0.2.0")
+        print("\n".join(install_lines(a.lines, a.wheel or a.lines in wheel_tags())))
+        return
     problems = []
     src = read("bin", "agentbus")
     m = re.search(r'^__version__ = "([^"]+)"$', src, re.M)
@@ -60,6 +110,26 @@ def main():
             problems.append("origin/main is not available (git fetch origin main), so the tag cannot be checked against main")
         elif subprocess.run(["git", "-C", ROOT, "merge-base", "--is-ancestor", rev, "refs/remotes/origin/main"]).returncode != 0:
             problems.append(f"the tagged commit is not an ancestor of origin/main; releases come from main")
+
+    dist = re.search(r'^DIST_NAME = "([^"]+)"$', src, re.M)
+    try:
+        proj = re.search(r'^\[project\]\n(?:.*\n)*?name = "([^"]+)"', read("pyproject.toml"), re.M)
+    except OSError:
+        proj = None
+    if not dist:
+        problems.append("bin/agentbus has no DIST_NAME")
+    elif not proj:
+        problems.append("pyproject.toml has no [project] name")
+    elif dist.group(1) != proj.group(1):
+        problems.append(f"DIST_NAME is {dist.group(1)}, but pyproject.toml names the project {proj.group(1)}")
+
+    if a.tag and re.fullmatch(r"v\d+\.\d+\.\d+", a.tag):
+        listed = subprocess.run(["git", "-C", ROOT, "tag", "--list", "v*"], capture_output=True, text=True).stdout.split()
+        finals = [t for t in listed if re.fullmatch(r"v(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})", t) and t != a.tag]
+        key = lambda t: tuple(int(x) for x in t[1:].split("."))
+        if finals and key(a.tag) < key(max(finals, key=key)):
+            problems.append(f"the tag {a.tag} is below the highest final release tag {max(finals, key=key)}; "
+                            "GitHub's latest release must be the highest final version")
 
     pin_to = final
     if version != final or (dev and not a.tag):  # an rc or a dev build: the README keeps naming the last final release
@@ -98,8 +168,31 @@ def main():
             if pin.group(1) != f"@v{pin_to}":
                 why = "" if pin_to == final else " (the last final release; the final tag moves it)"
                 problems.append(f"{name}: the install line {pin.group(0)} must pin @v{pin_to}{why}")
+        for pin in re.finditer(WHEEL_URL, read(name)):
+            pinned += 1
+            if pin.group(1) != f"v{pin_to}" or pin.group(2) != pin_to:
+                problems.append(f"{name}: the wheel URL {pin.group(0)} must name v{pin_to} in its path and {pin_to} in its file name")
     if pinned == 0:
-        problems.append("README.md has no pinned install line (git+https://github.com/wickdninja/agentbus@v" + pin_to + ")")
+        problems.append("README.md has no pinned install line (" + install_lines("v" + pin_to, f"v{pin_to}" in wheel_tags())[0] + ")")
+    # The README's first-install lines are exactly the generated ones, in the form the pinned release supports.
+    wheel = f"v{pin_to}" in wheel_tags()
+    readme = read("README.md")
+    for line in install_lines(f"v{pin_to}", wheel):
+        if line not in readme:
+            problems.append(f"README.md must carry the install line: {line} (python3 scripts/release_check.py {'--wheel ' if wheel else ''}--lines v{pin_to})")
+    if wheel and re.search(REPO_URL, readme):
+        problems.append(f"README.md still has a git+ install line, but v{pin_to} publishes a wheel (tests/released_wheels.txt): use the wheel URL")
+
+    # Prose that names the pinned release goes stale silently: each such line must name the release the install lines pin.
+    for name, rule in (("README.md", r"Setup in this release \((v[^)\s]*)\)"), ("SECURITY.md", r"pins (v\d+\.\d+\.\d+(?:rc\d+)?) today")):
+        try:
+            text = read(name)
+        except OSError:
+            continue
+        for line in text.splitlines():
+            for named in re.findall(rule, line):
+                if named != f"v{pin_to}":
+                    problems.append(f"{name}: '{re.search(rule, line).group(0)}' names {named}, but the install lines pin v{pin_to}")
 
     plugin = os.path.join(ROOT, ".claude-plugin", "plugin.json")
     market = os.path.join(ROOT, ".claude-plugin", "marketplace.json")
@@ -112,12 +205,22 @@ def main():
         entries = [p for p in data.get("plugins", []) if p.get("name") == "agentbus"]
         if not entries:
             problems.append(".claude-plugin/marketplace.json does not name the agentbus plugin")
+        # The ref always names a published tag; only the release-prep commit moves it. A tagged or release-versioned
+        # tree names exactly its own tag. A development build (main between releases) keeps the last plugin release:
+        # plugin users installing from the default branch must not run untagged code.
+        want_ref, why = tag, ""
+        if dev and not a.tag:
+            have = plugin_release_tags()
+            if have:
+                want_ref, why = have[-1], " (the last plugin release; the release-prep commit moves it)"
+            else:
+                want_ref, why = "v" + re.sub(r"\.dev\d+$", "", version), " (no tag carries the plugin yet, so the tag being prepared)"
         for p in entries:
             s = p.get("source")
             if isinstance(s, str):
-                problems.append(f".claude-plugin/marketplace.json source '{s}' is a path; it must be a git source with ref {tag}")
-            elif not isinstance(s, dict) or s.get("ref") != tag:
-                problems.append(f".claude-plugin/marketplace.json source ref is {s.get('ref') if isinstance(s, dict) else s}, not {tag}")
+                problems.append(f".claude-plugin/marketplace.json source '{s}' is a path; it must be a git source with ref {want_ref}")
+            elif not isinstance(s, dict) or s.get("ref") != want_ref:
+                problems.append(f".claude-plugin/marketplace.json source ref is {s.get('ref') if isinstance(s, dict) else s}, not {want_ref}{why}")
 
     skill = open(os.path.join(ROOT, "skills", "agentbus", "SKILL.md"), "rb").read()
     history = re.search(r"^SKILL_SHA256_HISTORY = \((.*?)^\)", src, re.S | re.M)

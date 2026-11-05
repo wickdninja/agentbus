@@ -1,10 +1,11 @@
 """A stand-in for the `claude` and `codex` commands, so tests/test_eval_harness.sh can run scripts/agent-eval.sh
-with no agent and no tokens. It does the scenario's work for real (bus commands through .agentbus/bin/agentbus,
+with no agent and no tokens. It does the scenario's work for real (bus commands through agentbus on PATH,
 file edits in the project) and prints the event stream the real harness would: Claude Code stream-json or
 `codex exec --json` lines. EVAL_ROLE and EVAL_SCENARIO say who it plays. EVAL_STUB_MISBEHAVE changes one habit:
   edit-first   the agent edits before it reads its inbox (handoff and resume)
   no-done      the agent never posts done (handoff)
   ignore-conflict   bob edits lib/ after his claim was refused, without waiting for alice (conflict)
+  side-bus     the lead makes a second bus in the folder of worktrees and posts there (worktrees)
 """
 import json
 import os
@@ -15,7 +16,7 @@ import time
 fmt = sys.argv[1]
 role, scenario = os.environ["EVAL_ROLE"], os.environ["EVAL_SCENARIO"]
 bad = os.environ.get("EVAL_STUB_MISBEHAVE", "")
-BUS = ".agentbus/bin/agentbus"
+BUS = "agentbus"  # the tool under test, on the PATH the harness gives the agent; never the project copy
 n = [0]
 
 
@@ -23,9 +24,18 @@ def emit(obj):
     print(json.dumps(obj), flush=True)
 
 
+SIDE = [None]  # the bus database a misbehaving lead points AGENTBUS_DB at
+
+
 def bus(*args):
-    n[0] += 1
     cmd = "%s --as %s %s" % (BUS, role, " ".join(args))
+    if SIDE[0]:
+        cmd = "AGENTBUS_DB=%s %s" % (SIDE[0], cmd)
+    return run(cmd)
+
+
+def run(cmd):
+    n[0] += 1
     if fmt == "claude":
         emit({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t%d" % n[0], "name": "Bash", "input": {"command": cmd}}]}})
     else:
@@ -131,3 +141,13 @@ elif scenario == "resume":
     bus("post", "'export done'", "--kind done")
     bus("leave")
     finish("Continuing the goal to ship the invoice export: export_invoices is done and its test passes.")
+elif scenario == "worktrees":
+    wts = os.path.join(os.path.dirname(os.getcwd()), "wts")   # the lanes' folder sits beside the project
+    if bad == "side-bus":
+        run("agentbus init %s --second-bus" % wts)
+        SIDE[0] = os.path.join(wts, ".agentbus", "bus.db")
+    bus("join")
+    bus("post", "'lane-a: add src/a.py; check: python3 -c \"import src.a\"'", "--to lane-a", "--kind handoff")
+    bus("post", "'lane-b: add src/b.py; check: python3 -c \"import src.b\"'", "--to lane-b", "--kind handoff")
+    bus("leave")
+    finish("Told lane-a and lane-b their files.")

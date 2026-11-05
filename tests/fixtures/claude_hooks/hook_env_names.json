@@ -1,0 +1,138 @@
+{
+  "note": "Names only, never values. Captured on Claude Code 2.1.316 with a scratch plugin whose hook ran python3 \"${CLAUDE_PLUGIN_ROOT}/hooklog.py\" EVENT.",
+  "per_event_run_r1_plugin_dir": {
+    "SessionStart": {
+      "CLAUDE_ENV_FILE_set": true,
+      "env_names_matching_CLAUDE_AGENTBUS_HOOKTEST": [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
+        "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_ENV_FILE",
+        "CLAUDE_PID",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PROJECT_DIR"
+      ],
+      "HOOKTEST_VAR_exported_by_SessionStart_visible": false,
+      "CLAUDE_PLUGIN_ROOT_equals_script_dir": true
+    },
+    "UserPromptSubmit": {
+      "CLAUDE_ENV_FILE_set": false,
+      "env_names_matching_CLAUDE_AGENTBUS_HOOKTEST": [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
+        "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PID",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PROJECT_DIR"
+      ],
+      "HOOKTEST_VAR_exported_by_SessionStart_visible": false,
+      "CLAUDE_PLUGIN_ROOT_equals_script_dir": true
+    },
+    "PreToolUse": {
+      "CLAUDE_ENV_FILE_set": false,
+      "env_names_matching_CLAUDE_AGENTBUS_HOOKTEST": [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
+        "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PID",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PROJECT_DIR"
+      ],
+      "HOOKTEST_VAR_exported_by_SessionStart_visible": false,
+      "CLAUDE_PLUGIN_ROOT_equals_script_dir": true
+    },
+    "Stop": {
+      "CLAUDE_ENV_FILE_set": false,
+      "env_names_matching_CLAUDE_AGENTBUS_HOOKTEST": [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
+        "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PID",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PROJECT_DIR"
+      ],
+      "HOOKTEST_VAR_exported_by_SessionStart_visible": false,
+      "CLAUDE_PLUGIN_ROOT_equals_script_dir": true
+    },
+    "SessionEnd": {
+      "CLAUDE_ENV_FILE_set": false,
+      "env_names_matching_CLAUDE_AGENTBUS_HOOKTEST": [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
+        "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_PID",
+        "CLAUDE_PLUGIN_DATA",
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_PROJECT_DIR"
+      ],
+      "HOOKTEST_VAR_exported_by_SessionStart_visible": false,
+      "CLAUDE_PLUGIN_ROOT_equals_script_dir": true
+    }
+  },
+  "installed_from_marketplace_cache_SessionStart": {
+    "CLAUDE_PLUGIN_ROOT_equals_script_dir": true,
+    "CLAUDE_CODE_SESSION_ID_equals_payload_session_id": true
+  },
+  "resume_run_r2_SessionStart": {
+    "CLAUDE_ENV_FILE_exists_before_hook_writes": true,
+    "line_count_before_hook_writes": 1,
+    "HOOKTEST_VAR_visible_to_hook": false
+  },
+  "AGENTBUS_AGENT_set_in_parent_env_run_r10": {
+    "visible_in_hook_env": true
+  },
+  "model_bash_tool_env_names_matching_probe_run_r3": [
+    "CLAUDE_CODE_SESSION_ID"
+  ],
+  "model_bash_tool_probe_list": [
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_ENV_FILE",
+    "CLAUDE_PLUGIN_ROOT",
+    "CLAUDE_PROJECT_DIR",
+    "AGENTBUS_AGENT"
+  ],
+  "CLAUDE_ENV_FILE_path_shape": "~/.claude/session-env/<session_id>/sessionstart-hook-<N>.sh (file persists across resume of the same session id; SessionStart hook creates it, append with >>)",
+  "r1_first_run_line_count_before_hook_writes": null
+}

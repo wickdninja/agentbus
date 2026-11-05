@@ -1,3 +1,4 @@
 # Commands of each released tag, for tests/test_docs.sh: the README may only name these for the tag it pins.
 # The release-prep commit adds the new tag's line. Keep one line per tag.
 v0.1.0: join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade
+v0.2.0: join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hook hooks doctor brief demo

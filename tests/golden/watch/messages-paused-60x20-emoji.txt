@@ -1,0 +1,20 @@
+ 🚌 agentbus  ~/src/acme-api                1 ALRT · 1 ask
+  🎯 auth on the new token API                    nate · 2h
+👥 Agents  3
+  ● 🧠 claude       planner     1 unread                now
+  ○ ✋ codex        implementer 2 unread · holds src/…   6m
+  ● 🧪 tests        tester      holds docs/api.md       now
+🔒 Claims  2
+  docs/api.md         tests      42m left
+  src/auth/           codex      1h 59m left
+📌 Facts  2
+  baseline_sha   abc123                                  7m
+  runtime        python 3.9+                            14m
+💬 Messages  9           paused at 16:44 · p or G to follow
+  … 4 earlier
+  #5  codex→claude  ✅ done Refresh path done, te… ↵+1  11m
+  #6  tests→codex   ❓ ask  Is the 401 body part of t…   9m
+  #7  codex→tests   💬 ans  ↳#6 Plain text for now. A…   7m
+> #8  claude→codex  🤝 hand Next: the token endpoint …   1m
+  #9  tests→claude  ❓ ask  ↳#7 Which signing algorit…  now
+  j/k move · Enter open · p follow · ? help · q quit

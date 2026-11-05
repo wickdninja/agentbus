@@ -22,11 +22,10 @@ start=$(date +%s)
 "${INSTALL[@]}" >"$T/install.out" 2>&1 || { tail -n 5 "$T/install.out" >&2; die "${INSTALL[*]}"; }
 agentbus init . >"$T/init.out" 2>&1 || { cat "$T/init.out" >&2; die "agentbus init ."; }
 agentbus setup claude >"$T/setup.out" 2>&1 || { cat "$T/setup.out" >&2; die "agentbus setup claude"; }
-BUS=.agentbus/bin/agentbus
-$BUS --as A join >/dev/null 2>&1 || die "A join"
-$BUS --as B join >/dev/null 2>&1 || die "B join"
-$BUS --as A post "ttfh handoff: parser done, tests next" --to B --kind handoff >/dev/null 2>&1 || die "A post"
-$BUS --as B inbox >"$T/inbox.out" 2>&1 || die "B inbox"
+agentbus --as A join >/dev/null 2>&1 || die "A join"
+agentbus --as B join >/dev/null 2>&1 || die "B join"
+agentbus --as A post "ttfh handoff: parser done, tests next" --to B --kind handoff >/dev/null 2>&1 || die "A post"
+agentbus --as B inbox >"$T/inbox.out" 2>&1 || die "B inbox"
 grep -qF "ttfh handoff: parser done, tests next" "$T/inbox.out" || { cat "$T/inbox.out" >&2; die "B's inbox did not show A's handoff"; }
 end=$(date +%s)
 echo "ttfh: $((end - start))s, 3 human commands"

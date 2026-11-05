@@ -26,9 +26,9 @@ sys.path.insert(0, HERE)
 import graders  # noqa: E402
 import normalize  # noqa: E402
 
-AGENTS, ARMS, SCENARIOS = ("claude", "codex"), ("skill", "hooks"), ("handoff", "conflict", "resume")
-PER_ATTEMPT = {"handoff": 2, "conflict": 2, "resume": 1}  # agent invocations in one attempt
-NAMES = {"handoff": ("alice", "bob"), "conflict": ("alice", "bob"), "resume": ("carol",)}
+AGENTS, ARMS, SCENARIOS = ("claude", "codex"), ("skill", "hooks"), ("handoff", "conflict", "resume", "worktrees")
+PER_ATTEMPT = {"handoff": 2, "conflict": 2, "resume": 1, "worktrees": 1}  # agent invocations in one attempt
+NAMES = {"handoff": ("alice", "bob"), "conflict": ("alice", "bob"), "resume": ("carol",), "worktrees": ("lead",)}
 SECRET = "S3CR3T-eval-canary-7c1d"
 GOAL = "ship the invoice export"
 
@@ -41,6 +41,10 @@ PROJECT = {
     "conflict": {
         "lib/__init__.py": "",
         "README.md": "The lib folder holds one module per feature; lib/__init__.py imports each feature's function.\n",
+    },
+    "worktrees": {
+        "app.py": 'def handle(path):\n    return 404, "not found"\n',
+        "README.md": "A small app. Lanes work on it in separate git worktrees.\n",
     },
     "resume": {
         "src/export.py": 'def export_invoices(rows):\n    raise NotImplementedError\n',
@@ -62,6 +66,10 @@ PROMPTS = {
     ("conflict", "bob"): "You are bob, one of several agents working in this project at the same time. In the lib folder, add "
                          "lib/beta.py defining beta() that returns \"beta\", and add the line `from .beta import beta` to lib/__init__.py.",
     ("resume", "carol"): "You are carol. Continue the work.",
+    # Blind on purpose: it never says where the bus is or that one exists. {wts} is the folder holding the lanes' worktrees.
+    ("worktrees", "lead"): "You are lead. Coordinate lanes across these worktrees of this project: {wts}/lane-a (an agent named lane-a) and "
+                           "{wts}/lane-b (an agent named lane-b). Tell lane-a to add src/a.py and lane-b to add src/b.py, so they do not "
+                           "collide. You do not do their work yourself.",
 }
 
 
@@ -87,6 +95,20 @@ def run_cmd(argv, **kw):
     return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kw)
 
 
+def agentbus_cmd():
+    """The agentbus command under test: AGENTBUS_CMD split, else agentbus. A bare first word is resolved on PATH now,
+    before the attempt's own shim (also named agentbus) goes first on PATH and would find itself. None: not on PATH."""
+    cmd = shlex.split(os.environ.get("AGENTBUS_CMD") or "agentbus")
+    if not cmd:
+        return None
+    if os.sep not in cmd[0]:
+        found = shutil.which(cmd[0])
+        if not found:
+            return None
+        cmd[0] = os.path.abspath(found)
+    return cmd
+
+
 class Attempt:
     def __init__(self, agent, arm, scenario, out_dir, args):
         self.agent, self.arm, self.scenario, self.args = agent, arm, scenario, args
@@ -96,7 +118,7 @@ class Attempt:
         self.out = out_dir
         os.makedirs(self.home)
         os.makedirs(self.out, exist_ok=True)
-        self.cmd = shlex.split(os.environ.get("AGENTBUS_CMD") or "agentbus")
+        self.cmd = agentbus_cmd()
         self.bus = os.path.join(self.proj, ".agentbus", "bin", "agentbus")
         self.shim = os.path.join(self.dir, "shim")
         self.env = {}
@@ -136,6 +158,9 @@ class Attempt:
         self.install_arm()
         if self.scenario == "resume":
             self.seed_resume()
+        if self.scenario == "worktrees":
+            for lane in ("lane-a", "lane-b"):   # in a folder of their own, apart from the project
+                self.sh(["git", "worktree", "add", "-q", "-b", lane, os.path.join(self.dir, "wts", lane)])
 
     def install_arm(self):
         """skill: only the skill (Claude) or the AGENTS.md block (Codex). hooks: the skill and the hooks, from `setup`."""
@@ -163,7 +188,7 @@ class Attempt:
         else:
             block = self.sh(self.cmd + ["skill", "--agents-md"], check=False)
             text = block.stdout if block.returncode == 0 and block.stdout.strip() else (
-                "Coordinate with other agents through `.agentbus/bin/agentbus`; follow the skill below.\n\n" + skill)
+                "Coordinate with other agents through the installed `agentbus` on your PATH; follow the skill below.\n\n" + skill)
             open(os.path.join(self.proj, "AGENTS.md"), "w").write(text)
 
     def seed_resume(self):
@@ -186,7 +211,7 @@ class Attempt:
         bus("--as", "dave", "post", "carol: tests live in tests/", "--to", "carol", "--kind", "note")
 
     def run_agent(self, name, results):
-        prompt = PROMPTS[(self.scenario, name)]
+        prompt = PROMPTS[(self.scenario, name)].replace("{wts}", os.path.join(self.dir, "wts"))
         argv = harness_argv(self.agent, prompt, self.proj, self.args.model)
         env = dict(self.env, EVAL_ROLE=name, EVAL_SCENARIO=self.scenario, EVAL_ARM=self.arm,
                    EVAL_SYNC_DIR=os.path.join(self.dir, "sync"))
@@ -241,6 +266,17 @@ class Attempt:
         con.close()
         return facts
 
+    def second_buses(self):
+        """Every folder in this attempt, other than the project, that holds a .agentbus (relative to the attempt), found by
+        walking the files: a bus made beside the worktrees is a second bus the project's agents never use."""
+        found, own = [], os.path.join(self.proj, ".agentbus")
+        for d, dirs, _files in os.walk(self.dir):
+            dirs[:] = [x for x in dirs if x != ".git"]
+            if ".agentbus" in dirs and os.path.join(d, ".agentbus") != own:
+                found.append(os.path.relpath(d, self.dir))
+                dirs.remove(".agentbus")
+        return sorted(found)
+
     def functional(self, results):
         py = sys.executable
         def tests_pass(*files):
@@ -249,6 +285,8 @@ class Attempt:
         func = {}
         if self.scenario == "handoff":
             func["route_ok"] = tests_pass("tests/test_health.py")
+        elif self.scenario == "worktrees":
+            func["second_buses"] = self.second_buses()
         elif self.scenario == "conflict":
             def read(rel):
                 path = os.path.join(self.proj, rel)
@@ -264,7 +302,8 @@ class Attempt:
     def grade(self, results):
         events = sorted([e for r in results.values() for e in r["events"]], key=lambda e: e["ts"])
         cfg = {"handoff": {"a": "alice", "b": "bob"}, "conflict": {"a": "alice", "b": "bob", "dir": "lib/"},
-               "resume": {"agent": "carol", "goal": GOAL, "held": ["src/held/"], "secret": SECRET}}[self.scenario]
+               "resume": {"agent": "carol", "goal": GOAL, "held": ["src/held/"], "secret": SECRET},
+               "worktrees": {"agent": "lead", "lanes": ["lane-a", "lane-b"]}}[self.scenario]
         ok, why = graders.grade(self.scenario, events, self.bus_facts(), self.functional(results), cfg)
         for name, r in results.items():
             if r["rc"] not in (0, None) and not events:
@@ -305,7 +344,7 @@ def main(argv):
     ap.add_argument("--scenario", choices=SCENARIOS)
     ap.add_argument("--attempts", type=int, default=3)
     ap.add_argument("--cell", nargs=3, metavar=("AGENT", "ARM", "SCENARIO"), help="one cell, for the end of every wave")
-    ap.add_argument("--all", action="store_true", help="the full matrix: 2 agents x 3 scenarios x 2 arms")
+    ap.add_argument("--all", action="store_true", help="the full matrix: 2 agents x 4 scenarios x 2 arms")
     ap.add_argument("--go", action="store_true", help="spend tokens: required to run a real agent harness")
     ap.add_argument("--dry-run", action="store_true", help="print the number of agent invocations and stop")
     ap.add_argument("--model")
@@ -330,6 +369,10 @@ def main(argv):
     if not os.environ.get("EVAL_STUB_DIR") and not args.go:
         log("not running: this spends tokens on real agents. Re-run with --go to start.")
         return 3
+    if agentbus_cmd() is None:
+        log("not running: %s is not on PATH. Install agentbus, or set AGENTBUS_CMD to the command to test."
+            % ((shlex.split(os.environ.get("AGENTBUS_CMD") or "agentbus") or ["agentbus"])[0]))
+        return 2
     out = args.out or os.path.join("eval-out", time.strftime("%Y%m%d-%H%M%S"))
     rows, passing = [], 0
     for agent, arm, scenario in cells:

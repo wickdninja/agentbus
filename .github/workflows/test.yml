@@ -34,6 +34,26 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Pick Python
         run: echo "PYTHON=${{ steps.py.outputs.python-path || '/usr/bin/python3' }}" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Claude Code CLI (tests/test_plugin_manifest.sh runs `claude plugin validate .`, which needs no login)
+        run: |
+          # Exact version. No install scripts run: the package's own install.cjs is run by hand, after the registry's
+          # integrity hash of the wrapper and of the platform build were checked against the values pinned here.
+          set -e
+          pin() { test "$(npm view "$1@2.1.316" dist.integrity)" = "$2"; }
+          pin @anthropic-ai/claude-code sha512-i3BpzyDkcCPnsa0CSkWgxGPs7WMsyqDkxkqT0SDxyEC5XMIxEmcUmluWRHG9VSeBY8Vyv+l9X34JvJ/Bj54nBQ==
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) plat=linux-x64; sum=sha512-RQDM6N285IjNKcmlPRriayNzpTkEJreAw5/vBU+V0R3qljkQ5z6/pSbzcVUAXvasoOlvub0RIma3NWvSuZA8Cg== ;;
+            Linux-aarch64) plat=linux-arm64; sum=sha512-xqlAkhgSLCMdcaepQNIs1+ym5X9++apiEeOc0LHRVOHpfLlpYKAaAXBRccM6QVITN0T9sXLCIby7CO1Lczusgw== ;;
+            Darwin-arm64) plat=darwin-arm64; sum=sha512-wJiLVMzg2atF7C/a+0wt+yQShWIePsMNL86gIoIJanURY2fxrwHIxrYuxoTW8sWqfj7ai+otV/ik2r7m5aPy1g== ;;
+            *) echo "no pinned Claude Code build for $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          pin "@anthropic-ai/claude-code-$plat" "$sum"
+          npm install --global --ignore-scripts "@anthropic-ai/claude-code@2.1.316" "@anthropic-ai/claude-code-$plat@2.1.316"
+          node "$(npm root --global)/@anthropic-ai/claude-code/install.cjs"
+          claude --version
       - name: Compile
         run: |
           "$PYTHON" -V
@@ -43,14 +63,41 @@ jobs:
           AGENTBUS_EMBED_CHECK=1 "$PYTHON" scripts/embed_skill.py --check
       - name: Tests
         # A skipped test file is a failure here (a skip means a change is missing); run_all writes the per-file times
-        # to the step summary. The two files that run other tests again run once, in the heavy job.
+        # to the step summary. The two files that run other tests again run once, in the mutations and eval-harness jobs.
         env:
           AGENTBUS_NO_SKIP: "1"
           AGENTBUS_EMBED_CHECK: "1"
         run: bash tests/run_all.sh --keep-going --skip-heavy
 
-  heavy:
-    # test_mutations.sh and test_eval_harness.sh run other tests again: once, on the oldest supported Python.
+  # tests/test_mutations.sh breaks bin/agentbus on purpose, one entry of tests/mutations.json at a time, and needs a test
+  # to notice: far too many runs for one job, so the entries are dealt to shards (scripts/mutate.py --shard I/N, whole
+  # test files per shard) and each shard is one matrix job, on the oldest supported Python. The harness self-tests run
+  # in every shard; a local run of the file without AGENTBUS_MUTATION_SHARD runs every entry.
+  mutations:
+    name: mutations (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        id: py
+        with:
+          python-version: "3.9"
+      - name: Pick Python
+        run: echo "PYTHON=${{ steps.py.outputs.python-path }}" >> "$GITHUB_ENV"
+      - name: Mutation checks, one shard
+        env:
+          AGENTBUS_NO_SKIP: "1"
+          AGENTBUS_EMBED_CHECK: "1"
+          AGENTBUS_MUTATION_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          RUN_ALL_TIMEOUT: "1200"  # three times this for a heavy file: the shard holding test_hooks_claude.sh needs more than 30 minutes
+        run: bash tests/run_all.sh --keep-going tests/test_mutations.sh
+
+  # test_eval_harness.sh runs the agent-eval graders end to end; it has its own job so run_all's per-file cap is its own.
+  eval-harness:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -60,11 +107,11 @@ jobs:
           python-version: "3.9"
       - name: Pick Python
         run: echo "PYTHON=${{ steps.py.outputs.python-path }}" >> "$GITHUB_ENV"
-      - name: Mutation checks and the agent-eval harness
+      - name: The agent-eval harness
         env:
           AGENTBUS_NO_SKIP: "1"
           AGENTBUS_EMBED_CHECK: "1"
-        run: bash tests/run_all.sh --keep-going --only-heavy
+        run: bash tests/run_all.sh --keep-going tests/test_eval_harness.sh
 
   # Every install path in the docs, built and run from the real artifacts, through the installed
   # executable only (scripts/verify_installed.sh), then once more with the installed file broken.
@@ -114,10 +161,14 @@ jobs:
       - name: Install (pipx)
         if: startsWith(matrix.installer, 'pipx')
         run: |
-          python3 -m pip install --user pipx
+          # One explicit interpreter for every pipx call in this job: the setup-python one, pipx installed into ITS site-packages
+          # (not --user: a later step that changes HOME, as scripts/verify_update_layout.sh does, cannot see a user site).
+          PIPX_PYTHON=$(python3 -c 'import sys; print(sys.executable)')
+          "$PIPX_PYTHON" -m pip install pipx
+          echo "PIPX_PYTHON=$PIPX_PYTHON" >> "$GITHUB_ENV"
           artifact=$(ls dist/*.${{ endsWith(matrix.installer, 'wheel') && 'whl' || 'tar.gz' }})
           export PIPX_HOME="$RUNNER_TEMP/pipx" PIPX_BIN_DIR="$RUNNER_TEMP/pipx-bin"
-          python3 -m pipx install "$artifact"
+          "$PIPX_PYTHON" -m pipx install "$artifact"
           echo "INSTALLED=$PIPX_BIN_DIR/agentbus" >> "$GITHUB_ENV"
           echo "INSTALLED_PY=$PIPX_HOME/venvs/agentbus/bin/python" >> "$GITHUB_ENV"
       - name: uvx runs the wheel
@@ -126,6 +177,9 @@ jobs:
       - name: Verify the installed command
         # Every step runs: a skipped step fails the job, here as in release.yml.
         run: bash scripts/verify_installed.sh "$INSTALLED" "${{ matrix.installer }}"
+      - name: update recognises this installer's real layout (a local tag pin, the release fixture)
+        if: endsWith(matrix.installer, '-wheel')
+        run: bash scripts/verify_update_layout.sh "${{ startsWith(matrix.installer, 'uv') && 'uv' || 'pipx' }}"
       - name: Negative control (a broken installed file must fail the verify)
         run: |
           file=$("$INSTALLED_PY" -c 'import agentbus; print(agentbus.__file__)')

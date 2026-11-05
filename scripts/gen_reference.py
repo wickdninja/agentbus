@@ -90,6 +90,12 @@ def block_errors(doc):
     return table(["Code", "Exit", "Retryable", "Extra fields", "Meaning and what to do"], rows)
 
 
+def block_warnings(doc):
+    rows = [["`%s`" % code, ", ".join("`%s`" % f for f in w["fields"]), ", ".join("`%s`" % c for c in w["commands"]),
+             w["meaning"] + " " + w["action"]] for code, w in doc["warnings"].items()]
+    return table(["Code", "Extra fields", "Commands", "Meaning and what to do"], rows)
+
+
 def block_exit_codes(doc):
     return table(["Exit", "Meaning"], [["`%s`" % k, v] for k, v in doc["exit_codes"].items()])
 
@@ -110,11 +116,12 @@ def block_env(doc):
 
 
 def block_error_fields(doc):
-    return table(["Field", "Type", "Meaning"], [["`%s`" % k, v["type"], v["meaning"]] for k, v in doc["error_fields"].items()])
+    return table(["Field", "Type", "Meaning"], [["`%s`" % k, v["type"] if isinstance(v["type"], str) else " or ".join(v["type"]), v["meaning"]]
+                                          for k, v in doc["error_fields"].items()])
 
 
 BLOCKS = {"error-fields": block_error_fields, "results": block_results, "objects": block_objects, "errors": block_errors,
-          "exit-codes": block_exit_codes, "retry": block_retry, "env": block_env}
+          "warnings": block_warnings, "exit-codes": block_exit_codes, "retry": block_retry, "env": block_env}
 
 
 def render(text, doc):

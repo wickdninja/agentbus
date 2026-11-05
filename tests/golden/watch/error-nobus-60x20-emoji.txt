@@ -1,0 +1,20 @@
+ 🚌 agentbus  ~/src/acme-api                        no bus
+
+  There is no bus here any more, so the sections are not
+  drawn.
+  no bus here or in any parent folder
+  Run: agentbus init ~/src/acme-api
+
+  Retrying every 1s. Last good frame: 40s ago. Your place
+  (filter, selection, pause, open detail) comes back with
+  the bus.
+
+
+
+
+
+
+
+
+
+  r retry now · ? help · q quit

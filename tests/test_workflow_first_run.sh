@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 # Workflow: a new user with an empty HOME. Checks the command answers --version, `init` installs a
-# bus copy, the README's hand-off block runs unchanged against that copy and its printed result is
+# bus copy, the README's hand-off block runs unchanged (as the `agentbus` on PATH) and its printed result is
 # the README's printed result, the stored rows tell the same story, and `watch --once` shows it.
 # `setup claude` runs too once the command exists. Runs on the source script, a mutation copy
 # (AGENTBUS_BIN) and an installed command (AGENTBUS_CMD); the bus copy runs under $PYTHON.
@@ -10,6 +10,8 @@ set -euo pipefail
 wf_setup
 # The bus copy starts with `#!/usr/bin/env python3`: put the interpreter under test first on PATH.
 mkdir "$T/shim"; ln -s "$(command -v "$PY")" "$T/shim/python3"
+# The README block runs the installed `agentbus` from PATH (step 1 of the quick start installs it): the shim is the command under test.
+{ printf '#!/bin/sh\nexec'; printf ' %q' "${AB[@]}"; printf ' "$@"\n'; } >"$T/shim/agentbus"; chmod +x "$T/shim/agentbus"
 
 echo "STEP 1: the command reports its version"
 got=$(agentbus --version)
@@ -46,7 +48,7 @@ goal: auth on the new token API
 posted #1 to codex [handoff]
 #1 claude -> codex [handoff] · <time>
   auth refactor is yours
-claimed src/auth/ until <TS>
+claimed src/auth/ <left>
 released src/auth/
 posted #2 to claude [done]
 #2 codex -> claude [done] re #1 · <time>
@@ -66,7 +68,8 @@ ok "bus state"
 
 echo "STEP 5: a person can watch it"
 w=$(COLUMNS=100 agentbus watch --once)
-grep -q '^ agentbus .* 2 agents · 0 claims · 2 messages$' <<<"$w" || fail "watch header: $(sed -n 1p <<<"$w")"
+# The header counts what needs a person (watch v2): a handoff and its done, no alert, no open question.
+grep -q '^ agentbus .* 0 alerts · 0 open questions$' <<<"$w" || fail "watch header: $(sed -n 1p <<<"$w")"
 grep -q '^Agents  2$' <<<"$w" && grep -q '^Messages  2$' <<<"$w" || fail "watch counts: $w"
 grep -q 'handoff.*auth refactor is yours' <<<"$w" || fail "watch lacks the handoff: $w"
 ok "watch --once shows two agents and two messages"
@@ -75,12 +78,13 @@ echo "STEP 6: setup claude puts the skill in HOME (runs once the command exists)
 if agentbus setup --help >/dev/null 2>&1; then
   say "agentbus setup claude (user)
   + ~/.claude/skills/agentbus/SKILL.md   installed, $(agentbus skill | wc -c | sed 's/^ *//' | python3 -c 'import sys; print(format(int(sys.stdin.read()), ","))') bytes
-done. Start a new Claude Code session to load it.
+  + ~/.claude/settings.json   added 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd)
+done. Start a new Claude Code session to load them.
 next: cd your-repo && agentbus init ." agentbus setup claude
   [ -f "$HOME/.claude/skills/agentbus/SKILL.md" ] || fail "setup claude wrote no skill into HOME"
   second=$(agentbus setup claude)
-  grep -qxF "  = ~/.claude/skills/agentbus/SKILL.md   unchanged" <<<"$second" && ! grep -q 'installed' <<<"$second" || fail "a second setup run was not a no-op: $second"
-  ok "setup claude installed the skill and a second run changed nothing"
+  grep -qxF "  = ~/.claude/skills/agentbus/SKILL.md   unchanged" <<<"$second" && grep -qxF "  = ~/.claude/settings.json   unchanged" <<<"$second" && ! grep -q 'installed' <<<"$second" || fail "a second setup run was not a no-op: $second"
+  ok "setup claude installed the skill and the hooks and a second run changed nothing"
 else
   skip_part "agentbus setup does not exist in this build"
 fi

@@ -5,23 +5,26 @@ set -euo pipefail
 # and stdout written with the lock held, so one slow pipe made every other agent fail "busy".
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); export HOME="$T/home"; mkdir -p "$HOME"
-trap 'exec 3>&- 4<&- 2>/dev/null || true; touch "$T/release" 2>/dev/null || true; rm -rf "$T"' EXIT
+trap 'exec 3>&- 2>/dev/null || true; [ -z "${CONS:-}" ] || kill_tree "$CONS"; touch "$T/release" 2>/dev/null || true; rm -rf "$T"' EXIT
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as a join --tool t >/dev/null
 agentbus --as b join --tool t >/dev/null
 
-# other_post_while ALIVE_PID: a second agent's post must land while ALIVE_PID is still blocked.
+# Every wait below ends at a deadline (HOLD_TEST_WAIT_S, default 120 s, well past the bus's own 15 s busy limit and its
+# 8 s hold limit) and a failure names the step, so a stall fails in seconds rather than at run_all's 600 s cap (issue #17).
+W=${HOLD_TEST_WAIT_S:-120}
+# HOLD_TEST_END_S: the same for a command that must finish once it is released (default W). tests/test_lock_hold_stall.sh
+# shortens it to prove a command that never finishes fails here in seconds.
+E=${HOLD_TEST_END_S:-$W}
+CONS=""   # the pid of TEST 2's output consumer, so the exit trap can end it
+# other_post_while ALIVE_PID WHAT: a second agent's post must land while ALIVE_PID is still blocked. If the blocked
+# command held the bus the post would fail busy after 15 s, which is the failure this reports.
 other_post_while() {
   local blocked=$1 what=$2
   agentbus --as b post "other agent during $what" >"$T/o2" 2>"$T/e2" & local p2=$!
-  local w=0
-  while kill -0 "$p2" 2>/dev/null; do
-    sleep 0.05; w=$((w+1)); [ $w -lt 200 ] || break   # 10 s, well inside the 15 s busy limit
-  done
+  wait_exit "$p2" "$W" "$what: another agent's post"
   kill -0 "$blocked" 2>/dev/null || fail "$what: the blocked command finished early; the test proved nothing"
-  local rc=0; kill -0 "$p2" 2>/dev/null && { kill "$p2"; rc=124; }
-  wait "$p2" || rc=$?
-  [ "$rc" = 0 ] || fail "$what: another agent's post failed while it was blocked (rc $rc): $(cat "$T/e2")"
+  [ "$WAIT_RC" = 0 ] || fail "$what: another agent's post failed while it was blocked (rc $WAIT_RC): $(cat "$T/e2")"
 }
 
 echo "TEST 1: post - reading a stalled FIFO does not hold the bus"
@@ -30,29 +33,39 @@ for cmd in "post -" "ctx set k -" "log add note -"; do
   rm -f "$T/in"; mkfifo "$T/in"
   n=$((n+1)); P="$T/pause1-$n"; mkdir -p "$P"; touch "$P/before-stdin-read.go"   # mark, never stop
   AGENTBUS_TEST_PAUSE="before-stdin-read=$P" agentbus --as a $cmd <"$T/in" >"$T/o1" 2>"$T/e1" & P1=$!
-  exec 3>"$T/in"          # a writer that has sent nothing yet
+  # A writer that has sent nothing yet. Read-write, so the open never waits for a reader: a command that died
+  # before opening its stdin can no longer leave this open blocked forever (wait_marker below reports it).
+  exec 3<>"$T/in"
   # Proof the command is at its stdin read: anything it opened before reading is open now.
-  wait_for "$P/before-stdin-read.reached"
+  wait_marker "$P/before-stdin-read.reached" "$P1" "$W" "$cmd reaching its stdin read" "$T/e1"
   other_post_while $P1 "$cmd from a stalled stdin"
   printf 'late input for %s\n' "$cmd" >&3; exec 3>&-
-  wait $P1 || fail "$cmd failed after its input arrived: $(cat "$T/e1")"
+  wait_exit "$P1" "$E" "$cmd after its input arrived"
+  [ "$WAIT_RC" = 0 ] || fail "$cmd failed after its input arrived: $(cat "$T/e1")"
 done
 [ "$(outof agentbus --json read | python3 -c 'import json,sys; print(sum(r["body"]=="late input for post -" for r in json.load(sys.stdin)["items"]))')" = 1 ] || fail "stdin body not posted"
 [ "$(outof agentbus --json ctx get k | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')" = "late input for ctx set k -" ] || fail "stdin ctx value not set"
 ok "stdin is read before the bus is opened"
 
 echo "TEST 2: a reader whose stdout is not being drained does not hold the bus"
-python3 -c 'print("x" * 300000)' | agentbus --as a post - >/dev/null   # more than a pipe buffer
-for cmd in read "--json read" status; do
+# 600 bodies of 3 KB, planted: a listing cuts each at 2 KB, so read (50 rows) is more than a pipe buffer, and status
+# --limit -1 (every message) is about 1.2 MB. The command must still be blocked on the full pipe when the other agent
+# posts ("finished early" means the output fitted the pipe and the test proved nothing); status's default is small.
+plant_big_messages "$AGENTBUS_DB" "*" 600
+for cmd in read "--json read" "status --limit -1"; do
   rm -f "$T/outp"; mkfifo "$T/outp"
   n=$((n+1)); P="$T/pause2-$n"; mkdir -p "$P"; touch "$P/before-stdout-write.go"
   AGENTBUS_TEST_PAUSE="before-stdout-write=$P" agentbus $cmd >"$T/outp" 2>"$T/e1" & P1=$!
-  exec 4<"$T/outp"        # a consumer that is not reading yet
+  # A consumer that holds the pipe open and is not reading yet. It is a background job so that neither side's blocking
+  # open can hang this script: it reads only once $T/drain-$n exists, and gives up after W seconds.
+  ( exec 4<"$T/outp"; w=0; while [ ! -e "$T/drain-$n" ] && [ $w -lt $((W * 20)) ]; do sleep 0.05; w=$((w+1)); done; cat <&4 >/dev/null ) & CONS=$!
   # Proof the command is at its stdout write (which blocks: the output exceeds a pipe buffer).
-  wait_for "$P/before-stdout-write.reached"
+  wait_marker "$P/before-stdout-write.reached" "$P1" "$W" "$cmd reaching its stdout write" "$T/e1"
   other_post_while $P1 "$cmd into a full pipe"
-  cat <&4 >/dev/null; exec 4<&-
-  wait $P1 || fail "$cmd failed: $(cat "$T/e1")"
+  : > "$T/drain-$n"
+  wait_exit "$P1" "$E" "$cmd after its output was read"
+  [ "$WAIT_RC" = 0 ] || fail "$cmd failed: $(cat "$T/e1")"
+  wait_exit "$CONS" "$E" "the reader of $cmd's output"; CONS=""
 done
 ok "output is printed after the bus is closed"
 
@@ -98,21 +111,22 @@ took=$(python3 -c 'import sys,time; print("%.1f" % (time.time() - float(sys.argv
 # time bound is only a backstop, with ample headroom for a loaded machine: capped, status takes
 # well under 1 s here; the old code took 5 s and more (20 s and more with longer rows).
 python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 15 else 1)' "$took" || fail "status with 200k agents took ${took}s"
-grep -qx "  ... $((total - 500)) more (use --limit)" "$T/o4" || fail "status did not cap the agents at 500: $(grep -c '' "$T/o4") lines"
-[ "$(sed -n '/^== agents$/,/^$/p' "$T/o4" | grep -c '^  ')" = 501 ] || fail "status did not show 500 agents and the more row"
-grep -q '^== last 10 messages$' "$T/o4" || fail "status lost its later sections"
+grep -qx "  ... $((total - 20)) more" "$T/o4" || fail "status did not cap the agents at 20: $(grep -c '' "$T/o4") lines"
+grep -qx "  next: agentbus who --limit $total" "$T/o4" || fail "status did not name the command that lists every agent"
+[ "$(sed -n '/^== agents$/,/^$/p' "$T/o4" | grep -c '^  ')" = 22 ] || fail "status did not show 20 agents, the more row and the next row"
+grep -q '^== recent messages$' "$T/o4" || fail "status lost its later sections"
 o=$(outof agentbus who --limit 3)
-[ "$(grep -c '^  ' <<<"$o")" = 4 ] && grep -qx "  ... $((total - 3)) more (use --limit)" <<<"$o" || fail "who --limit 3: $o"
-[ "$(njson env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who 2>"$T/e4")" = 500 ] || fail "--json who not capped at 500"
+[ "$(grep -c '^  ' <<<"$o")" = 5 ] && grep -qx "  ... $((total - 3)) more" <<<"$o" || fail "who --limit 3: $o"
+[ "$(njson env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who 2>"$T/e4")" = 50 ] || fail "--json who not capped at 50"
 [ "$(env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["has_more"])')" = True ] || fail "--json who did not say rows were left out"
 [ "$(njson env AGENTBUS_DB="$AGENTBUS_DB" "${AB[@]}" --json who --limit -1 2>/dev/null)" = "$total" ] || fail "--limit -1 is not every row"
-ok "status with $total agents took ${took}s, capped at 500 rows, while another agent posted"
+ok "status with $total agents took ${took}s, capped at 20 rows, while another agent posted"
 
 echo "TEST 5: a --json notice into a stderr nobody drains does not hold the bus"
 # Bug it catches: under --json, who and status wrote "N more not shown" to stderr while the bus was
 # still open, so a full stderr pipe held the exclusive lock indefinitely and every other agent
 # failed busy.
-D5="$T/b5"; mkdir -p "$D5"; AGENTBUS_DB="$D5/bus.db" agentbus --as b join --tool t >/dev/null
+D5="$T/b5"; mkdir -p "$D5"; AGENTBUS_DB="$D5/bus.db" agentbus --as b join --tool t >/dev/null; AGENTBUS_DB="$D5/bus.db" agentbus --as a join >/dev/null
 python3 - "$D5/bus.db" <<'PY'
 import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
@@ -270,7 +284,7 @@ for args in (["--json", "who"], ["who"], ["--json", "status"], ["status"], ["--a
         bad.append((args, e[-300:]))
 # The post notice must use the same deferred stderr path as listing notices.
 o, e = run("--as", "a", "post", "queued handoff", "--to", "absent", "--kind", "handoff")
-if "to absent [handoff]" not in o or e != "agentbus: absent is not on the roster; the message waits for that name.\n":
+if "to absent [handoff]" not in o or not e.startswith("agentbus: absent is not on the roster; the message waits for that name. On the roster: ") or not e.endswith(" more: agentbus who).\n"):
     bad.append(("off-roster post output", o, e))
 for b in bad[:10]:
     print(b)
@@ -318,16 +332,16 @@ c.executemany("INSERT INTO messages(ts,sender,recipient,kind,body) VALUES(?,?,?,
 c.commit()
 PY
 o=$(outof agentbus --as e inbox)
-[ "$(grep -c '^  to e ' <<<"$o")" = 500 ] && grep -qx '  ... 100 more unread; run inbox again' <<<"$o" || fail "inbox not capped at 500: $(grep -c '^  to e ' <<<"$o") shown"
-grep -q '^  to e 499$' <<<"$o" && ! grep -q '^  to e 500$' <<<"$o" || fail "inbox did not show the oldest 500"
+[ "$(grep -c '^  to e ' <<<"$o")" = 20 ] && grep -qx '  ... 580 more unread' <<<"$o" || fail "inbox not capped at 20: $(grep -c '^  to e ' <<<"$o") shown"
+grep -q '^  to e 019$' <<<"$o" && ! grep -q '^  to e 020$' <<<"$o" || fail "inbox did not show the oldest 20"
 o=$(outof agentbus --as e inbox --limit 30)
-[ "$(grep -c '^  to e ' <<<"$o")" = 30 ] && grep -q '^  to e 500$' <<<"$o" && grep -q '^  to e 529$' <<<"$o" || fail "second inbox did not start at the first unshown message"
-o=$(json_ok agentbus --json --as e inbox --peek)
-[ "$(python3 -c 'import json,sys; j=json.loads(sys.argv[1])["items"]; print(len(j), j[0]["body"])' "$o")" = "70 to e 530" ] || fail "--peek after the capped reads: $o"
+[ "$(grep -c '^  to e ' <<<"$o")" = 30 ] && grep -q '^  to e 020$' <<<"$o" && grep -q '^  to e 049$' <<<"$o" || fail "second inbox did not start at the first unshown message"
+o=$(json_ok agentbus --json --as e inbox --peek --limit -1)
+[ "$(python3 -c 'import json,sys; j=json.loads(sys.argv[1])["items"]; print(len(j), j[0]["body"])' "$o")" = "550 to e 050" ] || fail "--peek after the capped reads: $o"
 o=$(outof agentbus --as e inbox --limit -1)
-[ "$(grep -c '^  to e ' <<<"$o")" = 70 ] || fail "inbox --limit -1 did not show the remaining 70"
+[ "$(grep -c '^  to e ' <<<"$o")" = 550 ] || fail "inbox --limit -1 did not show the remaining 550"
 [ "$(outof agentbus --as e inbox)" = "inbox empty" ] || fail "inbox not empty after every message was shown"
-ok "leave and release --all list and log 500 of 20000 claims; inbox shows the oldest 500 and keeps the rest unread"
+ok "leave and release --all list and log 500 of 20000 claims; inbox shows the oldest 20 and keeps the rest unread"
 
 echo "TEST 8: 400k stored claims do not slow every open"
 # Bug it catches: normalize_stored_claims read every claim into Python on every open, with the lock
