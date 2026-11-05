@@ -154,4 +154,6 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 
 ## Addenda
 
-None yet.
+**2026-11-05, before the pilot.** Claude's per-message usage undercounts output tokens about fivefold, so tokens come from the stream's closing totals. A session killed by the `recovery` task has no closing totals, so its tokens are a lower bound, in every condition alike.
+
+**2026-11-05, before the pilot.** Pilot seeds are 9001 and 9002. The full matrix uses seeds from 1 up, so no pilot run can enter it.

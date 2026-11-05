@@ -204,10 +204,11 @@ def _calls(lines, harness):
 
 
 def cost_of(lines, harness, condition):
-    """Tokens, tool calls and what the channel itself took. A killed agent has no final summary, so tokens are summed from
-    each message; `complete` says whether the stream ended with its own totals."""
+    """Tokens, tool calls and what the channel itself took. Claude's per-message usage carries only the first streamed fragment of
+    the output (575 against a true 3,277 in one run), so the result event's totals win. A killed session has no result event: its
+    tokens are summed from messages, which makes them a lower bound, and `complete` is False."""
     usage = {"input": 0, "cache_write": 0, "cache_read": 0, "output": 0}
-    cost_usd, complete, model = None, False, None
+    cost_usd, complete, model, totals = None, False, None, None
     per_message = {}
     for wrapped in lines:
         obj = _obj(wrapped["line"])
@@ -218,14 +219,14 @@ def cost_of(lines, harness, condition):
             if obj.get("type") == "assistant" and message.get("usage"):
                 per_message[message.get("id")] = message["usage"]
             if obj.get("type") == "result":
-                complete, cost_usd = True, obj.get("total_cost_usd")
+                complete, cost_usd, totals = True, obj.get("total_cost_usd"), obj.get("usage")
         elif obj.get("type") == "turn.completed":
             u = obj.get("usage") or {}
             usage["input"] += u.get("input_tokens", 0) - u.get("cached_input_tokens", 0)
             usage["cache_read"] += u.get("cached_input_tokens", 0)
             usage["output"] += u.get("output_tokens", 0)
             complete = True
-    for u in per_message.values():
+    for u in [totals] if totals else per_message.values():
         usage["input"] += u.get("input_tokens", 0)
         usage["cache_write"] += u.get("cache_creation_input_tokens", 0)
         usage["cache_read"] += u.get("cache_read_input_tokens", 0)

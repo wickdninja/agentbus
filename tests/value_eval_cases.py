@@ -129,6 +129,9 @@ def test_cost_claude():
     check(got["channel_calls"] == 1 and got["channel_writes"] == 1 and got["channel_bytes_back"] > 0, "a bus call is channel cost: %s" % got)
     check(grade.cost_of(lines, "claude", "ledger")["channel_calls"] == 0, "a bus call counted in a ledger run")
     check(not grade.cost_of(lines[:-1], "claude", "agentbus")["complete"], "a killed session must read as incomplete")
+    truth = dict(use, output_tokens=40)
+    lines2 = lines[:-1] + claude_lines({"type": "result", "total_cost_usd": 0.5, "usage": truth})
+    check(grade.cost_of(lines2, "claude", "agentbus")["usage"]["output"] == 40, "the result event's totals must beat the undercounting message events")
     check(grade.cost_of(lines[:-1], "claude", "agentbus")["usage"]["output"] == 4, "a killed session's tokens must still count")
 
 
