@@ -20,10 +20,6 @@ echo "TEST: it leaves the caller's HOME, bus and folder alone"
 [ -z "$(ls -A "$T/home")" ] || fail "--check wrote to the caller's HOME: $(ls -A "$T/home")"
 [ -z "$(ls -A "$T/realbus")" ] || fail "--check touched the bus in AGENTBUS_DB: $(ls -A "$T/realbus")"
 [ -z "$(ls -A "$T/cwd")" ] || fail "--check wrote to the current folder: $(ls -A "$T/cwd")"
-# Bug it catches: the script moved HOME but kept the caller's XDG folders, so agentbus recorded the demo's bus in the caller's state.
-for x in state config cache; do
-  [ -z "$(ls -A "$T/xdg-$x")" ] || fail "--check wrote to the caller's XDG_$(tr a-z A-Z <<<"$x")_HOME: $(find "$T/xdg-$x" | head -5)"
-done
 # The same on macOS, where agentbus does not read the XDG variables: a stand-in tool records the environment it is run with.
 mkdir -p "$T/xdgprobe/scripts" "$T/xdgprobe/bin"; cp "$SCRIPT" "$T/xdgprobe/scripts/"
 printf '#!/bin/sh\nprintf "%%s\\n" "$HOME" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" >"%s"\nexit 0\n' "$T/xdg.seen" >"$T/xdgprobe/bin/agentbus"
@@ -35,6 +31,11 @@ home, *xdg = open(sys.argv[1]).read().split("\n")[:4]
 assert home and os.path.realpath(home) != os.path.realpath(os.path.join(sys.argv[2], "home")), home
 assert all(x.startswith(home + "/") for x in xdg), (home, xdg)
 PY2
+# Bug it catches: the script moved HOME but kept the caller's XDG folders, so agentbus recorded the demo's bus in the caller's state.
+# After the probe, so a mutation that keeps them fails on the probe's line on every system, Linux included.
+for x in state config cache; do
+  [ -z "$(ls -A "$T/xdg-$x")" ] || fail "--check wrote to the caller's XDG_$(tr a-z A-Z <<<"$x")_HOME: $(find "$T/xdg-$x" | head -5)"
+done
 ok "HOME, the XDG folders, AGENTBUS_DB and the current folder are untouched"
 
 echo "TEST: a tool that stops matching the story fails the check (negative control)"
