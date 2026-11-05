@@ -217,6 +217,10 @@ fresh gitok; printf '# tags that publish a wheel\nv0.1.0\n' >"$D/tests/released_
 ok "generated lines (--lines, --wheel); a wheel release needs the wheel URLs and no git+ line; any other needs git+"
 
 echo
+echo "TEST: verify_published.sh resolves a relative --sums before it moves to its temp folder (v0.2.0's first verify failed here)"
+grep -qF 'SUMS="$(cd "$(dirname "$SUMS")" && pwd)/$(basename "$SUMS")"' "$ROOT/scripts/verify_published.sh" || fail "verify_published.sh keeps a relative --sums path"
+ok "verify_published.sh: --sums is made absolute"
+
 echo "TEST: verify_published.sh runs only the README's literal pinned lines, and refuses anything else"
 fresh vp; cp "$ROOT/scripts/verify_published.sh" "$D/scripts/"
 RC=0; OUT=$(bash "$D/scripts/verify_published.sh" v0.2.0 --dry-run 2>&1) || RC=$?
