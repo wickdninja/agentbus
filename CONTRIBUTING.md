@@ -15,6 +15,8 @@ Set `PYTHON` to test another interpreter, for example `PYTHON=python3.15`. Tests
 
 Adding a command? Add its test file `tests/test_<command>.sh` (it is picked up by name), a line in `tests/test_docs.sh` if it changes the reference, and, when it changes what an agent or a person does end to end, a step in the matching `tests/test_workflow_*.sh` story. Break the behaviour on purpose and watch the test fail: add an entry to `tests/mutations.json` naming the test (`python3 scripts/mutate.py --list`, `bash tests/test_mutations.sh`).
 
+Friction posts on the bus start with a key, `[join-name] what happened`; check `agentbus read --topic friction` first and, if the key is there, post only `+1 [join-name]`. `scripts/wave_review.py` (internal) counts keys at each wave's close, and any key at 3 or more gets an issue.
+
 Agent evals (Claude Code and Codex doing real work on the bus) are run by the maintainers before a release: see [docs/evals/README.md](docs/evals/README.md). They spend tokens and are not part of `bash tests/run_all.sh`.
 
 A test file that needs something this build does not have (a command another change adds, a fixture) calls `skip_test "reason"`, or `skip_part "reason"` for one section, from `tests/lib.sh`. The runner prints `SKIP`, counts it apart (`ALL TESTS PASSED (N files, M skipped)`), and CI sets `AGENTBUS_NO_SKIP=1` so a skip there is a failure. `bash tests/run_all.sh --skip-heavy` leaves out the two files that run other tests again (`test_mutations.sh`, `test_eval_harness.sh`); `--only-heavy` runs just those. The runner also runs every file with a poisoned `AGENTBUS_DB`, `AGENTBUS_AGENT` and `HOME` and fails if any of them, or the checkout, changed.
