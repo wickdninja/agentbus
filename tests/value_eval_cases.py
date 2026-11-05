@@ -79,18 +79,26 @@ def test_overlap_runs_in_worktrees():
 
 
 def test_recovery_queue_gates_the_next_module():
-    """The session can only learn one module ahead, so it cannot port everything at once and die after finishing."""
+    """A session can learn only one module ahead, and no reading of the files gets it further: each module opens with the output of
+    the port before it. Pilot pass 2 read an encoded queue straight off the disk, so plain encoding is not enough."""
     t = tasks.build("recovery", 2)
     p = tasks._recovery_params(2)
+    ref = tasks.reference("recovery", 2)
     d = tempfile.mkdtemp()
     tree(d, t.files)
     nxt = lambda: subprocess.run([sys.executable, "-B", "tools/migrate.py", "next"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True).stdout  # noqa: E731
     check("next module: %s" % p["mods"][0] in nxt(), "the first module: %s" % nxt())
-    check(p["mods"][1] not in nxt(), "the queue shows more than one module")
-    check(not any(k.startswith("legacy/") for k in t.files), "legacy source sits in the repo, readable all at once")
-    tree(d, {"src/%s.py" % p["mods"][0]: "x = 1\n"})
-    check("next module: %s" % p["mods"][1] in nxt(), "the queue did not move on")
-    tree(d, tasks.reference("recovery", 2))
+    check(not any(k.startswith("legacy/") for k in t.files), "legacy source sits in the repo")
+    check("FACTOR" not in t.files["tools/queue.json"] and "old_" not in t.files["tools/queue.json"], "the queue is readable on disk")
+    tree(d, {"src/%s.py" % p["mods"][0]: "def run(values):\n    return [0 for v in values]\n"})
+    check("will not open" in nxt(), "a wrong port opened the next module: %s" % nxt())
+    for i, m in enumerate(p["mods"][:4]):
+        tree(d, {"src/%s.py" % m: ref["src/%s.py" % m]})
+        check("next module: %s" % p["mods"][i + 1] in nxt(), "the queue did not move past %s: %s" % (m, nxt()))
+    tree(d, {"src/__init__.py": ref["src/__init__.py"]})
+    check("next module: %s" % p["mods"][5] in nxt(), "skipping the retired module must open the last: %s" % nxt())
+    check("FACTOR = %d" % p["factors"][5] in nxt(), "the last module shows the old factor, which is the trap: %s" % nxt())
+    tree(d, ref)
     check("queue empty" in nxt(), "a finished queue: %s" % nxt())
     shutil.rmtree(d)
 

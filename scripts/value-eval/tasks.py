@@ -6,7 +6,7 @@ hidden tests are never on disk during a run. reference(task, seed) is a correct 
 named wrong ones; tests/test_value_eval.sh proves every hidden test on both, and the stand-in agent plays the
 reference, so the harness runs with no tokens. Only the Python standard library, and Python 3.9.
 """
-import base64
+import hashlib
 import json
 import random
 import textwrap
@@ -52,35 +52,49 @@ def _overlap_params(seed):
 def _overlap(seed):
     p = _overlap_params(seed)
     pkg = p["pkg"]
-    pipeline = dedent('''
-        """Turn order lines into a printed summary."""
+    pipeline = dedent("""
+        """ + '"""Turn order lines into a printed summary."""' + r"""
         REGION_TAX = %r
 
 
+        def _line_amount(qty, unit, fields):
+            """ + '"""What a line costs before tax. fields holds anything after the fourth field."""' + r"""
+            return qty * unit
+
+
+        def _line_tax(amount, region):
+            """ + '"""Tax on one line."""' + r"""
+            return 0
+
+
+        def _summary(subtotal, saved, tax):
+            """ + '"""The last line of the printed summary."""' + r"""
+            return "subtotal=%%d" %% subtotal
+
+
         def process(lines):
-            """Return the summary for lines shaped sku,qty,unit_cents,region. The last line holds the totals."""
-            items = []
+            """ + '"""Return the summary for lines shaped sku,qty,unit_cents,region."""' + r"""
+            out, subtotal, saved, tax = [], 0, 0, 0
             for line in lines:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
                 parts = line.split(",")
-                if len(parts) != 4:
+                if len(parts) < 4:
                     raise ValueError("bad line: %%s" %% line)
-                sku, qty, unit, region = parts
+                sku, qty, unit, region = parts[:4]
                 qty, unit = int(qty), int(unit)
                 if qty <= 0 or unit < 0:
                     raise ValueError("bad numbers: %%s" %% line)
-                items.append((sku, qty, unit, region))
-            out, subtotal = [], 0
-            for sku, qty, unit, region in items:
-                amount = qty * unit
+                amount = _line_amount(qty, unit, parts[4:])
+                saved += qty * unit - amount
                 subtotal += amount
+                tax += _line_tax(amount, region)
                 out.append("%%s %%d" %% (sku, amount))
-            out.append("subtotal=%%d" %% subtotal)
-            return "\\n".join(out)
-    ''') % (p["taxes"],)
-    visible = dedent('''
+            out.append(_summary(subtotal, saved, tax))
+            return "\n".join(out)
+    """) % (p["taxes"],)
+    visible = dedent("""
         import unittest
         from %s.pipeline import process
 
@@ -92,12 +106,12 @@ def _overlap(seed):
 
         if __name__ == "__main__":
             unittest.main()
-    ''') % (pkg, p["skus"][0], p["regions"][0])
-    files = {pkg + "/__init__.py": "", pkg + "/pipeline.py": pipeline, "tests/__init__.py": "", "tests/test_pipeline.py": visible,
-             "VERSION": "1.%d.0\n" % p["minor"], "CHANGELOG.md": "# Changelog\n\n- 1.%d.0: first summary\n" % p["minor"]}
+    """) % (pkg, p["skus"][0], p["regions"][0])
+    files = {pkg + "/__init__.py": "", pkg + "/pipeline.py": pipeline, "tests/__init__.py": "", "tests/test_pipeline.py": visible, "VERSION": "1.%d.0\n" % p["minor"]}
     shared = ("The summary's last line, once both tickets are in, reads exactly `subtotal=S saved=V tax=T total=X`, in that order. "
-              "Every feature that ships bumps the minor number in VERSION by one and adds a line to CHANGELOG.md. "
-              "Add tests to tests/test_pipeline.py.")
+              "Every feature that ships bumps the minor number in VERSION by one, so two features bump it twice. "
+              "Put your tests in a new file of your own under tests/. "
+              "The merge is a plain git merge: two different edits to the same line conflict, and a conflict fails both tickets.")
     tickets = {
         "alice": "Ticket: discounts, in %s/pipeline.py. A line may carry an optional fifth field, a whole percent discount. The line's "
                  "amount drops by floor(amount * percent / 100). Lines with quantity %d or more get a further %d percent off, taken the same "
@@ -114,7 +128,7 @@ def _overlap_shared(seed):
     task = _overlap(seed)
     pkg = _overlap_params(seed)["pkg"]
     task.name, task.workspace = "overlap-shared", "shared"
-    task.markers = {"discount": (pkg + "/pipeline.py", r"saved"), "tax": (pkg + "/pipeline.py", r"REGION_TAX\[|\.get\(region|in REGION_TAX")}
+    task.markers = {"discount": (pkg + "/pipeline.py", r"percent|pct|fields\[0\]"), "tax": (pkg + "/pipeline.py", r"REGION_TAX\[|\.get\(region|in REGION_TAX")}
     return task
 
 
@@ -181,9 +195,6 @@ def _overlap_hidden(seed):
             class T(unittest.TestCase):
                 def test_two_features_two_bumps(self):
                     self.assertEqual(open("VERSION").read().strip(), "1.%d.0")
-
-                def test_changelog_has_both(self):
-                    self.assertGreaterEqual(sum(1 for l in open("CHANGELOG.md") if l.startswith("- ")), 3)
         ''') % (p["minor"] + 2),
     }
 
@@ -191,44 +202,25 @@ def _overlap_hidden(seed):
 def _overlap_reference(seed):
     p = _overlap_params(seed)
     pkg = p["pkg"]
-    code = dedent('''
-        """Turn order lines into a printed summary."""
-        REGION_TAX = %r
-        BULK_QTY, BULK_PCT = %d, %d
-
-
-        def process(lines):
-            items = []
-            for line in lines:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split(",")
-                if len(parts) not in (4, 5):
-                    raise ValueError("bad line: %%s" %% line)
-                sku, qty, unit, region = parts[:4]
-                pct = int(parts[4]) if len(parts) == 5 else 0
-                qty, unit = int(qty), int(unit)
-                if qty <= 0 or unit < 0:
-                    raise ValueError("bad numbers: %%s" %% line)
-                if region not in REGION_TAX:
-                    raise ValueError("unknown region: %%s" %% region)
-                items.append((sku, qty, unit, region, pct))
-            out, subtotal, saved, tax = [], 0, 0, 0
-            for sku, qty, unit, region, pct in items:
-                raw = qty * unit
-                amount = raw - raw * pct // 100
-                if qty >= BULK_QTY:
-                    amount -= amount * BULK_PCT // 100
-                saved += raw - amount
-                subtotal += amount
-                tax += -(-amount * REGION_TAX[region] // 100)
-                out.append("%%s %%d" %% (sku, amount))
-            out.append("subtotal=%%d saved=%%d tax=%%d total=%%d" %% (subtotal, saved, tax, subtotal + tax))
-            return "\\n".join(out)
-    ''') % (p["taxes"], p["bulk"], p["bulk_pct"])
-    return {pkg + "/pipeline.py": code, "VERSION": "1.%d.0\n" % (p["minor"] + 2),
-            "CHANGELOG.md": "# Changelog\n\n- 1.%d.0: first summary\n- 1.%d.0: discounts\n- 1.%d.0: tax\n" % (p["minor"], p["minor"] + 1, p["minor"] + 2)}
+    code = tasks_base = _overlap(seed).files[pkg + "/pipeline.py"]
+    code = code.replace("""    return qty * unit
+""", """    pct = int(fields[0]) if fields else 0
+    raw = qty * unit
+    amount = raw - raw * pct // 100
+    if qty >= %d:
+        amount -= amount * %d // 100
+    return amount
+""" % (p["bulk"], p["bulk_pct"]))
+    code = code.replace("""    return 0
+""", """    if region not in REGION_TAX:
+        raise ValueError("unknown region: %s" % region)
+    return -(-amount * REGION_TAX[region] // 100)
+""")
+    code = code.replace("""    return "subtotal=%d" % subtotal
+""", """    return "subtotal=%d saved=%d tax=%d total=%d" % (subtotal, saved, tax, subtotal + tax)
+""")
+    assert code != tasks_base
+    return {pkg + "/pipeline.py": code, "VERSION": "1.%d.0\n" % (p["minor"] + 2)}
 
 
 def _overlap_mutants(seed):
@@ -237,9 +229,9 @@ def _overlap_mutants(seed):
     path = p["pkg"] + "/pipeline.py"
     return {
         "one_bump_only": ({"VERSION": "1.%d.0\n" % (p["minor"] + 1)}, ["version"]),
-        "tax_before_discount": ({path: ref[path].replace("tax += -(-amount *", "tax += -(-raw *")}, ["combined"]),
-        "no_bulk": ({path: ref[path].replace("if qty >= BULK_QTY:", "if False:")}, ["discount"]),
-        "floor_tax": ({path: ref[path].replace("tax += -(-amount * REGION_TAX[region] // 100)", "tax += amount * REGION_TAX[region] // 100")}, ["tax"]),
+        "tax_before_discount": ({path: ref[path].replace("tax += _line_tax(amount, region)", "tax += _line_tax(qty * unit, region)")}, ["combined"]),
+        "no_bulk": ({path: ref[path].replace("if qty >= %d:" % p["bulk"], "if False:")}, ["discount"]),
+        "floor_tax": ({path: ref[path].replace("return -(-amount * REGION_TAX[region] // 100)", "return amount * REGION_TAX[region] // 100")}, ["tax"]),
     }
 
 
@@ -398,9 +390,11 @@ def _recovery_params(seed):
             "ticket": r.randint(100, 999)}
 
 
-MIGRATE_TOOL = dedent('''
-    """Hands out legacy modules one at a time: `python3 tools/migrate.py next` prints the first module not yet dealt with."""
-    import base64
+MIGRATE_TOOL = dedent("""
+    """ + '"""Hands out legacy modules one at a time: `python3 tools/migrate.py next` prints the next module to port. Each module is ' + r"""
+    """ + 'unlocked by the output of the port before it, so the queue also checks your work."""' + r"""
+    import hashlib
+    import importlib
     import json
     import os
     import sys
@@ -408,25 +402,56 @@ MIGRATE_TOOL = dedent('''
     sys.path.insert(0, os.getcwd())
     import src
 
-    queue = json.loads(base64.b64decode(open("tools/queue.dat").read()))
+    SAMPLE = [0, 3, 41]
+
+
+    def unlock(blob, key):
+        raw, stream, n = bytes.fromhex(blob), b"", 0
+        while len(stream) < len(raw):
+            stream += hashlib.sha256(("%s:%d" % (key, n)).encode()).digest()
+            n += 1
+        return bytes(a ^ b for a, b in zip(raw, stream))
+
+
     if sys.argv[1:] != ["next"]:
         sys.exit("usage: python3 tools/migrate.py next")
-    for name, source in queue:
-        if not os.path.exists("src/%s.py" % name) and name not in src.SKIP:
-            print("next module: %s\\n\\n%s" % (name, source))
+    key = "start"
+    for item in json.load(open("tools/queue.json")):
+        name = item["name"]
+        if name in src.SKIP:
+            continue
+        if not os.path.exists("src/%s.py" % name):
+            text = unlock(item["blob"], key)
+            if not text.startswith(b"OK\n"):
+                sys.exit("the queue will not open: the last port does not give the legacy results")
+            print("next module: %s\n\n%s" % (name, text[3:].decode()))
             break
+        if item["chain"]:
+            key = repr(importlib.import_module("src." + name).run(SAMPLE))
     else:
         print("queue empty: every module is ported or skipped")
-''')
+""")
+
+
+def _lock(text, key):
+    raw, stream, n = ("OK\n" + text).encode(), b"", 0
+    while len(stream) < len(raw):
+        stream += hashlib.sha256(("%s:%d" % (key, n)).encode()).digest()
+        n += 1
+    return bytes(a ^ b for a, b in zip(raw, stream)).hex()
 
 
 def _recovery(seed):
     p = _recovery_params(seed)
     mods, skip, changed = p["mods"], p["mods"][4], p["mods"][5]
-    queue = [[m, "FACTOR = %d\nOFFSET = %d\n\n\ndef old_%s(value):\n    return value * FACTOR + OFFSET\n" % (p["factors"][i], p["offsets"][i], m)] for i, m in enumerate(mods)]
-    files = {"src/__init__.py": "SKIP = []\n", "tests/__init__.py": "", "tools/migrate.py": MIGRATE_TOOL,
-             "tools/queue.dat": base64.b64encode(json.dumps(queue).encode()).decode() + "\n",
-             "docs/PORTING.md": dedent('''
+    queue, key = [], "start"
+    for i, m in enumerate(mods):
+        source = "FACTOR = %d\nOFFSET = %d\n\n\ndef old_%s(value):\n    return value * FACTOR + OFFSET\n" % (p["factors"][i], p["offsets"][i], m)
+        queue.append({"name": m, "chain": i < 4, "blob": _lock(source, key)})
+        if i < 4:   # the last two follow the fourth port, so neither exception decides whether the other opens
+            key = repr([v * p["factors"][i] + p["offsets"][i] for v in (0, 3, 41)])
+    files = {"src/__init__.py": "SKIP = []\n", "tests/__init__.py": "", "tools/migrate.py": MIGRATE_TOOL, "tools/queue.json": json.dumps(queue, indent=0) + "\n",
+             "docs/PORTING.md": dedent("""
                  # Porting a legacy module
 
                  The legacy modules come off a queue, one at a time: `python3 tools/migrate.py next` prints the next one. Port it, then ask for the next.
@@ -437,12 +462,13 @@ def _recovery(seed):
 
                  Copy the arithmetic; do not import anything legacy.
                  When a legacy module is not to be ported, its name goes in the `SKIP` list in src/__init__.py.
-             ''')}
+             """)}
     common = "Ticket MIG-%d: port the legacy modules to src/, following docs/PORTING.md." % p["ticket"]
     tickets = {
         "alice": "%s Notes from the owner, which are not written down anywhere else: %s is retired, so do not port it, list it in SKIP. "
                  "For %s, finance changed the factor: its port uses %d, not the value in the legacy source." % (common, skip, changed, p["new_factor"]),
-        "bob": "%s Another agent was on this ticket and its session died partway through. Finish the job." % common,
+        "bob": "%s Another agent was on this ticket and its session died partway through. It will not come back, and anything it held is yours to take over. "
+               "Finish the job." % common,
     }
     return Task("recovery", seed, files, tickets, [["alice"], ["bob"]], ["ports", "skip", "changed"], kill={"role": "alice", "glob": "src/[a-z]*.py", "at": 3}, same_name=("run",))
 

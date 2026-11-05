@@ -164,3 +164,12 @@ Any of these invalidates the task design: fix it, record the fix as an addendum,
 - `overlap`: agents in one shared tree read each other's diffs and healed every collision, with or without a channel: a ceiling. Each agent now gets its own worktree, and the runner commits and merges the lanes at the end, recording conflicts and leaving their markers for the hidden tests. This also matches how lanes really run, and makes merge conflicts measurable, so the first Threats entry about worktrees no longer applies to this task. `none` may now sit at a floor here. That is acceptable for a task whose primary contrast is the bus against the ledger; a floor in every condition is not. The shared-tree version stays only as a test fixture.
 - Edit detection missed edits made through a Python script with the path in a variable. `script_edits` now catches them.
 - Pass 2 runs on fresh seeds, 9003 and 9004.
+
+**2026-11-05, after pilot pass 2.** Pass 1's fixes overshot, and the transcripts showed why. No comparison between conditions drove these either. Pass 2's runs count for nothing but cost.
+
+- `overlap` hit a floor: agents coordinated, but the repo gave them about ten lines both had to change, and any two different edits to one line conflict. The repo now has two shared points, `_summary` and `VERSION`, and the ticket states the merge rule. A pair that agrees who owns them merges clean. `none` has no way to agree, so it sits at a floor by construction. S5 therefore says nothing on this task, and P1 and P2 are unaffected.
+- `recovery`: alice read the encoded queue off the disk and decoded it. Each module now opens only with the output of the port before it, and the queue refuses a wrong port.
+- `recovery`: bob stopped on alice's open claim in both the ledger and the bus, so `changed` failed everywhere. His ticket now says the dead session will not return and its holdings are his, as an owner would. That removes a stall the channels share, and a stale claim remains a recorded failure mode.
+- `agentbus` lanes now start with `AGENTBUS_AGENT` set, the way the tool's docs say to name a lane, so hooks and prompt agree on the name. Before this, the harness gave an agent two names, which was the harness's fault, not the tool's.
+- Pass 3 runs on fresh seeds, 9005 and 9006.
+

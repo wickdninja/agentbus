@@ -275,7 +275,8 @@ class Run:
             shared = os.path.join(self.root, "shared-cfg")
             lines += ['if mkdir "%s.lock" 2>/dev/null; then cp -RP "$CLAUDE_CONFIG_DIR" "%s.tmp" && mv "%s.tmp" "%s"; fi' % (shared, shared, shared, shared),
                       'while [ ! -d "%s" ]; do sleep 0.2; done' % shared, 'CFG="%s"' % shared]
-        lines.append('exec /usr/bin/env -i %s CLAUDE_CONFIG_DIR="$CFG" %s "$@"' % (env, shlex.quote(real)))
+        name = ' AGENTBUS_AGENT="$VALUE_ROLE"' if self.condition == "agentbus" else ""   # the documented way to name a lane, so hooks and prompt agree
+        lines.append('exec /usr/bin/env -i %s%s CLAUDE_CONFIG_DIR="$CFG" %s "$@"' % (env, name, shlex.quote(real)))
         path = os.path.join(self.shim, "claude")
         with open(path, "w") as f:
             f.write("\n".join(lines) + "\n")
@@ -295,6 +296,8 @@ class Run:
                     {"HOME": self.real_home, "USER": env["USER"], "LANG": env["LANG"], "TERM": env["TERM"], "VALUE_ROLE": agent.role,
                      "PATH": os.pathsep.join([self.shim, "/usr/bin", "/bin"])})
         env = dict(env, CODEX_HOME=self.codex_home, VALUE_ROLE=agent.role)
+        if self.condition == "agentbus":
+            env["AGENTBUS_AGENT"] = agent.role
         rest = codex_args(prompt, self.workdir(agent.role), args.codex_model, self.condition, self.proj if self.worktrees else None)
         if self.stub:
             return [os.path.join(self.stub, "codex")] + rest, env
