@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `--request-id` replays a write only for `post` and `join`, where the bus stores the token. On `leave`, `claim`, `release`, `ctx set` and `goal` it is accepted and ignored: the help, `schema`, the skill and the reference say what a repeat really does (`ctx set` and `goal` set the value again over a change made since), and an error after one of them saved is `retryable: false`.
+- Every open sets `PRAGMA synchronous=FULL`, so a write is synced before its command reports it, whatever default the SQLite build has.
+- The wait for a busy bus is timed on the monotonic clock; a wall-clock change no longer ends it early or stretches it.
+- The reference says what a second SQLite connection to the bus does to agentbus commands, and the skill says where a batch cut by `inbox | head` can be read again (`read --since ID`).
+
 ## 0.2.0 - 2026-11-04
 
 All five versioned things change (see [How versions fit together](docs/explanation/versions.md)): the tool is 0.2.0; the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is now stamped 1, the v0.1.0 shape, so a v0.1.0 bus is adopted with no other change; the skill is rewritten; and the hooks are new.

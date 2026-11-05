@@ -8,7 +8,7 @@ T=$(mktemp -d); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as a join --tool t >/dev/null
 # Each test reads the inbox of its own name, so any one of them can run alone.
-for n in b c d e f g; do agentbus --as $n join --tool t >/dev/null; done
+for n in b c d e f g h; do agentbus --as $n join --tool t >/dev/null; done
 unread() { njson agentbus --json --as "${1:-b}" inbox --peek --limit -1; }
 # big NAME N: N long messages to NAME (plant_big_messages, tests/lib.sh), so the output is well past a pipe buffer.
 big() { plant_big_messages "$AGENTBUS_DB" "$1" "$2"; }
@@ -95,4 +95,14 @@ assert inbox() == ['bounded 2', 'bounded 3']
 assert inbox('--peek') == []
 PY
 ok "peek preserves all unread messages and limit 1 consumes exactly one"
+echo "TEST 8: a batch a pipe cut (inbox | head) is marked read but still there: read --since the last id seen shows the rest"
+# The skill promises this. The cursor moves once stdout was written, and a small batch always fits the pipe, so head
+# cannot stop it: all five are read, the agent saw two lines.
+first=$(agentbus --json --as a post "cut 1" --to h | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+for i in 2 3 4 5; do agentbus --as a post "cut $i" --to h >/dev/null; done
+(agentbus --as h inbox | head -2 >/dev/null) || true
+[ "$(unread h)" = 0 ] || fail "inbox | head left $(unread h) unread; the test assumed the batch was all marked read"
+rest=$(outof agentbus --as h read --since "$first")
+for i in 2 3 4 5; do grep -qF "cut $i" <<<"$rest" || fail "read --since $first lost 'cut $i': $rest"; done
+ok "inbox | head -2 marked all five read; read --since the first id shows the other four"
 echo "All inbox tests passed"

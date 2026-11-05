@@ -420,7 +420,7 @@ def diag(msg):
 # setup an open does): any failure after that carries committed: true.
 _WROTE = False
 # True once the command's own database rows were committed. Only that makes repeating it unsafe (without a
-# --request-id): a command that changed only files (init, upgrade's copy, setup) is safe to repeat and stays retryable.
+# stored --request-id): a command that changed only files (init, upgrade's copy, setup) is safe to repeat and stays retryable.
 _WROTE_ROWS = False
 # While a COMMIT of pending rows runs: "own" for the command's own write, "setup" for any other (the last-seen
 # refresh, an open's schema work). A process stopped then (the hold watchdog) cannot know whether SQLite had
@@ -432,8 +432,10 @@ _RERUN = None
 # The files the command itself has changed so far (init's and upgrade's copy and VERSION, init's exclude rule, setup's
 # config files and backups): a file write is the command's change as much as a row is (file_changed).
 _CHANGED = []
-# True when the command carries a --request-id (set in read_inputs).
+# True when the command carries a --request-id the bus stores, so a repeat replays the first result: post and join only.
+# Other writes accept the flag and ignore it, so a repeat of one is never promised safe.
 _HAS_TOKEN = False
+TOKEN_COMMANDS = ("post", "join")
 
 
 class Diag:
@@ -455,8 +457,8 @@ class Diag:
 
     @property
     def retryable(self):
-        """The code's own value, but never true once the command's change was saved unless a
-        --request-id makes repeating it return the saved result."""
+        """The code's own value, but never true once the command's change was saved unless a stored
+        --request-id (post, join) makes repeating it return the saved result."""
         own = CONTRACT["errors"].get(self.code, CONTRACT["errors"]["internal"])["retryable"]
         return own and (not _WROTE_ROWS or _HAS_TOKEN)
 
@@ -654,15 +656,16 @@ CONTRACT = {
                                        "outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; "
                                        "committed is then true when that write was the command's own.",
                             "action": "Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus "
-                                      "before repeating a write, or repeat it only with its request id."},
+                                      "before repeating a write, or repeat a post or join only with its request id."},
         "ack_failed": {"exit": 3, "retryable": True, "fields": ["delivered"],
                        "meaning": "inbox printed its messages but could not mark them read.",
                        "action": "The output was complete: use it, expect the same messages again, and dedupe by id."},
         "output_failed": {"exit": 1, "retryable": True, "fields": [],
-                          "meaning": "stdout could not be written; committed effects stand.", "action": "Retry with the same token."},
+                          "meaning": "stdout could not be written; committed effects stand.",
+                          "action": "Repeat a post or join with the same --request-id; for any other write, look at what it changed instead of repeating it."},
         "interrupted": {"exit": 130, "retryable": True, "fields": [], "optional_fields": ["directory", "backup", "migrations", "rerun", "changed", "argv"],
                         "meaning": "The command was stopped (Ctrl-C or SIGINT) before it finished.",
-                        "action": "Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun)."},
+                        "action": "Check committed: if true the change was saved, so repeat a post or join only with its request id, and look at what any other write changed before repeating it, unless retryable is true (init, upgrade and setup can simply be rerun)."},
         "items_failed": {"exit": 1, "retryable": False, "fields": ["failed"],
                          "meaning": "Some of the items the command works on failed or were refused (buses of upgrade --all, "
                                     "files of setup, checks of doctor); stdout holds the whole result, and failed lists those items.",
@@ -702,13 +705,13 @@ CONTRACT = {
         "130": "interrupted (Ctrl-C), the shell convention",
     },
     # Fields every error object carries, beside the per-code ones in "errors". retryable here is the
-    # code's own value; the error object says false whenever committed is true and no --request-id was given.
+    # code's own value; the error object says false whenever committed is true, except for a post or join with a --request-id.
     "error_fields": {
         "code": {"type": "string", "meaning": "One of the error codes below; branch on this, not on the message."},
         "message": {"type": "string", "meaning": "What happened and what to do, for a person."},
-        "retryable": {"type": "boolean", "meaning": "Whether running the same command again can succeed. False once the command saved database rows, unless it had a --request-id; a command that changed only files (init, upgrade's copy, setup) stays retryable."},
-        "committed": {"type": "boolean", "meaning": "True when the command's own change had been saved before the failure, so a write must not be repeated without its --request-id unless retryable is true."},
-        "next": {"type": ["string", "null"], "meaning": "The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A write's request id is not repeated here: reuse the one you sent."},
+        "retryable": {"type": "boolean", "meaning": "Whether running the same command again can succeed. False once the command saved database rows, unless it is a post or join with a --request-id (the bus stores that token, so a repeat returns the first result); a command that changed only files (init, upgrade's copy, setup) stays retryable."},
+        "committed": {"type": "boolean", "meaning": "True when the command's own change had been saved before the failure, so a write must not be repeated unless retryable is true (a post or join with its --request-id). For any other write, look at what it changed first."},
+        "next": {"type": ["string", "null"], "meaning": "The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A post's or join's request id is not repeated here: reuse the one you sent."},
     },
     "env": {
         "AGENTBUS_DB": {"meaning": "Path of the bus database; overrides discovery and --up.",
@@ -745,7 +748,8 @@ CONTRACT = {
                              "instead of name_active; or join --takeover for your own name"}),
         "leave": _cmd("Leave the roster and release your claims",
                       _o({"left": _STR, "was_joined": _BOOL, "released": _list(_STR), "released_count": _INT}),
-                      retry={"class": "idempotent", "how": "a second run reports was_joined false and released_count 0 and writes no log row",
+                      retry={"class": "idempotent", "how": "a second run reports was_joined false and released_count 0 and writes no log row; "
+                                                            "--request-id is ignored (a repeat after you joined again releases what you then hold)",
                              "short": "safe to repeat"}),
         "who": _cmd("List agents, most recently seen first", _env(_ref("Agent"))),
         "post": _cmd("Send a message",
@@ -761,8 +765,9 @@ CONTRACT = {
                      {"anyOf": [_env(_ref("Message")), _ref("Message")]}, ["no_message"],
                      text='{"items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message'),
         "ctx set": _cmd("Set a shared fact and record its history", _ref("Fact"), ["not_on_roster"],
-                        retry={"class": "idempotent", "short": "safe to repeat",
-                               "how": "an unchanged value writes no history row and returns unchanged true"}),
+                        retry={"class": "idempotent", "short": "repeat if unchanged since",
+                               "how": "an unchanged value writes no history row and returns unchanged true. --request-id is ignored: a repeat after "
+                                      "another agent changed the key sets your value again and overwrites theirs, so ctx get KEY first"}),
         "ctx get": _cmd("Get one fact, or list all facts", {"anyOf": [_ref("Fact"), _env(_ref("Fact"))]}, ["no_context_key"],
                         text='a Fact, or {"items": [Fact], "has_more": boolean, "next": string or null}'),
         "ctx history": _cmd("Show the history of a fact", _env(_ref("FactVersion"))),
@@ -772,10 +777,12 @@ CONTRACT = {
                           "renewed": _BOOL, "previous_purpose": _NSTR}, optional=("previous_purpose",)),
                       ["claim_conflict", "not_on_roster"],
                       {"class": "idempotent", "how": "renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, "
-                                                     "and previous_purpose is set when --purpose changed it", "short": "safe to repeat"}),
+                                                     "and previous_purpose is set when --purpose changed it. --request-id is ignored; a resource another "
+                                                     "agent took meanwhile gives claim_conflict, never an overwrite", "short": "safe to repeat"}),
         "release": _cmd("Release one claim, or all of yours", _o({"released": _list(_STR), "released_count": _INT}), ["not_held"],
                         {"class": "idempotent_with_flag", "short": "with --if-held",
-                         "how": "release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent"}),
+                         "how": "release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent. "
+                                "--request-id is ignored: a plain repeat of a release that worked gives not_held"}),
         "claims": _cmd("List claims", _env(_ref("Claim"))),
         "log add": _cmd("Append an activity log entry",
                         _o({"id": _INT, "logged": _BOOL, "agent": _STR, "action": _STR, "detail": _STR}), ["not_on_roster"],
@@ -788,8 +795,9 @@ CONTRACT = {
         "goal": _cmd("Show or set the shared goal",
                      _o({"goal": _NSTR, "set_by": _NSTR, "set_at": _NSTR, "unchanged": _BOOL}, optional=("unchanged",)),
                      ["not_on_roster"], text='a Goal, or {"goal": null, "set_by": null, "set_at": null} when none is set',
-                     retry={"class": "idempotent", "short": "safe to repeat",
-                            "how": "showing is free; an unchanged goal writes no history row and returns unchanged true"}),
+                     retry={"class": "idempotent", "short": "repeat if unchanged since",
+                            "how": "showing is free; an unchanged goal writes no history row and returns unchanged true. --request-id is ignored: "
+                                   "a repeat after another agent changed the goal sets your text again and overwrites theirs, so run goal first"}),
         "watch": _cmd("A live view of the bus; with --json one snapshot",
                       _o({"bus": _STR, "directory": _STR,
                           "agents": _list(_o({"name": _STR, "role": _NSTR, "last_seen": _STR, "joined_at": _STR})),
@@ -1163,7 +1171,7 @@ class Watchdog:
         if committing:
             fields["outcome_unknown"] = True
             if committing == "own":
-                _WROTE = _WROTE_ROWS = True  # possibly saved counts as saved: no repeat without a --request-id
+                _WROTE = _WROTE_ROWS = True  # possibly saved counts as saved: no repeat unless a post or join with its --request-id
         exit_now(why, "bus_unavailable", **fields)
 
 
@@ -2463,7 +2471,7 @@ def held_too_long_message(path, hold=None, committing=False):
            f"wait {BUSY_WAIT_S:g} s for it), and was stopped"
     if committing:
         return (held + " while saving a write, so that write may or may not have been saved. Check the bus before "
-                "repeating the command, or repeat it only with its --request-id. Something slow made the save last "
+                "repeating the command, or repeat a post or join only with its --request-id. Something slow made the save last "
                 "(a stalled disk, or rows an agent wrote)")
     return (held + "; a write still in progress was not saved. Something "
             "in the bus makes this command slow (an agent can write any rows); check the bus")
@@ -2749,12 +2757,12 @@ def open_bus(path, strict_dir=False, migrate=True, read_only=False, busy_wait=BU
             die(f"no bus at {path}: {folder} does not exist. Run: agentbus init DIR", "no_bus", next="agentbus init DIR", bus=path)
         os.makedirs(os.path.dirname(folder), exist_ok=True)
         make_dir(folder)
-    deadline = time.time() + busy_wait
+    deadline = time.monotonic() + busy_wait  # monotonic: a wall clock that is set or jumps must not end or extend the wait
     while True:
         try:
             check_bus(path, strict_dir, read_only)
         except _Vanished as e:
-            if time.time() > deadline:
+            if time.monotonic() > deadline:
                 die(f"refusing {e}: it keeps vanishing or changing while being checked", "bus_unavailable", file=str(e))
             time.sleep(random.uniform(0.002, 0.03))
             continue
@@ -2762,7 +2770,7 @@ def open_bus(path, strict_dir=False, migrate=True, read_only=False, busy_wait=BU
         if con is not None:
             break
         _test_pause("lock-retry")
-        if time.time() > deadline:
+        if time.monotonic() > deadline:
             die(f"{path} stayed busy for {busy_wait:g} seconds. "
                 "Close any sqlite3 shell or dashboard holding it open, then retry.", "busy", bus=path)
         time.sleep(random.uniform(0.002, 0.03))
@@ -2772,6 +2780,10 @@ def open_bus(path, strict_dir=False, migrate=True, read_only=False, busy_wait=BU
                  held_too_long_message(path, hold, committing=True))
     try:
         con.execute(f"PRAGMA busy_timeout={int(busy_wait * 1000)}")
+        # Durability is chosen here, not left to the SQLite build: the default for a WAL database is a compile-time option
+        # (SQLITE_DEFAULT_WAL_SYNCHRONOUS), and NORMAL can lose the last commits on power loss. A command that printed
+        # "posted #7" must find #7 afterwards, so every commit syncs the WAL. Cost: one sync per write command.
+        con.execute("PRAGMA synchronous=FULL")
         con.execute("PRAGMA foreign_keys=ON")
         if read_only:
             _setup_read_only(con, path)
@@ -4296,7 +4308,7 @@ def read_inputs(a):
     """Everything a command reads from its arguments or stdin, read before the bus is opened: stdin
     may be slow (a pipe, a FIFO, a terminal), and the bus is exclusively locked while open."""
     global _HAS_TOKEN
-    _HAS_TOKEN = getattr(a, "request_id", None) is not None
+    _HAS_TOKEN = getattr(a, "cmd", None) in TOKEN_COMMANDS and getattr(a, "request_id", None) is not None
     a._body = None
     a._before_id = a._after_id = None
     if getattr(a, "before", None) is not None:
@@ -5288,11 +5300,12 @@ def limit_count(text):
     return v
 
 
-def request_id_arg(parser, replays=False):
-    """--request-id on a write. One rule: repeating a command with the same token never repeats its effect."""
+def request_id_arg(parser, repeat=None):
+    """--request-id on a write. The bus stores the token only for post and join (TOKEN_COMMANDS), where a repeat
+    replays the first result. Everywhere else it is accepted and ignored; repeat says what a repeat really does."""
     parser.add_argument("--request-id", metavar="TOKEN", help=(
-        "Retry safely: the same token and flags replay the first result, flagged duplicate." if replays else
-        "Retry safely. Accepted so every write retries the same way; this command already does nothing the second time."))
+        "Retry safely: the same token and flags replay the first result, flagged duplicate." if repeat is None else
+        f"Accepted and ignored: the bus does not store it. {repeat}"))
 
 
 class OneName(argparse.Action):
@@ -5321,11 +5334,12 @@ def register_join(sub):
     j.add_argument("--role", help="What you do here (shown in who/watch).")
     j.add_argument("--takeover", action="store_true",
                    help="Rejoin a name active in the last 30 min (only your own); tool, model and role you leave out are kept.")
-    request_id_arg(j, replays=True)
+    request_id_arg(j)
 
 
 def register_leave(sub):
-    request_id_arg(sub("leave", help="Leave the roster and release all your claims"))
+    request_id_arg(sub("leave", help="Leave the roster and release all your claims"),
+                   "Repeating leave is safe: it leaves again and releases what you hold then.")
 
 
 def register_who(sub):
@@ -5374,7 +5388,7 @@ def register_ctx(sub):
                          help="The fact's name, for example test-command." if action != "get" else "The fact's name; omit to list all facts.")
         if action == "set":
             act.add_argument("value", nargs="*", metavar="VALUE", help="The fact's value. Several words are joined; - reads it from stdin.")
-            request_id_arg(act)
+            request_id_arg(act, "Repeating ctx set sets the value again, over a change made since: ctx get KEY first.")
         else:
             act.add_argument("--limit", type=integer, default=argparse.SUPPRESS, metavar="N",
                              help=f"Maximum facts (get) or values (history); default {LISTING_LIMIT}. Use -1 for all.")
@@ -5386,7 +5400,7 @@ def register_claim(sub):
     cl = sub("claim", help="Claim a resource (bus-relative path, or issue:N, table:x, area:y)")
     cl.add_argument("resource", help="What to claim: a path relative to the bus folder (a folder covers what is under it), or issue:N, table:NAME, area:NAME.")
     cl.add_argument("--purpose", metavar="TEXT", help="Why you hold it; shown to anyone who runs into the claim.")
-    request_id_arg(cl)
+    request_id_arg(cl, "Repeating claim renews your hold; it never takes a resource another agent holds.")
     cl.add_argument("--ttl-min", type=integer, default=120, metavar="MIN", help=f"Claim lifetime in minutes: 1-{MAX_TTL_MIN}; default 120. Claim again to renew.")
 
 
@@ -5396,7 +5410,7 @@ def register_release(sub):
     g.add_argument("resource", nargs="?", help="Resource to release; use the spelling from claims.")
     g.add_argument("--all", action="store_true", help="Release all your claims")
     rl.add_argument("--if-held", action="store_true", help="With a resource: succeed (releasing nothing) when you do not hold it, for cleanup.")
-    request_id_arg(rl)
+    request_id_arg(rl, "To repeat a release, add --if-held.")
 
 
 def register_claims(sub):
@@ -5429,7 +5443,7 @@ def register_status(sub):
 def register_goal(sub):
     gl = sub("goal", help="The shared goal every agent sees first: set it with text, show it without")
     gl.add_argument("text", nargs="*", help="The goal; '-' reads it from stdin. Omit to show the current goal.")
-    request_id_arg(gl)
+    request_id_arg(gl, "Repeating goal sets the text again, over a change made since: goal first.")
 
 
 def register_watch(sub):
@@ -8379,15 +8393,15 @@ SKILL_TEXT = (
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `brief` (goal, holders, questions, handoffs, facts, next command), then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name (join suggests a free one). `ctx get` reads facts, `ctx history KEY` earlier values.\n'
+    'Start with `join`, then `brief` (goal, holders, questions, handoffs, facts, next command), then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name. `ctx get` reads facts, `ctx history KEY` earlier values.\n'
     '\n'
     'Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as. Hooks never claim and never replace reading inbox.\n'
     '\n'
     '## Before shared work\n'
     '\n'
-    'Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"` directly: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
+    'Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Before editing, run `claim RESOURCE --purpose "PURPOSE"`: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
     '\n'
-    'Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. Claims are advisory and expire after 120 minutes by default. Claim again to renew; omitted purpose preserves the current purpose and acquisition time stays unchanged. `--ttl-min` sets a lifetime of 1 to 10080 minutes.\n'
+    'Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. Claims are advisory and expire after 120 minutes by default. Claim again to renew; an omitted purpose and the acquisition time stay unchanged. `--ttl-min` sets 1 to 10080 minutes.\n'
     '\n'
     '## Communicate\n'
     '\n'
@@ -8399,17 +8413,17 @@ SKILL_TEXT = (
     '\n'
     'Kinds: note, question, answer, handoff, decision, alert, done. Assign work with handoff. Decisions, if used: `read --topic decision`.\n'
     '\n'
-    'Check recipients with `who`. Messages queue for absent names (post warns). Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.\n'
+    'Messages queue for absent names (post warns). Without `--to`, a message is broadcast. `--reply-to` does not choose a recipient.\n'
     '\n'
     '## Read correctly\n'
     '\n'
-    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head; use `inbox --limit N` or inspect with `inbox --peek`. New identities get older direct messages but only later broadcasts. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or inspect with `inbox --peek`. New identities get older direct messages but only later broadcasts. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.\n'
     '\n'
-    'A nonzero exit does not imply rollback. A write may commit before output fails. When a write might be retried, add `--request-id` with a token; a repeat returns the original.\n'
+    'A nonzero exit does not imply rollback. A write may commit before output fails. When a `post` or `join` might be retried, add `--request-id` with a token; a repeat returns the original. Other writes ignore it.\n'
     '\n'
     '## Finish the session\n'
     '\n'
-    'Before ending the session, check `inbox`, post the result or handoff, then `leave`, which releases all claims.\n'
+    'Before ending, check `inbox`, post the result or handoff, then `leave`, which releases all claims.\n'
     '\n'
     '## Boundaries\n'
     '\n'

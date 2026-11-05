@@ -211,9 +211,9 @@ A failing command exits non-zero and, under `--json`, prints one JSON object on 
 | --- | --- | --- |
 | `code` | string | One of the error codes below; branch on this, not on the message. |
 | `message` | string | What happened and what to do, for a person. |
-| `retryable` | boolean | Whether running the same command again can succeed. False once the command saved database rows, unless it had a --request-id; a command that changed only files (init, upgrade's copy, setup) stays retryable. |
-| `committed` | boolean | True when the command's own change had been saved before the failure, so a write must not be repeated without its --request-id unless retryable is true. |
-| `next` | string or null | The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A write's request id is not repeated here: reuse the one you sent. |
+| `retryable` | boolean | Whether running the same command again can succeed. False once the command saved database rows, unless it is a post or join with a --request-id (the bus stores that token, so a repeat returns the first result); a command that changed only files (init, upgrade's copy, setup) stays retryable. |
+| `committed` | boolean | True when the command's own change had been saved before the failure, so a write must not be repeated unless retryable is true (a post or join with its --request-id). For any other write, look at what it changed first. |
+| `next` | string or null | The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A post's or join's request id is not repeated here: reuse the one you sent. |
 <!-- /generated:error-fields -->
 
 What stdout holds depends on when the failure happened:
@@ -225,7 +225,7 @@ What stdout holds depends on when the failure happened:
 
 Output together with a non-zero exit is possible for `ack_failed`, `output_failed`, `interrupted` and `items_failed`. When `committed` is `true`, any stdout is the complete result and must be read: an `inbox` interrupted inside its mark-read commit prints the full JSON, and its messages are already marked read.
 
-`committed` is `true` when the command's own change had been saved before the failure came (a database error after a `post` committed, an `output_failed` from a write, an `interrupted` after the commit), `false` when nothing was written. `retryable` is never `true` once the command saved database rows, unless it carried `--request-id`: then repeating it returns the saved result with `duplicate: true`. A command that changed only files (`init`, the copy `upgrade` replaced, `setup`) is safe to repeat, so it stays retryable with `committed: true`; an interrupted one names the command that finishes it (`rerun`). The `retryable` column of the table below is the code's own value, before that rule.
+`committed` is `true` when the command's own change had been saved before the failure came (a database error after a `post` committed, an `output_failed` from a write, an `interrupted` after the commit), `false` when nothing was written. `retryable` is never `true` once the command saved database rows, unless it is a `post` or `join` that carried `--request-id`: then repeating it returns the saved result with `duplicate: true`. For any other write, look at what it changed before repeating it. A command that changed only files (`init`, the copy `upgrade` replaced, `setup`) is safe to repeat, so it stays retryable with `committed: true`; an interrupted one names the command that finishes it (`rerun`). The `retryable` column of the table below is the code's own value, before that rule.
 
 Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention), with one JSON error on stderr under `--json`. Stdout is empty unless `committed` is `true` (see above). A Ctrl-C that lands while a command is committing is held until the commit is recorded, so `committed` is accurate.
 
@@ -250,10 +250,10 @@ Ctrl-C (SIGINT) is `interrupted`, exit `130` in both modes (the shell convention
 | `schema_corrupt` | 3 | no | `bus`, `bus_schema` | bus.db records a schema version no agentbus writes; another tool or an agent changed it. Stop and tell the user; restore a backup (docs/how-to/upgrade.md). |
 | `backup_failed` | 3 | no | `bus`, `reason` | The backup before a migration could not be made. Free disk space or move the bus. |
 | `copy_newer` | 1 | no | `directory`, `copy_version`, `tool_version` | The folder's copy of agentbus is newer than this one; it is never downgraded. Run upgrade or init with a newer agentbus. |
-| `bus_unavailable` | 3 | no | `file` (optional), `outcome_unknown` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; committed is then true when that write was the command's own. Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat it only with its request id. |
+| `bus_unavailable` | 3 | no | `file` (optional), `outcome_unknown` (optional) | The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; committed is then true when that write was the command's own. Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat a post or join only with its request id. |
 | `ack_failed` | 3 | yes | `delivered` | inbox printed its messages but could not mark them read. The output was complete: use it, expect the same messages again, and dedupe by id. |
-| `output_failed` | 1 | yes | none | stdout could not be written; committed effects stand. Retry with the same token. |
-| `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional), `argv` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun). |
+| `output_failed` | 1 | yes | none | stdout could not be written; committed effects stand. Repeat a post or join with the same --request-id; for any other write, look at what it changed instead of repeating it. |
+| `interrupted` | 130 | yes | `directory` (optional), `backup` (optional), `migrations` (optional), `rerun` (optional), `changed` (optional), `argv` (optional) | The command was stopped (Ctrl-C or SIGINT) before it finished. Check committed: if true the change was saved, so repeat a post or join only with its request id, and look at what any other write changed before repeating it, unless retryable is true (init, upgrade and setup can simply be rerun). |
 | `items_failed` | 1 | no | `failed` | Some of the items the command works on failed or were refused (buses of upgrade --all, files of setup, checks of doctor); stdout holds the whole result, and failed lists those items. Read each failed item's error, fix it, then run the command again. |
 | `installer_failed` | 1 | no | `argv`, `exit_status`, `reason`, `recovery` | The installer update ran did not finish, or finished without moving agentbus to the new release (reason: exit, signal, timeout, version_unchanged, version_mismatch). Run agentbus update again (recovery); the installer's own output is above the error. |
 | `download_failed` | 1 | no | `reason`, `asset` | The release's wheel or SHA256SUMS could not be downloaded or did not check out (reason: http, redirect, tls, malformed, too_large, hash_mismatch). Nothing was installed. Try again later: agentbus update. |
@@ -299,21 +299,21 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | Command | Class | How to retry safely |
 | --- | --- | --- |
 | `join` | idempotent with flag | join --request-id TOKEN: the same token and flags return the first result with duplicate true instead of name_active; or join --takeover for your own name |
-| `leave` | idempotent | a second run reports was_joined false and released_count 0 and writes no log row |
+| `leave` | idempotent | a second run reports was_joined false and released_count 0 and writes no log row; --request-id is ignored (a repeat after you joined again releases what you then hold) |
 | `who` | safe | repeat freely |
 | `post` | needs request id | pass --request-id TOKEN; the same token and payload returns the original id with duplicate true |
 | `inbox` | at least once | repeat; a crash or ack_failed redelivers, so check message ids before acting; with `--peek`: safe (repeat freely) |
 | `read` | safe | repeat freely |
-| `ctx set` | idempotent | an unchanged value writes no history row and returns unchanged true |
+| `ctx set` | idempotent | an unchanged value writes no history row and returns unchanged true. --request-id is ignored: a repeat after another agent changed the key sets your value again and overwrites theirs, so ctx get KEY first |
 | `ctx get` | safe | repeat freely |
 | `ctx history` | safe | repeat freely |
-| `claim` | idempotent | renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, and previous_purpose is set when --purpose changed it |
-| `release` | idempotent with flag | release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent |
+| `claim` | idempotent | renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, and previous_purpose is set when --purpose changed it. --request-id is ignored; a resource another agent took meanwhile gives claim_conflict, never an overwrite |
+| `release` | idempotent with flag | release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent. --request-id is ignored: a plain repeat of a release that worked gives not_held |
 | `claims` | safe | repeat freely |
 | `log add` | unsafe | each call appends a row; check log show --limit 1 before retrying |
 | `log show` | safe | repeat freely |
 | `status` | safe | repeat freely |
-| `goal` | idempotent | showing is free; an unchanged goal writes no history row and returns unchanged true |
+| `goal` | idempotent | showing is free; an unchanged goal writes no history row and returns unchanged true. --request-id is ignored: a repeat after another agent changed the goal sets your text again and overwrites theirs, so run goal first |
 | `watch` | safe | repeat freely |
 | `buses` | safe | repeat freely |
 | `init` | idempotent | repeat |
@@ -330,7 +330,7 @@ A retry after a timeout, a crash or an `output_failed` is safe when the command'
 | `demo` | safe | repeat freely |
 <!-- /generated:retry -->
 
-One rule for every write: repeating a command with the same `--request-id` never repeats its effect. `post` and `join` replay the first result (`duplicate: true`); `leave`, `claim`, `release`, `ctx set` and `goal` accept the flag and are already safe to repeat, so it changes nothing. `log add` has no token yet: check `log show --limit 1` before retrying it.
+`--request-id` replays a write only where the bus stores the token: `post` and `join` return the first result (`duplicate: true`). `leave`, `claim`, `release`, `ctx set` and `goal` accept the flag and ignore it, and a repeat does what the command does: `leave` leaves again, `claim` renews your hold or gives `claim_conflict` if another agent took the resource meanwhile, a repeated `release` gives `not_held` unless it has `--if-held`, and `ctx set` and `goal` set the value again, over a change another agent made since (run `ctx get KEY` or `goal` first). `log add` has no token: check `log show --limit 1` before retrying it.
 
 `post --request-id TOKEN` makes a retry by the same sender return the original message ID with `duplicate: true`. Body, recipient, kind, topic and reply target must match; a different payload gives `request_id_reused`, naming the original (`original_id`). Tokens belong to their sender and remain on the message row. Without a token each post creates a message.
 
@@ -354,6 +354,6 @@ One rule for every write: repeating a command with the same `--request-id` never
 
 ## Locking
 
-Each command holds SQLite exclusively and closes it before formatting or printing. Others wait up to 15 seconds. SQL has a 6-second budget; a watchdog caps the whole hold at 8 seconds, leaving slack for a slow machine. Watch closes the bus between frames.
+Each command holds SQLite exclusively and closes it before formatting or printing. Others wait up to 15 seconds, timed on the monotonic clock, so a clock change cannot cut the wait or stretch it. SQL has a 6-second budget; a watchdog caps the whole hold at 8 seconds, leaving slack for a slow machine. Watch closes the bus between frames. Every open sets `PRAGMA synchronous=FULL`, so a write is synced to disk before its command reports it, whatever default the SQLite build has; it costs one sync per write command.
 
-An idle sqlite3 shell or dashboard can block every command. Inspect with `status`, `read` or `--json`, or close the other client between queries. Files stay owner-only; link checks and schema-shape validation run on every open.
+Any other SQLite connection that has read the bus blocks every agentbus command, reads included, for as long as it stays open, even idle between queries. A command waits for it to close and then runs; if it is still open after 15 seconds the command fails `busy`. Inspect with `status`, `read` or `--json`, or close the other client between queries. Files stay owner-only; link checks and schema-shape validation run on every open.
