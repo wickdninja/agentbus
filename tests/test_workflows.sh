@@ -45,6 +45,10 @@ assert 'scripts/verify_dist.sh' in by['build'] and 'SHA256SUMS' in by['build'], 
 for n in ('publish',):
     assert 'scripts/check_sums.sh dist expected-sums' in by[n], (n, 'must check the exact file set, the bytes and SHA256SUMS against the sums the build job emitted')
     assert 'actions/checkout' in by[n], (n, 'needs the repository for scripts/check_sums.sh')
+    # upload-artifact keeps paths relative to the files' common folder: dist/ and notes.md are uploaded together, so the
+    # download holds dist/ already. A step that makes dist/ fails there (v0.2.0's first publish).
+    assert 'mkdir dist' not in by[n] and 'mv *.whl' not in by[n], (n, 'the downloaded artifact already holds dist/')
+    assert 'notes.md' in by['build'] and 'dist/*.whl' in by['build'], ('build', 'the artifact layout publish relies on')
 assert '--verify-tag' in by['publish'], 'gh release create --verify-tag'
 assert 'GITHUB_SHA' in by['publish'], 'the tag must still point at the built commit before the release is created'
 assert 'actions/attest-build-provenance' in by['publish'], 'GitHub artifact attestations for the release assets'

@@ -188,6 +188,10 @@ RC=0; OUT=$(bash "$D/scripts/check_sums.sh" "$T/dist" "$T/expected" 2>&1) || RC=
 printf 'wheel bytes' >"$T/dist/a-1.0-py3-none-any.whl"; printf '%s\n' "$(cat "$T/expected")" "0000000000000000000000000000000000000000000000000000000000000000  other.whl" >"$T/dist/SHA256SUMS"
 RC=0; OUT=$(bash "$D/scripts/check_sums.sh" "$T/dist" "$T/expected" 2>&1) || RC=$?
 [ "$RC" = 1 ] && grep -qF "differs from the sums the build job emitted" <<<"$OUT" || fail "a SHA256SUMS that is not the emitted one: exit $RC: $OUT"
+printf 'wheel bytes' >"$T/dist/a-1.0-py3-none-any.whl"; cp "$T/expected" "$T/dist/SHA256SUMS"
+# As release.yml runs it: both paths relative to the folder above dist (v0.2.0's first publish failed here).
+RC=0; OUT=$(cd "$T" && bash "$D/scripts/check_sums.sh" dist expected 2>&1) || RC=$?
+[ "$RC" = 0 ] && [ "$(tail -n 1 <<<"$OUT")" = "files match the recorded sha256s: a-1.0-py3-none-any.whl a-1.0.tar.gz" ] || fail "relative paths, as the workflow passes them: exit $RC: $OUT"
 ok "check_sums.sh: exact file set, exact bytes, exact SHA256SUMS"
 
 echo

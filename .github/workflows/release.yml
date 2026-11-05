@@ -90,7 +90,7 @@ jobs:
         env:
           SUMS: ${{ needs.build.outputs.sums }}
         run: |
-          mkdir dist && mv *.whl *.tar.gz SHA256SUMS dist/
+          # The artifact keeps the paths it was uploaded with: dist/ (the wheel, the sdist, SHA256SUMS) and notes.md.
           printf '%s\n' "$SUMS" > expected-sums
           bash scripts/check_sums.sh dist expected-sums
       - name: The tag still points at the commit that was built
