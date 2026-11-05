@@ -1344,22 +1344,23 @@ def chmod_nofollow(path, mode, kind, expect, optional=False):
         os.close(fd)
 
 
-def write_atomic(path, data, mode):
+def write_atomic(path, data, mode, dir_fd=None):
     """Replace path with data: a fresh, randomly named temp file in the same folder, created with
-    O_CREAT|O_EXCL|O_NOFOLLOW (never an existing file or link), then os.replace."""
+    O_CREAT|O_EXCL|O_NOFOLLOW (never an existing file or link), then os.replace. With dir_fd, path is
+    a name in that folder."""
     d = os.path.dirname(path)
     tmp = os.path.join(d, f".{os.path.basename(path)}.{secrets.token_hex(8)}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, mode)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, mode, dir_fd=dir_fd)
     try:
         with os.fdopen(fd, "wb") as f:
             os.fchmod(f.fileno(), mode)
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        os.replace(tmp, path, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
     except BaseException:
         try:
-            os.unlink(tmp)
+            os.unlink(tmp, dir_fd=dir_fd)
         except OSError:
             pass
         raise
@@ -8546,37 +8547,92 @@ def setup_read(path, follow=False):
     return None if len(data) > SETUP_READ_LIMIT else data
 
 
-def setup_mkdirs(path):
-    """Create the folders above a file we will write, owner-only, never through a link we create."""
-    missing = []
-    while path and not os.path.isdir(path):
-        missing.append(path)
-        parent = os.path.dirname(path)
-        if parent == path:
-            break
-        path = parent
-    for d in reversed(missing):
-        os.mkdir(d, 0o700)
-
-
 _SETUP_SCOPE = None  # the scope of the setup running: the folder chain of every write and removal is checked against it
+_SETUP_PINS = {}  # folder: the descriptor setup_pin holds on it for the whole run
+SETUP_DIR = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+
+
+def setup_pin(folder):
+    """At planning, hold the folder every later step starts from: with --scope project the working directory; otherwise
+    `folder`, or its nearest parent that exists, links and all (the user's own config folder may be one). What the path
+    names later cannot move a step that starts here. Only a running setup holds one: doctor plans too."""
+    project = _SETUP_SCOPE == "project"
+    d = os.getcwd() if project else folder
+    while _SETUP_SCOPE and d not in _SETUP_PINS:
+        try:
+            _SETUP_PINS[d] = os.open("." if project else d, SETUP_DIR)
+        except (FileNotFoundError, NotADirectoryError):
+            if d == os.path.dirname(d):
+                raise
+            d = os.path.dirname(d)
+
+
+@contextmanager
+def setup_dir(path, create=False):
+    """Yield (fd, name): the folder holding path and path's name. Every write, rename and removal in setup uses them with
+    dir_fd. The walk goes down from setup_pin's folder one O_NOFOLLOW step at a time (making what is missing, owner-only,
+    with create), so the kernel refuses a link in the way and a swap once the fd is held moves nothing."""
+    base, rest = os.path.dirname(path), []
+    while base not in _SETUP_PINS:
+        base, part = os.path.split(base)
+        if not part:
+            raise OSError(errno.ENOENT, f"{path} was not planned")
+        rest.insert(0, part)
+    fd = os.dup(_SETUP_PINS[base])
+    try:
+        for part in rest:
+            base = os.path.join(base, part)
+            if create:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            try:
+                step = os.open(part, SETUP_DIR | NOFOLLOW, dir_fd=fd)
+            except OSError as e:  # Linux says ENOTDIR for a link opened with O_DIRECTORY
+                if e.errno == errno.ELOOP or (e.errno == errno.ENOTDIR and os.path.islink(base)):
+                    raise OSError(errno.ELOOP, f"{base} is a link" + (", so setup would write outside this project" if _SETUP_SCOPE == "project"
+                                                                       else ", and was not one when setup started"))
+                raise
+            os.close(fd)
+            fd = step
+        _test_pause("setup-dir-held")
+        yield fd, os.path.basename(path)
+        setup_check_chain(path, after=True)
+    finally:
+        os.close(fd)
 
 
 def setup_check_chain(path, after=False):
     """Refuse when, with --scope project, a folder between the working directory and `path` is (now) a link: right before
-    each write or removal, and again after a write (what was written then is named in the error, never trusted)."""
+    a change, and again after it (setup_dir kept the change out of the link; the error says what happened)."""
     linked = setup_linked_dir(_SETUP_SCOPE, os.path.dirname(path))
     if linked:
-        raise OSError(errno.ELOOP, f"{linked} is a link" + (f", and became one while setup wrote {path}; check where it went" if after
+        raise OSError(errno.ELOOP, f"{linked} is a link" + (f", and became one while setup changed {path}; nothing went through it" if after
                                                                 else ", so setup would write outside this project"))
 
 
 def setup_write(path, data, mode):
-    """write_atomic, then the folder is synced so the rename survives a crash."""
-    setup_check_chain(path)
-    write_atomic(path, data, mode)
-    setup_check_chain(path, after=True)
-    setup_sync_dir(os.path.dirname(path))
+    """write_atomic in the folder setup_dir walked to, then the folder is synced so the rename survives a crash."""
+    with setup_dir(path, create=True) as (dfd, name):
+        write_atomic(name, data, mode, dir_fd=dfd)
+        setup_sync_dir(dfd)
+
+
+def setup_remove(path):
+    """Remove the file or link at path, in the folder setup_dir walked to."""
+    with setup_dir(path) as (dfd, name):
+        os.unlink(name, dir_fd=dfd)
+        setup_sync_dir(dfd)
+
+
+def setup_rmdir(folder):
+    """Remove folder when it is empty; one that holds anything else (a backup, the user's files) stays."""
+    try:
+        with setup_dir(folder) as (dfd, name):
+            os.rmdir(name, dir_fd=dfd)
+    except OSError:
+        pass
 
 
 def setup_backup_write(path, data):
@@ -8585,40 +8641,35 @@ def setup_backup_write(path, data):
     two setups at once never share one; a clash moves the stamp on a microsecond. Returns the basename."""
     from datetime import timedelta
     now, n = datetime.now(timezone.utc), 0  # a file name: the real clock
-    while True:
-        name = f"{path}.agentbus-{(now + timedelta(microseconds=n)).strftime('%Y%m%dT%H%M%S.%fZ')}.bak"
+    with setup_dir(path) as (dfd, base):
+        while True:
+            name = f"{base}.agentbus-{(now + timedelta(microseconds=n)).strftime('%Y%m%dT%H%M%S.%fZ')}.bak"
+            try:
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600, dir_fd=dfd)
+                break
+            except FileExistsError:
+                n += 1
         try:
-            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600)
-            break
-        except FileExistsError:
-            n += 1
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-    except BaseException:
-        try:
-            os.unlink(name)
-        except OSError:
-            pass
-        raise
-    setup_sync_dir(os.path.dirname(name))
-    file_changed(name)
-    return os.path.basename(name)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+        except BaseException:
+            try:
+                os.unlink(name, dir_fd=dfd)
+            except OSError:
+                pass
+            raise
+        setup_sync_dir(dfd)
+        file_changed(os.path.join(os.path.dirname(path), name))
+    return name
 
 
-def setup_sync_dir(folder):
+def setup_sync_dir(dfd):
     try:
-        fd = os.open(folder or ".", os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
+        os.fsync(dfd)
     except OSError:
         pass  # some filesystems cannot sync a folder; the file is written
-    finally:
-        os.close(fd)
 
 
 def setup_test_fail(point):
@@ -8713,6 +8764,7 @@ class SkillFilePiece:
         if linked:
             return setup_refuse_link(linked)
         try:
+            setup_pin(os.path.dirname(folder))  # above the skill's own folder: that one may be the old link setup replaces
             return self._plan(scope, folder, skill, uninstall)
         except OSError as e:
             return [Change(skill, "refused", f"{skill} cannot be inspected ({e.strerror or e}); not changed.",
@@ -8741,7 +8793,7 @@ class SkillFilePiece:
             link_changes = [Change(folder, "replaced_link", f"replaced the link to {old}",
                                    line="{path}   replaced the link to " + old + " (the old install line)",
                                    would="would replace the link {path} to " + old + " (the old install line)",
-                                   write=lambda: (setup_check_chain(folder), os.unlink(folder)))]  # the folders above the link; the link is the entry being replaced
+                                   write=lambda: setup_remove(folder))]  # the folders above the link; the link is the entry being replaced
             st = None
         elif st is not None and not stat.S_ISDIR(st.st_mode):
             return self._refuse(folder, "exists and is not a folder", f"Move it aside, or run: {project}")
@@ -8785,7 +8837,6 @@ class SkillFilePiece:
 
         def write():
             setup_guard(skill, existing, "setup-before-write")
-            setup_mkdirs(os.path.dirname(skill))
             if backup:
                 change.backup = setup_backup_write(skill, existing)
                 setup_test_fail("after-backup")
@@ -8803,12 +8854,8 @@ class SkillFilePiece:
 
     def _remove(self, folder, skill):
         def write():
-            setup_check_chain(skill)
-            os.unlink(skill)
-            try:
-                os.rmdir(folder)
-            except OSError:
-                pass  # the folder holds something else (a backup, the user's files): it stays
+            setup_remove(skill)
+            setup_rmdir(folder)
         gone = not [n for n in os.listdir(folder) if n != "SKILL.md"]
         shown = folder + os.sep if gone else skill
         return Change(shown, "removed", "", line="removed {path}", would="would remove {path}", write=write)
@@ -8885,6 +8932,7 @@ class TextBlockPiece:
         if linked:
             return setup_refuse_link(linked)
         try:
+            setup_pin(os.path.dirname(path))
             return self._plan(scope, path, uninstall)
         except OSError as e:
             msg = f"{{path}} cannot be inspected ({e.strerror or e}); not changed."
@@ -8951,7 +8999,6 @@ class TextBlockPiece:
         mode = stat.S_IMODE(st.st_mode) if st is not None else 0o600
         def write():
             setup_guard(path, raw, "setup-before-write")
-            setup_mkdirs(os.path.dirname(path))
             if backup:
                 change.backup = setup_backup_write(path, raw)
                 setup_test_fail("after-backup")
@@ -8961,8 +9008,7 @@ class TextBlockPiece:
             if not new.strip():  # the block was all the file held: leave no empty file behind
                 def gone():
                     setup_guard(path, raw, "setup-before-write")
-                    os.unlink(path)
-                    setup_sync_dir(os.path.dirname(path))
+                    setup_remove(path)
                 return Change(path, "removed", "", line="{path}   removed the agentbus block, and the file, which held nothing else",
                               would="would remove the agentbus block and the file {path}, which holds nothing else", write=gone)
             change = Change(path, "removed", "", line="{path}   removed the agentbus block",
@@ -9088,6 +9134,7 @@ class JsonEntriesPiece:
         if linked:
             return setup_refuse_link(linked)
         try:
+            setup_pin(os.path.dirname(path))
             return self._plan(scope, path, uninstall)
         except OSError as e:
             msg = f"{{path}} cannot be inspected ({e.strerror or e}); not changed."
@@ -9141,13 +9188,9 @@ class JsonEntriesPiece:
                 if keep:
                     removal.backup = setup_backup_write(path, raw)
                     setup_test_fail("after-backup")
-                os.unlink(path)
-                setup_sync_dir(os.path.dirname(path))
+                setup_remove(path)
                 if _SETUP_SCOPE == "project" and os.path.basename(os.path.dirname(path)) == ".codex":
-                    try:
-                        os.rmdir(os.path.dirname(path))  # the project's folder setup made for it, when nothing else is in it (never ~/.codex)
-                    except OSError:
-                        pass
+                    setup_rmdir(os.path.dirname(path))  # the project's folder setup made for it, when nothing else is in it (never ~/.codex)
             removal = Change(path, "removed", "", line="{path}   removed the agentbus hooks, and the file, which held nothing else" + gone_note,
                              would="would remove the agentbus hooks and the file {path}, which holds nothing else" + gone_note,
                              write=gone, backup_hint=gone_hint if keep else "")
@@ -9163,7 +9206,6 @@ class JsonEntriesPiece:
 
         def write():
             setup_guard(path, raw, "setup-before-write-entries")  # its own name: tests pause here after another piece wrote
-            setup_mkdirs(os.path.dirname(path))
             if save:
                 change.backup = setup_backup_write(path, raw)
                 setup_test_fail("after-backup")

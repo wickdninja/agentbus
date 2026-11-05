@@ -1395,6 +1395,60 @@
     "expect": "a foreign skill file was not kept by refresh"
   },
   {
+    "name": "setup follows a link planted on its walk",
+    "file": "bin/agentbus",
+    "find": "SETUP_DIR \\| NOFOLLOW, dir_fd=fd",
+    "replace": "SETUP_DIR, dir_fd=fd",
+    "count": 1,
+    "run": "tests/test_setup_race.sh",
+    "expect": "user scope: a link planted after planning was followed"
+  },
+  {
+    "name": "setup writes by path after holding the folder",
+    "file": "bin/agentbus",
+    "find": "write_atomic\\(name, data, mode, dir_fd=dfd\\)",
+    "replace": "write_atomic(path, data, mode)",
+    "count": 1,
+    "run": "tests/test_setup_race.sh",
+    "expect": "install wrote through a folder swapped in at the gap"
+  },
+  {
+    "name": "setup backs up by path after holding the folder",
+    "file": "bin/agentbus",
+    "find": "os\\.open\\(name, os\\.O_WRONLY \\| os\\.O_CREAT \\| os\\.O_EXCL \\| NOFOLLOW, 0o600, dir_fd=dfd\\)",
+    "replace": "os.open(os.path.join(os.path.dirname(path), name), os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, 0o600)",
+    "count": 1,
+    "run": "tests/test_setup_race.sh",
+    "expect": "a backup went through a folder swapped in at the gap"
+  },
+  {
+    "name": "setup removes by path after holding the folder",
+    "file": "bin/agentbus",
+    "find": "os\\.unlink\\(name, dir_fd=dfd\\)\\n        setup_sync_dir",
+    "replace": "os.unlink(path)\n        setup_sync_dir",
+    "count": 1,
+    "run": "tests/test_setup_race.sh",
+    "expect": "uninstall removed a file through a folder swapped in at the gap"
+  },
+  {
+    "name": "setup opens its starting folder at write time, not planning",
+    "file": "bin/agentbus",
+    "find": "fd = os\\.dup\\(_SETUP_PINS\\[base\\]\\)",
+    "replace": "fd = os.open(base, SETUP_DIR)",
+    "count": 1,
+    "run": "tests/test_setup_race.sh",
+    "expect": "user scope: a removal followed a config folder swapped after planning"
+  },
+  {
+    "name": "setup stays silent about a swap at the gap",
+    "file": "bin/agentbus",
+    "find": "        setup_check_chain\\(path, after=True\\)\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_setup_race.sh",
+    "expect": "install: a swap at the gap was not reported"
+  },
+  {
     "name": "doctor shows a cached release more than a week old",
     "file": "bin/agentbus",
     "find": "    if not 0 <= age < 7 \\* 86400:",
@@ -3116,8 +3170,8 @@
   {
     "name": "uninstall leaves the empty .codex folder",
     "file": "bin/agentbus",
-    "find": "                        os\\.rmdir\\(os\\.path\\.dirname\\(path\\)\\)[^\\n]*\\n",
-    "replace": "                        pass\n",
+    "find": "                    setup_rmdir\\(os\\.path\\.dirname\\(path\\)\\)[^\\n]*\\n",
+    "replace": "                    pass\n",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "uninstall left the empty .codex folder"
@@ -3431,8 +3485,8 @@
   {
     "name": "project scope cannot replace the old install link",
     "file": "bin/agentbus",
-    "find": "setup_check_chain\\(folder\\), os\\.unlink\\(folder\\)",
-    "replace": "setup_check_chain(skill), os.unlink(folder)",
+    "find": "write=lambda: setup_remove\\(folder\\)",
+    "replace": "write=lambda: (setup_check_chain(skill), setup_remove(folder))",
     "count": 1,
     "run": "tests/test_setup.sh",
     "expect": "project scope cannot replace the old install link"
