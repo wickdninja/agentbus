@@ -461,6 +461,62 @@ def test_infra():
     check(grade.infra_failure(no_tool, "claude", 1, False, "time_cap") is None, "a timeout stays in")
     check(grade.infra_failure(no_tool, "claude", 1, True, None) is None, "the task's own kill stays in")
     check(grade.infra_failure(claude_lines({"type": "result", "result": "done"}), "claude", 0, False, None) is None, "an idle agent stays in: it did nothing, and that counts")
+    # the provider's own sign-in failure is infrastructure whenever it happens, tool calls or not (Dropping runs: "sign-in failed")
+    expired = {"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "Failed to authenticate: OAuth session expired and could not be refreshed"}]}}
+    cut = claude_lines({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}, expired)
+    check(grade.infra_failure(cut, "claude", 1, False, None) == "authentication failed", "a sign-in failure after tool calls is infra")
+    check(grade.infra_failure(cut, "claude", 0, False, None) == "authentication failed", "a sign-in failure is infra whatever the exit code")
+    check(grade.infra_failure(cut, "claude", 1, False, "time_cap") is None, "a real timeout stays in, even with a sign-in failure in the stream")
+    check(grade.infra_failure(cut, "claude", 1, False, "tool_cap") is None, "a tool cap stays in")
+    check(grade.infra_failure(cut, "claude", 1, True, None) is None, "the task's own kill stays in")
+    quoted = claude_lines({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}},
+                          {"type": "assistant", "message": {"model": "claude-x", "content": [{"type": "text", "text": "the log said: Please run /login"}]}},
+                          {"type": "user", "message": {"content": [{"type": "tool_result", "content": "Failed to authenticate in the fixture"}]}})
+    check(grade.infra_failure(quoted, "claude", 1, False, None) is None, "agent text and tool output quoting the phrase stay in")
+    worked = claude_lines({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}})
+    check(grade.infra_failure(worked, "claude", 1, False, None, stderr_lines=["Please run /login"]) == "authentication failed", "a sign-in failure only on stderr is infra")
+    check(grade.infra_failure(worked, "claude", 1, False, None, stderr_lines=["some warning"]) is None, "other stderr stays in")
+    check(grade.infra_failure(worked, "claude", 0, False, None) is None, "a clean run stays in")
+
+
+def test_regrade_infra():
+    """Rows already in a manifest, graded again by the current rule: only an unflagged run whose own stream or stderr carries a
+    sign-in failure changes, and the folder is read, never rewritten."""
+    out = tempfile.mkdtemp()
+    work = {"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}
+    expired = {"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "OAuth session expired"}]}}
+    quoted = {"type": "assistant", "message": {"model": "claude-x", "content": [{"type": "text", "text": "Please run /login"}]}}
+
+    def run_folder(rid, streams, stops=None, stderr=None):
+        files = {}
+        agents = {}
+        for role, objs in streams.items():
+            files["%s/trace-%s.jsonl" % (rid, role)] = "".join(json.dumps(w) + "\n" for w in claude_lines(*objs))
+            files["%s/stderr-%s.txt" % (rid, role)] = (stderr or {}).get(role, "")
+            agents[role] = {"harness": "claude", "rc": 1, "stop": (stops or {}).get(role)}
+        files["%s/run.json" % rid] = json.dumps({"id": rid, "agents": agents})
+        tree(out, files)
+
+    run_folder("rclean", {"alice": [work], "bob": [work]})
+    run_folder("rcut", {"alice": [work], "bob": [work, expired]})
+    run_folder("rerr", {"alice": [work]}, stderr={"alice": "Failed to authenticate\n"})
+    run_folder("rquote", {"alice": [work, quoted]})
+    run_folder("rtime", {"alice": [work, expired]}, stops={"alice": "time_cap"})
+    run_folder("rtask", {"alice": [work, expired]}, stops={"alice": "task_kill"})
+    run_folder("rold", {"alice": [expired]})
+    rows = [{"id": i, "infra": {}, "isolation": []} for i in ("rclean", "rcut", "rerr", "rquote", "rtime", "rtask")]
+    rows.append({"id": "rold", "infra": {"alice": "no tool call and rc 1"}, "isolation": []})
+    tree(out, {"manifest.jsonl": "".join(json.dumps(r) + "\n" for r in rows)})
+    before = open(os.path.join(out, "manifest.jsonl")).read()
+    changed = grade.regrade_infra(out)
+    check(changed == {"rcut": {"bob": "authentication failed"}, "rerr": {"alice": "authentication failed"}}, "regrade found: %s" % changed)
+    check(open(os.path.join(out, "manifest.jsonl")).read() == before, "a dry regrade rewrote the manifest")
+    check(grade.regrade_infra(out, write=True) == changed, "a written regrade found something else")
+    got = {r["id"]: r["infra"] for r in (json.loads(l) for l in open(os.path.join(out, "manifest.jsonl")))}
+    check(got == {"rclean": {}, "rcut": {"bob": "authentication failed"}, "rerr": {"alice": "authentication failed"}, "rquote": {}, "rtime": {}, "rtask": {},
+                  "rold": {"alice": "no tool call and rc 1"}}, "regraded manifest: %s" % got)
+    check(grade.regrade_infra(out, write=True) == {}, "a second regrade changed rows again")
+    shutil.rmtree(out)
 
 
 def test_stats():

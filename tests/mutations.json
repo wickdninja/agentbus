@@ -4444,5 +4444,32 @@
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "equal cells must be closed"
+  },
+  {
+    "name": "value eval: a sign-in failure after tool calls is not infrastructure",
+    "file": "scripts/value-eval/grade.py",
+    "find": "    if any\\(auth_failed\\(w\\[\"line\"\\]\\) for w in lines\\) or any\\(auth_failed\\(line\\) for line in stderr_lines\\):\\n        return \"authentication failed\"\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a sign-in failure after tool calls is infra"
+  },
+  {
+    "name": "value eval: a regrade flags a run that was already infrastructure",
+    "file": "scripts/value-eval/grade.py",
+    "find": "        if row\\[\"infra\"\\] or row\\[\"isolation\"\\]:\\n            continue\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "regrade found"
+  },
+  {
+    "name": "value eval: a dry regrade rewrites the manifest",
+    "file": "scripts/value-eval/grade.py",
+    "find": "    if write and changed:",
+    "replace": "    if changed:",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a dry regrade rewrote the manifest"
   }
 ]

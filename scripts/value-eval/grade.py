@@ -473,11 +473,14 @@ def auth_failed(line):
     return False
 
 
-def infra_failure(lines, harness, rc, killed_by_task, stop_reason):
+def infra_failure(lines, harness, rc, killed_by_task, stop_reason, stderr_lines=()):
     """A run may be replaced only for one of these (docs/evals/value-protocol.md, Dropping runs). None is a real run, whatever
-    its outcome. Timeouts and tool caps are real runs."""
+    its outcome. Timeouts and tool caps are real runs. A sign-in failure in the provider's own voice (stream or stderr) is
+    infrastructure whether or not the agent had made tool calls: it is the plan's sign-in, not the agent's work."""
     if killed_by_task or stop_reason:
         return None
+    if any(auth_failed(w["line"]) for w in lines) or any(auth_failed(line) for line in stderr_lines):
+        return "authentication failed"
     if not any(tool_calls_in_line(w["line"], harness) for w in lines):
         text = " ".join(w["line"] for w in lines)[-2000:]
         if rc != 0 or re.search(r"authentication|not logged in|overloaded|rate.?limit|usage limit|api error|hit your", text, re.I):
@@ -485,7 +488,40 @@ def infra_failure(lines, harness, rc, killed_by_task, stop_reason):
     return None
 
 
+def regrade_infra(out, write=False):
+    """The current infrastructure rule applied to the manifest rows of runs already made: a row with no infrastructure failure whose
+    agent's own stream or stderr carries a sign-in failure gets one. Rows already flagged, and every other row, are untouched; the
+    run folders are only read. Returns {run id: {role: reason}} for the rows that change; write=True saves the manifest."""
+    path = os.path.join(out, "manifest.jsonl")
+    with open(path) as f:
+        rows = [json.loads(line) for line in f]
+    changed = {}
+    for row in rows:
+        if row["infra"] or row["isolation"]:
+            continue
+        with open(os.path.join(out, row["id"], "run.json")) as f:
+            agents = json.load(f)["agents"]
+        for role, a in sorted(agents.items()):
+            with open(os.path.join(out, row["id"], "trace-%s.jsonl" % role), errors="replace") as f:
+                lines = [json.loads(line) for line in f]
+            err_path = os.path.join(out, row["id"], "stderr-%s.txt" % role)
+            with open(err_path, errors="replace") as f:
+                stderr_lines = [line.rstrip("\n") for line in f] if os.path.exists(err_path) else []
+            why = infra_failure(lines, a["harness"], a["rc"], a["stop"] == "task_kill", a["stop"], stderr_lines)
+            if why:
+                row["infra"][role] = why
+                changed.setdefault(row["id"], {})[role] = why
+    if write and changed:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+        os.replace(tmp, path)
+    return changed
+
+
 def main(argv):
+    """grade.py OUT grades every run folder. grade.py OUT --infra then applies the current infrastructure rule to the manifest."""
     out = argv[0]
     graded = 0
     for name in sorted(os.listdir(out)):
@@ -494,6 +530,11 @@ def main(argv):
             write_json(os.path.join(run_dir, "grade.json"), blind_grade(run_dir))
             graded += 1
     print("graded %d runs" % graded)
+    if "--infra" in argv[1:]:
+        changed = regrade_infra(out, write=True)
+        for rid, why in sorted(changed.items()):
+            print("infrastructure: %s %s" % (rid, why))
+        print("regraded the manifest: %d runs now infrastructure" % len(changed))
     return 0
 
 
