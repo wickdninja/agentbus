@@ -7,7 +7,7 @@ _agentbus() {
     for ((i = 1; i < COMP_CWORD; i++)); do
         w=${COMP_WORDS[i]}
         case $w in
-            --after|--as|--before|--branch|--cwd|--depth|--id|--interval|--kind|--limit|--model|--purpose|--reply-to|--request-id|--role|--scope|--since|--to|--tool|--topic|--ttl-min|--up) i=$((i + 1)) ;;
+            --after|--as|--before|--branch|--cwd|--depth|--from|--id|--interval|--kind|--limit|--model|--purpose|--reply-to|--request-id|--role|--scope|--since|--timeout|--to|--tool|--topic|--ttl-min|--up) i=$((i + 1)) ;;
             -*) ;;
             *) if [ -z "$cmd" ]; then cmd=$w; elif [ -z "$sub" ]; then sub=$w; fi ;;
         esac
@@ -22,21 +22,22 @@ _agentbus() {
         "doctor --scope") COMPREPLY=($(compgen -W "user project all" -- "$cur")); return ;;
     esac
     case $prev in
-        --after|--as|--before|--branch|--cwd|--depth|--id|--interval|--kind|--limit|--model|--purpose|--reply-to|--request-id|--role|--scope|--since|--to|--tool|--topic|--ttl-min|--up) return ;;
+        --after|--as|--before|--branch|--cwd|--depth|--from|--id|--interval|--kind|--limit|--model|--purpose|--reply-to|--request-id|--role|--scope|--since|--timeout|--to|--tool|--topic|--ttl-min|--up) return ;;
     esac
     case "$key" in
-        "") flags="--as --json --up --version --help"; words="join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo" ;;
+        "") flags="--as --json --up --version --help"; words="join leave who post inbox wait read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo" ;;
         "join") flags="--tool --model --cwd --branch --role --takeover --request-id" ;;
         "leave") flags="--request-id" ;;
         "who") flags="--limit" ;;
         "post") flags="--to --kind --topic --reply-to --request-id" ;;
         "inbox") flags="--peek --after --limit" ;;
+        "wait") flags="--timeout" ;;
         "read") flags="--since --topic --before --id --limit" ;;
         "ctx") flags="--limit"; words="set get history" ;;
         "ctx set") flags="--request-id" ;;
         "ctx get") flags="--limit" ;;
         "ctx history") flags="--limit --before" ;;
-        "claim") flags="--purpose --request-id --ttl-min" ;;
+        "claim") flags="--purpose --request-id --ttl-min --from" ;;
         "release") flags="--all --if-held --request-id" ;;
         "claims") flags="--stale --limit" ;;
         "log") flags="--limit"; words="add show" ;;
@@ -48,8 +49,8 @@ _agentbus() {
         "buses") flags="" ;;
         "init") flags="--second-bus"; mode="dir" ;;
         "upgrade") flags="--all --depth --dry-run"; mode="dir" ;;
-        "schema") flags="--index --full"; words="join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo"; case $prev in ctx) words="set get history" ;; log) words="add show" ;; esac ;;
-        "help") flags=""; words="join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo"; case $prev in ctx) words="set get history" ;; log) words="add show" ;; esac ;;
+        "schema") flags="--index --full"; words="join leave who post inbox wait read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo"; case $prev in ctx) words="set get history" ;; log) words="add show" ;; esac ;;
+        "help") flags=""; words="join leave who post inbox wait read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo"; case $prev in ctx) words="set get history" ;; log) words="add show" ;; esac ;;
         "completion") flags=""; words="bash zsh fish" ;;
         "skill") flags="--agents-md" ;;
         "setup") flags="--scope --dry-run --uninstall --refresh"; words="claude codex" ;;

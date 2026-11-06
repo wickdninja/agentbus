@@ -3,6 +3,7 @@ leave
 who
 post
 inbox
+wait
 read
 ctx
 ctx set

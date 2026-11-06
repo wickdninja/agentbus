@@ -8,8 +8,9 @@ ARGUMENTS
 
 FLAGS
   -h, --help          Show this help message and exit.
-  --request-id TOKEN  Retry safely. Accepted so every write retries the same
-                      way; this command already does nothing the second time.
+  --request-id TOKEN  Accepted and ignored: the bus does not store it.
+                      Repeating ctx set sets the value again, over a change
+                      made since: ctx get KEY first.
 
 INHERITED FLAGS
   --as NAME  Your agent identity (or AGENTBUS_AGENT)
@@ -22,4 +23,4 @@ EXAMPLES
   # Read the value from a file
   agentbus --as alice ctx set notes - < notes.txt
 
-JSON result: Fact. Retry: safe to repeat.
+JSON result: Fact. Retry: repeat if unchanged since.

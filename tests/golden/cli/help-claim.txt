@@ -1,20 +1,28 @@
-usage: agentbus claim RESOURCE [--purpose TEXT] [--request-id TOKEN]
-    [--ttl-min MIN]
+usage: agentbus claim RESOURCE... [--purpose TEXT] [--request-id TOKEN]
+    [--ttl-min MIN] [--from HOLDER]
 
-Claim a resource (bus-relative path, or issue:N, table:x, area:y)
+Claim one or several resources, all or none (bus-relative paths, or issue:N,
+table:x, area:y)
 
 ARGUMENTS
-  RESOURCE  What to claim: a path relative to the bus folder (a folder covers
-            what is under it), or issue:N, table:NAME, area:NAME.
+  RESOURCE...  What to claim, one or several (at most 100; all are claimed or
+               none): a path relative to the bus folder (a folder covers what
+               is under it), or issue:N, table:NAME, area:NAME.
 
 FLAGS
   -h, --help          Show this help message and exit.
   --purpose TEXT      Why you hold it; shown to anyone who runs into the
                       claim.
-  --request-id TOKEN  Retry safely. Accepted so every write retries the same
-                      way; this command already does nothing the second time.
+  --request-id TOKEN  Accepted and ignored: the bus does not store it.
+                      Repeating claim renews your hold; without --from it
+                      never takes a resource another agent holds, so if one
+                      was taken meanwhile it claims nothing.
   --ttl-min MIN       Claim lifetime in minutes: 1-10080; default 120. Claim
                       again to renew.
+  --from HOLDER       Take the claims in the way from HOLDER, only when your
+                      user or a handoff gave you its work; repeat for several
+                      holders. A claim moves whole (name the folder it holds);
+                      it is logged and HOLDER is told.
 
 INHERITED FLAGS
   --as NAME  Your agent identity (or AGENTBUS_AGENT)
@@ -24,7 +32,9 @@ INHERITED FLAGS
 EXAMPLES
   # Claim a folder before editing it
   agentbus --as alice claim src/api/ --purpose "rate limiting"
+  # Claim several files at once, all or none
+  agentbus --as alice claim src/a.py src/b.py src/c.py --purpose "rename"
   # Claim an issue
   agentbus --as alice claim issue:42
 
-JSON result: {"resource": string, "agent": string, "purpose": string or null, "claimed_at": string, "expires_at": string, "auto_released": [{"resource": string, "agent": string}], "auto_released_count": integer, "renewed": boolean}. Retry: safe to repeat.
+JSON result: for one resource a ClaimResult; for several {"claims": [ClaimResult], "claimed_count": integer}, one per resource, each once, in the order given. Retry: safe to repeat.

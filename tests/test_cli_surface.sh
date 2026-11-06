@@ -83,7 +83,8 @@ if [ "$update" = 1 ]; then
     [ -f "$G/help.txt" ] || fail "no base goldens: run --update under Python 3.9 to 3.11 first"
     rm -rf "$O"; mkdir "$O"
     for f in "$T/out"/*; do cmp -s "$f" "$G/$(basename "$f")" || cp "$f" "$O/"; done
-    echo "wrote $(ls "$O" | wc -l | tr -d ' ') goldens that differ on Python 3.12+ to tests/golden/cli/py3.12/. Review: git diff --stat -- tests/golden/cli"
+    rmdir "$O" 2>/dev/null || true  # nothing differs: leave no empty directory behind
+    echo "wrote $(ls "$O" 2>/dev/null | wc -l | tr -d ' ') goldens that differ on Python 3.12+ to tests/golden/cli/py3.12/. Review: git diff --stat -- tests/golden/cli"
   fi
   exit 0
 fi
@@ -92,7 +93,7 @@ echo "TEST 2: every file is byte-equal to its golden, and no golden is missing o
 [ -f "$G/help.txt" ] || fail "no goldens in tests/golden/cli/. Run: bash tests/test_cli_surface.sh --update"
 mkdir "$T/want"
 find "$G" -maxdepth 1 -type f -exec cp {} "$T/want/" \;
-if [ "$new_py" = 1 ] && [ -d "$O" ]; then cp "$O"/* "$T/want/"; fi
+if [ "$new_py" = 1 ] && [ -d "$O" ]; then find "$O" -maxdepth 1 -type f -exec cp {} "$T/want/" \;; fi
 if ! diff -rq "$T/want" "$T/out" >"$T/changed" 2>&1; then
   sed -e "s#$T/out#now#g" -e "s#$T/want#golden#g" "$T/changed" | head -n 20
   # schema.json is one line: show its difference as indented JSON, the rest as it is.

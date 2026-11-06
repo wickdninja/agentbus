@@ -7,8 +7,9 @@ ARGUMENTS
 
 FLAGS
   -h, --help          Show this help message and exit.
-  --request-id TOKEN  Retry safely. Accepted so every write retries the same
-                      way; this command already does nothing the second time.
+  --request-id TOKEN  Accepted and ignored: the bus does not store it.
+                      Repeating goal sets the text again, over a change made
+                      since: goal first.
 
 INHERITED FLAGS
   --as NAME  Your agent identity (or AGENTBUS_AGENT)
@@ -21,4 +22,4 @@ EXAMPLES
   # Show it
   agentbus goal
 
-JSON result: a Goal, or {"goal": null, "set_by": null, "set_at": null} when none is set. Retry: safe to repeat.
+JSON result: a Goal, or {"goal": null, "set_by": null, "set_at": null} when none is set. Retry: repeat if unchanged since.

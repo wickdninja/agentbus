@@ -141,6 +141,87 @@
     }
    }
   },
+  "ClaimResult": {
+   "type": "object",
+   "required": [
+    "resource",
+    "agent",
+    "purpose",
+    "claimed_at",
+    "expires_at",
+    "auto_released",
+    "auto_released_count",
+    "renewed"
+   ],
+   "properties": {
+    "resource": {
+     "type": "string"
+    },
+    "agent": {
+     "type": "string"
+    },
+    "purpose": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "claimed_at": {
+     "type": "string"
+    },
+    "expires_at": {
+     "type": "string"
+    },
+    "auto_released": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": [
+       "resource",
+       "agent"
+      ],
+      "properties": {
+       "resource": {
+        "type": "string"
+       },
+       "agent": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "auto_released_count": {
+     "type": "integer"
+    },
+    "renewed": {
+     "type": "boolean"
+    },
+    "previous_purpose": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "taken_from": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": [
+       "resource",
+       "agent"
+      ],
+      "properties": {
+       "resource": {
+        "type": "string"
+       },
+       "agent": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  },
   "Fact": {
    "type": "object",
    "required": [
@@ -727,12 +808,19 @@
    "fields": [
     "resource",
     "holder",
+    "claimed_at",
     "expires_at",
-    "purpose"
+    "purpose",
+    "holder_last_seen",
+    "holder_idle_min",
+    "takeover",
+    "claim_from"
    ],
-   "meaning": "Another agent holds an overlapping claim.",
-   "action": "Ask the holder, or work elsewhere.",
-   "optional_fields": []
+   "optional_fields": [
+    "conflicts"
+   ],
+   "meaning": "Another agent holds an overlapping claim. claimed_at is when the holder took it. holder_last_seen is when the holder last ran a command (null when unknown) and holder_idle_min the whole minutes since. claim_from is always the claim --from command that moves the claims in the way to you under your own name (a folder held above the resource is named whole: a claim moves whole); with several resources it takes the whole batch. It is null only when more than 100 agents hold claims in the way (one command names at most 100). takeover is the same command for that conflict, given only when the holder has not been seen for 30 minutes or more (the window join uses), else null. With several resources, nothing was claimed: resource and holder are the first blocked resource, and conflicts lists every blocked one as {resource, holder, held, claimed_at, expires_at, purpose, holder_last_seen, holder_idle_min, takeover, claim_from} (held is the claim in the way, the resource itself or a folder above or inside it).",
+   "action": "In a shared checkout, leave it until the holder answers or releases it. On a separate branch, post what you are touching; the merge decides. Run claim_from only if your user or a handoff gave you the holder's work; if takeover is given and the holder does not answer, ask your user. With several resources, leave the blocked ones out and claim the rest."
   },
   "not_held": {
    "exit": 1,
@@ -740,9 +828,11 @@
    "fields": [
     "resource"
    ],
-   "meaning": "You do not hold that claim.",
-   "action": "Nothing to release; use release --if-held for cleanup.",
-   "optional_fields": []
+   "optional_fields": [
+    "resources"
+   ],
+   "meaning": "You do not hold that claim. With several resources, none was released, and resources lists every one you do not hold.",
+   "action": "Nothing to release; use release --if-held for cleanup."
   },
   "no_message": {
    "exit": 1,
@@ -903,7 +993,7 @@
     "outcome_unknown"
    ],
    "meaning": "The bus or its folder failed a safety check, SQLite or the system refused it, or a command ran out of time. outcome_unknown (true) means it was stopped while saving a write, so the write may or may not have been saved; committed is then true when that write was the command's own.",
-   "action": "Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat it only with its request id."
+   "action": "Read the message, fix the folder, then run the command again. When outcome_unknown is true, check the bus before repeating a write, or repeat a post or join only with its request id."
   },
   "ack_failed": {
    "exit": 3,
@@ -915,12 +1005,22 @@
    "action": "The output was complete: use it, expect the same messages again, and dedupe by id.",
    "optional_fields": []
   },
+  "wait_timeout": {
+   "exit": 124,
+   "retryable": true,
+   "fields": [
+    "waited"
+   ],
+   "meaning": "wait ended with no unread message after --timeout seconds (waited).",
+   "action": "Run wait again to keep waiting, or read inbox.",
+   "optional_fields": []
+  },
   "output_failed": {
    "exit": 1,
    "retryable": true,
    "fields": [],
    "meaning": "stdout could not be written; committed effects stand.",
-   "action": "Retry with the same token.",
+   "action": "Repeat a post or join with the same --request-id; for any other write, look at what it changed instead of repeating it.",
    "optional_fields": []
   },
   "interrupted": {
@@ -936,7 +1036,7 @@
     "argv"
    ],
    "meaning": "The command was stopped (Ctrl-C or SIGINT) before it finished.",
-   "action": "Check committed: if true the change was saved, so repeat a write only with its request id, unless retryable is true (init, upgrade and setup can simply be rerun)."
+   "action": "Check committed: if true the change was saved, so repeat a post or join only with its request id, and look at what any other write changed before repeating it, unless retryable is true (init, upgrade and setup can simply be rerun)."
   },
   "items_failed": {
    "exit": 1,
@@ -1037,6 +1137,7 @@
   "2": "usage: bad arguments, unknown command, missing identity",
   "3": "the bus is unavailable or unsafe",
   "4": "internal error",
+  "124": "wait: the timeout ended with no message, as GNU timeout exits",
   "130": "interrupted (Ctrl-C), the shell convention"
  },
  "error_fields": {
@@ -1050,18 +1151,18 @@
   },
   "retryable": {
    "type": "boolean",
-   "meaning": "Whether running the same command again can succeed. False once the command saved database rows, unless it had a --request-id; a command that changed only files (init, upgrade's copy, setup) stays retryable."
+   "meaning": "Whether running the same command again can succeed. False once the command saved database rows, unless it is a post or join with a --request-id (the bus stores that token, so a repeat returns the first result); a command that changed only files (init, upgrade's copy, setup) stays retryable."
   },
   "committed": {
    "type": "boolean",
-   "meaning": "True when the command's own change had been saved before the failure, so a write must not be repeated without its --request-id unless retryable is true."
+   "meaning": "True when the command's own change had been saved before the failure, so a write must not be repeated unless retryable is true (a post or join with its --request-id). For any other write, look at what it changed first."
   },
   "next": {
    "type": [
     "string",
     "null"
    ],
-   "meaning": "The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A write's request id is not repeated here: reuse the one you sent."
+   "meaning": "The one command that recovers from this error, exactly as the message gives it (placeholders in capitals, such as NAME or PATH, are yours to fill); null when no command recovers from it. A post's or join's request id is not repeated here: reuse the one you sent."
   }
  },
  "env": {
@@ -1237,7 +1338,7 @@
    },
    "retry": {
     "class": "idempotent",
-    "how": "a second run reports was_joined false and released_count 0 and writes no log row",
+    "how": "a second run reports was_joined false and released_count 0 and writes no log row; --request-id is ignored (a repeat after you joined again releases what you then hold)",
     "short": "safe to repeat"
    },
    "text": null,
@@ -1515,8 +1616,8 @@
    },
    "retry": {
     "class": "idempotent",
-    "short": "safe to repeat",
-    "how": "an unchanged value writes no history row and returns unchanged true"
+    "short": "repeat if unchanged since",
+    "how": "an unchanged value writes no history row and returns unchanged true. --request-id is ignored: a repeat after another agent changed the key sets your value again and overwrites theirs, so ctx get KEY first"
    },
    "text": null,
    "errors": [
@@ -1663,80 +1764,57 @@
    ]
   },
   "claim": {
-   "summary": "Claim a resource",
+   "summary": "Claim one or several resources, all or none",
    "result": {
-    "type": "object",
-    "required": [
-     "contract",
-     "resource",
-     "agent",
-     "purpose",
-     "claimed_at",
-     "expires_at",
-     "auto_released",
-     "auto_released_count",
-     "renewed"
-    ],
-    "properties": {
-     "contract": {
-      "type": "integer"
-     },
-     "resource": {
-      "type": "string"
-     },
-     "agent": {
-      "type": "string"
-     },
-     "purpose": {
-      "type": [
-       "string",
-       "null"
-      ]
-     },
-     "claimed_at": {
-      "type": "string"
-     },
-     "expires_at": {
-      "type": "string"
-     },
-     "auto_released": {
-      "type": "array",
-      "items": {
-       "type": "object",
-       "required": [
-        "resource",
-        "agent"
-       ],
-       "properties": {
-        "resource": {
-         "type": "string"
-        },
-        "agent": {
-         "type": "string"
+    "anyOf": [
+     {
+      "allOf": [
+       {
+        "$ref": "#/objects/ClaimResult"
+       },
+       {
+        "type": "object",
+        "required": [
+         "contract"
+        ],
+        "properties": {
+         "contract": {
+          "type": "integer"
+         }
         }
        }
-      }
-     },
-     "auto_released_count": {
-      "type": "integer"
-     },
-     "renewed": {
-      "type": "boolean"
-     },
-     "previous_purpose": {
-      "type": [
-       "string",
-       "null"
       ]
+     },
+     {
+      "type": "object",
+      "required": [
+       "contract",
+       "claims",
+       "claimed_count"
+      ],
+      "properties": {
+       "contract": {
+        "type": "integer"
+       },
+       "claims": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/ClaimResult"
+        }
+       },
+       "claimed_count": {
+        "type": "integer"
+       }
+      }
      }
-    }
+    ]
    },
    "retry": {
     "class": "idempotent",
-    "how": "renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, and previous_purpose is set when --purpose changed it",
+    "how": "renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, and previous_purpose is set when --purpose changed it. --request-id is ignored; if another agent took any of the resources meanwhile, nothing is claimed and the repeat gives claim_conflict, never an overwrite; except that --from takes again from the holders you name, whatever they hold by then, and a repeat after it worked renews and takes nothing",
     "short": "safe to repeat"
    },
-   "text": null,
+   "text": "for one resource a ClaimResult; for several {\"claims\": [ClaimResult], \"claimed_count\": integer}, one per resource, each once, in the order given",
    "errors": [
     "claim_conflict",
     "not_on_roster",
@@ -1755,7 +1833,7 @@
    ]
   },
   "release": {
-   "summary": "Release one claim, or all of yours",
+   "summary": "Release one or several claims, all or none, or all of yours",
    "result": {
     "type": "object",
     "required": [
@@ -1781,7 +1859,7 @@
    "retry": {
     "class": "idempotent_with_flag",
     "short": "with --if-held",
-    "how": "release RESOURCE --if-held: not held returns released [] and released_count 0 with exit 0; release --all is already idempotent"
+    "how": "release RESOURCE... --if-held: a resource you do not hold is skipped (none held returns released [] and released_count 0 with exit 0); release --all is already idempotent. --request-id is ignored: a plain repeat of a release that worked gives not_held"
    },
    "text": null,
    "errors": [
@@ -2099,8 +2177,8 @@
    },
    "retry": {
     "class": "idempotent",
-    "short": "safe to repeat",
-    "how": "showing is free; an unchanged goal writes no history row and returns unchanged true"
+    "short": "repeat if unchanged since",
+    "how": "showing is free; an unchanged goal writes no history row and returns unchanged true. --request-id is ignored: a repeat after another agent changed the goal sets your text again and overwrites theirs, so run goal first"
    },
    "text": "a Goal, or {\"goal\": null, \"set_by\": null, \"set_at\": null} when none is set",
    "errors": [
@@ -3430,6 +3508,58 @@
    },
    "text": null,
    "errors": [
+    "bad_input",
+    "no_bus",
+    "busy",
+    "schema_refused",
+    "schema_older",
+    "schema_newer",
+    "schema_corrupt",
+    "backup_failed",
+    "bus_unavailable",
+    "output_failed",
+    "interrupted",
+    "internal"
+   ]
+  },
+  "wait": {
+   "summary": "Wait until you have an unread message, then say how many and what reads them",
+   "result": {
+    "type": "object",
+    "required": [
+     "contract",
+     "name",
+     "unread",
+     "waited_s",
+     "next"
+    ],
+    "properties": {
+     "contract": {
+      "type": "integer"
+     },
+     "name": {
+      "type": "string"
+     },
+     "unread": {
+      "type": "integer"
+     },
+     "waited_s": {
+      "type": "integer"
+     },
+     "next": {
+      "type": "string"
+     }
+    }
+   },
+   "retry": {
+    "class": "safe",
+    "how": "repeat freely; wait marks nothing read",
+    "short": "safe to repeat"
+   },
+   "text": null,
+   "errors": [
+    "not_on_roster",
+    "wait_timeout",
     "bad_input",
     "no_bus",
     "busy",

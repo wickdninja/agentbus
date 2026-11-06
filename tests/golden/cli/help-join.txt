@@ -1,7 +1,13 @@
-usage: agentbus join [--tool TOOL] [--model MODEL] [--cwd CWD] [--branch
-    BRANCH] [--role ROLE] [--takeover] [--request-id TOKEN]
+usage: agentbus join [NAME] [--tool TOOL] [--model MODEL] [--cwd CWD]
+    [--branch BRANCH] [--role ROLE] [--takeover] [--request-id TOKEN]
 
-Register yourself; refuses a name active in the last 30 min unless --takeover
+Register yourself on the roster under a name. Give it either way: agentbus
+--as NAME join, or agentbus join NAME. Every other command takes the name with
+--as (or AGENTBUS_AGENT) only. It refuses a name active in the last 30 min
+unless --takeover.
+
+ARGUMENTS
+  NAME  Your name, the same as --as NAME before the command.
 
 FLAGS
   -h, --help          Show this help message and exit.
@@ -23,6 +29,8 @@ INHERITED FLAGS
 EXAMPLES
   # Join under your own name
   agentbus --as alice join --role "api work"
+  # Or give the name after join
+  agentbus join alice
   # Say which tool and branch
   agentbus --as alice join --tool claude --branch feat/api
 

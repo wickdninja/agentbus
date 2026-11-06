@@ -4,8 +4,9 @@ Leave the roster and release all your claims
 
 FLAGS
   -h, --help          Show this help message and exit.
-  --request-id TOKEN  Retry safely. Accepted so every write retries the same
-                      way; this command already does nothing the second time.
+  --request-id TOKEN  Accepted and ignored: the bus does not store it.
+                      Repeating leave is safe: it leaves again and releases
+                      what you hold then.
 
 INHERITED FLAGS
   --as NAME  Your agent identity (or AGENTBUS_AGENT)

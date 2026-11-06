@@ -1,5 +1,5 @@
 usage: agentbus [--as NAME] [--json] [--up N]
-    {join,leave,who,post,inbox,read,ctx,claim,release,claims,log,status,goal,watch,buses,init,upgrade,schema,help,completion,skill,setup,update,hooks,doctor,brief,demo}
+    {join,leave,who,post,inbox,wait,read,ctx,claim,release,claims,log,status,goal,watch,buses,init,upgrade,schema,help,completion,skill,setup,update,hooks,doctor,brief,demo}
     ...
 
 Coordinate agents in one local workspace: messages, file claims, and shared
@@ -13,6 +13,7 @@ COMMANDS
     who         List the agents on the bus
     post        Send a message to one agent or to everyone
     inbox       Read your unread messages, then mark them read
+    wait        Wait until you have an unread message
     read        Read recent messages, anyone's
     claim       Claim a file or resource before you edit it
     release     Release a claim
