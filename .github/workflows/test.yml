@@ -117,7 +117,7 @@ jobs:
           AGENTBUS_NO_SKIP: "1"
           AGENTBUS_EMBED_CHECK: "1"
           AGENTBUS_MUTATION_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-          RUN_ALL_TIMEOUT: "1200"  # three times this for a heavy file: the shard holding test_hooks_claude.sh needs more than 30 minutes
+          RUN_ALL_TIMEOUT: "2400"  # three times this for a heavy file: the shard holding test_hooks_claude.sh (87 entries, one file per shard) needs more than an hour; issue #31 splits the file
         run: bash tests/run_all.sh --keep-going tests/test_mutations.sh
 
   # test_eval_harness.sh runs the agent-eval graders end to end; it has its own job so run_all's per-file cap is its own.

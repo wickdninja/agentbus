@@ -84,7 +84,7 @@ print("PASS: schema marks the same arguments required on every Python")
 
 # ---- the registry's own tables equal the design (written out here, not read from the registry) ----
 EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
-    "claim_conflict": (1, False, ["resource", "holder", "claimed_at", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"]),
+    "claim_conflict": (1, False, ["resource", "holder", "claimed_at", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover", "claim_from"]),
     "not_held": (1, False, ["resource"]),
     "no_message": (1, False, ["id"]),
     "no_context_key": (1, False, ["key"]),
@@ -253,9 +253,11 @@ ok("--as", "a", "claim", "src/api/", "--purpose", "refactor", db=db)
 e = expect("claim_conflict", "--as", "b", "claim", "src/api/x.py", db=db)
 assert (e["resource"], e["holder"], e["purpose"]) == ("src/api/x.py", "a", "refactor"), e
 assert e["claimed_at"].endswith("Z") and e["holder_idle_min"] in (0, 1) and e["takeover"] is None and "conflicts" not in e, ("one resource: the old fields plus the holder's age", e)
+assert e["claim_from"] == "agentbus --as b claim src/api/ --from a", ("claim_from is always the --from command, the folder named whole", e)
 e = expect("claim_conflict", "--as", "b", "claim", "src/api/x.py", "src/api/y.py", "free.py", db=db)
 assert [c["resource"] for c in e["conflicts"]] == ["src/api/x.py", "src/api/y.py"] and {c["holder"] for c in e["conflicts"]} == {"a"}, e
-assert all(set(c) == {"resource", "holder", "held", "claimed_at", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"} for c in e["conflicts"]), e
+assert all(set(c) == {"resource", "holder", "held", "claimed_at", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover", "claim_from"} for c in e["conflicts"]), e
+assert e["claim_from"] == "agentbus --as b claim src/api/ free.py --from a", ("one command for the whole batch, each folder once", e)
 expect("not_held", "--as", "b", "release", "src/api/", db=db)
 e = expect("not_held", "--as", "b", "release", "src/api/", "other/", db=db)
 assert e["resources"] == ["src/api/", "other/"], e

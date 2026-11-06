@@ -470,7 +470,7 @@ expect_fail "RESOURCE must not contain control characters" agentbus --as ma rele
 [ "$(agentbus --json claims | "$PY" -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin)["items"] if r["resource"]=="ok/a.py"))')" = 0 ] || fail "a batch with a bad name took the good one"
 ok "release takes several; a missing one refuses the lot unless --if-held; every name is checked for control characters"
 echo
-echo "TEST: a conflict says how long ago the holder was seen, and past 30 minutes how to clear a gone holder's claims"
+echo "TEST: a conflict says how long ago the holder was seen, past 30 minutes that it may be gone, and always the --from command"
 # Bug it catches: a dead session's claim stalled a live agent for up to two hours, and nothing in the refusal said the
 # holder might be gone or what to run.
 seen_ago() { "$PY" -c "import sqlite3,sys; from datetime import datetime,timedelta,timezone; c=sqlite3.connect(sys.argv[1]); t=(datetime.now(timezone.utc)-timedelta(minutes=int(sys.argv[3]))).strftime('%Y-%m-%dT%H:%M:%SZ'); c.execute('UPDATE agents SET last_seen=? WHERE name=?', (t, sys.argv[2])); c.commit()" "$AGENTBUS_DB" "$1" "$2"; }
@@ -481,23 +481,27 @@ seen_ago dg 180
 seen_ago dl 4
 err=$(mktemp)
 agentbus --as dh claim d/gone.py 2>"$err" && fail "claim of a gone holder's file succeeded"
-for w in "dg was last seen 3h ago." "dg may be gone" "agentbus --as dg leave" "ask: agentbus --as dh post QUESTION --to dg"; do grep -qF -- "$w" "$err" || { cat "$err"; fail "the refusal for a gone holder lacks '$w'"; }; done
+for w in "dg was last seen 3h ago." "dg may be gone" "agentbus --as dh claim d/gone.py --from dg" "ask: agentbus --as dh post QUESTION --to dg"; do grep -qF -- "$w" "$err" || { cat "$err"; fail "the refusal for a gone holder lacks '$w'"; }; done
 agentbus --as dh claim d/live.py 2>"$err" && fail "claim of a live holder's file succeeded"
 grep -qF "dl was last seen 4m ago." "$err" || { cat "$err"; fail "the refusal for a recent holder lacks its age"; }
 grep -qF -- "--as dl leave" "$err" && { cat "$err"; fail "a holder seen 4 minutes ago was offered a leave"; }
+grep -qF "dl may be gone" "$err" && { cat "$err"; fail "a holder seen 4 minutes ago may be gone"; }
+grep -qF "If your user or a handoff gave you dl's work, take it: agentbus --as dh claim d/live.py --from dl" "$err" || { cat "$err"; fail "the refusal for a recent holder lacks the --from command"; }
 agentbus --json --as dh claim d/gone.py 2>"$err" && fail "json claim of a gone holder succeeded"
 "$PY" - "$err" <<'PY' || fail "JSON conflict fields for a gone holder"
 import json, sys
 e = json.load(open(sys.argv[1]))["error"]
 assert e["code"] == "claim_conflict" and e["holder"] == "dg", e
 assert e["holder_last_seen"].endswith("Z") and 178 <= e["holder_idle_min"] <= 182, e
-assert e["takeover"] == "agentbus --as dg leave" and e["next"].endswith("--to dg --kind question"), e
+assert e["takeover"] == "agentbus --as dh claim d/gone.py --from dg" and e["next"].endswith("--to dg --kind question"), e
+assert e["claim_from"] == e["takeover"], e
 PY
 agentbus --json --as dh claim d/live.py 2>"$err" && fail "json claim of a live holder succeeded"
 "$PY" - "$err" <<'PY' || fail "JSON conflict fields for a recent holder"
 import json, sys
 e = json.load(open(sys.argv[1]))["error"]
 assert e["holder"] == "dl" and 3 <= e["holder_idle_min"] <= 5 and e["takeover"] is None and e["holder_last_seen"], e
+assert e["claim_from"] == "agentbus --as dh claim d/live.py --from dl", e
 PY
 # the window is join's: 29 minutes is live, 30 is past it
 seen_ago dl 29
@@ -505,8 +509,8 @@ agentbus --json --as dh claim d/live.py 2>"$err" && fail "claim of a holder seen
 "$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; sys.exit(0 if e["takeover"] is None else 1)' "$err" || fail "a holder seen 29 minutes ago was offered a takeover"
 seen_ago dl 30
 agentbus --json --as dh claim d/live.py 2>"$err" && fail "claim of a holder seen 30 minutes ago succeeded"
-"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; sys.exit(0 if e["takeover"] == "agentbus --as dl leave" else 1)' "$err" || fail "a holder seen 30 minutes ago was not offered a takeover"
-# several resources: every conflict carries its holder's age, and the message offers the leave for the gone ones only
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; sys.exit(0 if e["takeover"] == "agentbus --as dh claim d/live.py --from dl" else 1)' "$err" || fail "a holder seen 30 minutes ago was not offered a takeover"
+# several resources: every conflict carries its holder's age and its --from command; takeover and "may be gone" for the gone ones only
 agentbus --as dx claim d/dx.py >/dev/null
 agentbus --json --as dh claim d/gone.py d/dx.py 2>"$err" && fail "json batch succeeded"
 "$PY" - "$err" <<'PY' || fail "JSON conflicts carry the holder's age"
@@ -514,15 +518,17 @@ import json, sys
 e = json.load(open(sys.argv[1]))["error"]
 by = {c["holder"]: c for c in e["conflicts"]}
 assert set(by) == {"dg", "dx"}, e
-assert by["dg"]["takeover"] == "agentbus --as dg leave" and by["dx"]["takeover"] is None, by
+assert by["dg"]["takeover"] == "agentbus --as dh claim d/gone.py --from dg" and by["dx"]["takeover"] is None, by
+assert by["dx"]["claim_from"] == "agentbus --as dh claim d/dx.py --from dx" and e["claim_from"] == "agentbus --as dh claim d/gone.py d/dx.py --from dg --from dx", e
 assert by["dg"]["holder_idle_min"] >= 178 and by["dx"]["holder_idle_min"] <= 2, by
-assert "agentbus --as dg leave" in e["message"] and "agentbus --as dx leave" not in e["message"], e["message"]
+assert "dg may be gone" in e["message"] and "dx may be gone" not in e["message"] and "--as dg leave" not in e["message"] and "--as dx leave" not in e["message"], e["message"]
 PY
-# the command it names works: the gone holder's claim is cleared and the file can be claimed
-agentbus --as dg leave >/dev/null
-agentbus --as dh claim d/gone.py >/dev/null || fail "the file was still held after the holder was cleared"
+# the command it names works: the gone holder's claim moves to the taker, and the holder stays on the roster
+agentbus --as dh claim d/gone.py --from dg >/dev/null || fail "the --from command did not take the file"
+agentbus --json claims | "$PY" -c 'import json,sys; r={c["resource"]: c["agent"] for c in json.load(sys.stdin)["items"]}; assert r["d/gone.py"]=="dh", r' || fail "the file is not the taker's"
+agentbus who | grep -qF dg || fail "--from removed the holder from the roster"
 rm -f "$err"
-ok "the holder's age is in every conflict; a leave is named only past the live window, and it frees the file"
+ok "the holder's age and the --from command are in every conflict; takeover only past the live window, and it takes the file"
 echo
 echo "release with no resource and --up names the claims command for that same bus (the hint carries --up)"
 expect_fail "See: agentbus --as NAME --up 1 claims" agentbus --as me --up 1 release
