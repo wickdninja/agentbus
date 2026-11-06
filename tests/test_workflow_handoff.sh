@@ -15,9 +15,9 @@ echo "STEP 1: three agents join; the goal reaches the ones who join after it is 
 say "joined as planner on $BUSLINE" agentbus --as planner join --tool claude --role planner
 say "goal: ship the health route" agentbus --as planner goal "ship the health route"
 say "joined as worker on $BUSLINE
-goal: ship the health route" agentbus --as worker join --tool codex --role worker
+goal (planner, <ago>): ship the health route" agentbus --as worker join --tool codex --role worker
 say "joined as reviewer on $BUSLINE
-goal: ship the health route" agentbus --as reviewer join --tool claude --role reviewer
+goal (planner, <ago>): ship the health route" agentbus --as reviewer join --tool claude --role reviewer
 is_equal "roster rows" "planner|claude|planner
 reviewer|claude|reviewer
 worker|codex|worker" "$(sql "SELECT name, tool, role FROM agents ORDER BY name")"

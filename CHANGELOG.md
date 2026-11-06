@@ -10,6 +10,9 @@
 
 ### Changed
 
+- `join NAME` works: it joins as NAME, the same as `--as NAME join`, and the success line says to keep using `--as NAME` on later commands (`post` and the rest still take the name only with `--as` or `AGENTBUS_AGENT`). `--as bob join alice` is a usage error naming both names, and `join ''` is a bad name, never the name in `AGENTBUS_AGENT`.
+- The goal reads `goal (alice, 2d ago): TEXT` in `join`, `brief`, `goal` and `status`, and the SessionStart note says how old the goal is once it is a day old. `--json` is unchanged.
+- docs/how-to/setup.md shows `(N bytes)` for the skill size instead of a number every edit to SKILL.md had to change; the test checks the real size.
 - `--request-id` replays a write only for `post` and `join`, where the bus stores the token. On `leave`, `claim`, `release`, `ctx set` and `goal` it is accepted and ignored: the help, `schema`, the skill and the reference say what a repeat really does (`ctx set` and `goal` set the value again over a change made since), and an error after one of them saved is `retryable: false`.
 - Every open sets `PRAGMA synchronous=FULL`, so a write is synced before its command reports it, whatever default the SQLite build has.
 - The wait for a busy bus is timed on the monotonic clock; a wall-clock change no longer ends it early or stretches it.
@@ -17,6 +20,8 @@
 
 ### Fixed
 
+- `schema --json` marks the same arguments required on every Python. Below 3.12 it marked `goal TEXT`, `schema COMMAND`, `help COMMAND` and `update DIR` required, and 3.12 and later did not mark `ctx set VALUE` or `log add DETAIL`; both now follow the command's real rule.
+- `watch` shows a span from a clock that ran backwards as `0s`, not `-1m`, and a field squeezed to zero columns is empty, not a one-column ellipsis.
 - `setup` can no longer be redirected by a folder swapped for a link while it runs: every write, backup and removal goes through a folder held open with `O_NOFOLLOW`, and a link that appears in the way is refused by name.
 - `agentbus init` on the home folder no longer prints a `cd` and `join` step that fails: discovery never looks in the home folder, so it says to pick a project folder instead.
 - `doctor` finds a second bus above worktrees made with `worktree.useRelativePaths`, and prints a path in its hints as `~/'my dir'`, never `'~/my dir'`.

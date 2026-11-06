@@ -268,7 +268,7 @@ ok(db, "--as", "web", "ctx", "set", "login_flag", "auth.newTokens, default off")
 ok(db, "--as", "tests", "ctx", "set", "fixtures", "tests/auth/fixtures.json is frozen until Friday")
 out = ok(db, "--as", "api", "brief")
 check(len(out) < 1600, "brief is %d characters, over the 400-token budget (1,600):\n%s" % (len(out), out))
-for part in ("goal:", "lead", "tests", "token refactor", "next:"):
+for part in ("goal (lead,", "lead", "tests", "token refactor", "next:"):
     check(part in out, "a realistic brief lost %r:\n%s" % (part, out))
 print("PASS: a realistic bus briefs in %d characters (budget 1,600)" % len(out))
 
