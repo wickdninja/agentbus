@@ -2531,7 +2531,7 @@
   {
     "name": "the marketplace ref is main",
     "file": ".claude-plugin/marketplace.json",
-    "find": "\"ref\": \"v0\\.2\\.0\"",
+    "find": "\"ref\": \"v[0-9]+\\.[0-9]+\\.[0-9]+(rc[0-9]+)?\"",
     "replace": "\"ref\": \"main\"",
     "count": 1,
     "run": "tests/test_plugin_manifest.sh",
