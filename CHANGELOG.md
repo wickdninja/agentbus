@@ -1,28 +1,36 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-11-06
+
+Which of the [five versioned things](docs/explanation/versions.md) change: the tool is 0.3.0; the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill is rewritten; the hooks change (`agentbus update` refreshes what setup installed; plugin users update the plugin).
+
+For agents, what changes:
+
+- A refused `claim` now says who holds the file, why and since when, and gives two ways on: in a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching. It no longer offers `--as HOLDER leave`.
+- `claim RESOURCE... --from HOLDER` takes the claims in the way when your user or a handoff gave you that agent's work. Use it only then.
+- `join NAME` works, the same as `--as NAME join`. Later commands still need `--as NAME`.
+- Run `brief` before `inbox`. `brief` now shows every fact to an agent that has read only mail sent before it joined.
 
 ### Added
 
 - `claim` and `release` take several resources in one call, all or none (up to 100). If another agent holds any of them, nothing is claimed and the error names every blocked resource and its holder. `--json` keeps the claim object for one resource and returns `{"claims": [...], "claimed_count": N}` for several; the error gains `conflicts`. `release` refuses the lot, naming every resource you do not hold, unless `--if-held`.
 - A claim conflict says when the holder was last seen. Once the holder has been silent for 30 minutes it says the holder may be gone and, if no answer comes, to ask your user; `takeover` in `--json` then holds the `claim --from` command.
-- `claim RESOURCE... --from HOLDER` (repeatable) takes the claims in the way from the named holders, all or none, under your own name, for when your user or a handoff gave you their work. A claim moves whole: a folder the holder claimed above the resource is named, never split. It refuses when someone not named is in the way, and when a named holder holds nothing in the way; a repeat takes again from the holders you name. Each holder gets a `claim_taken` log row and an alert (topic `claim`) saying who took what and why, each claim counted once. Every refusal ends with the `--from` command (`claim_from` in `--json`; with several holders the text gives one per conflict), or says plainly when more than 100 agents are in the way; no output or doc suggests `--as HOLDER leave` any more.
-- `agentbus --as NAME wait [--timeout SECONDS]` blocks until you have an unread message, then prints how many and the command that reads them. It marks nothing read and does not hold the bus while it waits. Exit 0 on messages, 124 (`wait_timeout`) when the timeout (600 s by default, at most 1800) ends first. Run it as a background command to be told when work arrives; it does not wake an idle session.
-- The hook before an edit (Claude Code and Codex) also says how many messages wait for this session's name: those sent to it, plus broadcast decisions and alerts. It says so once for each message not already announced (at SessionStart, on a prompt or at an earlier edit), so an agent deep in edits hears of a question without a new prompt. A subagent is not told: its parent hears it. More than 1000 of a kind is said as `1000+`.
+- `claim RESOURCE... --from HOLDER` (repeatable) takes the claims in the way from the named holders, all or none, under your own name. A claim moves whole: a folder the holder claimed above the resource is named, never split. It refuses when someone not named is in the way, and when a named holder holds nothing in the way. A repeat renews your claims; if the holder took them back, it takes them again. Each holder gets a `claim_taken` log row and an alert (topic `claim`) saying who took what. Every refusal ends with the `--from` command (`claim_from` in `--json`), or says plainly when more than 100 agents are in the way.
+- `agentbus --as NAME wait [--timeout SECONDS]` blocks until you have an unread message, then prints how many and the command that reads them. It marks nothing read. Exit 0 on messages, 124 (`wait_timeout`) when the timeout (600 s by default, at most 1800) ends first. Run it as a background command to be told when work arrives; it does not wake an idle session.
+- The hook before an edit (Claude Code and Codex) also says how many messages wait for this session's name: those sent to it, plus broadcast decisions and alerts. It says so once for each message not already announced, so an agent deep in edits hears of a question without a new prompt. A subagent is not told: its parent hears it. More than 1000 of a kind is said as `1000+`.
 
 ### Changed
 
-- The hook note that another name holds a claim on a file now comes once per file and holder per session, not on every edit of it, and again after a resume or compact. It gives the refusal's two branches: in a shared checkout, leave the file until the holder answers or releases it; on a separate branch, post what you are touching.
-- The hook note about a claim under another name adds: if your user or a handoff gave you its work, `agentbus --as NAME claim PATH --from HOLDER`.
-- The SessionStart note says to read with `brief` before `inbox` (was `status`), and `brief` shows every fact to an agent that has read only mail sent before it joined, so a decision recorded before a handoff is no longer hidden behind it.
-- The skill says to record what only you know at once with `ctx set`, and to take a holder's work with `claim --from` only when your user or a handoff gave it to you.
-- A claim refusal now says who holds the file, why and since when, then both branches: "In a shared checkout, leave it until HOLDER answers or releases it" and "On a separate branch, post what you are touching; the merge decides." It is the same wherever you run it and no longer says "Do not edit it yet" outright. `--json` errors (and each entry of `conflicts`) carry the holder's `claimed_at`.
+- A claim refusal says who holds the file, why and since when, then both branches (see above). `--json` errors, and each entry of `conflicts`, carry the holder's `claimed_at`.
 - Every refused claim writes a `claim_refused` row to the log, with JSON detail `{"conflicts": [{resource, held, holder, claimed_at}]}`, so refusals can be counted. A busy bus never turns the refusal into another error.
-- `join NAME` works: it joins as NAME, the same as `--as NAME join`, and the success line says to keep using `--as NAME` on later commands (`post` and the rest still take the name only with `--as` or `AGENTBUS_AGENT`). `--as bob join alice` is a usage error naming both names, and `join ''` is a bad name, never the name in `AGENTBUS_AGENT`.
+- The hook note that another name holds a claim on a file comes once per file and holder per session, not on every edit of it, and again after a resume or compact. It gives the same two branches and, for work you were given, the `claim --from` command.
+- The SessionStart note says to read with `brief` before `inbox` (was `status`).
+- `brief` shows every fact to an agent that has read only mail sent before it joined, so a decision recorded before a handoff is no longer hidden behind it.
+- The skill says to record what only you know at once with `ctx set`, and to take a holder's work with `claim --from` only when your user or a handoff gave it to you.
+- `join NAME` joins as NAME and the success line says to keep using `--as NAME`. `--as bob join alice` is a usage error naming both names, and `join ''` is a bad name, never the name in `AGENTBUS_AGENT`.
 - The goal reads `goal (alice, 2d ago): TEXT` in `join`, `brief`, `goal` and `status`, and the SessionStart note says how old the goal is once it is a day old. `--json` is unchanged.
-- docs/how-to/setup.md shows `(N bytes)` for the skill size instead of a number every edit to SKILL.md had to change; the test checks the real size.
-- `--request-id` replays a write only for `post` and `join`, where the bus stores the token. On `leave`, `claim`, `release`, `ctx set` and `goal` it is accepted and ignored: the help, `schema`, the skill and the reference say what a repeat really does (`ctx set` and `goal` set the value again over a change made since), and an error after one of them saved is `retryable: false`.
-- Every open sets `PRAGMA synchronous=FULL`, so a write is synced before its command reports it, whatever default the SQLite build has.
+- `--request-id` replays a write only for `post` and `join`, where the bus stores the token. On `leave`, `claim`, `release`, `ctx set` and `goal` it is accepted and ignored: the help, `schema`, the skill and the reference say what a repeat really does, and an error after one of them saved is `retryable: false`.
+- Every open sets `PRAGMA synchronous=FULL`, so a write is synced before its command reports it.
 - The wait for a busy bus is timed on the monotonic clock; a wall-clock change no longer ends it early or stretches it.
 - The reference says what a second SQLite connection to the bus does to agentbus commands, and the skill says where a batch cut by `inbox | head` can be read again (`read --since ID`).
 

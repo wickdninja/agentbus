@@ -11,7 +11,7 @@
       "source": {
         "source": "github",
         "repo": "wickdninja/agentbus",
-        "ref": "v0.2.0"
+        "ref": "v0.3.0"
       }
     }
   ]

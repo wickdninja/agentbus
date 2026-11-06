@@ -42,10 +42,10 @@ Claims are advisory, so nothing stops an agent that ignores one. It runs on one 
 **1. Install**
 
 ```bash
-uv tool install https://github.com/wickdninja/agentbus/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl
+uv tool install https://github.com/wickdninja/agentbus/releases/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl
 ```
 
-or `pipx install --force https://github.com/wickdninja/agentbus/releases/download/v0.2.0/agentbus-0.2.0-py3-none-any.whl`.
+or `pipx install --force https://github.com/wickdninja/agentbus/releases/download/v0.3.0/agentbus-0.3.0-py3-none-any.whl`.
 
 Not on PyPI: `pip install agentbus` installs a different project. Needs Python 3.9+ and git 2.31+.
 
