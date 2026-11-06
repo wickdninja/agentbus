@@ -2990,8 +2990,8 @@
   {
     "name": "a done replying to a reply closes the todo above it",
     "file": "bin/agentbus",
-    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\\\"",
-    "replace": "WHERE kind IN ({closers}) AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind IN ({closers}) AND p.reply_to IS NOT NULL)\"",
+    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"",
+    "replace": "WHERE kind IN ({closers}) AND reply_to IS NOT NULL AND id>{f} UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind IN ({closers}) AND p.reply_to IS NOT NULL)\"",
     "count": 1,
     "run": "tests/test_todo.sh",
     "expect": "a done replying to a reply (ancestry) closed the todo"
@@ -2999,8 +2999,8 @@
   {
     "name": "brief treats any reply as an answer",
     "file": "bin/agentbus",
-    "find": "WHERE kind='answer' AND reply_to IS NOT NULL\\)\\\"",
-    "replace": "WHERE reply_to IS NOT NULL)\"",
+    "find": "WHERE kind=\\'answer\\' AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"",
+    "replace": "WHERE reply_to IS NOT NULL AND id>{f})\"",
     "count": 1,
     "run": "tests/test_brief.sh",
     "expect": "worker's open questions"
@@ -5420,8 +5420,8 @@
   {
     "name": "a closing row with no reply_to hides every open todo",
     "file": "bin/agentbus",
-    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\"",
-    "replace": "WHERE kind IN ({closers}))\"",
+    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"",
+    "replace": "WHERE kind IN ({closers}) AND id>{f})\"",
     "count": 1,
     "run": "tests/test_todo.sh",
     "expect": "a done with no reply_to closed the todo"
@@ -5501,8 +5501,8 @@
   {
     "name": "an answer to a reply closes the question above it",
     "file": "bin/agentbus",
-    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL\\)\"\\)",
-    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
+    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind=\\'answer\\' AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"\\)",
+    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL AND id>{f} UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
     "count": 1,
     "run": "tests/test_brief.sh",
     "expect": "worker's open questions"
@@ -5519,8 +5519,8 @@
   {
     "name": "an answer to a reply closes the question above it (unit)",
     "file": "bin/agentbus",
-    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL\\)\"\\)",
-    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
+    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind=\\'answer\\' AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"\\)",
+    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL AND id>{f} UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
     "count": 1,
     "run": "tests/test_unit.sh",
     "expect": "test_a_question_is_closed_only_by_a_direct_answer"
@@ -5528,8 +5528,8 @@
   {
     "name": "the open todo query scans the table once per todo",
     "file": "bin/agentbus",
-    "find": "    return \\(f\"\\{p\\}kind='todo' AND \\{p\\}id NOT IN \"\\n            f\"\\(SELECT reply_to FROM messages WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\"\\)",
-    "replace": "    return (f\"{p}kind='todo' AND NOT EXISTS (SELECT 1 FROM messages c WHERE c.reply_to = {p}id AND c.kind IN ({closers}))\")",
+    "find": "    return \\(f\"\\{p\\}kind='todo' AND \\{p\\}id>\\{f\\} AND \\{p\\}id NOT IN \"\\n            f\"\\(SELECT reply_to FROM messages WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"\\)",
+    "replace": "    return (f\"{p}kind='todo' AND {p}id>{f} AND NOT EXISTS (SELECT 1 FROM messages c WHERE c.reply_to = {p}id AND c.kind IN ({closers}))\")",
     "count": 1,
     "run": "tests/test_unit.sh",
     "expect": "test_no_query_scans_the_table_once_per_row"
