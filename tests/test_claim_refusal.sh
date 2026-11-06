@@ -110,11 +110,110 @@ PY
 agentbus --json --as rw claim r/a.py 2>"$err" && fail "claim succeeded with the log full"
 "$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["code"]=="claim_conflict" and e["holder"]=="rh1" and e["committed"] is False, e' "$err" || { cat "$err"; fail "a full log changed the refusal"; }
 [ "$(rows | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')" = "$before" ] || fail "a failed log write left a row"
-# the takeover wording: ask first, take over only if no answer
+# the takeover wording: ask first, then your user; take it only with a handoff or your user's word, under your own name
+# Bug it catches: the refusal offered `agentbus --as rh2 leave`, which acts as the holder (impersonation).
 seen_ago rh2 180
 agentbus --as rw claim r/b.py 2>"$err" && fail "claim of a gone holder's file succeeded"
-grep -qF "rh2 may be gone: ask first, and take over only if no answer comes, by clearing its claims with: agentbus --as rh2 leave" "$err" || { cat "$err"; fail "the takeover wording"; }
+grep -qF "rh2 was last seen 3h ago. rh2 may be gone: if no answer comes, ask your user. If your user or a handoff gave you rh2's work, take it: agentbus --as rw claim r/b.py --from rh2" "$err" || { cat "$err"; fail "the takeover wording"; }
 grep -qF "probably gone" "$err" && fail "the refusal says probably gone"
+grep -qF -- "--as rh2 leave" "$err" && { cat "$err"; fail "the refusal offers to act as the holder"; }
 rm -f "$err"
 ok "the refusal names holder, purpose, since when and both branches; claim_refused is logged and survives a failed write"
+
+echo "TEST: claim --from HOLDER moves the named holders' claims in the way, all or nothing, and tells each holder"
+# Bug it catches: a successor whose user or handoff gave it a crashed agent's work had no way out but acting as the
+# holder (--as HOLDER leave), shown only after 30 minutes. --from is the taker's own name, logged and told.
+err=$(mktemp)
+export AGENTBUS_DB="$TMP/from.db"  # the bus above has a full log, by design
+for n in fa fb fc; do agentbus --as $n join --tool t >/dev/null; done
+agentbus --as fa claim f/src/ --purpose "port" >/dev/null
+holder() { agentbus --json claims | "$PY" -c 'import json,sys; print(" ".join(r["resource"] + "=" + r["agent"] for r in json.load(sys.stdin)["items"] if r["resource"].startswith("f/")))'; }
+# every refusal shows the --from command, with when to use it; a folder above is named whole
+agentbus --as fb claim f/src/a.py 2>"$err" && fail "claim inside another's folder succeeded"
+grep -qF "If your user or a handoff gave you fa's work, take it: agentbus --as fb claim f/src/ --from fa" "$err" || { cat "$err"; fail "the refusal lacks the --from command, folder named whole"; }
+grep -qF "leave it until fa answers or releases it" "$err" || { cat "$err"; fail "the refusal lost the shared-checkout rule"; }
+grep -qF "may be gone" "$err" && { cat "$err"; fail "a holder seen just now may be gone"; }
+agentbus --json --as fb claim f/src/a.py 2>"$err" && fail "json claim inside another's folder succeeded"
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["claim_from"]=="agentbus --as fb claim f/src/ --from fa" and e["takeover"] is None, e' "$err" || { cat "$err"; fail "claim_from is not the --from command, or takeover is given under 30 minutes"; }
+# a claim moves whole: --from on a path inside the holder's folder frees none of it
+agentbus --json --as fb claim f/src/a.py --from fa 2>"$err" && fail "--from on a path inside the holder's folder succeeded"
+"$PY" - "$err" <<'PY' || { cat "$err"; fail "--from inside a folder"; }
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["code"] == "claim_conflict" and e["committed"] is False, e
+assert e["message"].startswith("Nothing claimed: fa's claim is f/src/, wider than f/src/a.py, and a claim moves whole. "), e["message"]
+assert e["claim_from"] == "agentbus --as fb claim f/src/ --from fa", e
+PY
+[ "$(holder)" = "f/src/=fa" ] || fail "a refused --from changed the claims: $(holder)"
+# --from the wrong holder: the one in the way is named, with the command that names it
+agentbus --json --as fb claim f/src/ --from fc 2>"$err" && fail "--from the wrong holder succeeded"
+"$PY" - "$err" <<'PY' || { cat "$err"; fail "--from the wrong holder"; }
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["code"] == "claim_conflict" and e["holder"] == "fa" and e["committed"] is False, e
+assert e["message"].startswith("Nothing claimed: --from fc, but fa holds f/src/. "), e["message"]
+assert e["claim_from"] == "agentbus --as fb claim f/src/ --from fa", e
+PY
+[ "$(holder)" = "f/src/=fa" ] || fail "--from the wrong holder changed the claims: $(holder)"
+# a stale command: nothing is in the way and the named holder holds nothing (it released, or its claim expired)
+rc=0; agentbus --json --as fb claim f/free.py --from fc 2>"$err" || rc=$?
+[ "$rc" = 2 ] || fail "--from a non-holder exited $rc, not 2"
+"$PY" - "$err" <<'PY' || { cat "$err"; fail "--from a non-holder"; }
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["code"] == "bad_input" and e["field"] == "from" and e["committed"] is False, e
+assert "fc holds no claim in the way of f/free.py" in e["message"] and "Nothing claimed" in e["message"], e["message"]
+assert e["next"] == "agentbus --as fb claim f/free.py", e
+PY
+[ "$(holder)" = "f/src/=fa" ] || fail "a stale --from claimed something: $(holder)"
+agentbus --as fb claim f/src/ --from fb 2>"$err" && fail "--from your own name succeeded"
+grep -qF "take from yourself" "$err" || { cat "$err"; fail "--from your own name"; }
+# a blocker nobody named refuses the whole batch, and the command names every holder
+agentbus --as fc claim f/lib/x.py --purpose "lib" >/dev/null
+agentbus --json --as fb claim f/src/ f/lib/ --from fa 2>"$err" && fail "--from with an unnamed blocker succeeded"
+"$PY" - "$err" <<'PY' || { cat "$err"; fail "--from with an unnamed blocker"; }
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["code"] == "claim_conflict" and e["holder"] == "fc" and e["resource"] == "f/lib/", e
+assert e["message"].startswith("Nothing claimed: --from fa, but fc holds f/lib/x.py. "), e["message"]
+assert e["claim_from"] == "agentbus --as fb claim f/src/ f/lib/ --from fa --from fc", e
+assert [c["claim_from"] for c in e["conflicts"]] == ["agentbus --as fb claim f/lib/ --from fc"], e
+PY
+[ "$(holder)" = "f/lib/x.py=fc f/src/=fa" ] || fail "a refused batch changed the claims: $(holder)"
+agentbus --as fb claim f/src/ f/lib/ 2>"$err" && fail "batch over two holders succeeded"
+grep -qF "If your user or a handoff gave you the holders' work, take it: agentbus --as fb claim f/src/ f/lib/ --from fa --from fc" "$err" || { cat "$err"; fail "the batch refusal lacks one --from command for the batch"; }
+# the move: both holders named, all taken in one go
+agentbus --as fb claim f/src/ f/lib/ --from fa --from fc --purpose "finish the port" >"$TMP/out" 2>"$err" || { cat "$err"; fail "--from both holders refused"; }
+grep -qF "taken from fa (f/src/), fc (f/lib/x.py); each is told" "$TMP/out" || { cat "$TMP/out"; fail "the success text does not say what was taken"; }
+[ "$(holder)" = "f/lib/=fb f/src/=fb" ] || fail "--from did not move the claims: $(holder)"
+agentbus --json log show --limit 500 | "$PY" -c '
+import json, sys
+rows = [r for r in json.load(sys.stdin)["items"] if r["action"] == "claim_taken"]
+by = {json.loads(r["detail"])["from"]: json.loads(r["detail"]) for r in rows}
+assert [r["agent"] for r in rows] == ["fb", "fb"], rows
+assert by["fa"] == {"from": "fa", "resources": ["f/src/"], "count": 1, "claimed": ["f/src/", "f/lib/"], "purpose": "finish the port"}, by
+assert by["fc"]["resources"] == ["f/lib/x.py"] and by["fc"]["count"] == 1, by
+' || fail "claim_taken rows"
+agentbus log show --limit 500 | grep -F claim_taken | grep -qF "f/src/ taken from fa" || fail "log show does not read a claim_taken row as a sentence"
+for h in fa fc; do
+  agentbus --json --as $h inbox | "$PY" -c '
+import json, sys
+h = sys.argv[1]
+m = [x for x in json.load(sys.stdin)["items"] if x["sender"] == "fb"]
+assert len(m) == 1 and m[0]["kind"] == "alert" and m[0]["topic"] == "claim" and m[0]["recipient"] == h, m
+held = {"fa": "f/src/", "fc": "f/lib/x.py"}[h]
+assert m[0]["body"] == "fb took your claim on %s with claim --from and now holds f/src/, f/lib/ (purpose: \"finish the port\")." % held, m[0]["body"]
+' $h || fail "$h was not told who took what and why"
+done
+# a repeat of your own --from renews and takes nothing again
+agentbus --json --as fb claim f/src/ f/lib/ --from fa --from fc >"$TMP/out" 2>"$err" || { cat "$err"; fail "a repeat of --from refused"; }
+"$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert all(c["renewed"] and c["taken_from"] == [] for c in d["claims"]), d' "$TMP/out" || fail "a repeat of --from did not renew"
+[ "$(agentbus --json log show --limit 500 | "$PY" -c 'import json,sys; print(sum(r["action"]=="claim_taken" for r in json.load(sys.stdin)["items"]))')" = 2 ] || fail "a repeat logged another claim_taken"
+# paths inside the resource move too, and the JSON says what each resource took
+agentbus --as fa claim f/in/a.py f/in/b.py >/dev/null
+agentbus --json --as fc claim f/in/ --from fa >"$TMP/out" 2>"$err" || { cat "$err"; fail "--from over paths inside refused"; }
+"$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["taken_from"] == [{"resource": "f/in/a.py", "agent": "fa"}, {"resource": "f/in/b.py", "agent": "fa"}], d' "$TMP/out" || { cat "$TMP/out"; fail "taken_from"; }
+[ "$(holder)" = "f/in/=fc f/lib/=fb f/src/=fb" ] || fail "paths inside did not move: $(holder)"
+rm -f "$err"
+ok "--from moves whole claims of named holders only, refuses stale and partial takes, logs claim_taken and tells the holder"
 all_passed "All tests passed!"

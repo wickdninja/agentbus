@@ -178,6 +178,28 @@ out = ok(db, "--as", "worker", "brief")
 check("later = 1" in out and "api" not in out and "mine2" not in out, "facts text: %r" % out)
 print("PASS: changed facts are those since the last inbox read, excluding my own and the goal; all of them before a first read")
 
+# ---- a newcomer who read only mail sent before it joined still sees every fact ----
+# Bug it catches: alice recorded a decision (T1), handed off to bob (T2) and crashed; bob joined, read the handoff in
+# inbox, and brief then showed only facts from T2 on, so the decision bob most needed was hidden behind the handoff.
+db = bus("newcomer")
+join(db, "alice")
+ok(db, "--as", "alice", "ctx", "set", "factor", "owner changed it to 3")
+sql(db, "UPDATE context SET updated_at='2026-01-01T09:00:00Z' WHERE key='factor'")
+mid = post(db, "alice", "finish the port", to="bob", kind="handoff")
+sql(db, "UPDATE messages SET ts='2026-01-01T10:00:00Z' WHERE id=?", mid)
+join(db, "bob")
+ok(db, "--as", "bob", "inbox")
+f = jok(db, "--as", "bob", "brief")["facts"]
+check(f["since"] is None and [i["key"] for i in f["items"]] == ["factor"],
+      "a newcomer whose inbox held only mail from before it joined sees every fact: %s" % f)
+# once it reads a message sent after it joined, the window moves as before
+mid2 = post(db, "alice", "one more", to="bob")
+sql(db, "UPDATE messages SET ts='2026-01-01T11:00:00Z' WHERE id=?", mid2)
+ok(db, "--as", "bob", "inbox")
+f = jok(db, "--as", "bob", "brief")["facts"]
+check(f["since"] == "2026-01-01T11:00:00Z" and f["items"] == [], "after mail sent since it joined, the window applies: %s" % f)
+print("PASS: a newcomer's brief shows facts recorded before the handoff it read")
+
 # ---- who is here, what each holds, and why ----
 db = bus("h")
 ok(db, "--as", "lead", "join", "--role", "planner", "--tool", "claude")

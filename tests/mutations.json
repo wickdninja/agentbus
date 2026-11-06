@@ -929,7 +929,7 @@
   {
     "name": "the hook held note says ask the holder or work elsewhere",
     "file": "bin/agentbus",
-    "find": "\"In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching\\.\"\\)",
+    "find": "\"In a shared checkout, leave it until the holder answers or releases it; if your user or a handoff gave you its work, \"\\n                \"claim PATH --from HOLDER\\. On a separate branch, post what you are touching\\.\"\\)",
     "replace": "\"Claims are advisory; ask the holder or work elsewhere.\")",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -2574,6 +2574,150 @@
     "expect": "suggested_name"
   },
   {
+    "name": "claim --from lets a holder nobody named be taken",
+    "file": "bin/agentbus",
+    "find": "others\\ =\\ f\"\\ AND\\ agent\\ NOT\\ IN\\ \\(\\{','\\.join\\('\\?'\\ \\*\\ len\\(skip\\)\\)\\}\\)\"\\ if\\ skip\\ else\\ \"\"",
+    "replace": "others = f\" AND agent NOT IN ({','.join('?' * len(skip))}) AND 0\" if skip else \"\"",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: --from the wrong holder"
+  },
+  {
+    "name": "claim --from takes part of a folder the holder claimed",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ not\\ is_path\\(res\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ None\\\n\\ \\ \\ \\ s,\\ best\\ =\\ res\\.rstrip\\(\"/\"\\),\\ None",
+    "replace": "    if True:\n        return None\n    s, best = res.rstrip(\"/\"), None",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: --from on a path inside the holder's folder succeeded"
+  },
+  {
+    "name": "a stale claim --from claims anyway",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ stale\\ and\\ not\\ blocked\\ and\\ not\\ all\\(own_claim\\(con,\\ name,\\ res,\\ t\\)\\ for\\ res\\ in\\ wanted\\):",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: --from a non-holder exited 0, not 2"
+  },
+  {
+    "name": "a repeat of your own claim --from is refused as stale",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ stale\\ and\\ not\\ blocked\\ and\\ not\\ all\\(own_claim\\(con,\\ name,\\ res,\\ t\\)\\ for\\ res\\ in\\ wanted\\):",
+    "replace": "        if stale and not blocked:",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: a repeat of --from refused"
+  },
+  {
+    "name": "claim --from writes no claim_taken row",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"claim_taken\",\\ json\\.dumps\\(",
+    "replace": "        (lambda *x: None)(con, name, \"claim_taken\", json.dumps(",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: claim_taken rows"
+  },
+  {
+    "name": "claim --from does not tell the holder",
+    "file": "bin/agentbus",
+    "find": "\\(t,\\ name,\\ h,\\ \"alert\",\\ \"claim\",",
+    "replace": "(t, name, name, \"alert\", \"claim\",",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "was not told who took what and why"
+  },
+  {
+    "name": "a claim refusal leaves out the --from command",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ seen\\ \\+=\\ f\"\\ If\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ \\{whose\\}\\ work,\\ take\\ it:\\ \\{take\\}\"",
+    "replace": "    seen += \"\"",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: the takeover wording"
+  },
+  {
+    "name": "a claim refusal offers to act as the holder again",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ take\\ =\\ fields\\[\"claim_from\"\\]\\\n",
+    "replace": "    take = next_command(a, \"--as\", first[\"holder\"], \"leave\", as_=False)\n",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: the takeover wording"
+  },
+  {
+    "name": "takeover is given before the holder has been silent 30 minutes",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ b\\[\"idle_min\"\\]\\ is\\ None\\ or\\ b\\[\"idle_min\"\\]\\ <\\ LIVE_WINDOW_MIN:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ None\\\n\\ \\ \\ \\ return\\ b\\[\"claim_from\"\\]",
+    "replace": "    return b[\"claim_from\"]",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "FAIL: a holder seen 4 minutes ago may be gone"
+  },
+  {
+    "name": "a one-resource claim_conflict leaves out claim_from",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"claim_conflict\",\\ next=ask,\\ \\*\\*fields\\)\\\n",
+    "replace": "            \"claim_conflict\", next=ask, **{k: v for k, v in fields.items() if k != \"claim_from\"})\n",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "claim_from is not the --from command"
+  },
+  {
+    "name": "claim --from reads the claim on the resource itself twice",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ filters\\[\\-1\\]\\ =\\ \\(where\\ \\+\\ \"\\ AND\\ resource<>\\?\",\\ params\\ \\+\\ \\[res\\.rstrip\\(\"/\"\\)\\ \\+\\ \"/\"\\]\\)",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: the success text does not say what was taken"
+  },
+  {
+    "name": "claim --from accepts your own name",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ name\\ in\\ froms:\\\n",
+    "replace": "    if False:\n",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: --from your own name"
+  },
+  {
+    "name": "log show prints a claim_taken row as raw JSON",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ action\\ ==\\ \"claim_taken\":\\\n",
+    "replace": "    if action == \"claim_taken_\":\n",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "log show does not read a claim_taken row as a sentence"
+  },
+  {
+    "name": "the hook held note leaves out claim --from",
+    "file": "bin/agentbus",
+    "find": "if\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ its\\ work,\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"claim\\ PATH\\ \\-\\-from\\ HOLDER\\.\\ On\\ a\\ separate\\ branch",
+    "replace": "\"\n                \"On a separate branch",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "held path src/app.py"
+  },
+  {
+    "name": "SessionStart says status before inbox again",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ for\\ read\\ in\\ \\(f\"Read\\ with:\\ \\{tool\\}\\ \\-\\-as\\ \\{name\\}\\ brief\\ ;\\ \\{tool\\}\\ \\-\\-as\\ \\{name\\}\\ inbox\\.\\ \",",
+    "replace": "    for read in (f\"Read with: {tool} --as {name} status ; {tool} --as {name} inbox. \",",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionStart text differs"
+  },
+  {
+    "name": "brief hides facts from before a newcomer's first join behind the mail it read",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ last_read\\ and\\ not\\ new:",
+    "replace": "    if last_read:",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "a newcomer whose inbox held only mail from before it joined sees every fact"
+  },
+  {
     "name": "identity: request id mismatch does not name the original",
     "file": "bin/agentbus",
     "find": " Original: \\{original\\}\\. \\\"",
@@ -3242,8 +3386,8 @@
   {
     "name": "output: the claim confirmation says until ISO",
     "file": "bin/agentbus",
-    "find": "emit\\(a, result, \"claimed \\{\\} \\{\\}\", res, until_phrase\\(ttl, exp\\)\\)",
-    "replace": "emit(a, result, \"claimed {} until {}\", res, exp)",
+    "find": "emit\\(a, result, \"claimed \\{\\} \\{\\}\\{\\}\", res, until_phrase\\(ttl, exp\\), told\\)",
+    "replace": "emit(a, result, \"claimed {} until {}{}\", res, exp, told)",
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "claim does not say `for 2h (until HH:MM)`"
@@ -3638,8 +3782,8 @@
   {
     "name": "SessionStart text omits the name in the commands",
     "file": "bin/agentbus",
-    "find": "f\"Read with: \\{tool\\} --as \\{name\\} status ; \\{tool\\} --as \\{name\\} inbox\\. ",
-    "replace": "f\"Read with: {tool} status ; {tool} inbox. ",
+    "find": "f\"Read with: \\{tool\\} --as \\{name\\} brief ; \\{tool\\} --as \\{name\\} inbox\\. ",
+    "replace": "f\"Read with: {tool} brief ; {tool} inbox. ",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
     "expect": "SessionStart text differs"
@@ -5132,8 +5276,8 @@
   {
     "name": "docs: claude-code.md's SessionStart text drops --as",
     "file": "docs/how-to/claude-code.md",
-    "find": "Read with: agentbus --as claude-a1b2c3d4 status ; agentbus --as claude-a1b2c3d4 inbox\\.",
-    "replace": "Read with: agentbus status ; agentbus inbox.",
+    "find": "Read with: agentbus --as claude-a1b2c3d4 brief ; agentbus --as claude-a1b2c3d4 inbox\\.",
+    "replace": "Read with: agentbus brief ; agentbus inbox.",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "docs/how-to/claude-code.md does not show the real SessionStart text"
