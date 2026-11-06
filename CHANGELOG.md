@@ -6,6 +6,8 @@ For agents, what changes:
 
 - Record work before you start it: `post "WHAT" --kind todo`. It stays open until a `done` or `dropped` replies to it with `--reply-to ID`. `brief` lists every open todo; SessionStart says how many are open.
 - An answer closes only the question it replies to. An answer to a clarifying question no longer closes the question above it (#63).
+- Record your own jobs. At start, post each job you own as its own todo; close each with a linked `done`; before you stop with work left, every unfinished job must be an open todo, never a line inside a `done`. You may finish a todo whose owner left. A live trial found fresh agents finished one of three jobs and never recorded the other two; `brief` can only list todos.
+- `brief`'s `next:` points at the oldest open todo (`read --id ID`, and a line saying how to close it) instead of `claim PATH`. A row cut short says so and names the command that reads it whole. `--limit 0` shows each section's total instead of "none". The skill's decision line is `post "WHAT" --kind decision --topic decision`, which `read --topic decision` returns.
 
 ### Added
 
@@ -16,7 +18,7 @@ For agents, what changes:
 ### Changed
 
 - The Stop hook's claim reminder ignores a `done` that is a reply, so closing a todo does not silence it.
-- Open questions use the direct-answer rule in `brief` (open questions and pending between others). `watch` still counts a question as open until any message replies to it.
+- Open questions use the direct-answer rule in `brief` (open questions and pending between others), and `watch` uses the same rule (#66). Its header counts the whole bus instead of the 200 messages it holds, adds `N open todos` when any are open, and `watch --json` has `open` with the counts. An alert is open until any message replies to it.
 - A question is answered only by an `answer` that replies to it directly. A reply chained through a note (question, note, answer) no longer closes the question, so a thread that the old rule counted as closed can show as open again. That is deliberate: a false open costs a glance, a false close loses work.
 - The Stop hook's text now reads "has not posted a handoff or a done that is not a reply", and a `handoff` that is a reply still counts.
 - The skill is shorter to fit the new kinds: it no longer says "Writes need a joined name." (the `not_on_roster` error names `join`), "check the exit status first", "at the beginning of" each turn, or "set it" for the goal.

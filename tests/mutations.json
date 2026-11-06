@@ -5623,5 +5623,257 @@
     "count": 1,
     "run": "tests/test_todo.sh",
     "expect": "--limit 0 hides the expired claims"
+  },
+  {
+    "name": "brief next ignores open todos",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ todos:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ todos\\[0\\]\\[\"id\"\\]\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "next with open todos"
+  },
+  {
+    "name": "brief next points at the newest open todo",
+    "file": "bin/agentbus",
+    "find": "if\\ todos:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ todos\\[0\\]\\[\"id\"\\]\\)",
+    "replace": "if todos:\n        return cmd(\"read\", \"--id\", todos[-1][\"id\"])",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "next with open todos"
+  },
+  {
+    "name": "brief next names the todo before an open question",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ for\\ q\\ in\\ questions:\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ q\\[\"sender\"\\]\\ !=\\ me_name:",
+    "replace": "    if todos:\n        return cmd(\"read\", \"--id\", todos[0][\"id\"])\n    for q in questions:\n        if q[\"sender\"] != me_name:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "an open question to me must come before a todo"
+  },
+  {
+    "name": "brief never says how to close the oldest todo",
+    "file": "bin/agentbus",
+    "find": "if\\ td\\ and\\ r\\[\"next\"\\]\\.endswith\\(",
+    "replace": "if False and td and r[\"next\"].endswith(",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "no line says how to close the oldest todo"
+  },
+  {
+    "name": "brief shows a close line when next is not the todo",
+    "file": "bin/agentbus",
+    "find": "if\\ td\\ and\\ r\\[\"next\"\\]\\.endswith\\(f\"\\ read\\ \\-\\-id\\ \\{td\\[0\\]\\['id'\\]\\}\"\\):",
+    "replace": "if td:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a close line shows although next: is not the todo"
+  },
+  {
+    "name": "brief cut marker ignores body_truncated",
+    "file": "bin/agentbus",
+    "find": "if\\ not\\ \\(truncated\\ or\\ len\\(\"\\ \"\\.join\\(str\\(text\\)\\.split\\(\\)\\)\\)\\ >\\ n\\):",
+    "replace": "if not (len(\" \".join(str(text).split())) > n):",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a todo cut by the 200-character read says nothing"
+  },
+  {
+    "name": "brief cut marker ignores the 90-character cut",
+    "file": "bin/agentbus",
+    "find": "if\\ not\\ \\(truncated\\ or\\ len\\(\"\\ \"\\.join\\(str\\(text\\)\\.split\\(\\)\\)\\)\\ >\\ n\\):",
+    "replace": "if not truncated:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a body cut at 90 characters has no read --id"
+  },
+  {
+    "name": "brief marks every row as cut",
+    "file": "bin/agentbus",
+    "find": "if\\ not\\ \\(truncated\\ or\\ len\\(\"\\ \"\\.join\\(str\\(text\\)\\.split\\(\\)\\)\\)\\ >\\ n\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a body that fits shows a marker anyway"
+  },
+  {
+    "name": "brief question row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "_brief_cut\\(a,\\ q\\[\"body\"\\],\\ BRIEF_BODY_TEXT,\\ q\\[\"body_truncated\"\\],\\ \"read\",\\ \"\\-\\-id\",\\ q\\[\"id\"\\]\\)",
+    "replace": "_brief_line(q[\"body\"], BRIEF_BODY_TEXT)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the row with QQQQQQQQ lacks"
+  },
+  {
+    "name": "brief unread row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "show\\(\"\\#\\{\\}\\ \\{\\}\\ \\[\\{\\}\\]:\\ \\{\\}\",\\ m\\[\"id\"\\],\\ _brief_line\\(m\\[\"sender\"\\],\\ 40\\),\\ m\\[\"kind\"\\],\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ _brief_cut\\(a,\\ m\\[\"body\"\\],\\ BRIEF_BODY_TEXT,\\ m\\[\"body_truncated\"\\],\\ \"read\",\\ \"\\-\\-id\",\\ m\\[\"id\"\\]\\),\\ row=True\\)",
+    "replace": "show(\"#{} {} [{}]: {}\", m[\"id\"], _brief_line(m[\"sender\"], 40), m[\"kind\"],\n                     _brief_line(m[\"body\"], BRIEF_BODY_TEXT), row=True)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the row with HHHHHHHH lacks"
+  },
+  {
+    "name": "brief pending-between-others row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "_brief_cut\\(a,\\ m\\[\"body\"\\],\\ BRIEF_BODY_TEXT,\\ m\\[\"body_truncated\"\\],\\ \"read\",\\ \"\\-\\-id\",\\ m\\[\"id\"\\]\\),\\ row=True\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ more\\(omitted\\[\"pending_others\"\\]\\)",
+    "replace": "_brief_line(m[\"body\"], BRIEF_BODY_TEXT), row=True)\n        more(omitted[\"pending_others\"])",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the row with PPPPPPPP lacks"
+  },
+  {
+    "name": "brief fact row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "_brief_cut\\(a,\\ x\\[\"value\"\\],\\ BRIEF_BODY_TEXT,\\ x\\[\"value_truncated\"\\],\\ \"ctx\",\\ \"get\",\\ x\\[\"key\"\\]\\)",
+    "replace": "_brief_line(x[\"value\"], BRIEF_BODY_TEXT)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the row with wide = lacks"
+  },
+  {
+    "name": "brief todo row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "_brief_cut\\(a,\\ x\\[\"body\"\\],\\ BRIEF_BODY_TEXT,\\ x\\[\"body_truncated\"\\],\\ \"read\",\\ \"\\-\\-id\",\\ x\\[\"id\"\\]\\)",
+    "replace": "_brief_line(x[\"body\"], BRIEF_BODY_TEXT)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a todo cut by the 200-character read says nothing"
+  },
+  {
+    "name": "brief --limit 0 says nobody has joined",
+    "file": "bin/agentbus",
+    "find": "if\\ agents\\ or\\ omitted\\[\"agents\"\\]:",
+    "replace": "if agents:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "nobody has joined"
+  },
+  {
+    "name": "brief --limit 0 says open questions none",
+    "file": "bin/agentbus",
+    "find": "if\\ qs\\ or\\ omitted\\[\"questions\"\\]:",
+    "replace": "if qs:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "open questions: none"
+  },
+  {
+    "name": "brief --limit 0 says pending between others none",
+    "file": "bin/agentbus",
+    "find": "if\\ po\\[\"items\"\\]\\ or\\ omitted\\[\"pending_others\"\\]:",
+    "replace": "if po[\"items\"]:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "pending between others: none"
+  },
+  {
+    "name": "brief --limit 0 says facts none",
+    "file": "bin/agentbus",
+    "find": "if\\ f\\[\"items\"\\]\\ or\\ omitted\\[\"facts\"\\]:",
+    "replace": "if f[\"items\"]:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "facts: none"
+  },
+  {
+    "name": "watch counts a question open by its own rule",
+    "file": "bin/agentbus",
+    "find": "count\\(open_question_where\\(\"\",\\ floor\\)\\)",
+    "replace": "count(f\"kind='question' AND id>{floor}\")",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "after closing"
+  },
+  {
+    "name": "watch counts a todo open by its own rule",
+    "file": "bin/agentbus",
+    "find": "count\\(open_todo_where\\(\"\",\\ floor\\)\\)",
+    "replace": "count(f\"kind='todo' AND id>{floor}\")",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "after closing"
+  },
+  {
+    "name": "watch header leaves out open todos",
+    "file": "bin/agentbus",
+    "find": "\\ \\+\\ \\(f\"\\ \u00b7\\ \\{_plural\\(todos,\\ 'open\\ todo'\\)\\}\"\\ if\\ todos\\ else\\ \"\"\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "watch header"
+  },
+  {
+    "name": "watch header shows a zero todo count",
+    "file": "bin/agentbus",
+    "find": "\\(f\"\\ \u00b7\\ \\{_plural\\(todos,\\ 'open\\ todo'\\)\\}\"\\ if\\ todos\\ else\\ \"\"\\)",
+    "replace": "(f\" \u00b7 {_plural(todos, 'open todo')}\")",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a header with no open todo mentions todos"
+  },
+  {
+    "name": "watch counts the whole bus every tick",
+    "file": "bin/agentbus",
+    "find": "floor\\ =\\ max\\(0,\\ newest\\ \\-\\ SCAN\\)",
+    "replace": "floor = 0",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "watch_open over a window"
+  },
+  {
+    "name": "watch hides its counting window",
+    "file": "bin/agentbus",
+    "find": "\"window\":\\ SCAN\\ if\\ floor\\ else\\ None\\}",
+    "replace": "\"window\": None}",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "watch_open over a window"
+  },
+  {
+    "name": "watch narrow header leaves out open todos",
+    "file": "bin/agentbus",
+    "find": "\\ \\+\\ \\(f\"\\ \u00b7\\ \\{todos\\}\\ todo\"\\ if\\ todos\\ else\\ \"\"\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "narrow watch header"
+  },
+  {
+    "name": "skill drops recording your own jobs at start",
+    "file": "skills/agentbus/SKILL.md",
+    "find": "At\\ start,\\ post\\ each\\ job\\ you\\ own\\ as\\ its\\ own\\ todo\\.\\ ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the skill must tell an agent to post each job it owns as a todo at start"
+  },
+  {
+    "name": "skill allows unfinished jobs inside a done",
+    "file": "skills/agentbus/SKILL.md",
+    "find": "every\\ unfinished\\ job\\ must\\ be\\ an\\ open\\ todo,\\ not\\ a\\ line\\ inside\\ a\\ done",
+    "replace": "a summary is enough",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the skill must say every unfinished job is left as an open todo"
+  },
+  {
+    "name": "skill forbids finishing a todo whose owner left",
+    "file": "skills/agentbus/SKILL.md",
+    "find": "\\ You\\ may\\ finish\\ a\\ todo\\ whose\\ owner\\ left:\\ claim\\ its\\ files\\ as\\ usual,\\ with\\ `claim\\ RESOURCE\\ \\-\\-from\\ HOLDER`\\ if\\ a\\ claim\\ is\\ in\\ the\\ way\\.",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the skill must say a todo whose owner left may be finished"
+  },
+  {
+    "name": "skill teaches a decision post with no topic",
+    "file": "skills/agentbus/SKILL.md",
+    "find": "post\\ \"WHAT\"\\ \\-\\-kind\\ decision\\ \\-\\-topic\\ decision",
+    "replace": "post \"WHAT\" --kind decision",
+    "count": 1,
+    "run": "tests/test_skill.sh",
+    "expect": "the skill must teach posting a decision with --topic decision"
   }
 ]

@@ -2314,6 +2314,7 @@
      "messages",
      "unread",
      "counts",
+     "open",
      "omitted"
     ],
     "properties": {
@@ -2468,6 +2469,32 @@
        },
        "messages": {
         "type": "integer"
+       }
+      }
+     },
+     "open": {
+      "type": "object",
+      "required": [
+       "alerts",
+       "questions",
+       "todos",
+       "window"
+      ],
+      "properties": {
+       "alerts": {
+        "type": "integer"
+       },
+       "questions": {
+        "type": "integer"
+       },
+       "todos": {
+        "type": "integer"
+       },
+       "window": {
+        "type": [
+         "integer",
+         "null"
+        ]
        }
       }
      },

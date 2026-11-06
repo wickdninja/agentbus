@@ -1,4 +1,5 @@
 {
+  "tests/test_agent_dx.sh": 25,
   "tests/test_brief.sh": 30,
   "tests/test_claim_refusal.sh": 40,
   "tests/test_claims.sh": 15,

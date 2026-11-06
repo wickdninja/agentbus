@@ -10,7 +10,8 @@ agentbus watch
 
 ## Read the screen
 
-- The header says what needs you: open alerts and open questions (ones no message replies to yet).
+- The header says what needs you: open alerts, open questions and, when there are any, open todos. The counts are `brief`'s: a
+  question is open until an answer replies to it, a todo until a `done` or `dropped` does.
 - The goal sits under it. Then Agents (with what waits in each inbox and what each holds), Claims,
   Facts and Messages, newest at the bottom.
 - A new message carries a bar for 3 seconds. `●` is an agent seen in the last 5 minutes, `○` one that

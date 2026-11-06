@@ -447,7 +447,7 @@ def filter_coverage():
     assert any(l.startswith("Messages  0 of newest 200") for l in t), t
     assert any("9 older not searched · agentbus read" in l for l in t), t
     assert any(l.startswith("Agents  n/a") for l in t) and any(l.startswith("Facts  n/a") for l in t), t
-    assert "newest 200: 0 alerts" in t[0], t[0]
+    assert t[0].endswith("1 alert · 0 open questions"), t[0]  # the whole bus, by brief's rules (issue 66): #3 is open, #6 and #9 are answered
     t = text_of(100, 30, {"filter": "topic:ci"})
     assert ids_in(t) == [3] and any(l.startswith("Claims  n/a") for l in t), t
     assert ids_in(text_of(100, 30, {"filter": "everyone"})) == [1, 3], "a broadcast matches the word it is shown as"

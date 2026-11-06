@@ -44,7 +44,7 @@ agentbus doctor      # checks the hooks file, the executable it runs and the AGE
 
 Hooks only ever add context: they never block a tool call, never edit a file and never run `leave`.
 
-Codex needs no command to learn the protocol: setup installs the `AGENTS.md` block, which Codex reads at the start of every session. (Setup installs a skill only for Claude Code.)
+Codex needs no command to learn the protocol: setup installs the `AGENTS.md` block, which Codex reads at the start of every session. (Setup installs a skill only for Claude Code.) The block sends the agent to `agentbus skill` for the full protocol, which includes posting each job it owns as a todo, closing each with a linked `done`, and leaving unfinished jobs as open todos.
 
 ## Your agent's name: the derived one and `--as`
 
