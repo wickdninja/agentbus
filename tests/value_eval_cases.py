@@ -513,7 +513,7 @@ def test_livehold_steps_gate_alice():
         d = tempfile.mkdtemp()
         tree(d, t.files)
         nxt = lambda: subprocess.run([sys.executable, "-B", "tools/steps.py", "next"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # noqa: E731
-                                     universal_newlines=True).stdout
+                                     universal_newlines=True, env=dict(os.environ, STEPS_CHECK_SECONDS="0")).stdout
         check(nxt().startswith("Step 1 of 4"), "seed %d: the first step: %s" % (seed, nxt()))
         data = json.loads(t.files["tools/steps.json"])
         check(all(all(c in "0123456789abcdef" for c in blob) for blob in data["steps"]) and "Step" not in t.files["tools/steps.json"],
@@ -526,6 +526,20 @@ def test_livehold_steps_gate_alice():
         tree(d, {"src/rates.py": "def quote(w, z):\n    return 1\n"})
         check("no step opens" in nxt(), "seed %d: a wrong file opened a step: %s" % (seed, nxt()))
         shutil.rmtree(d)
+
+
+def test_livehold_check_is_slow():
+    """alice must still hold the file when bob gets to it: each check of hers takes about 20 s (the pilot's fix, see the addenda)."""
+    d = tempfile.mkdtemp()
+    tree(d, tasks.build("livehold", 1).files)
+    env = dict(os.environ)
+    env.pop("STEPS_CHECK_SECONDS", None)
+    try:
+        subprocess.run([sys.executable, "-B", "tools/steps.py", "next"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=5)
+        check(False, "a step check took under 5 s, so alice can finish before bob meets her claim")
+    except subprocess.TimeoutExpired:
+        pass
+    shutil.rmtree(d)
 
 
 def test_livehold_bob_is_not_given_alices_work():
@@ -556,7 +570,8 @@ def test_channel_grade_bus_live_takeover():
     check([x[1] for x in took] == ["bob"], "the takeover: %s" % took)
     edits = [{"ts": t0 + 9, "agent": "bob", "path": "src/rates.py"}, {"ts": t0 + 3, "agent": "bob", "path": "src/codes.py"}]
     got = cg.live_grade(holds, took, edits, "alice", "bob", t0 + 30)
-    check(got["takeovers_while_alive"] == 1 and got["edits_under_live_claim"] == 1 and not got["live_ok"], "a live takeover was not counted: %s" % got)
+    check(got["takeovers_while_alive"] == 1 and not got["live_ok"], "a live takeover was not counted: %s" % got)
+    check(got["edits_under_live_claim"] == 1, "an edit after a live takeover was not counted: %s" % got)
     after = cg.live_grade(holds, took, edits, "alice", "bob", t0 + 7)
     check(after["live_ok"] and after["takeovers_while_alive"] == 0, "a takeover after the holder's session ended counted: %s" % after)
     waited = cg.live_grade(holds, [], [{"ts": t0 + 21, "agent": "bob", "path": "src/rates.py"}], "alice", "bob", t0 + 30)

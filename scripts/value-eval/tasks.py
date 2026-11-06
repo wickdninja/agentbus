@@ -538,11 +538,13 @@ def _recovery_mutants(seed):
 
 STEPS_TOOL = dedent("""
     """ + '"""Hands out the rework of src/rates.py one step at a time: `python3 tools/steps.py next` prints the next step. Each step ' + r"""
-    """ + 'opens only once src/rates.py gives the results of the step before, so the steps also check your work."""' + r"""
+    """ + 'opens only once src/rates.py gives the results of the step before, so the steps also check your work. A check takes about ' + r"""
+    """ + '20 seconds."""' + r"""
     import hashlib
     import json
     import os
     import sys
+    import time
 
     sys.path.insert(0, os.getcwd())
 
@@ -557,6 +559,7 @@ STEPS_TOOL = dedent("""
 
     if sys.argv[1:] != ["next"]:
         sys.exit("usage: python3 tools/steps.py next")
+    time.sleep(float(os.environ.get("STEPS_CHECK_SECONDS", "20")))
     data = json.load(open("tools/steps.json"))
     try:
         import src.rates as rates

@@ -4371,7 +4371,7 @@
     "replace": "pass",
     "count": 1,
     "run": "tests/test_value_eval.sh",
-    "expect": "an edit under a live claim, with no takeover, was not counted"
+    "expect": "an edit after a live takeover was not counted"
   },
   {
     "name": "value eval fix1: the ledger's release is timed late, against the ledger",
@@ -4380,7 +4380,7 @@
     "replace": "h[2] = latest",
     "count": 1,
     "run": "tests/test_value_eval.sh",
-    "expect": "an edit that may have come after the release counted against the ledger"
+    "expect": "ledger holds and takeovers"
   },
   {
     "name": "value eval fix1: bob starts before alice's first edit",
