@@ -620,7 +620,8 @@ CONTRACT = {
                            "meaning": "Another agent holds an overlapping claim. claimed_at is when the holder took it. holder_last_seen is when the holder last ran a command (null when unknown) and "
                                       "holder_idle_min the whole minutes since. claim_from is always the claim --from command that moves the claims in the way "
                                       "to you under your own name (a folder held above the resource is named whole: a claim moves whole); with several "
-                                      "resources it takes the whole batch. takeover is the same command for that conflict, given only when the holder has not "
+                                      "resources it takes the whole batch. It is null only when more than 100 agents hold claims in the way (one command "
+                                      "names at most 100). takeover is the same command for that conflict, given only when the holder has not "
                                       "been seen for 30 minutes or more (the window join uses), else null. With several resources, nothing was claimed: "
                                       "resource and holder are the first blocked resource, and conflicts lists every blocked one as {resource, holder, held, "
                                       "claimed_at, expires_at, purpose, holder_last_seen, holder_idle_min, takeover, claim_from} (held is the claim in the way, "
@@ -800,7 +801,8 @@ CONTRACT = {
                       retry={"class": "idempotent", "how": "renews the claim and keeps its purpose and claimed_at; renewed is true when you already held it, "
                                                             "and previous_purpose is set when --purpose changed it. --request-id is ignored; if another "
                                                             "agent took any of the resources meanwhile, nothing is claimed and the repeat gives "
-                                                            "claim_conflict, never an overwrite. A repeat of your own claim --from renews and takes nothing again",
+                                                            "claim_conflict, never an overwrite; except that --from takes again from the holders you name, whatever they "
+                                                            "hold by then, and a repeat after it worked renews and takes nothing",
                                                             "short": "safe to repeat"}),
         "release": _cmd("Release one or several claims, all or none, or all of yours", _o({"released": _list(_STR), "released_count": _INT}), ["not_held"],
                         {"class": "idempotent_with_flag", "short": "with --if-held",
@@ -4690,7 +4692,7 @@ def named_wider(con, res, t, froms):
         r = con.execute(f"SELECT {cut('resource')} AS held, {cut('agent')} AS holder, {cut('claimed_at')} AS claimed_at, "
                         f"{cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
                         f"WHERE ({where}) AND typeof(resource)='text' AND expires_at>? AND rtrim(resource, '/')<>? "
-                        f"AND agent IN ({','.join('?' * len(froms))}) ORDER BY length(resource) LIMIT 1",
+                        f"AND agent IN ({','.join('?' * len(froms))}) AND {_CLAIM_ON_ROSTER} ORDER BY length(resource) LIMIT 1",
                         params + [t, s] + list(froms)).fetchone()
         if r and (best is None or len(r["held"]) < len(best["held"])):
             best = dict(r)
@@ -4699,9 +4701,14 @@ def named_wider(con, res, t, froms):
     return best
 
 
+TAKE_SCAN = 1000  # claims a refusal reads to name the holders of a folder; one it misses still blocks the command it gives
+
+
 def take_target(con, name, res, t):
     """(what a --from command names to take res: res, or the widest folder above it another agent holds, since a claim
-    moves whole; the names whose claims are in the way of that, first claimed first). Reads only, bounded."""
+    moves whole; the names whose claims are in the way of that, in path order). Reads at most TAKE_SCAN claims per
+    filter, in index order, before any other test: a holder past them is not named, and still blocks when the command
+    runs, so the command never takes less than it says."""
     target = res
     if is_path(res):
         for where, params in _above(res):
@@ -4711,8 +4718,10 @@ def take_target(con, name, res, t):
                 target = r[0]
     holders = []
     for where, params in overlap_filters(target):
-        for (h,) in con.execute(f"SELECT {cut('agent')} FROM claims WHERE ({where}) AND {_CLAIM_LIVE} AND {_CLAIM_ON_ROSTER} "
-                                "GROUP BY agent ORDER BY MIN(claimed_at), agent LIMIT ?", params + [name, t, MAX_CLAIM_BATCH]):
+        rows = con.execute(f"SELECT {cut('agent')} FROM (SELECT resource, agent, expires_at FROM claims WHERE ({where}) "
+                           f"ORDER BY resource LIMIT ?) AS claims WHERE {_CLAIM_LIVE} AND {_CLAIM_ON_ROSTER}",
+                           params + [TAKE_SCAN, name, t]).fetchall()
+        for (h,) in rows:
             if h not in holders:
                 holders.append(h)
     return target, holders
@@ -4723,24 +4732,58 @@ def from_command(a, name, targets, holders):
     return next_command(a, "--as", name, "claim", *targets, *[w for h in holders for w in ("--from", h)], as_=False)
 
 
-def named_in_way(con, res, t, froms):
-    """The --from holders' live claims in the way of res (res itself or paths inside it; folders above refuse first):
-    ([{resource, agent}] the first AUTO_RELEASE_SHOWN, {agent: count}). Reads only."""
-    shown, counts = [], {}
-    names = ",".join("?" * len(froms))
-    filters = overlap_filters(res)
-    if is_path(res):  # the range inside res starts at res + "/", which the first filters already match: read it once
-        where, params = filters[-1]
-        filters[-1] = (where + " AND resource<>?", params + [res.rstrip("/") + "/"])
-    for where, params in filters:
-        live = f"({where}) AND typeof(resource)='text' AND expires_at>? AND agent IN ({names})"
-        for h, n in con.execute(f"SELECT {cut('agent')}, COUNT(*) FROM claims WHERE {live} GROUP BY agent", params + [t] + list(froms)):
-            counts[h] = counts.get(h, 0) + n
-        room = AUTO_RELEASE_SHOWN - len(shown)
-        if room > 0:
-            shown += [dict(r) for r in con.execute(f"SELECT {cut('resource')} AS resource, {cut('agent')} AS agent FROM claims "
-                                                   f"WHERE {live} ORDER BY resource LIMIT ?", params + [t] + list(froms) + [room])]
-    return shown, counts
+def _named(froms):
+    return f"typeof(resource)='text' AND expires_at>? AND agent IN ({','.join('?' * len(froms))}) AND {_CLAIM_ON_ROSTER}"
+
+
+def named_holders(con, res, t, froms):
+    """The --from holders on the roster with a live claim in the way of res (res itself or paths inside it; a folder
+    above refuses first). Reads only, at most one row per holder and filter."""
+    found = set()
+    for where, params in overlap_filters(res):
+        found.update(h for (h,) in con.execute(f"SELECT DISTINCT agent FROM claims WHERE ({where}) AND {_named(froms)} LIMIT ?",
+                                               params + [t] + list(froms) + [len(froms)]))
+    return found
+
+
+def move_named(con, res, t, froms, taken):
+    """Inside claim --from's transaction, after every check passed: delete the --from holders' claims in the way of res,
+    counting each claim once (one already moved for an earlier resource is gone) into taken {holder: {"resources": the
+    first AUTO_RELEASE_SHOWN, each holder's own, "count"}}. Returns [{resource, agent}], the first AUTO_RELEASE_SHOWN
+    this resource took."""
+    shown = []
+    for where, params in overlap_filters(res):  # each DELETE runs before the next filter reads: a claim two match counts once
+        live = f"({where}) AND {_named(froms)}"
+        args = params + [t] + list(froms)
+        for h, n in con.execute(f"SELECT agent, COUNT(*) FROM claims WHERE {live} GROUP BY agent", args).fetchall():
+            got = taken.setdefault(h, {"resources": [], "count": 0})
+            got["count"] += n
+            room = AUTO_RELEASE_SHOWN - len(got["resources"])
+            mine = [r[0] for r in con.execute(f"SELECT {cut('resource')} FROM claims WHERE {live} AND agent=? ORDER BY resource LIMIT ?",
+                                              args + [h, max(room, AUTO_RELEASE_SHOWN - len(shown), 0)])]
+            got["resources"] += mine[:max(room, 0)]
+            shown += [{"resource": r, "agent": h} for r in mine[:AUTO_RELEASE_SHOWN - len(shown)]]
+        con.execute(f"DELETE FROM claims WHERE {live}", args)
+    return shown
+
+
+def move_named_raw(con, res, rows, taken, gone):
+    """The --from holders' claims in the way of res stored under bytes that are not UTF-8 ([(raw, row)], already checked
+    not to be a folder above res): deleted by their bytes and counted like move_named, each once (gone: the raw values
+    already moved)."""
+    shown = []
+    for raw, r in rows:
+        if raw in gone:
+            continue
+        gone.add(raw)
+        con.execute("DELETE FROM claims WHERE resource=CAST(? AS TEXT)", (raw,))
+        got = taken.setdefault(r["agent"], {"resources": [], "count": 0})
+        got["count"] += 1
+        if len(got["resources"]) < AUTO_RELEASE_SHOWN:
+            got["resources"].append(r["resource"])
+        if len(shown) < AUTO_RELEASE_SHOWN:
+            shown.append({"resource": r["resource"], "agent": r["agent"]})
+    return shown
 
 
 def claim_phrase(res, b):
@@ -4805,14 +4848,22 @@ def refuse_claim(a, name, blocked, total, many, froms=(), batch=None):
                 " Last seen: " + ", ".join(f"{h} {t}" for h, t in ages[:CONFLICTS_SHOWN]) + ".")
     if gone:
         seen += f" {or_list(gone[:CONFLICTS_SHOWN])} may be gone: if no answer comes, ask your user."
-    targets, holders = batch if many and batch else (None, None)
-    take = fields["claim_from"]
-    if many and batch:
-        take = fields["claim_from"] = from_command(a, name, targets, holders)
+    holders, cmds = first["take_holders"], []
+    if many:  # one command for the batch in JSON; in the text one per conflict when several hold them
+        fields["claim_from"] = from_command(a, name, *batch) if batch else None
+        holders = batch[1] if batch else []
+        cmds = list(dict.fromkeys(b["claim_from"] for _, b in blocked))
+    if fields["claim_from"] is None:
+        what = first_res if not many else "these resources"
+        seen += (f" More than {MAX_CLAIM_BATCH} agents hold claims in the way of {what}, and --from takes at most {MAX_CLAIM_BATCH} "
+                 "at once: claim narrower paths, or ask your user.")
+    elif many and len({h for _, b in blocked for h in b["take_holders"]}) > 1:
+        seen += " If your user or a handoff gave you their work, take each: " + "; ".join(cmds[:CONFLICTS_SHOWN])
+        if len(cmds) > CONFLICTS_SHOWN:
+            seen += f"; and {len(cmds) - CONFLICTS_SHOWN} more (--json lists them all)"
     else:
-        holders = first["take_holders"]
-    whose = f"{holders[0]}'s" if len(holders) == 1 else "the holders'"
-    seen += f" If your user or a handoff gave you {whose} work, take it: {take}"
+        whose = f"{holders[0]}'s" if len(holders) == 1 else "their"
+        seen += f" If your user or a handoff gave you {whose} work, take it: {fields['claim_from']}"
     lead = ""
     if froms and first.get("why") == "wider":
         lead = f"Nothing claimed: {first['holder']}'s claim is {first['held']}, wider than {first_res}, and a claim moves whole. "
@@ -4910,6 +4961,8 @@ def cmd_claim(con, a):
         die(f"claim takes at most {MAX_CLAIM_BATCH} resources at once (got {len(a.resource)}). Claim the folder above them, or claim in batches", "bad_input")
     wanted = list(dict.fromkeys(norm_resource(r, a=a) for r in a.resource))  # each once, in the order asked
     froms = list(dict.fromkeys(a.from_ or []))  # claim --from HOLDER: take the claims in the way from these names
+    if any(not h.strip() for h in froms):
+        die("--from needs a name: the holder whose claims to take, for example --from alice", "bad_input", field="from")
     if name in froms:
         renew = next_command(a, "--as", name, "claim", *wanted, as_=False)
         die(f"--from {name} is you: you cannot take from yourself. To renew your own claim: {renew}", "bad_input", next=renew, field="from")
@@ -4924,51 +4977,64 @@ def cmd_claim(con, a):
         plan, blocked, holds = [], [], set()
         for res in wanted:
             b, odd = claim_blocker(con, name, res, t, skip=froms)
-            if not b and froms:
+            raw_moves = []
+            if froms and not b:
+                # the --from holders' claims under bytes that are not UTF-8: a folder above refuses like any other; the rest
+                # move and are accounted. A holder off the roster is released as for a plain claim.
+                for raw, r in [x for x in odd if x[1]["agent"] in froms]:
+                    if not con.execute("SELECT 1 FROM agents WHERE name=?", (r["agent"],)).fetchone():
+                        continue
+                    if res.rstrip("/").startswith(r["resource"].rstrip("/") + "/"):
+                        b = {"same": False, "held": r["resource"], "claimed_at": r["claimed_at"], "holder": r["agent"],
+                             "expires_at": r["expires_at"], "purpose": r["purpose"], "why": "wider", "target": r["resource"],
+                             **dict(zip(("last_seen", "idle_min"), holder_seen(con, r["agent"])))}
+                        break
+                    raw_moves.append((raw, r))
+                moved = {raw for raw, _ in raw_moves}
+                odd = [x for x in odd if x[0] not in moved]
+            if froms and not b:
                 b = named_wider(con, res, t, froms)  # a claim moves whole: a named holder's folder above refuses
-            elif b and froms:
+            elif b and froms and "why" not in b:
                 b["why"] = "unnamed"
-            moving = named_in_way(con, res, t, froms) if froms and not b else ([], {})
-            holds.update(moving[1])
-            holds.update(r["agent"] for _, r in odd if r["agent"] in froms)
+            if froms and not b:
+                holds.update(named_holders(con, res, t, froms))
+                holds.update(r["agent"] for _, r in raw_moves)
             if b:
                 blocked.append((res, b))
-            plan.append((res, odd, moving))
+            plan.append((res, odd, raw_moves))
         batch = None
-        if blocked:  # the --from command for each conflict, and the one that takes everything asked
-            tt, hh = [], list(h for h in froms if h in holds)
-            for res in wanted:
-                target, holders = take_target(con, name, res, t)
-                tt += [target] if target not in tt else []
-                hh += [h for h in holders if h not in hh]
-            batch = (tt, hh)
+        if blocked:  # the --from command for each conflict (read only for these), and the one that takes everything asked
+            takes = {}
             for res, b in blocked:
                 target, holders = take_target(con, name, res, t)
-                b["take_holders"] = holders or [b["holder"]]
-                b["claim_from"] = from_command(a, name, [target], b["take_holders"])
+                target = b.get("target", target)
+                holders = holders + [b["holder"]] if b["holder"] not in holders else holders  # the one in the way, past the read too
+                takes[res] = (target, holders)
+                b["take_holders"] = holders
+                b["claim_from"] = from_command(a, name, [target], holders) if len(holders) <= MAX_CLAIM_BATCH else None
+            tt, hh = [], [h for h in froms if h in holds]
+            for res in wanted:
+                target = takes[res][0] if res in takes else res
+                tt += [target] if target not in tt else []
+                hh += [h for h in takes.get(res, (None, []))[1] if h not in hh]
+            batch = (tt, hh) if len(hh) <= MAX_CLAIM_BATCH and all(b["claim_from"] for _, b in blocked) else None
         stale = [h for h in froms if h not in holds]
         if stale and not blocked and not all(own_claim(con, name, res, t) for res in wanted):
-            # a stale command: a named holder has nothing in the way (released, expired, or never held it); a repeat of
-            # your own --from is not stale (you already hold everything asked), so claim stays safe to repeat
+            # a stale command: a named holder has nothing in the way (released, expired, off the roster, or never held
+            # it); a repeat of your own --from is not stale (you already hold everything asked), so claim stays safe to repeat
             rest = [h for h in froms if h in holds]
             plain = from_command(a, name, wanted, rest)
             asked = ", ".join(wanted[:CONFLICTS_SHOWN]) + (f" and {len(wanted) - CONFLICTS_SHOWN} more" if len(wanted) > CONFLICTS_SHOWN else "")
             die(f"{or_list(stale[:CONFLICTS_SHOWN])} {'holds' if len(stale) == 1 else 'hold'} no claim in the way of {asked}. "
                 f"Nothing claimed. If it was released or has expired, claim without it: {plain}", "bad_input", next=plain, field="from")
-        done = []
+        done, gone = [], set()
         if not blocked:
-            for res, odd, (shown, counts) in plan:
-                if counts:
-                    for where, params in overlap_filters(res):
-                        con.execute(f"DELETE FROM claims WHERE ({where}) AND typeof(resource)='text' AND expires_at>? "
-                                    f"AND agent IN ({','.join('?' * len(froms))})", params + [t] + froms)
+            for res, odd, raw_moves in plan:
+                shown = move_named(con, res, t, froms, taken) if froms else []
+                shown += move_named_raw(con, res, raw_moves, taken, gone)
                 result = take_claim(con, a, name, res, t, exp, odd)
                 if froms:
-                    result["taken_from"] = shown
-                for h, n in counts.items():
-                    got = taken.setdefault(h, {"resources": [], "count": 0})
-                    got["resources"] += [r["resource"] for r in shown if r["agent"] == h][:AUTO_RELEASE_SHOWN - len(got["resources"])]
-                    got["count"] += n
+                    result["taken_from"] = shown[:AUTO_RELEASE_SHOWN]
                 done.append(result)
             if taken:
                 tell_taken(con, a, name, wanted, taken)
@@ -8784,7 +8850,7 @@ SKILL_TEXT = (
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name. `ctx history KEY` shows earlier values. Record what only you know (owner notes, decisions) at once with `ctx set KEY "VALUE"`; `brief` shows facts to whoever comes next.\n'
+    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name. `ctx history KEY` shows earlier values. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers.\n'
     '\n'
     'Hooks: with the agentbus plugin or setup, a hook message gives your exact name (already joined); use it with --as and skip `join`. Hooks never claim or replace reading inbox.\n'
     '\n'
@@ -8792,7 +8858,7 @@ SKILL_TEXT = (
     '\n'
     'Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
     '\n'
-    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you the holder's work, take it with `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes by default. Claim again to renew.\n"
+    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you the holder's work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.\n"
     '\n'
     '## Communicate\n'
     '\n'
@@ -12491,7 +12557,7 @@ def hook_claim_note(sid, db, agent, held, unclaimed, peers, copy, name):
     if [rel for rel, holders in held if sid is None or hook_nudge_once(sid, db, ["held", agent, rel, holders])]:
         return (f"agentbus: a claim under a different name covers this file. See who and why: {copy} --as {name} claims. "
                 "In a shared checkout, leave it until the holder answers or releases it; if your user or a handoff gave you its work, "
-                "claim PATH --from HOLDER. On a separate branch, post what you are touching.")
+                f"{copy} --as {name} claim PATH --from HOLDER. On a separate branch, post what you are touching.")
     # Alone on the bus there is nobody to claim against: no nudge.
     if not peers or sid is None:
         return None

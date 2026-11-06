@@ -24,6 +24,6 @@ s|100|Kinds: note, question, answer, handoff, decision, alert, done.
 s|40|Assign work with handoff.
 s|60|Run error.next to recover (fill in capitals).
 s|60|Delivery can repeat; dedupe by message ID.
-s|120|If your user or a handoff gave you the holder's work, take it with `claim RESOURCE --from HOLDER`
+s|120|If your user or a handoff gave you the holder's work, take it: `claim RESOURCE --from HOLDER`
 s|130|don't edit until the holder answers or releases
 s|140|Record what only you know (owner notes, decisions) at once

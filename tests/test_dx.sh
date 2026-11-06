@@ -58,6 +58,7 @@ exp=$(when expires_at); since=$(when claimed_at)
 refusal_rest() { echo "In a shared checkout, leave it until claude answers or releases it; ask: agentbus --as codex post QUESTION --to claude --kind question. On a separate branch, post what you are touching; the merge decides."; }
 expect_fail "src/api/ is claimed by claude since $since until $exp (purpose: \"review\"). $(refusal_rest)" agentbus --as codex claim src/api/
 expect_fail "src/api/a.py overlaps src/api/, claimed by claude since $since until $exp (purpose: \"review\"). $(refusal_rest)" agentbus --as codex claim src/api/a.py
+expect_fail "If your user or a handoff gave you claude's work, take it: agentbus --as codex claim src/api/ --from claude" agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"
 
 "$PY" - <<'PY'

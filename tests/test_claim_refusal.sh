@@ -181,11 +181,12 @@ assert [c["claim_from"] for c in e["conflicts"]] == ["agentbus --as fb claim f/l
 PY
 [ "$(holder)" = "f/lib/x.py=fc f/src/=fa" ] || fail "a refused batch changed the claims: $(holder)"
 agentbus --as fb claim f/src/ f/lib/ 2>"$err" && fail "batch over two holders succeeded"
-grep -qF "If your user or a handoff gave you the holders' work, take it: agentbus --as fb claim f/src/ f/lib/ --from fa --from fc" "$err" || { cat "$err"; fail "the batch refusal lacks one --from command for the batch"; }
-# the move: both holders named, all taken in one go
+grep -qF "If your user or a handoff gave you their work, take each: agentbus --as fb claim f/src/ --from fa; agentbus --as fb claim f/lib/ --from fc" "$err" || { cat "$err"; fail "the batch refusal lacks one --from command per holder"; }
+# the move: both holders named, all taken in one go; a claim of theirs outside what is asked stays theirs
+agentbus --as fa claim f/keep.py >/dev/null
 agentbus --as fb claim f/src/ f/lib/ --from fa --from fc --purpose "finish the port" >"$TMP/out" 2>"$err" || { cat "$err"; fail "--from both holders refused"; }
 grep -qF "taken from fa (f/src/), fc (f/lib/x.py); each is told" "$TMP/out" || { cat "$TMP/out"; fail "the success text does not say what was taken"; }
-[ "$(holder)" = "f/lib/=fb f/src/=fb" ] || fail "--from did not move the claims: $(holder)"
+[ "$(holder)" = "f/keep.py=fa f/lib/=fb f/src/=fb" ] || fail "--from did not move the claims, or took one outside what was asked: $(holder)"
 agentbus --json log show --limit 500 | "$PY" -c '
 import json, sys
 rows = [r for r in json.load(sys.stdin)["items"] if r["action"] == "claim_taken"]
@@ -213,7 +214,100 @@ agentbus --json --as fb claim f/src/ f/lib/ --from fa --from fc >"$TMP/out" 2>"$
 agentbus --as fa claim f/in/a.py f/in/b.py >/dev/null
 agentbus --json --as fc claim f/in/ --from fa >"$TMP/out" 2>"$err" || { cat "$err"; fail "--from over paths inside refused"; }
 "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["taken_from"] == [{"resource": "f/in/a.py", "agent": "fa"}, {"resource": "f/in/b.py", "agent": "fa"}], d' "$TMP/out" || { cat "$TMP/out"; fail "taken_from"; }
-[ "$(holder)" = "f/in/=fc f/lib/=fb f/src/=fb" ] || fail "paths inside did not move: $(holder)"
+[ "$(holder)" = "f/in/=fc f/keep.py=fa f/lib/=fb f/src/=fb" ] || fail "paths inside did not move: $(holder)"
+# a request that names a claim twice (src and src/a.py) takes and counts it once
+agentbus --as fa claim f/o/a.py >/dev/null
+agentbus --as fb claim f/o f/o/a.py --from fa >/dev/null 2>"$err" || { cat "$err"; fail "--from over overlapping resources refused"; }
+agentbus --json log show --limit 500 | "$PY" -c '
+import json, sys
+d = [json.loads(r["detail"]) for r in json.load(sys.stdin)["items"] if r["action"] == "claim_taken"][-1]
+assert d["resources"] == ["f/o/a.py"] and d["count"] == 1, d
+' || fail "a claim asked for twice was counted twice"
+# --from needs a name
+rc=0; agentbus --json --as fb claim f/y.py --from "" 2>"$err" || rc=$?
+[ "$rc" = 2 ] && "$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["code"]=="bad_input" and e["field"]=="from" and "--from needs a name" in e["message"], e' "$err" || { cat "$err"; fail "--from with an empty name was accepted"; }
+# a named holder off the roster: its claims are released as for a plain claim, so --from it is stale and the plain claim works
+agentbus --as fz join --tool t >/dev/null
+agentbus --as fz claim f/z/ >/dev/null
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("DELETE FROM agents WHERE name=?", ("fz",)); c.commit()' "$AGENTBUS_DB"
+agentbus --json --as fb claim f/z/a.py --from fz 2>"$err" && fail "--from an agent off the roster succeeded"
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["code"]=="bad_input" and e["next"]=="agentbus --as fb claim f/z/a.py", e' "$err" || { cat "$err"; fail "--from an agent off the roster did not point at the plain claim"; }
+agentbus --as fb claim f/z/a.py >/dev/null || fail "the plain claim over an off-roster folder failed"
+# a retry after the holder took it back takes it again: --from takes from the named holders each time it runs
+agentbus --as fa claim f/r.py >/dev/null
+agentbus --as fb claim f/r.py --from fa >/dev/null
+agentbus --as fa claim f/r.py --from fb >/dev/null
+agentbus --as fb claim f/r.py --from fa >/dev/null || fail "a retry of --from after the holder took it back refused"
+agentbus --json schema claim | "$PY" -c 'import json,sys; h=json.load(sys.stdin)["commands"]["claim"]["retry"]["how"]; assert "--from takes again from the holders you name" in h, h' || fail "the retry contract does not say what a repeated --from does"
+# the docs never teach acting as the holder
+ROOT="$(cd "$(dirname "$BIN")/.." && pwd)"
+! grep -rnF -e "--as HOLDER leave" "$ROOT/docs/reference.md" "$ROOT/README.md" "$ROOT/skills" "$ROOT/docs/how-to" || fail "the docs still teach --as HOLDER leave"
 rm -f "$err"
 ok "--from moves whole claims of named holders only, refuses stale and partial takes, logs claim_taken and tells the holder"
+
+echo "TEST: --from and claims stored under bytes that are not UTF-8: the folder moves whole or not at all, and is accounted"
+# Bug it catches: a named holder's folder stored as non-UTF-8 text escaped the wider-folder check, and the claim deleted
+# it raw with no claim_taken row and no alert, freeing the rest of the folder.
+export AGENTBUS_DB="$TMP/raw.db"
+for n in ua ub; do agentbus --as $n join --tool t >/dev/null; done
+"$PY" - "$AGENTBUS_DB" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("INSERT INTO claims VALUES(CAST(X'752f71ff' AS TEXT),'ua','dir','2026-11-01T10:00:00Z','2999-01-01T00:00:00Z')")
+c.commit()
+PY
+raw() { "$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(" ".join(a + "=" + h for h, a in c.execute("SELECT hex(resource), agent FROM claims ORDER BY 1")))' "$AGENTBUS_DB"; }
+agentbus --json --as ub claim $'u/q\xef\xbf\xbd/a.py' --from ua 2>"$err" && fail "--from inside an undecoded folder succeeded"
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["code"]=="claim_conflict" and "wider than" in e["message"] and "a claim moves whole" in e["message"], e' "$err" || { cat "$err"; fail "--from inside an undecoded folder"; }
+[ "$(raw)" = "ua=752F71FF" ] || fail "a refused --from changed an undecoded folder: $(raw)"
+agentbus --as ub claim $'u/q\xef\xbf\xbd' --from ua >/dev/null 2>"$err" || { cat "$err"; fail "--from of the undecoded folder itself refused"; }
+[ "$(raw)" = "ub=752F71EFBFBD" ] || fail "the undecoded folder did not move: $(raw)"
+agentbus --json log show --limit 100 | "$PY" -c '
+import json, sys
+rows = json.load(sys.stdin)["items"]
+t = [json.loads(r["detail"]) for r in rows if r["action"] == "claim_taken"]
+assert len(t) == 1 and t[0]["from"] == "ua" and t[0]["count"] == 1, t
+assert not any("auto-released" in str(r["detail"]) for r in rows), rows
+' || fail "the undecoded folder was not accounted as taken"
+agentbus --json --as ua inbox | "$PY" -c 'import json,sys; m=json.load(sys.stdin)["items"]; assert len(m)==1 and m[0]["kind"]=="alert" and m[0]["sender"]=="ub", m' || fail "the holder of the undecoded folder was not told"
+rm -f "$err"
+ok "an undecoded folder moves whole with its log row and alert, or the claim refuses"
+
+echo "TEST: --from past its limits: never a command that cannot work"
+# Bug it catches: 101 holders in the way gave a command naming 100, which refused again with the same command; and the
+# command's holders came from a scan of the whole folder on every refusal.
+export AGENTBUS_DB="$TMP/many.db"
+agentbus --as mb join --tool t >/dev/null
+"$PY" - "$AGENTBUS_DB" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.executemany("INSERT INTO agents(name,joined_at,last_seen) VALUES(?,?,?)", [("h%03d" % i, "2026-11-06T00:00:00Z", "2999-01-01T00:00:00Z") for i in range(101)])
+c.executemany("INSERT INTO claims VALUES(?,?,?,?,?)", [("m/f%03d.py" % i, "h%03d" % i, None, "2026-11-06T00:00:00Z", "2999-01-01T00:00:00Z") for i in range(101)])
+c.commit()
+PY
+agentbus --json --as mb claim m 2>"$err" && fail "claim over 101 holders succeeded"
+"$PY" - "$err" <<'PY' || { cat "$err"; fail "over 100 holders"; }
+import json, sys
+e = json.load(open(sys.argv[1]))["error"]
+assert e["code"] == "claim_conflict" and e["claim_from"] is None and e["takeover"] is None, e
+assert "More than 100 agents hold claims in the way of m" in e["message"] and "ask your user" in e["message"] and "--from" not in e["message"].split("ask your user")[-1], e["message"]
+PY
+# the holders a command names come from a bounded read: a holder past it still blocks the command, which takes nothing
+export AGENTBUS_DB="$TMP/big.db"
+for n in ba bb bc; do agentbus --as $n join --tool t >/dev/null; done
+"$PY" - "$AGENTBUS_DB" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.executemany("INSERT INTO claims VALUES(?,?,?,?,?)", [("g/a%05d.py" % i, "ba", None, "2026-11-06T00:00:00Z", "2999-01-01T00:00:00Z") for i in range(3000)])
+c.execute("INSERT INTO claims VALUES('g/z.py','bc',NULL,'2026-11-06T00:00:01Z','2999-01-01T00:00:00Z')")
+c.commit()
+PY
+agentbus --json --as bb claim g 2>"$err" && fail "claim over a big folder succeeded"
+cmd=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["error"]["claim_from"])' "$err")
+[ "$cmd" = "agentbus --as bb claim g --from ba" ] || fail "the bounded read named: $cmd"
+agentbus --json --as bb claim g --from ba 2>"$err" && fail "the command took a folder with a holder it did not name"
+"$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["code"]=="claim_conflict" and e["holder"]=="bc" and e["claim_from"]=="agentbus --as bb claim g --from ba --from bc", e' "$err" || { cat "$err"; fail "the holder past the bounded read did not block"; }
+[ "$("$PY" -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("SELECT COUNT(*) FROM claims WHERE agent=?", ("ba",)).fetchone()[0])' "$AGENTBUS_DB")" = 3000 ] || fail "a refused --from took claims"
+rm -f "$err"
+ok "over 100 holders says so and gives no command; a holder the bounded read missed still blocks"
 all_passed "All tests passed!"

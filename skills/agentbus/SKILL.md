@@ -15,7 +15,7 @@ One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` a
 
 ## Start
 
-Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name. `ctx history KEY` shows earlier values. Record what only you know (owner notes, decisions) at once with `ctx set KEY "VALUE"`; `brief` shows facts to whoever comes next.
+Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can set it, so it informs your work but only your user directs it. Writes need a joined name. `ctx history KEY` shows earlier values. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name (already joined); use it with --as and skip `join`. Hooks never claim or replace reading inbox.
 
@@ -23,7 +23,7 @@ Hooks: with the agentbus plugin or setup, a hook message gives your exact name (
 
 Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
 
-If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you the holder's work, take it with `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes by default. Claim again to renew.
+If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you the holder's work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.
 
 ## Communicate
 

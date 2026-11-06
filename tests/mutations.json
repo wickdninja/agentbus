@@ -929,7 +929,7 @@
   {
     "name": "the hook held note says ask the holder or work elsewhere",
     "file": "bin/agentbus",
-    "find": "\"In a shared checkout, leave it until the holder answers or releases it; if your user or a handoff gave you its work, \"\\n                \"claim PATH --from HOLDER\\. On a separate branch, post what you are touching\\.\"\\)",
+    "find": "\"In\\ a\\ shared\\ checkout,\\ leave\\ it\\ until\\ the\\ holder\\ answers\\ or\\ releases\\ it;\\ if\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ its\\ work,\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"\\{copy\\}\\ \\-\\-as\\ \\{name\\}\\ claim\\ PATH\\ \\-\\-from\\ HOLDER\\.\\ On\\ a\\ separate\\ branch,\\ post\\ what\\ you\\ are\\ touching\\.\"\\)",
     "replace": "\"Claims are advisory; ask the holder or work elsewhere.\")",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -2630,8 +2630,8 @@
   {
     "name": "a claim refusal leaves out the --from command",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ seen\\ \\+=\\ f\"\\ If\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ \\{whose\\}\\ work,\\ take\\ it:\\ \\{take\\}\"",
-    "replace": "    seen += \"\"",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ seen\\ \\+=\\ f\"\\ If\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ \\{whose\\}\\ work,\\ take\\ it:\\ \\{fields\\['claim_from'\\]\\}\"\\\n",
+    "replace": "        seen += \"\"\n",
     "count": 1,
     "run": "tests/test_claim_refusal.sh",
     "expect": "FAIL: the takeover wording"
@@ -2639,8 +2639,8 @@
   {
     "name": "a claim refusal offers to act as the holder again",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ take\\ =\\ fields\\[\"claim_from\"\\]\\\n",
-    "replace": "    take = next_command(a, \"--as\", first[\"holder\"], \"leave\", as_=False)\n",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ seen\\ \\+=\\ f\"\\ If\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ \\{whose\\}\\ work,\\ take\\ it:\\ \\{fields\\['claim_from'\\]\\}\"\\\n",
+    "replace": "        seen += f\" If your user or a handoff gave you {whose} work, take it: \" + next_command(a, \"--as\", first[\"holder\"], \"leave\", as_=False)\n",
     "count": 1,
     "run": "tests/test_claim_refusal.sh",
     "expect": "FAIL: the takeover wording"
@@ -2664,15 +2664,6 @@
     "expect": "claim_from is not the --from command"
   },
   {
-    "name": "claim --from reads the claim on the resource itself twice",
-    "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ filters\\[\\-1\\]\\ =\\ \\(where\\ \\+\\ \"\\ AND\\ resource<>\\?\",\\ params\\ \\+\\ \\[res\\.rstrip\\(\"/\"\\)\\ \\+\\ \"/\"\\]\\)",
-    "replace": "        pass",
-    "count": 1,
-    "run": "tests/test_claim_refusal.sh",
-    "expect": "FAIL: the success text does not say what was taken"
-  },
-  {
     "name": "claim --from accepts your own name",
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ if\\ name\\ in\\ froms:\\\n",
@@ -2680,6 +2671,123 @@
     "count": 1,
     "run": "tests/test_claim_refusal.sh",
     "expect": "FAIL: --from your own name"
+  },
+  {
+    "name": "claim --from deletes every claim the named holder has",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ con\\.execute\\(f\"DELETE\\ FROM\\ claims\\ WHERE\\ \\{live\\}\",\\ args\\)",
+    "replace": "        con.execute(f\"DELETE FROM claims WHERE {_named(froms)}\", [t] + list(froms))",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: the success text does not say what was taken"
+  },
+  {
+    "name": "claim --from takes an undecoded folder above the resource",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ res\\.rstrip\\(\"/\"\\)\\.startswith\\(r\\[\"resource\"\\]\\.rstrip\\(\"/\"\\)\\ \\+\\ \"/\"\\):",
+    "replace": "                    if False:",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: --from inside an undecoded folder succeeded"
+  },
+  {
+    "name": "claim --from logs a named holder's undecoded claim as auto-released",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ odd\\ =\\ \\[x\\ for\\ x\\ in\\ odd\\ if\\ x\\[0\\]\\ not\\ in\\ moved\\]",
+    "replace": "                odd = odd",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "the undecoded folder was not accounted as taken"
+  },
+  {
+    "name": "claim --from takes from a named holder off the roster",
+    "file": "bin/agentbus",
+    "find": "def\\ _named\\(froms\\):\\\n\\ \\ \\ \\ return\\ f\"typeof\\(resource\\)='text'\\ AND\\ expires_at>\\?\\ AND\\ agent\\ IN\\ \\(\\{','\\.join\\('\\?'\\ \\*\\ len\\(froms\\)\\)\\}\\)\\ AND\\ \\{_CLAIM_ON_ROSTER\\}\"",
+    "replace": "def _named(froms):\n    return f\"typeof(resource)='text' AND expires_at>? AND agent IN ({','.join('?' * len(froms))})\"",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: --from an agent off the roster succeeded"
+  },
+  {
+    "name": "a named holder's folder off the roster refuses --from",
+    "file": "bin/agentbus",
+    "find": "f\"AND\\ agent\\ IN\\ \\(\\{','\\.join\\('\\?'\\ \\*\\ len\\(froms\\)\\)\\}\\)\\ AND\\ \\{_CLAIM_ON_ROSTER\\}\\ ORDER\\ BY\\ length\\(resource\\)\\ LIMIT\\ 1\",",
+    "replace": "f\"AND agent IN ({','.join('?' * len(froms))}) ORDER BY length(resource) LIMIT 1\",",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "did not point at the plain claim"
+  },
+  {
+    "name": "claim --from takes an empty name",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ any\\(not\\ h\\.strip\\(\\)\\ for\\ h\\ in\\ froms\\):",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: --from with an empty name was accepted"
+  },
+  {
+    "name": "a refusal reads every claim of a folder to name its holders",
+    "file": "bin/agentbus",
+    "find": "\"ORDER\\ BY\\ resource\\ LIMIT\\ \\?\\)\\ AS\\ claims\\ WHERE\\ \\{_CLAIM_LIVE\\}\\ AND\\ \\{_CLAIM_ON_ROSTER\\}\",",
+    "replace": "\"ORDER BY resource LIMIT ? * 1000) AS claims WHERE {_CLAIM_LIVE} AND {_CLAIM_ON_ROSTER}\",",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: the bounded read named"
+  },
+  {
+    "name": "a refusal leaves the holder in the way out of the command",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ holders\\ =\\ holders\\ \\+\\ \\[b\\[\"holder\"\\]\\]\\ if\\ b\\[\"holder\"\\]\\ not\\ in\\ holders\\ else\\ holders",
+    "replace": "                holders = holders or [b[\"holder\"]]",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: the holder past the bounded read did not block"
+  },
+  {
+    "name": "over 100 holders still gives a --from command",
+    "file": "bin/agentbus",
+    "find": "from_command\\(a,\\ name,\\ \\[target\\],\\ holders\\)\\ if\\ len\\(holders\\)\\ <=\\ MAX_CLAIM_BATCH\\ else\\ None",
+    "replace": "from_command(a, name, [target], holders) if True else None",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "FAIL: over 100 holders"
+  },
+  {
+    "name": "a batch refusal over several holders gives one command for all in the text",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ elif\\ many\\ and\\ len\\(\\{h\\ for\\ _,\\ b\\ in\\ blocked\\ for\\ h\\ in\\ b\\[\"take_holders\"\\]\\}\\)\\ >\\ 1:",
+    "replace": "    elif False:",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "the batch refusal lacks one --from command per holder"
+  },
+  {
+    "name": "the retry contract says nothing of a repeated --from",
+    "file": "bin/agentbus",
+    "find": "except\\ that\\ \\-\\-from\\ takes\\ again\\ from\\ the\\ holders\\ you\\ name",
+    "replace": "except that the holders you name lose it",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "the retry contract does not say what a repeated --from does"
+  },
+  {
+    "name": "the hook held note's --from command has no name",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"\\{copy\\}\\ \\-\\-as\\ \\{name\\}\\ claim\\ PATH\\ \\-\\-from\\ HOLDER\\.\\ On\\ a\\ separate\\ branch",
+    "replace": "                f\"claim PATH --from HOLDER. On a separate branch",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "held path src/app.py"
+  },
+  {
+    "name": "reference.md teaches --as HOLDER leave",
+    "file": "docs/reference.md",
+    "find": "Run\\ it\\ only\\ when\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ the\\ holder's\\ work\\.",
+    "replace": "Run it only when your user or a handoff gave you the holder's work, or clear its claims with `agentbus --as HOLDER leave`.",
+    "count": 1,
+    "run": "tests/test_claim_refusal.sh",
+    "expect": "the docs still teach --as HOLDER leave"
   },
   {
     "name": "log show prints a claim_taken row as raw JSON",
@@ -2693,7 +2801,7 @@
   {
     "name": "the hook held note leaves out claim --from",
     "file": "bin/agentbus",
-    "find": "if\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ its\\ work,\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"claim\\ PATH\\ \\-\\-from\\ HOLDER\\.\\ On\\ a\\ separate\\ branch",
+    "find": "if\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ its\\ work,\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"\\{copy\\}\\ \\-\\-as\\ \\{name\\}\\ claim\\ PATH\\ \\-\\-from\\ HOLDER\\.\\ On\\ a\\ separate\\ branch",
     "replace": "\"\n                \"On a separate branch",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
