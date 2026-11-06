@@ -5,7 +5,7 @@ import sqlite3
 import time
 import unittest
 
-from load_agentbus import ab, patched
+from load_agentbus import ab
 
 HOOK_SQL_BUDGET_S = 0.5  # open_bus(hold=HOOK_HOLD_S): hold 1.0 less the grace, the query budget a hook has
 
