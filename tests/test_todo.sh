@@ -247,7 +247,54 @@ check("claim PATH" in text or "claim src/auth/" in text, "no plain claim command
 check("--from" not in text and "dead" not in text.lower() and "gone" not in text.lower(), "the line judges the holder instead of stating facts: %r" % text)
 check("docs/api.md" not in text, "an expired claim whose holder is off the roster is listed")
 check(jok(bus("noexp"), "brief")["expired_claims"] == {"items": [], "next": None}, "an empty bus lacks the expired_claims key")
+# the JSON of a bus that holds a real expired-claim row (and an open todo) matches the registry
+pid(db, "alice", "finish the token refactor", to="bob", kind="todo")
+real = jok(db, "--as", "alice", "brief")
+check(real["expired_claims"]["items"] and real["todos"]["items"], "fixture: no expired claim or todo in the JSON: %s" % real)
+for who in ([], ["--as", "alice"]):
+    problems = validate(jok(db, *who, "brief"), schema["commands"]["brief"]["result"], schema["objects"])
+    check(not problems, "brief --json with an expired claim row does not match its schema: %s" % problems)
 print("PASS: brief names expired claims whose holder is on the roster, with purpose and the plain claim command, and never calls anyone dead")
+
+# ---- a repeated close (same --request-id) reports the same closed as the first response ----
+# Bug it catches: the retry path returned only the id, so a client that lost the first response and retried could not tell
+# whether its post had closed the todo.
+db = bus("retry")
+join(db, "alice", "bob")
+t = pid(db, "alice", "validate X", kind="todo")
+note = pid(db, "alice", "just a note")
+
+
+def close(who, kind, target, rid):
+    return json.loads(ok(db, "--as", who, "--json", "post", "result", "--kind", kind, "--reply-to", str(target), "--request-id", rid))
+
+
+a1, a2 = close("alice", "done", t, "r-a"), close("alice", "done", t, "r-a")
+check(a1["closed"] == t and a2.get("duplicate") is True and a2.get("closed") == t and a2["id"] == a1["id"],
+      "a repeated closing post: first %s, repeat %s" % (a1, a2))
+b1, b2 = close("bob", "done", t, "r-b"), close("bob", "done", t, "r-b")
+check(b1["closed"] is None and b2.get("duplicate") is True and b2.get("closed", "missing") is None,
+      "a second closer's repeat: first %s, repeat %s" % (b1, b2))
+check(close("alice", "done", t, "r-a").get("closed") == t, "the first closer's repeat after another closer posted no longer reports closed")
+n1, n2 = close("bob", "dropped", note, "r-n"), close("bob", "dropped", note, "r-n")
+check(n1["closed"] is None and n2.get("duplicate") is True and n2.get("closed", "missing") is None, "a dropped on a non-todo, repeated: %s %s" % (n1, n2))
+print("PASS: a repeated close returns the first response's closed")
+
+# ---- --limit 0: the totals and the widening hint stay ----
+# Bug it catches: with --limit 0 the sections showed nothing and said nothing, so an open todo or an expired claim was invisible.
+db = bus("limit0")
+join(db, "alice", "bob")
+for i in range(3):
+    pid(db, "alice", "todo %d" % i, to="bob", kind="todo")
+ok(db, "--as", "bob", "claim", "x/", "--purpose", "p1")
+ok(db, "--as", "bob", "claim", "y/", "--purpose", "p2")
+sql(db, "UPDATE claims SET expires_at=?", ago_ts(hours=1))
+text = ok(db, "--as", "alice", "brief", "--limit", "0")
+check("open todos (3)" in text and "... 3 more" in text and "brief --limit" in text, "--limit 0 hides the todos: %r" % text)
+check("expired claims, holder still on the roster (2)" in text and "+2 more" in text and "claim PATH" in text, "--limit 0 hides the expired claims: %r" % text)
+b = jok(db, "--as", "alice", "brief", "--limit", "0")
+check(b["todos"]["items"] == [] and b["omitted"]["todos"] == 3 and b["omitted"]["expired_claims"] == 2, "--limit 0 JSON: %s" % b["omitted"])
+print("PASS: --limit 0 still shows the todo and expired-claim totals with the widening hint")
 
 # ---- stored text cannot make brief long or forge a line ----
 # Bug it catches: the todo and expired-claim rows carry text any lane wrote (a body, an owner name, a purpose); an uncut

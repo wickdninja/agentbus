@@ -137,7 +137,7 @@ The four cursor walks (`ctx history`, `read`, `log show`, `inbox --peek`) page o
 
 ### Results
 
-Other commands return one object. `{...}` lists exact keys; `[X]` is an array of X; a `null` alternative is a literal JSON `null`. `unchanged` is `true` when `ctx set` or `goal` found the value already stored and wrote nothing.
+Other commands return one object. `{...}` lists exact keys; `[X]` is an array of X; a `null` alternative is a literal JSON `null`. `unchanged` is `true` when `ctx set` or `goal` found the value already stored and wrote nothing. `post` adds `duplicate` (`true` on a repeat of a `--request-id`) and, for a `done` or `dropped` that replies to a message, `closed`: the id of the todo it closed, or `null` when it closed nothing (the todo was already closed, or the target is not a todo). A repeat of the same `--request-id` returns the same `closed` as the first response.
 
 <!-- generated:results -->
 | Command | `--json` result |

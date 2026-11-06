@@ -33,8 +33,18 @@ def big_bus(n=100_000):
             kind = "todo"
         elif i % 16 == 3:
             kind = "question"
-        rows.append((i, "2026-11-01T00:00:00Z", "a", "*", kind, "b"))
+        # recipients mix everyone and named agents (some on the roster, some not), so the name-dependent paths run
+        to = ("*", "b", "c", "gone")[(i // 3) % 4]
+        if kind == "note" and i % 10 == 5:
+            kind = "handoff"  # unread handoffs to named agents: the pending-between-others path
+        rows.append((i, "2026-11-01T00:00:00Z", "a" if i % 3 else "c", to, kind, "b"))
     con.executemany("INSERT INTO messages(id,ts,sender,recipient,kind,body) VALUES(?,?,?,?,?,?)", rows)
+    con.executemany("INSERT INTO agents(name,joined_at,last_seen) VALUES(?,?,?)", [(x, "2026-11-01T00:00:00Z", "2026-11-01T00:00:00Z") for x in "abc"])
+    con.execute("INSERT INTO cursors(agent,last_read_id) VALUES('b', 10)")
+    # 4,000 claims on the roster's names: half expired, half live
+    con.executemany("INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)",
+                    [("res/%d" % k, "abc"[k % 3], "work %d" % k, "2026-11-01T00:00:00Z",
+                      "2000-01-01T00:00:00Z" if k % 2 else "2999-01-01T00:00:00Z") for k in range(4000)])
     todos = [r[0] for r in rows if r[4] == "todo"]
     questions = [r[0] for r in rows if r[4] == "question"]
     notes = [r[0] for r in rows if r[4] == "note"]
@@ -93,17 +103,20 @@ class Budget(unittest.TestCase):
 
     def test_every_query_finishes_inside_the_hook_sql_budget(self):
         """Bug: the old open-question walk was interrupted at 0.501 s on this size, so a hook that used it lost its whole
-        message. Each query path runs under the 0.5 s budget as an interrupt; one that is too slow raises here."""
+        message. Each query path runs under the 0.5 s budget as an interrupt, on a bus with named recipients, a roster,
+        unread handoffs and 4,000 claims (2,000 expired); one that is too slow raises here."""
         con = self.con
         budgeted(con)
         try:
             self.assertEqual(ab.hook_open_todos(con), 1000)
             items, more = ab._brief_open_todos(con, 5)
             self.assertEqual((len(items), more), (5, 995))
-            q, qmore = ab._brief_open_questions(con, "a", 5)
+            q, qmore = ab._brief_open_questions(con, "b", 5)
             self.assertEqual(len(q), 5)
-            ab._brief_pending_others(con, "zed", 5)
-            ab._brief_expired_claims(con, 5)
+            others, omore = ab._brief_pending_others(con, "zed", 5)
+            self.assertEqual((len(others), omore > 0), (5, True), "the pending path did not run on named recipients")
+            expired, emore = ab._brief_expired_claims(con, 5)
+            self.assertEqual((len(expired), emore), (5, 1995), "the expired-claims path did not run on real claim rows")
         finally:
             con.set_progress_handler(None, 0)
 

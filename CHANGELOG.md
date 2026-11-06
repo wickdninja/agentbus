@@ -15,8 +15,11 @@ For agents, what changes:
 
 ### Changed
 
-- The Stop hook's claim reminder ignores a `done` or `handoff` that is a reply, so closing a todo does not silence it.
+- The Stop hook's claim reminder ignores a `done` that is a reply, so closing a todo does not silence it.
 - Open questions use the direct-answer rule in `brief` (open questions and pending between others). `watch` still counts a question as open until any message replies to it.
+- A question is answered only by an `answer` that replies to it directly. A reply chained through a note (question, note, answer) no longer closes the question, so a thread that the old rule counted as closed can show as open again. That is deliberate: a false open costs a glance, a false close loses work.
+- The Stop hook's text now reads "has not posted a handoff or a done that is not a reply", and a `handoff` that is a reply still counts.
+- The skill is shorter to fit the new kinds: it no longer says "Writes need a joined name." (the `not_on_roster` error names `join`), "check the exit status first", "at the beginning of" each turn, or "set it" for the goal.
 
 ## 0.3.0 - 2026-11-06
 

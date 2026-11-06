@@ -4426,7 +4426,10 @@ def cmd_post(con, a):
                 warnings = roster_warnings(con, a.to)
                 for w in warnings:
                     note(warn_text(w, a))
-                emit(a, {"id": old['id'], "duplicate": True, "warnings": warnings},
+                dup = {"id": old['id'], "duplicate": True, "warnings": warnings}
+                if a.kind in TODO_CLOSERS and a.reply_to is not None:
+                    dup["closed"] = closed_by(con, old['id'], a.reply_to)  # what the first response said
+                emit(a, dup,
                      "posted #{} to {} [{}] (already posted)", old['id'], "everyone" if a.to == "*" else a.to, a.kind)
                 return
         if a.reply_to is not None and not con.execute("SELECT 1 FROM messages WHERE id=?", (a.reply_to,)).fetchone():
@@ -4444,6 +4447,16 @@ def cmd_post(con, a):
     if a.kind in TODO_CLOSERS and a.reply_to is not None:
         result["closed"] = closed
     emit(a, result, "posted #{} to {} [{}]", cur.lastrowid, "everyone" if a.to == "*" else a.to, a.kind)
+
+
+def closed_by(con, post_id, target):
+    """The todo id the post `post_id` (a done or dropped replying to `target`) closed when it was posted, else None: it
+    closed it when the target is a todo and no closing row of an earlier id replies to it."""
+    if con.execute("SELECT kind FROM messages WHERE id=?", (target,)).fetchone()[0] != "todo":
+        return None
+    marks = ",".join("?" * len(TODO_CLOSERS))
+    first = con.execute(f"SELECT MIN(id) FROM messages WHERE reply_to=? AND kind IN ({marks})", (target, *TODO_CLOSERS)).fetchone()[0]
+    return target if first == post_id else None
 
 
 def closing_target(con, a):
@@ -12643,8 +12656,8 @@ def hook_stop(payload):
                                     "AND typeof(claimed_at)='text' AND expires_at>?", (name, now())).fetchone()
         if not count:
             return None
-        # A reply is not a handoff: a done that closes a todo says nothing about the claims still held.
-        said = con.execute("SELECT 1 FROM messages WHERE sender=? AND kind IN ('handoff','done') AND reply_to IS NULL AND ts>=? LIMIT 1",
+        # A done that replies (it closes a todo) says nothing about the claims still held; a handoff always counts.
+        said = con.execute("SELECT 1 FROM messages WHERE sender=? AND (kind='handoff' OR (kind='done' AND reply_to IS NULL)) AND ts>=? LIMIT 1",
                            (name, newest)).fetchone()
         held = [r[0] for r in con.execute("SELECT resource FROM claims WHERE agent=? AND typeof(resource)='text' AND expires_at>? "
                                           "ORDER BY resource LIMIT ?", (name, now(), HOOK_SEEN_MAX))]
@@ -12656,7 +12669,7 @@ def hook_stop(payload):
     if not hook_nudge_once(payload["session_id"], found[0], ["stop", hashlib.sha256("\0".join(held).encode("utf-8", "replace")).hexdigest()[:16]]):
         return None
     # A systemMessage: the person sees it, the agent does not.
-    return None, f"agentbus: {name} still holds {count} claim{'' if count == 1 else 's'} and has not posted a handoff or done."
+    return None, f"agentbus: {name} still holds {count} claim{'' if count == 1 else 's'} and has not posted a handoff or a done that is not a reply."
 
 
 def hook_session_end(payload):
@@ -14364,7 +14377,8 @@ def _brief_ago(ts, now_dt):
 
 
 def _brief_show(a, r, limit):
-    more_hint = f"({next_command(a, 'brief', '--limit', max(limit * 4, 20))})"
+    more_cmd = next_command(a, 'brief', '--limit', max(limit * 4, 20))
+    more_hint = f"({more_cmd})"
     now_dt = clock()
     omitted = r["omitted"]
 
@@ -14395,11 +14409,11 @@ def _brief_show(a, r, limit):
         show("here: nobody has joined")
 
     ex = r["expired_claims"]["items"]
-    if ex:
+    if ex or omitted["expired_claims"]:
         listed = "; ".join(
             _brief_line(c["resource"], 48) + (f" [{_brief_line(c['purpose'], 40)}]" if c["purpose"] else "")
             + f" ({_brief_line(c['holder'], 40)}, expired {_brief_ago(c['expires_at'], now_dt)}, holder seen {_brief_ago(c['holder_last_seen'], now_dt)})"
-            for c in ex) + (f"; +{omitted['expired_claims']} more" if omitted["expired_claims"] else "")
+            for c in ex) + (f"{'; ' if ex else ''}+{omitted['expired_claims']} more ({more_cmd})" if omitted["expired_claims"] else "")
         show("expired claims, holder still on the roster ({}): {}. To take one: {}", len(ex) + omitted["expired_claims"], listed,
              r["expired_claims"]["next"])
 
@@ -14414,7 +14428,7 @@ def _brief_show(a, r, limit):
         show("open questions: none")
 
     td = r["todos"]["items"]
-    if td:
+    if td or omitted["todos"]:
         show("open todos ({}):", len(td) + omitted["todos"])
         for x in td:
             who = _brief_line(x["owner"], 40) + (f" (from {_brief_line(x['sender'], 40)})" if x["sender"] != x["owner"] else "")
