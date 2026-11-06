@@ -5595,7 +5595,7 @@
     "replace": "    if False:\n        return None\n    # Once per set of claims",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "a plain done no longer silences Stop"
+    "expect": "Stop after a done post"
   },
   {
     "name": "a repeated closing post loses closed",
