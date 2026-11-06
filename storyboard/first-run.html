@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>First run, PR B</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="assets/sb.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · PR B</a>
+  <nav class="nav">
+    <a href="first-run.html" aria-current="page">First run</a>
+    <a href="watch.html">Watch</a>
+    <a href="demo.html">Demo</a>
+    <a href="readme.html">README</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+  <div class="lede">
+    <h1>First run: from install to one useful answer</h1>
+    <p>A person sets up Claude Code and Codex in one repo, checks that both are on the bus, then watches one agent's answer change the other's code. Every frame is what their terminal shows.</p>
+  </div>
+
+  <section class="frame" id="f1">
+    <h2><span class="n">F1</span>Install</h2>
+    <p>One command. The release is not on PyPI, so the README gives the wheel's address.</p>
+    <figure class="term" data-set="mocked" data-frame="install"></figure>
+  </section>
+
+  <section class="frame" id="f2">
+    <h2><span class="n">F2</span>Add a bus to the repo</h2>
+    <p>The bus is a folder inside the repo, kept out of git.</p>
+    <figure class="term" data-set="captured" data-frame="init"></figure>
+  </section>
+
+  <section class="frame" id="f3">
+    <h2><span class="n">F3</span>Connect both agents</h2>
+    <p>Each setup installs the hooks that join a session to the bus when it starts. Claude Code picks them up in its next session. Codex runs none of them until you trust them.</p>
+    <div class="grid">
+      <figure class="term" data-set="captured" data-frame="setup-claude"></figure>
+      <figure class="term" data-set="captured" data-frame="setup-codex"></figure>
+    </div>
+  </section>
+
+  <section class="frame" id="f4">
+    <h2><span class="n">F4</span>Trust the hooks in Codex</h2>
+    <p>The next time Codex starts, it stops on this screen. Choose Review hooks, check that each of the four commands ends with <code># agentbus:managed</code>, and trust them. Skip it and Codex never joins the bus, without a word.</p>
+    <figure class="term" data-set="mocked" data-frame="codex-review" data-caption="Codex's screen, not ours. The words are copied from Codex 0.166.0; the layout is drawn."></figure>
+  </section>
+
+  <section class="frame" id="f5">
+    <h2><span class="n">F5</span>Check that both are on the bus</h2>
+    <p>Start a Claude Code session and a Codex session in the repo, then ask who is here. This is the step that tells a working setup from a quiet one.</p>
+    <div class="grid two">
+      <figure class="term" data-set="captured" data-frame="who-one" data-title="agentbus who · Codex hooks not trusted yet" data-caption="Only Claude has joined. Codex is running but its hooks are not trusted: type /hooks in Codex."></figure>
+      <figure class="term" data-set="captured" data-frame="who-two" data-title="agentbus who · ready" data-caption="Both are listed, so each can reach the other. Ready for work."></figure>
+    </div>
+    <div class="decision"><b>Owner decision</b>The tool column cuts <code>claude-code</code> to <code>claude-...</code> (its width cap is 10). The README's ready check reads better if PR B raises the cap to 12. The frames show today's output.</div>
+    <h3>If something is still missing</h3>
+    <figure class="term" data-set="captured" data-frame="doctor"></figure>
+  </section>
+
+  <section class="frame" id="f6">
+    <h2><span class="n">F6</span>What each session is told when it joins</h2>
+    <p>Each hook adds one note to the agent's context: its bus name and how to read. People never see this; it is why nobody types a command.</p>
+    <div class="grid two" id="ctx"></div>
+  </section>
+
+  <section class="frame" id="f7">
+    <h2><span class="n">F7</span>The first handoff: a question only one agent can answer</h2>
+    <p>The example in <code>examples/first-handoff/</code> gives Claude the upload limit in its task and gives Codex the tests to write. Codex has drafted a test with a guessed limit. Instead of shipping the guess, it asks.</p>
+    <div class="grid">
+      <figure class="term" data-set="captured" data-frame="ask" data-title="codex"></figure>
+      <figure class="term" data-set="captured" data-frame="claude-inbox" data-title="claude, at its next step"></figure>
+      <figure class="term" data-set="captured" data-frame="answer" data-title="claude"></figure>
+    </div>
+  </section>
+
+  <section class="frame" id="f8">
+    <h2><span class="n">F8</span>The answer changes the code</h2>
+    <p>This is the moment the README promises. Codex reads Claude's answer and its test changes: the guess goes and the real number comes in, with the message it came from.</p>
+    <div class="grid">
+      <figure class="term" data-set="captured" data-frame="codex-inbox" data-title="codex"></figure>
+      <figure class="term" data-set="captured" data-frame="diff" data-title="codex's change"></figure>
+    </div>
+  </section>
+
+  <section class="frame" id="f9">
+    <h2><span class="n">F9</span>The example checks itself</h2>
+    <p>A script compares the limit in the code with the one in the tests. It passes only when Codex used Claude's answer.</p>
+    <figure class="term" data-set="mocked" data-frame="check"></figure>
+    <div class="decision"><b>Owner decision</b>The upload limit is a stand-in. Probe P3 picks the real task; the example and these frames follow it.</div>
+  </section>
+
+  <section class="frame" id="f10">
+    <h2><span class="n">F10</span>What you saw in watch</h2>
+    <p>The same exchange in watch, with each agent in its own colour. Names from hooks are long, so watch cuts them in narrow columns; the colour is what tells the two apart there.</p>
+    <div class="grid pair">
+      <figure class="term" data-compare="captured:first-watch-100,mocked:first-watch-100" data-title="agentbus watch"></figure>
+      <figure class="term" data-compare="captured:first-watch-60,mocked:first-watch-60" data-title="60 columns"></figure>
+    </div>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="frames/captured.js"></script>
+<script src="frames/mocked.js"></script>
+<script>
+  (function () {
+    var box = document.getElementById("ctx");
+    var c = window.CAPTURED && window.CAPTURED.ctx;
+    if (!c) return;
+    ["claude", "codex"].forEach(function (k) {
+      var d = document.createElement("div");
+      d.className = "context";
+      var who = document.createElement("span");
+      who.className = "who";
+      who.textContent = (k === "claude" ? "Claude Code" : "Codex") + " · SessionStart hook · captured";
+      d.appendChild(who);
+      d.appendChild(document.createTextNode(c[k]));
+      box.appendChild(d);
+    });
+  })();
+</script>
+<script src="assets/term.js"></script>
+</body>
+</html>

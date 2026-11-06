@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo, PR B</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="assets/sb.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · PR B</a>
+  <nav class="nav">
+    <a href="first-run.html">First run</a>
+    <a href="watch.html">Watch</a>
+    <a href="demo.html" aria-current="page">Demo</a>
+    <a href="readme.html">README</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+  <div class="lede">
+    <h1>Demo: the tour plays inside watch</h1>
+    <p>Today the tour finishes first and then offers watch, so a newcomer sees a bus where everything already happened. In PR B watch opens at once and the tour runs behind it, one step every two seconds, with the step and its command on the two rows above the keys.</p>
+  </div>
+
+  <section class="frame" id="d1">
+    <h2><span class="n">D1</span>Start</h2>
+    <p>Two lines, then watch takes the screen. No question to answer first.</p>
+    <figure class="term" data-set="mocked" data-frame="demo-start"></figure>
+  </section>
+
+  <section class="frame" id="d2">
+    <h2><span class="n">D2</span>The whole tour, at its real pace</h2>
+    <p>Every screen here is today's watch, captured while the demo's own steps ran against its bus; the caption rows, the header's "demo bus" and the colours are PR B. The last step is new: the lead takes the folder for review, so the claim changes hands and the mark shows.</p>
+    <figure class="term" id="tour" data-set="mocked" data-title="agentbus demo" data-caption="Press play to run the tour as a person sees it: about 30 seconds."></figure>
+  </section>
+
+  <section class="frame" id="d3">
+    <h2><span class="n">D3</span>Every step, at 60 columns</h2>
+    <p>The same tour in a narrow terminal. The caption keeps its two rows; Messages gives way first.</p>
+    <div class="grid three" id="strip"></div>
+  </section>
+
+  <section class="frame" id="d4">
+    <h2><span class="n">D4</span>After q</h2>
+    <p>Quitting watch ends the tour, removes the bus and prints today's closing lines.</p>
+    <figure class="term" data-set="mocked" data-frame="demo-after"></figure>
+  </section>
+
+  <section class="frame" id="d5">
+    <h2><span class="n">D5</span>Not a terminal</h2>
+    <p>Piped or in CI there is no watch and no pause: the tour prints as text and ends. Today it still pauses two seconds per step unless you pass <code>--no-pause</code>; PR B drops the pauses when stdout is not a terminal. This is today's text.</p>
+    <figure class="term" data-set="captured" data-frame="demo-pipe"></figure>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="frames/captured.js"></script>
+<script src="frames/mocked.js"></script>
+<script>
+  (function () {
+    var steps = (window.CAPTURED && window.CAPTURED["demo-steps"]) || [];
+    // The tour player: step i lands about 2.4 s after the one before (the demo's 2 s pause plus the command).
+    var seq = ["demo-100-0@0"];
+    steps.forEach(function (s, i) { seq.push("demo-100-" + s.step + "@" + (1500 + i * 2400)); });
+    seq.push("demo-100-end@" + (1500 + steps.length * 2400 + 3000));
+    document.getElementById("tour").setAttribute("data-seq", seq.join(","));
+    var strip = document.getElementById("strip");
+    ["0"].concat(steps.map(function (s) { return String(s.step); })).concat(["end"]).forEach(function (k) {
+      var f = document.createElement("figure");
+      f.className = "term";
+      f.setAttribute("data-set", "mocked");
+      f.setAttribute("data-frame", "demo-60-" + k);
+      var m = window.MOCKED && window.MOCKED["demo-60-" + k];
+      f.setAttribute("data-title", k === "0" ? "watch opens" : k === "end" ? "tour done" : "step " + k + " of " + steps.length);
+      if (m) f.setAttribute("data-caption", m.note);
+      strip.appendChild(f);
+    });
+  })();
+</script>
+<script src="assets/term.js"></script>
+</body>
+</html>

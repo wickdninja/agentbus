@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR B Storyboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="assets/sb.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · PR B</a>
+  <nav class="nav">
+    <a href="first-run.html">First run</a>
+    <a href="watch.html">Watch</a>
+    <a href="demo.html">Demo</a>
+    <a href="readme.html">README</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+  <div class="index-hero"><img src="../docs/agentbus.jpg" alt="The agentbus comic: a yellow bus of agents leaping down a git-graph road"></div>
+  <div class="lede">
+    <h1>A first run that proves itself</h1>
+    <p>The storyboard for PR B. Each frame is drawn by a real terminal renderer from what agentbus prints. A grey badge means captured from today's tool; a yellow badge means the PR B design, built from a captured frame wherever one exists.</p>
+    <div class="legend"><span class="badge badge-captured">captured from the real tool</span><span class="badge badge-edited">captured, one line edited</span><span class="badge badge-mocked">mocked: the PR B design</span></div>
+  </div>
+  <div class="toc">
+    <section>
+      <h2><a href="first-run.html">First run</a></h2>
+      <p>Install to one useful answer.</p>
+      <ol>
+        <li><a href="first-run.html#f1"><span class="n">F1</span><span><b>Install</b><em>One uv command for the wheel.</em></span></a></li>
+        <li><a href="first-run.html#f2"><span class="n">F2</span><span><b>Add a bus to the repo</b><em>init, with the install hint as an installed tool prints it.</em></span></a></li>
+        <li><a href="first-run.html#f3"><span class="n">F3</span><span><b>Connect both agents</b><em>setup claude and setup codex, captured.</em></span></a></li>
+        <li><a href="first-run.html#f4"><span class="n">F4</span><span><b>Trust the hooks in Codex</b><em>Codex's Hooks need review screen, in Codex's own words.</em></span></a></li>
+        <li><a href="first-run.html#f5"><span class="n">F5</span><span><b>Check that both are on the bus</b><em>who before and after Codex trusts its hooks.</em></span></a></li>
+        <li><a href="first-run.html#f6"><span class="n">F6</span><span><b>What each session is told</b><em>The real SessionStart notes for Claude and Codex.</em></span></a></li>
+        <li><a href="first-run.html#f7"><span class="n">F7</span><span><b>A question only one agent can answer</b><em>Codex asks for the upload limit; Claude answers.</em></span></a></li>
+        <li><a href="first-run.html#f8"><span class="n">F8</span><span><b>The answer changes the code</b><em>Codex's inbox and the git diff it made from it.</em></span></a></li>
+        <li><a href="first-run.html#f9"><span class="n">F9</span><span><b>The example checks itself</b><em>A script passes only if the answer was used.</em></span></a></li>
+        <li><a href="first-run.html#f10"><span class="n">F10</span><span><b>What you saw in watch</b><em>The exchange in watch, today and in PR B colours.</em></span></a></li>
+      </ol>
+    </section>
+    <section>
+      <h2><a href="watch.html">Watch</a></h2>
+      <p>Colour means who; a claim that changes hands is marked.</p>
+      <ol>
+        <li><a href="watch.html#w1"><span class="n">W1</span><span><b>Colour means who</b><em>One colour per agent everywhere; kinds plain, alert red.</em></span></a></li>
+        <li><a href="watch.html#w2"><span class="n">W2</span><span><b>A claim changes hands</b><em>The mark at 0, 1000 and 3000 ms, playable, at 100 and 60 columns.</em></span></a></li>
+        <li><a href="watch.html#w3"><span class="n">W3</span><span><b>NO_COLOR</b><em>The bar and the words carry the mark.</em></span></a></li>
+        <li><a href="watch.html#w4"><span class="n">W4</span><span><b>Not a terminal</b><em>One plain frame, no mark, unchanged.</em></span></a></li>
+        <li><a href="watch.html#w5"><span class="n">W5</span><span><b>Nobody here yet</b><em>Goal and facts stay; the hint names the real causes.</em></span></a></li>
+      </ol>
+      <h2 style="margin-top:34px"><a href="demo.html">Demo</a></h2>
+      <p>The tour runs while watch is open.</p>
+      <ol>
+        <li><a href="demo.html#d1"><span class="n">D1</span><span><b>Start</b><em>Two lines, then watch.</em></span></a></li>
+        <li><a href="demo.html#d2"><span class="n">D2</span><span><b>The whole tour, at its real pace</b><em>Captured watch screens with the step caption, playable.</em></span></a></li>
+        <li><a href="demo.html#d3"><span class="n">D3</span><span><b>Every step, at 60 columns</b><em>All 11 steps in a narrow terminal.</em></span></a></li>
+        <li><a href="demo.html#d4"><span class="n">D4</span><span><b>After q</b><em>Today's closing lines.</em></span></a></li>
+        <li><a href="demo.html#d5"><span class="n">D5</span><span><b>Not a terminal</b><em>The tour as text, with no pauses.</em></span></a></li>
+      </ol>
+      <h2 style="margin-top:34px"><a href="readme.html">README</a></h2>
+      <p>The first screen people read.</p>
+      <ol>
+        <li><a href="readme.html#r1"><span class="n">R1</span><span><b>The first screen</b><em>The exchange as the pitch, five steps with the ready check, and Skip it when.</em></span></a></li>
+      </ol>
+    </section>
+  </div>
+  <p style="color:var(--muted);margin-top:48px;font-size:14px">Rebuild the frames: <code>python3 storyboard/capture/capture.py</code> runs the real tool in a throwaway HOME, then <code>python3 storyboard/capture/mocks.py</code> applies the PR B changes.</p>
+</main>
+<script src="assets/term.js"></script>
+</body>
+</html>

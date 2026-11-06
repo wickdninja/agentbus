@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch, PR B</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="assets/sb.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · PR B</a>
+  <nav class="nav">
+    <a href="first-run.html">First run</a>
+    <a href="watch.html" aria-current="page">Watch</a>
+    <a href="demo.html">Demo</a>
+    <a href="readme.html">README</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+  <div class="lede">
+    <h1>Watch: see who did what, and what just moved</h1>
+    <p>Two changes for PR B. Each agent keeps one colour wherever it appears, and a claim that changes hands is marked for three seconds. Everything else on the screen is today's watch.</p>
+  </div>
+
+  <section class="frame" id="w1">
+    <h2><span class="n">W1</span>Colour means who</h2>
+    <p>Today the second agent and the answer kind are both cyan, the third agent and the question kind are both magenta, and the roster colours only the dot. Switch between Today and PR B on each frame. In PR B an agent's colour belongs to that agent alone: its dot and name in Agents, its claims, and both ends of its messages. Kinds keep their word and emoji and lose their colour, except alert, which stays red. Yellow is the bus: the header, the goal and the change mark.</p>
+    <div class="grid pair">
+      <figure class="term" data-compare="captured:handover-before-100,mocked:handover-before-100" data-title="agentbus watch"></figure>
+      <figure class="term" data-compare="captured:handover-before-60,mocked:handover-before-60" data-title="60 columns"></figure>
+    </div>
+    <div class="rules" style="margin-top:22px">
+      <div><b>Order</b><span>Blue, magenta, green, cyan, then bright blue, bright magenta, bright green, bright cyan, in roster order, so the first eight agents never share one. A ninth takes one from its name.</span></div>
+      <div><b>Never used for agents</b><span>Yellow (the bus and what just changed) and red (alerts).</span></div>
+      <div><b>Without colour</b><span>Names are always written out, so nothing depends on colour. NO_COLOR, a pipe and <code>--json</code> carry no codes at all.</span></div>
+    </div>
+  </section>
+
+  <section class="frame" id="w2">
+    <h2><span class="n">W2</span>A claim changes hands</h2>
+    <p>The worker releases <code>src/auth/</code> and the lead claims it. Without a mark, one name swaps for another in a list and nobody notices. The mark uses the same bar watch already draws beside a new message, so there is one thing to learn.</p>
+    <div class="timeline">
+      <div class="on"><b>0 ms</b>First paint with the new holder: a yellow bar, the holder's name on yellow, "from worker".</div>
+      <div class="on"><b>1000 ms</b>Next paint: the name goes back to its own colour, in bold. The bar and "from worker" stay.</div>
+      <div><b>3000 ms</b>The row is plain again, with its time left back.</div>
+    </div>
+    <figure class="term" data-set="mocked" data-seq="handover-before-100@0,handover-100-p1@1200,handover-100-p2@2200,handover-100-p3@4200" data-title="agentbus watch" data-caption="Plays the change as it lands: the frame before, then 0, 1000 and 3000 ms after the paint that shows the lead holding it."></figure>
+    <h3>The three paints, at 60 columns</h3>
+    <div class="grid three">
+      <figure class="term" data-set="mocked" data-frame="handover-60-p1" data-title="0 ms"></figure>
+      <figure class="term" data-set="mocked" data-frame="handover-60-p2" data-title="1000 ms"></figure>
+      <figure class="term" data-set="mocked" data-frame="handover-60-p3" data-title="3000 ms"></figure>
+    </div>
+    <p style="margin-top:18px">At 60 columns "from worker" takes the place of the time left while the mark lasts, and the time comes back with the plain row.</p>
+    <div class="rules">
+      <div><b>When</b><span>A claim appears with a holder other than the last one watch saw on that resource in the previous 10 seconds. A release and a new claim between two reads count, so do the demo's steps.</span></div>
+      <div><b>How long</b><span>3 seconds, the same as a new message's mark. Watch repaints once a second, so the 0 and 1000 ms paints are two refreshes. With a longer <code>--interval</code> each paint still shows at least once.</span></div>
+      <div><b>Pause</b><span><code>p</code> freezes the whole view, mark included, as it does today. Reduced motion is the same switch.</span></div>
+      <div><b>Never in output</b><span>The mark lives only on watch's live screen. <code>--json</code>, <code>--once</code>, <code>claims</code>, <code>brief</code>, hooks and anything an agent reads never carry it.</span></div>
+      <div><b>What it cannot see</b><span>Two hand-overs inside one second (worker to lead and back) look like no change. The record is in <code>agentbus log</code>.</span></div>
+    </div>
+  </section>
+
+  <section class="frame" id="w3">
+    <h2><span class="n">W3</span>NO_COLOR</h2>
+    <p>With <code>NO_COLOR=1</code> watch draws no colour codes at all, today and in PR B. The bar and the words "from worker" still mark the row for 3 seconds; the 0 and 1000 ms paints look the same.</p>
+    <div class="grid pair">
+      <figure class="term" data-compare="captured:handover-nocolor-100,mocked:handover-nocolor-100" data-title="NO_COLOR=1 agentbus watch"></figure>
+      <figure class="term" data-set="mocked" data-frame="handover-nocolor-60" data-title="NO_COLOR=1 · 60 columns"></figure>
+    </div>
+  </section>
+
+  <section class="frame" id="w4">
+    <h2><span class="n">W4</span>Not a terminal</h2>
+    <p>Piped, redirected or in CI, watch prints one frame with no colour and exits, as it does today. One frame has no frame before it, so there is no mark. Nothing in this frame changes in PR B.</p>
+    <figure class="term" data-set="captured" data-frame="handover-pipe"></figure>
+  </section>
+
+  <section class="frame" id="w5">
+    <h2><span class="n">W5</span>Nobody here yet</h2>
+    <p>Watch already keeps the goal and facts when nobody is on the bus. What changes is the Agents line. Switch between Today and PR B to compare. Today it says to join by hand, which a person who just set up hooks has no reason to do. In PR B it says that sessions join by themselves and names the two real reasons none has: Codex hooks not trusted yet, or a setup step missing.</p>
+    <div class="grid pair">
+      <figure class="term" data-compare="captured:empty-goal-100,mocked:empty-goal-100" data-title="agentbus watch"></figure>
+      <figure class="term" data-compare="captured:empty-goal-60,mocked:empty-goal-60" data-title="60 columns"></figure>
+    </div>
+    <p style="margin-top:18px">A fresh bus with no goal keeps today's "no goal yet" line; only the Agents lines change.</p>
+  </section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="frames/captured.js"></script>
+<script src="frames/mocked.js"></script>
+<script src="assets/term.js"></script>
+</body>
+</html>
