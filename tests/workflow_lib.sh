@@ -31,8 +31,10 @@ s = re.sub(r"\b(?:\d+h \d\dm|\d+m) left\b", "<left>", s)
 # a claim: "for 2h (until 13:47)" is time left, and any other "until 13:47" is an expiry
 s = re.sub(r"\bfor (?:\d+d(?: \d+h)?|\d+h(?: \d+m)?|\d+m|\d+s) \(until (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d\)", "<left>", s)
 s = re.sub(r"\buntil (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d\b", "until <TS>", s)
+s = re.sub(r"\bsince (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d\b", "since <TS>", s)  # a claim refusal: when the holder took it
 s = re.sub(r"(?m)^  (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d (?=\S+: )", "  <TS> ", s)  # a ctx history row starts with its time
 s = re.sub(r"seen (?:just now|\d+[smhd] ago)", "seen <ago>", s)
+s = re.sub(r"goal \((\S+), (?:now|\d+[smhd] ago)\):", r"goal (\1, <ago>):", s)   # the goal line: who set it, how long ago
 s = re.sub(r"active (?:less than a minute|\d+ min) ago", "active <ago> ago", s)
 s = re.sub(r"(?m)  copy \S+(?: \+dirty)?$", "  copy <copy>", s)  # a buses row: the version or commit of the folder copy
 sys.stdout.write(s)'

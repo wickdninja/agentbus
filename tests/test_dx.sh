@@ -47,15 +47,17 @@ ok "identity and bus level before and after commands, including ctx/log actions"
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as claude claim src/api/ --purpose review >/dev/null
 # the message names the expiry in local time (HH:MM today, Mon D HH:MM another day), worked out here from the stored ISO time
-exp=$(agentbus --json claims | "$PY" -c '
+when() { agentbus --json claims | "$PY" -c '
 import json, os, sys, time
 from datetime import datetime, timezone
-t = datetime.strptime(json.load(sys.stdin)["items"][0]["expires_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
+t = datetime.strptime(json.load(sys.stdin)["items"][0][sys.argv[1]], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone()
 pin = os.environ.get("AGENTBUS_TEST_NOW")   # a test-only hook: the clock starts at this UTC time
 today = (datetime.strptime(pin, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone() if pin else datetime.now()).date()
-print(t.strftime("%H:%M") if t.date() == today else t.strftime("%b ") + str(t.day) + t.strftime(" %H:%M"))')
-expect_fail "src/api/ is claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude: agentbus --as codex post QUESTION --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/
-expect_fail "src/api/a.py overlaps src/api/, claimed by claude until $exp (purpose: \"review\"). Do not edit it yet. Ask claude: agentbus --as codex post QUESTION --to claude --kind question, or choose another resource." agentbus --as codex claim src/api/a.py
+print(t.strftime("%H:%M") if t.date() == today else t.strftime("%b ") + str(t.day) + t.strftime(" %H:%M"))' "$1"; }
+exp=$(when expires_at); since=$(when claimed_at)
+refusal_rest() { echo "In a shared checkout, leave it until claude answers or releases it; ask: agentbus --as codex post QUESTION --to claude --kind question. On a separate branch, post what you are touching; the merge decides."; }
+expect_fail "src/api/ is claimed by claude since $since until $exp (purpose: \"review\"). $(refusal_rest)" agentbus --as codex claim src/api/
+expect_fail "src/api/a.py overlaps src/api/, claimed by claude since $since until $exp (purpose: \"review\"). $(refusal_rest)" agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"
 
 "$PY" - <<'PY'

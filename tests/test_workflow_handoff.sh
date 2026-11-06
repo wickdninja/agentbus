@@ -15,9 +15,9 @@ echo "STEP 1: three agents join; the goal reaches the ones who join after it is 
 say "joined as planner on $BUSLINE" agentbus --as planner join --tool claude --role planner
 say "goal: ship the health route" agentbus --as planner goal "ship the health route"
 say "joined as worker on $BUSLINE
-goal: ship the health route" agentbus --as worker join --tool codex --role worker
+goal (planner, <ago>): ship the health route" agentbus --as worker join --tool codex --role worker
 say "joined as reviewer on $BUSLINE
-goal: ship the health route" agentbus --as reviewer join --tool claude --role reviewer
+goal (planner, <ago>): ship the health route" agentbus --as reviewer join --tool claude --role reviewer
 is_equal "roster rows" "planner|claude|planner
 reviewer|claude|reviewer
 worker|codex|worker" "$(sql "SELECT name, tool, role FROM agents ORDER BY name")"
@@ -36,7 +36,7 @@ ok "handoff delivered once, to the right agent"
 
 echo "STEP 3: the worker claims a folder; the reviewer is refused with the exact conflict text"
 jcall claim --as worker claim app/api --purpose "health route" | jis "the claim reply" 'r["resource"] == "app/api" and r["agent"] == "worker" and r["purpose"] == "health route"'
-refuse 1 "agentbus: app/api/health.py overlaps app/api, claimed by worker until <TS> (purpose: \"health route\"). Do not edit it yet. Ask worker: agentbus --as reviewer post QUESTION --to worker --kind question, or choose another resource. worker was last seen <ago>." \
+refuse 1 "agentbus: app/api/health.py overlaps app/api, claimed by worker since <TS> until <TS> (purpose: \"health route\"). In a shared checkout, leave it until worker answers or releases it; ask: agentbus --as reviewer post QUESTION --to worker --kind question. On a separate branch, post what you are touching; the merge decides. worker was last seen <ago>." \
   agentbus --as reviewer claim app/api/health.py --purpose "review"
 is_equal "only the worker holds a claim" "app/api|worker|health route" "$(sql "SELECT resource, agent, purpose FROM claims")"
 ok "claim conflict refused with the documented text"

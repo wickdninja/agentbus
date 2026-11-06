@@ -68,10 +68,23 @@ parser_commands -= set(module["CONTRACT"]["hidden"])  # commands the parser has 
 assert doc["contract"] == 1 and isinstance(doc["agentbus"], str), doc["contract"]
 assert set(commands) == parser_commands, ("registry vs parser", sorted(set(commands) ^ parser_commands))
 print("PASS: schema --json has an entry for every subcommand in the parser and none for a command that does not exist")
+# Which arguments a caller must give is the same on every Python: argparse itself marks a bare nargs="*" positional
+# required below 3.12 (goal TEXT, update DIR, schema COMMAND), so the contract states it. Written out here, not read
+# from the registry; this file runs on whatever Python the suite uses, so each version is held to the same lists.
+REQUIRED = {"post body", "ctx set KEY", "ctx set VALUE", "ctx history KEY", "claim RESOURCE", "log add ACTION", "log add DETAIL",
+            "completion shell", "setup target", "hooks target"}
+OPTIONAL_POSITIONAL = {"join NAME", "ctx get KEY", "release RESOURCE", "goal text", "init DIR", "upgrade DIR", "schema COMMAND", "help COMMAND", "update DIR"}
+got_required = {c + " " + a["name"] for c, v in commands.items() for a in v["args"] if a.get("required")}
+got_optional = {c + " " + a["name"] for c, v in commands.items() for a in v["args"] if a.get("positional") and not a.get("required")}
+for what, got, want in (("required arguments", got_required, REQUIRED), ("optional positionals", got_optional, OPTIONAL_POSITIONAL)):
+    if got != want:  # a FAIL line, so tests/mutations.json can tell this check killed the change
+        print("FAIL: %s on Python %d.%d differ from the contract: %s" % (what, *sys.version_info[:2], sorted(got ^ want)))
+        sys.exit(1)
+print("PASS: schema marks the same arguments required on every Python")
 
 # ---- the registry's own tables equal the design (written out here, not read from the registry) ----
 EXPECTED_ERRORS = {  # code: (exit, retryable, extra fields)
-    "claim_conflict": (1, False, ["resource", "holder", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"]),
+    "claim_conflict": (1, False, ["resource", "holder", "claimed_at", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"]),
     "not_held": (1, False, ["resource"]),
     "no_message": (1, False, ["id"]),
     "no_context_key": (1, False, ["key"]),
@@ -239,10 +252,10 @@ for n in ("a", "b"):
 ok("--as", "a", "claim", "src/api/", "--purpose", "refactor", db=db)
 e = expect("claim_conflict", "--as", "b", "claim", "src/api/x.py", db=db)
 assert (e["resource"], e["holder"], e["purpose"]) == ("src/api/x.py", "a", "refactor"), e
-assert e["holder_idle_min"] in (0, 1) and e["takeover"] is None and "conflicts" not in e, ("one resource: the old fields plus the holder's age", e)
+assert e["claimed_at"].endswith("Z") and e["holder_idle_min"] in (0, 1) and e["takeover"] is None and "conflicts" not in e, ("one resource: the old fields plus the holder's age", e)
 e = expect("claim_conflict", "--as", "b", "claim", "src/api/x.py", "src/api/y.py", "free.py", db=db)
 assert [c["resource"] for c in e["conflicts"]] == ["src/api/x.py", "src/api/y.py"] and {c["holder"] for c in e["conflicts"]} == {"a"}, e
-assert all(set(c) == {"resource", "holder", "held", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"} for c in e["conflicts"]), e
+assert all(set(c) == {"resource", "holder", "held", "claimed_at", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"} for c in e["conflicts"]), e
 expect("not_held", "--as", "b", "release", "src/api/", db=db)
 e = expect("not_held", "--as", "b", "release", "src/api/", "other/", db=db)
 assert e["resources"] == ["src/api/", "other/"], e

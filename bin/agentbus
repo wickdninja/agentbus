@@ -613,15 +613,16 @@ CONTRACT = {
     },
     "errors": {
         "claim_conflict": {"exit": 1, "retryable": False,
-                           "fields": ["resource", "holder", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"],
+                           "fields": ["resource", "holder", "claimed_at", "expires_at", "purpose", "holder_last_seen", "holder_idle_min", "takeover"],
                            "optional_fields": ["conflicts"],
-                           "meaning": "Another agent holds an overlapping claim. holder_last_seen is when the holder last ran a command (null when unknown) and "
+                           "meaning": "Another agent holds an overlapping claim. claimed_at is when the holder took it. holder_last_seen is when the holder last ran a command (null when unknown) and "
                                       "holder_idle_min the whole minutes since; takeover is the command that clears its claims, given only when it has not "
                                       "been seen for 30 minutes or more (the window join uses), else null. With several resources, nothing was claimed: "
                                       "resource and holder are the first blocked resource, and conflicts lists every blocked one as {resource, holder, held, "
-                                      "expires_at, purpose, holder_last_seen, holder_idle_min, takeover} (held is the claim in the way, the resource "
+                                      "claimed_at, expires_at, purpose, holder_last_seen, holder_idle_min, takeover} (held is the claim in the way, the resource "
                                       "itself or a folder above or inside it).",
-                           "action": "Ask the holder, or work elsewhere. If takeover is given and the holder does not answer, run it and claim again. "
+                           "action": "In a shared checkout, leave it until the holder answers or releases it. On a separate branch, post what you are touching; the merge decides. "
+                                     "If takeover is given and the holder does not answer, run it and claim again. "
                                      "With several resources, leave the blocked ones out and claim the rest."},
         "not_held": {"exit": 1, "retryable": False, "fields": ["resource"], "optional_fields": ["resources"],
                      "meaning": "You do not hold that claim. With several resources, none was released, and resources lists every one you do not hold.",
@@ -964,7 +965,11 @@ def _arg_entry(action, notes):
         e["type"] = "boolean"
     else:
         e["type"] = {integer: "integer", bus_level: "integer", limit_count: "integer", interval: "number"}.get(action.type, "string")
-    if action.required or (positional and action.nargs is None):
+    # Required is stated here, not read from argparse: below Python 3.12 argparse marks a bare `nargs="*"` positional
+    # required although it parses with none, so the same parser gave a different contract on each Python. A positional
+    # is required when it takes exactly one value or one or more; a `*` one that the command still needs (post BODY,
+    # ctx set VALUE, log add DETAIL) says so in arg_notes, applied below. An option is required when declared so.
+    if (action.nargs in (None, "+")) if positional else action.required:
         e["required"] = True
     if action.nargs in ("*", "+"):
         e["repeatable"] = True
@@ -974,7 +979,7 @@ def _arg_entry(action, notes):
         e["default"] = action.default
     if action.help and action.help is not argparse.SUPPRESS:
         e["help"] = action.help
-    e.update(notes.get(name, {}))
+    e.update(notes.get(name.lower() if positional else name, {}))
     return e
 
 
@@ -1239,7 +1244,8 @@ def _test_fail(point):
     """Test hook: AGENTBUS_TEST_FAIL=<point> makes the command fail there, as a real fault would:
     parse (bad arguments), open (the bus cannot be opened), before-emit (a database error after the
     command ran, before any output), emit (stdout cannot be written), ack (inbox cannot mark messages
-    read), touch (the last-seen refresh fails), internal (a bug). tests/test_failure_phases.sh and test_exit_codes.sh use it."""
+    read), touch (the last-seen refresh fails), refusal-log and refusal-log-db (the claim_refused log write finds the bus busy, or fails), internal (a bug).
+    tests/test_failure_phases.sh, test_exit_codes.sh and test_claim_refusal.sh use it."""
     if os.environ.get("AGENTBUS_TEST_FAIL") != point:
         return
     if point == "parse":
@@ -1252,6 +1258,10 @@ def _test_fail(point):
         raise BrokenPipeError(errno.EPIPE, "injected")
     if point in ("ack", "touch"):
         raise sqlite3.OperationalError("injected " + point + " failure")
+    if point == "refusal-log":
+        die("injected busy", "busy")
+    if point == "refusal-log-db":
+        raise sqlite3.OperationalError("injected refusal-log failure")
     raise RuntimeError("injected internal failure")
 
 
@@ -3741,7 +3751,7 @@ def undecoded_overlaps(con, res, name, t):
         return []
     p = res[:res.index("\ufffd")]
     rows = con.execute(f"SELECT CAST(resource AS BLOB) AS _raw, resource, {cut('agent')} AS agent, "
-                       f"{cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
+                       f"{cut('claimed_at')} AS claimed_at, {cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
                        "WHERE resource >= ? AND resource < CAST(? AS TEXT) AND typeof(resource)='text' "
                        "AND agent<>? AND expires_at>? LIMIT ?",
                        (p, p.encode() + b"\xff\xff", name, t, UNDECODED_SCAN)).fetchall()
@@ -4148,6 +4158,14 @@ def join_result(con, a, name, **extra):
             "contract": CONTRACT["contract"], **extra}
 
 
+def keep_as(a, name):
+    """After `join NAME`, the words that keep the next command from exiting 2: no other command takes the name after the command word.
+    Empty when the name came from --as or already is AGENTBUS_AGENT."""
+    if getattr(a, "_named_in_join", False) and os.environ.get("AGENTBUS_AGENT") != name:
+        return f". Keep using --as {name} before each command"
+    return ""
+
+
 def cmd_join(con, a):
     name = me(a)
     t = now()
@@ -4173,9 +4191,9 @@ def cmd_join(con, a):
                     request_reused(a.request_id, name, prev["id"], f"join (log #{prev['id']})", "join", "flags")
                 result = join_result(con, a, name, duplicate=True, **flag)
                 g = result["goal"]
-                emit(a, result, "joined as {} on {} (already joined)", name, a._db)
+                emit(a, result, "joined as {} on {} (already joined){}", name, a._db, keep_as(a, name))
                 if g and not a.json:
-                    show("goal: {}", g["goal"])
+                    show("goal ({}, {}): {}", g["set_by"], goal_age(g["set_at"]), g["goal"])
                 return
         # A name seen in the last LIVE_WINDOW_MIN minutes may belong to another live session; joining
         # under it would overwrite that session's roster entry and let this one act as it.
@@ -4214,9 +4232,9 @@ def cmd_join(con, a):
         log(con, name, "join", json.dumps(detail))
     result = join_result(con, a, name, **flag)
     g = result["goal"]
-    emit(a, result, "joined as {} on {}", name, tilde(a._db))
+    emit(a, result, "joined as {} on {}{}", name, tilde(a._db), keep_as(a, name))
     if g and not a.json:
-        show("goal: {}", g["goal"])
+        show("goal ({}, {}): {}", g["set_by"], goal_age(g["set_at"]), g["goal"])
 
 
 def cwd_text():
@@ -4571,6 +4589,12 @@ def cmd_ctx(con, a):
 GOAL_KEY = "goal"
 
 
+def goal_age(set_at):
+    """How old the goal is, for the text lines that show it: now, 42s ago, 12m ago, 3h ago, 2d ago."""
+    age = ago(set_at, clock())
+    return "now" if age == "now" else "an unknown time ago" if age == "?" else age + " ago"
+
+
 def current_goal(con):
     r = con.execute("SELECT value, updated_by, updated_at FROM context WHERE key=?", (GOAL_KEY,)).fetchone()
     return {"goal": r["value"], "set_by": r["updated_by"], "set_at": r["updated_at"]} if r else None
@@ -4598,7 +4622,7 @@ def cmd_goal(con, a):
     if a.json:
         print_json(g or {"goal": None, "set_by": None, "set_at": None})
     elif g:
-        show("goal: {}", g["goal"])
+        show("goal ({}, {}): {}", g["set_by"], goal_age(g["set_at"]), g["goal"])
         show("set by {} at {}", g["set_by"], human_time(g["set_at"]), row=True)
     else:
         show("no goal yet. Set one with: {} \"what we are shipping\"", next_command(a, "--as", "NAME", "goal", as_=False))
@@ -4623,10 +4647,10 @@ def holder_seen(con, holder):
 def claim_blocker(con, name, res, t):
     """(the live claim of another agent on the roster that overlaps res, or None; the overlapping claims
     held under bytes that are not UTF-8 and not by anyone on the roster, which the claim will release).
-    The blocker is {same, held, holder, expires_at, purpose, last_seen, idle_min}. Reads only."""
+    The blocker is {same, held, holder, claimed_at, expires_at, purpose, last_seen, idle_min}. Reads only."""
     for where, params in overlap_filters(res):
         r = con.execute(f"SELECT resource={_is_text('?')} AS same, {cut('resource')} AS held, {cut('agent')} AS holder, "
-                        f"{cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
+                        f"{cut('claimed_at')} AS claimed_at, {cut('expires_at')} AS expires_at, {cut('purpose')} AS purpose FROM claims "
                         f"WHERE ({where}) AND {_CLAIM_LIVE} AND {_CLAIM_ON_ROSTER} LIMIT 1", [res] + params + [name, t]).fetchone()
         if r:
             return {**dict(r), **dict(zip(("last_seen", "idle_min"), holder_seen(con, r["holder"])))}, []
@@ -4634,7 +4658,8 @@ def claim_blocker(con, name, res, t):
     for raw, r in odd:
         if con.execute("SELECT 1 FROM agents WHERE name=(SELECT agent FROM claims WHERE resource=CAST(? AS TEXT))",
                        (raw,)).fetchone():
-            return {"same": False, "held": r["resource"], "holder": r["agent"], "expires_at": r["expires_at"], "purpose": r["purpose"],
+            return {"same": False, "held": r["resource"], "holder": r["agent"], "claimed_at": r["claimed_at"],
+                    "expires_at": r["expires_at"], "purpose": r["purpose"],
                     **dict(zip(("last_seen", "idle_min"), holder_seen(con, r["agent"])))}, []
     return None, odd
 
@@ -4642,7 +4667,7 @@ def claim_blocker(con, name, res, t):
 def claim_phrase(res, b):
     why = f'purpose: "{b["purpose"]}"' if b["purpose"] else "no purpose given"
     held = f'{res} is claimed by' if b["same"] else f'{res} overlaps {b["held"]}, claimed by'
-    return f'{held} {b["holder"]} until {human_time(b["expires_at"])} ({why})'
+    return f'{held} {b["holder"]} since {human_time(b["claimed_at"])} until {human_time(b["expires_at"])} ({why})'
 
 
 def takeover_command(a, b):
@@ -4655,15 +4680,39 @@ def takeover_command(a, b):
 
 
 def conflict_fields(a, res, b):
-    return dict(resource=res, holder=b["holder"], expires_at=b["expires_at"], purpose=b["purpose"],
+    return dict(resource=res, holder=b["holder"], claimed_at=b["claimed_at"], expires_at=b["expires_at"], purpose=b["purpose"],
                 holder_last_seen=b["last_seen"], holder_idle_min=b["idle_min"], takeover=takeover_command(a, b))
+
+
+SEPARATE_BRANCH = "On a separate branch, post what you are touching; the merge decides."
+
+
+def log_refusal(con, name, blocked):
+    """Log one claim_refused row for a refused claim: detail is JSON {"conflicts": [{resource, held, holder, claimed_at}]}
+    (the first CONFLICTS_SHOWN, and "more": how many were left out), so refusals can be counted and read by holder.
+    A separate short write after the refusal's transaction ended: the refusal changes nothing else. Best effort, like
+    touch: a busy or refused bus must not change the claim_conflict the caller is about to get."""
+    detail = {"conflicts": [{"resource": res, "held": b["held"], "holder": b["holder"], "claimed_at": b["claimed_at"]}
+                            for res, b in blocked[:CONFLICTS_SHOWN]]}
+    if len(blocked) > CONFLICTS_SHOWN:
+        detail["more"] = len(blocked) - CONFLICTS_SHOWN
+    try:
+        _test_fail("refusal-log")
+        _test_fail("refusal-log-db")
+        with immediate(con, record=False):  # not the command's change: the error still says committed false
+            # default=repr: a lane can store any type in a column (a blob claimed_at), and the refusal must still come out
+            log(con, name, "claim_refused", json.dumps(detail, default=repr))
+    except (SystemExit, sqlite3.Error):
+        pass
 
 
 def refuse_claim(a, name, blocked, total, many):
     """Exit claim_conflict. blocked: [(resource, blocker)] in the order asked; total: how many distinct resources were
     asked for; many: more than one was typed. One resource: the one-resource message and fields. Several: nothing was
-    claimed, and every blocked resource and its holder is named. A holder not seen for LIVE_WINDOW_MIN minutes or more
-    may be gone: the message then says what clears its claims, and the fields carry the command."""
+    claimed, and every blocked resource and its holder is named. The message says who holds it, why and since when, then
+    both branches, true wherever the caller runs (a shared checkout leaves it until the holder answers or releases it; a separate branch posts what it
+    touches and the merge decides), never a guess from the working folder. A holder not seen for LIVE_WINDOW_MIN minutes
+    or more may be gone: the message then says what clears its claims, and the fields carry the command."""
     first_res, first = blocked[0]
     ask = next_command(a, "--as", name, "post", "QUESTION", "--to", first["holder"], "--kind", "question", as_=False)
     fields = conflict_fields(a, first_res, first)
@@ -4679,13 +4728,14 @@ def refuse_claim(a, name, blocked, total, many):
         seen += (f" {names} may be gone: ask first, and take over only if no answer comes, by clearing {'its claims' if len(gone) == 1 else 'their claims'} with: "
                  + "; ".join(c for _, c in gone[:CONFLICTS_SHOWN]))
     if not many:
-        die(claim_phrase(first_res, first) + f". Do not edit it yet. Ask {first['holder']}: {ask}, or choose another resource." + seen,
+        die(claim_phrase(first_res, first) + f". In a shared checkout, leave it until {first['holder']} answers or releases it; ask: {ask}. {SEPARATE_BRANCH}" + seen,
             "claim_conflict", next=ask, **fields)
     shown = "; ".join(claim_phrase(res, b) for res, b in blocked[:CONFLICTS_SHOWN])
     if len(blocked) > CONFLICTS_SHOWN:
         shown += f"; and {len(blocked) - CONFLICTS_SHOWN} more (--json lists them all)"
-    die(f"nothing claimed: {len(blocked)} of {total} resources are held by other agents. {shown}. Do not edit them yet. "
-        f"Ask {first['holder']}: {ask}, and the other holders the same way, or leave these out and claim the rest." + seen,
+    die(f"nothing claimed: {len(blocked)} of {total} resources are held by others. {shown}. "
+        f"In a shared checkout, leave them until the holders answer or release them; ask {first['holder']}: {ask} (and the others), "
+        f"or leave these out and claim the rest. {SEPARATE_BRANCH}" + seen,
         "claim_conflict", next=ask, **fields,
         conflicts=[{**conflict_fields(a, res, b), "held": b["held"]} for res, b in blocked])
 
@@ -4756,9 +4806,10 @@ def cmd_claim(con, a):
             if b:
                 blocked.append((res, b))
             plan.append((res, odd))
-        if blocked:
-            refuse_claim(a, name, blocked, len(wanted), len(a.resource) > 1)
-        done = [take_claim(con, a, name, res, t, exp, odd) for res, odd in plan]
+        done = [] if blocked else [take_claim(con, a, name, res, t, exp, odd) for res, odd in plan]
+    if blocked:  # nothing was changed; the log row is its own short write
+        log_refusal(con, name, blocked)
+        refuse_claim(a, name, blocked, len(wanted), len(a.resource) > 1)
     ttl = a.ttl_min * 60
     if len(a.resource) == 1:
         result = done[0]
@@ -4859,6 +4910,13 @@ def log_detail(action, detail):
     empty ones left out; a claim entry from before the purpose was optional ends in a bare ': '; `1 claims` reads `1 claim`.
     The stored text is unchanged."""
     text = "" if detail is None else str(detail)
+    if action == "claim_refused":
+        try:
+            fields = json.loads(text)
+            shown = [f"{c['resource']} held by {c['holder']}" for c in fields["conflicts"]]
+            return "; ".join(shown) + (f"; and {fields['more']} more" if fields.get("more") else "")
+        except (ValueError, KeyError, TypeError):
+            pass  # not a row this tool wrote: shown as stored
     if action == "join":
         try:
             fields = json.loads(text)
@@ -4913,7 +4971,7 @@ def cmd_status(con, a):
         return
     show("== bus {}", tilde(a._db))
     if g:
-        show("== goal: {}", g["goal"])
+        show("== goal ({}, {}): {}", g["set_by"], goal_age(g["set_at"]), g["goal"])
     else:
         show("== no goal yet ({} \"...\")", next_command(a, "--as", "NAME", "goal", as_=False))
     later(print)
@@ -5100,6 +5158,7 @@ KIND_MEANINGS = {
 # "say who you are" error shows. Names are alice and bob; paths are ~/src/app style.
 HELP_EXAMPLES = {
     "join": [("Join under your own name", 'agentbus --as alice join --role "api work"'),
+             ("Or give the name after join", "agentbus join alice"),
              ("Say which tool and branch", "agentbus --as alice join --tool claude --branch feat/api")],
     "leave": [("Leave and release everything you hold", "agentbus --as alice leave"),
               ("As JSON, for a script", "agentbus --as alice --json leave")],
@@ -5315,11 +5374,7 @@ class Parser(argparse.ArgumentParser):
             leaf = self.leaf_for(ns)
             if getattr(ns, "cmd", None) in words and extras[0] in words[:words.index(ns.cmd)]:
                 leaf = self  # a flag typed before the command belongs to agentbus, not to the command
-            see = None
-            bare = [x for x in extras if not x.startswith("-")]
-            if leaf.cmd_path == ("join",) and len(bare) == 1:
-                see = f"agentbus --as {shlex.quote(bare[0])} join"  # `join NAME`: the name goes in --as, before the command
-            leaf.error(leaf.unrecognized(extras), see=see)
+            leaf.error(leaf.unrecognized(extras))
         return ns
 
     def unrecognized(self, extras):
@@ -5334,8 +5389,6 @@ class Parser(argparse.ArgumentParser):
                 if close and close[0] != flag:
                     guesses.append((flag, close[0]))
         text = "unrecognized arguments: " + " ".join(extras)
-        if self.cmd_path == ("join",) and len([x for x in extras if not x.startswith("-")]) == 1:
-            text += ". join takes no name; give it with --as, before the command"
         if len(guesses) == 1:
             text += f". Did you mean {guesses[0][1]}?"
         elif guesses:
@@ -5468,7 +5521,11 @@ def limit_arg(parser, default=LISTING_LIMIT, what="rows"):
 
 
 def register_join(sub):
-    j = sub("join", help="Register yourself; refuses a name active in the last 30 min unless --takeover")
+    j = sub("join", help="Register yourself; refuses a name active in the last 30 min unless --takeover",
+            description="Register yourself on the roster under a name. Give it either way: agentbus --as NAME join, or agentbus join NAME. "
+                        "Every other command takes the name with --as (or AGENTBUS_AGENT) only. "
+                        "It refuses a name active in the last 30 min unless --takeover.")
+    j.add_argument("name", nargs="?", metavar="NAME", help="Your name, the same as --as NAME before the command.")
     j.add_argument("--tool", help="Tool running this session.")
     j.add_argument("--model", help="Model running this session.")
     j.add_argument("--cwd", help="Working directory for this session.")
@@ -6280,13 +6337,14 @@ def human_time(ts, t_now=None):
 
 def human_span(seconds):
     """A duration in the largest units that say it: 45s, 12m, 2h, 1h 59m, 6d 23h."""
-    m = int(seconds) // 60
+    seconds = max(int(seconds), 0)   # a clock that ran backwards is 0s, not -1m
+    m = seconds // 60
     if m >= 1440:
         d, h = m // 1440, m % 1440 // 60
         return f"{d}d" + (f" {h}h" if h else "")
     if m >= 60:
         return f"{m // 60}h" + (f" {m % 60}m" if m % 60 else "")
-    return f"{m}m" if m else f"{max(int(seconds), 0)}s"
+    return f"{m}m" if m else f"{seconds}s"
 
 
 def until_phrase(seconds, until, t_now=None):
@@ -6328,6 +6386,8 @@ def fit(text, n):
     n = max(0, n)
     if text_width(s) <= n:
         return s + " " * (n - text_width(s))
+    if n == 0:
+        return ""   # no column to put even the ellipsis in
     out, w = [], 0
     for c in s:
         cw = cell_width(c)
@@ -6341,8 +6401,11 @@ def fit(text, n):
 def fit_left(text, n):
     """Like fit(), but cut from the left: keeps the end of a path (…/myrepo)."""
     s = clean(text)
+    n = max(0, n)
     if text_width(s) <= n:
         return s + " " * (n - text_width(s))
+    if n == 0:
+        return ""   # no column to put even the ellipsis in
     out, w = [], 0
     for c in reversed(s):
         cw = cell_width(c)
@@ -6552,16 +6615,19 @@ def fit_ascii(text, n):
 
 
 def fit_left_ascii(text, n):
+    """fit_left() with an ASCII ellipsis, cut to the columns there are (fit_ascii's rule)."""
     s = clean(text)
+    n = max(0, n)
     if text_width(s) <= n:
         return s + " " * (n - text_width(s))
+    keep = max(0, n - 3)
     out, w = [], 0
     for c in reversed(s):
-        if w + cell_width(c) > n - 3:
+        if w + cell_width(c) > keep:
             break
         out.append(c)
         w += cell_width(c)
-    return "..." + "".join(reversed(out)) + " " * (n - 3 - w)
+    return "..."[:n - w] + "".join(reversed(out)) + " " * max(0, n - w - 3)
 
 
 def _plural(n, word):
@@ -8545,7 +8611,7 @@ SKILL_TEXT = (
     '\n'
     'Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
     '\n'
-    "Proceed only if the claim succeeds. On a conflict, ask the holder or work elsewhere. The error gives the holder's last-seen: minutes ago is busy; 30 or more may be gone: ask first, take over only if no answer, with the command it gives. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.\n"
+    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. The error gives the holder's last-seen: minutes ago is busy; 30 or more may be gone: ask first, take over only if unanswered, with its command. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.\n"
     '\n'
     '## Communicate\n'
     '\n'
@@ -11025,12 +11091,15 @@ HOOK_HOLD_S = 1.0  # how long a hook may hold one
 HOOK_LIMIT_S = 4.0  # the whole hook, whatever it is waiting on (git, stdin, the disk)
 HOOK_END_LIMIT_S = 1.2  # SessionEnd shares a 1.5 s budget in Claude Code
 HOOK_STDIN_MAX = 1 << 20
-HOOK_SEEN_MAX = 200  # paths remembered per session for the once-per-path nudge
+HOOK_SEEN_MAX = 200  # keys (paths, held files, notices) remembered per session for the once-per-session notes
+HOOK_MEMORY_MAX = 1 << 20  # the most of a session's memory file read: 200 keys of long paths fit
+HOOK_UNREAD_SCAN = 1000  # newest rows each PreToolUse unread count reads (direct, then broadcast): any backlog fits the hold budget
 HOOK_CONTEXT_MAX = 600  # characters of SessionStart context
 # SessionEnd reasons that end the session id the payload names (docs/design/claude-hook-contract.md).
 HOOK_END_REASONS = ("clear", "resume", "logout", "prompt_input_exit", "other")
 HOOK_CONTEXT_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse")
 HOOK_PATH_KEYS = ("file_path", "notebook_path")  # NotebookEdit names its file notebook_path
+HOOK_EDIT_BCAST = ("decision", "alert")  # broadcast kinds the PreToolUse unread note counts, beside direct messages
 HOOK_KIND_PLURAL = {"note": "notes", "question": "questions", "answer": "answers", "handoff": "handoffs",
                     "decision": "decisions", "alert": "alerts", "done": "done", "other": "other"}
 HOOK_STATE_KEEP_S = 7 * 86400  # per-session memory older than this is removed
@@ -11046,7 +11115,7 @@ HOOK_NOTICES = {
 
 
 class HookNotice(Exception):
-    """A reason the hooks are off that the user should see once (a key of HOOK_NOTICES)."""
+    """A reason the hooks are off that the user should see once: args are (a key of HOOK_NOTICES, the bus path)."""
 
 
 def hook_cutoff():
@@ -11105,6 +11174,18 @@ def hook_state_drop(key):
         os.unlink(os.path.join(hook_state_dir(), key))
     except (OSError, SystemExit):
         pass
+
+
+def hook_memory_drop(session_id):
+    """Remove the session's memory files, one per bus it used (and an older agentbus's SESSION.seen)."""
+    key = hook_state_key(session_id, "")
+    try:
+        with os.scandir(hook_state_dir()) as entries:
+            for entry in entries:
+                if entry.name == key + ".seen" or (entry.name.startswith(key + ".") and entry.name.endswith(".v2.seen")):
+                    hook_state_drop(entry.name)
+    except (OSError, SystemExit):
+        pass  # a memory folder that cannot be used must not stop SessionEnd from leaving
 
 
 def hook_pid_alive(pid):
@@ -11769,7 +11850,7 @@ def hook_open(path, strict, read_only):
         return open_bus(path, strict, migrate=False, read_only=read_only, busy_wait=HOOK_BUSY_S, hold=HOOK_HOLD_S)
     except SystemExit as e:
         if refusal(e)["code"] in HOOK_NOTICES:
-            raise HookNotice(refusal(e)["code"])
+            raise HookNotice(refusal(e)["code"], path)
         raise
 
 
@@ -11787,30 +11868,76 @@ def hook_tool(db):
     return "agentbus"
 
 
-def hook_unread(con, name):
-    """{kind: count} of the messages `name` has not read, kinds outside KINDS counted as other. Nothing is
-    marked read. The same rows inbox would show (cmd_inbox)."""
+def hook_cursor(con, name):
+    """(last_read_id, bcast_from) of name's inbox cursor. A name with none yet has read nothing and sees no broadcast
+    sent before now (ensure_cursor's rule)."""
     row = con.execute("SELECT last_read_id, bcast_from FROM cursors WHERE agent=?", (name,)).fetchone()
-    if row:
-        last, bcast = row[0], row[1]
-    else:
-        last, bcast = 0, con.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0]
-    counts = {}
-    for kind, n in con.execute(
-            "SELECT kind, COUNT(*) FROM messages WHERE id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?)) GROUP BY kind",
-            (last, name, name, bcast)).fetchall():
+    return (row[0], row[1]) if row else (0, con.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()[0])
+
+
+def hook_kind_counts(rows):
+    """({kind: count}, newest id) from (kind, count, newest id) rows; kinds outside KINDS are counted as other."""
+    counts, newest = {}, 0
+    for kind, n, top in rows:
         key = kind if isinstance(kind, str) and kind in KINDS else "other"
         counts[key] = counts.get(key, 0) + int(n)
-    return counts
+        newest = max(newest, int(top))
+    return counts, newest
+
+
+def hook_unread(con, name):
+    """({kind: count}, newest id) of the messages `name` has not read. Nothing is marked read. The same rows inbox
+    would show (cmd_inbox)."""
+    last, bcast = hook_cursor(con, name)
+    return hook_kind_counts(con.execute(
+        "SELECT kind, COUNT(*), MAX(id) FROM messages WHERE id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?)) GROUP BY kind",
+        (last, name, name, bcast)).fetchall())
+
+
+def hook_direct_unread(con, name):
+    """({kind: count}, newest id, capped kinds) of the unread messages worth breaking an edit for: those addressed to `name`
+    itself, plus broadcast decisions and alerts. inbox's rule otherwise (after the cursor, broadcasts since the agent first
+    joined, not its own). Each scan walks idx_messages_recipient from the newest row and stops at HOOK_UNREAD_SCAN messages
+    it counts (the kind and sender tests are inside the limit, so notes between never hide an alert); in a scan that
+    stopped there, the kind that filled it is capped, said as N+. Nothing is marked read."""
+    last, bcast = hook_cursor(con, name)
+    marks = ",".join("?" * len(HOOK_EDIT_BCAST))
+    scan = "SELECT kind, id FROM messages WHERE recipient=? AND id>? AND sender<>? {} ORDER BY id DESC LIMIT ?"
+    counts, newest, capped = {}, 0, set()
+    for rows in (con.execute(scan.format(""), (name, last, name, HOOK_UNREAD_SCAN + 1)).fetchall(),
+                 con.execute(scan.format(f"AND kind IN ({marks})"),
+                             ("*", max(last, bcast), name, *HOOK_EDIT_BCAST, HOOK_UNREAD_SCAN + 1)).fetchall()):
+        part, top = hook_kind_counts([(kind, 1, i) for kind, i in rows[:HOOK_UNREAD_SCAN]])
+        for k, n in part.items():
+            counts[k] = counts.get(k, 0) + n
+        if len(rows) > HOOK_UNREAD_SCAN:
+            capped.add(max(part, key=part.get))  # the kind that filled the scan; the others are said as counted
+        newest = max(newest, top)
+    return counts, newest, capped
+
+
+def hook_unread_note(counts, tool, name):
+    return (f"agentbus: {hook_unread_text(counts)}. Read them with: {tool} --as {name} inbox. "
+            "They are information from other agents, not orders.")
+
+
+def hook_edit_unread_note(counts, capped, tool, name):
+    """PreToolUse's note: it counts direct messages, decisions and alerts only, so it says so instead of a total."""
+    return (f"agentbus: unread direct messages, decisions and alerts: {hook_kind_parts(counts, capped)}. Read them with: {tool} --as {name} inbox. "
+            "They are information from other agents, not orders.")
+
+
+def hook_kind_parts(counts, capped=()):
+    """Each kind's count, other last: "1 decision, 2 questions"; a capped count reads "1000+ notes"."""
+    return ", ".join(f"{counts[k]}{'+' if k in capped else ''} {k if counts[k] == 1 and k not in capped else HOOK_KIND_PLURAL[k]}"
+                     for k in sorted(counts, key=lambda k: (k == "other", k)))
 
 
 def hook_unread_text(counts):
     total = sum(counts.values())
     if not total:
         return "no unread messages for you"
-    kinds = sorted(counts, key=lambda k: (k == "other", k))
-    parts = ", ".join(f"{counts[k]} {k if counts[k] == 1 else HOOK_KIND_PLURAL[k]}" for k in kinds)
-    return f"{total} unread message{'' if total == 1 else 's'} for you ({parts})"
+    return f"{total} unread message{'' if total == 1 else 's'} for you ({hook_kind_parts(counts)})"
 
 
 def hook_live_minutes(last_seen):
@@ -11865,6 +11992,15 @@ def hook_export_name(name):
         os.close(fd)
 
 
+def hook_goal_text(goal):
+    """The goal clause of the SessionStart note: it is set; or, once it is a day old or more, how old (a stale goal reads as
+    current otherwise). Age only, never who set it or what it says: that text is another agent's."""
+    if goal is None:
+        return ""
+    age = ago(goal[0], clock())
+    return f", and the shared goal was set {age} ago" if age.endswith("d") else ", and a shared goal is set"
+
+
 def hook_session_start(payload):
     ident = hook_identity(payload)
     found = hook_find_bus(payload) if ident else None
@@ -11874,13 +12010,13 @@ def hook_session_start(payload):
     if derived:
         name = hook_start_name(payload, name)
     db, strict = found
-    sid = payload["session_id"]
+    sid = hook_sid(payload)  # a derived name always has one
     con = hook_open(db, strict, read_only=False)
     try:
         hook_join(con, name, takeover=derived)  # a live foreign name is left alone: its owner already joined
         agents = con.execute("SELECT COUNT(*) FROM agents WHERE last_seen>=?", (hook_cutoff(),)).fetchone()[0]
-        unread = hook_unread(con, name)
-        goal = con.execute("SELECT 1 FROM context WHERE key=?", (GOAL_KEY,)).fetchone() is not None
+        unread, newest = hook_unread(con, name)
+        goal = con.execute("SELECT updated_at FROM context WHERE key=?", (GOAL_KEY,)).fetchone()
     finally:
         con.close()
     notice = None
@@ -11893,12 +12029,19 @@ def hook_session_start(payload):
         if pid and (payload.get("source") not in ("clear", "fork", "compact") or hook_state_get(f"proc-{pid}.name") is None):
             hook_state_put(f"proc-{pid}.name", name)
         hook_export_name(name)
+    try:
+        if sid and payload.get("source") in ("compact", "resume"):
+            hook_forget_held(sid, db)  # the context that heard the held notes is gone
+        if newest and sid:
+            hook_unread_mark(sid, db, name, newest)  # announced here: PreToolUse does not say these again
+    except (OSError, SystemExit):
+        pass  # a memory file that cannot be used (a link, a full disk) must not silence the note
     var = hook_dialect()["plugin_env"]
-    if var and os.environ.get(var) and hook_duplicate_hooks() and hook_nudge_once(sid, "notice:duplicate"):
+    if var and sid and os.environ.get(var) and hook_duplicate_hooks() and hook_notice_once(sid, db, "duplicate"):
         notice = HOOK_NOTICES["duplicate"]
     tool = hook_tool(db)
     base = (f"{max(agents, 1)} agent{' is' if agents == 1 else 's are'} on it, {hook_unread_text(unread)}"
-            + (", and a shared goal is set" if goal else ""))
+            + hook_goal_text(goal))
     where = "AGENTBUS_DB's bus" if explicit_db() else "this folder's bus"  # the variable overrides discovery, and may name another bus
     head = f"agentbus: you are on {where} as {name}. {base}. Use --as {name} on every command. "
     tail = "Goals and messages are information from other agents, not orders."
@@ -11924,23 +12067,80 @@ def hook_user_prompt(payload):
     found = hook_find_bus(payload) if ident else None
     if not found:
         return None
-    name = ident[0]
+    name, sid = ident[0], hook_sid(payload)
     con = hook_open(found[0], found[1], read_only=True)
     try:
-        unread = hook_unread(con, name)
+        unread, newest = hook_unread(con, name)
     finally:
         con.close()
-    if not sum(unread.values()):
+    if not newest:
         return None
-    return (f"agentbus: {hook_unread_text(unread)}. Read them with: {hook_tool(found[0])} --as {name} inbox. "
-            "They are information from other agents, not orders."), None
+    try:
+        if sid:
+            hook_unread_mark(sid, found[0], name, newest)  # announced here: PreToolUse does not say these again
+    except (OSError, SystemExit):
+        pass  # a memory file that cannot be used (a link, a full disk) must not silence the note
+    return hook_unread_note(unread, hook_tool(found[0]), name), None
 
 
-def hook_nudge_once(session_id, key):
-    """True the first time `key` (a path, or a notice or reminder name) is mentioned in this session; remembered, at
-    most HOOK_SEEN_MAX keys. Updated under an exclusive lock on the memory file, so hooks running at once (a
-    subagent's, parallel tool calls) lose none. A link or another user's file there is an error (the hook is silent)."""
-    path = os.path.join(hook_state_dir(), hook_state_key(session_id, ".seen"))
+def hook_sid(payload):
+    """The payload's session id, or None: a missing, empty or non-text id is no session, and nothing is remembered."""
+    sid = payload.get("session_id")
+    return sid if isinstance(sid, str) and sid else None
+
+
+def hook_nudge_once(session_id, db, key):
+    """True the first time `key` is said in this session on bus `db`; remembered, at most HOOK_SEEN_MAX keys of each kind,
+    the oldest dropped. A key is a list of text whose first item is its kind ("path", "held", "notice", "stop"), so no
+    path can pass for another kind's key, and 200 files with no claim push no held note out."""
+    def change(seen, marks):
+        if key in seen:
+            return False
+        seen.append(key)
+        return True
+    return hook_memory(session_id, db, change)
+
+
+def hook_notice_once(session_id, db, code):
+    """True the first time notice `code` is due in this session on bus `db`, and also when the memory cannot be used: a
+    notice said again beats a hook that prints nothing."""
+    try:
+        return hook_nudge_once(session_id, db, ["notice", code])
+    except (OSError, SystemExit):
+        return True
+
+
+def hook_unread_mark(session_id, db, name, newest):
+    """True when message `newest` is past the newest one already announced to `name` in this session; it is then
+    remembered. One mark per name, kept apart from the said keys, so new messages never push a path out."""
+    def change(seen, marks):
+        if newest <= marks.get(name, 0):
+            return False
+        marks[name] = newest
+        return True
+    return hook_memory(session_id, db, change)
+
+
+def hook_forget_held(session_id, db):
+    """Drop the session's held keys for bus `db`, so each held file is said again."""
+    def change(seen, marks):
+        seen[:] = [e for e in seen if e[0] != "held"]
+        return True
+    return hook_memory(session_id, db, change)
+
+
+def hook_memory_suffix(db):
+    """The memory file's name after the session's part: the bus (a hash of its real path, so two buses never share a mark
+    or a key) and the format. An older agentbus's SESSION.seen has another name and is never read."""
+    return "." + hashlib.sha256(os.path.realpath(db).encode("utf-8", "surrogateescape")).hexdigest()[:12] + ".v2.seen"
+
+
+def hook_memory(session_id, db, change):
+    """Run change(seen, marks) on this session's memory for bus `db` and save it when change returns True; returns that.
+    The file holds one JSON list per line: the said keys, then ["unread", name, id] marks. Updated under an exclusive lock
+    on the file, so hooks running at once (a subagent's, parallel tool calls) lose none. A link or another user's file
+    there is an error (the hook is silent)."""
+    path = os.path.join(hook_state_dir(), hook_state_key(session_id, hook_memory_suffix(db)))
     fd = os.open(path, os.O_RDWR | os.O_CREAT | NOFOLLOW | NONBLOCK, 0o600)
     try:
         st = os.fstat(fd)
@@ -11949,16 +12149,34 @@ def hook_nudge_once(session_id, key):
         _test_pause("hook-seen-lock")
         fcntl.flock(fd, fcntl.LOCK_EX)
         data = b""
-        while len(data) < (1 << 17):
-            chunk = os.read(fd, 1 << 17)
+        while len(data) < HOOK_MEMORY_MAX:
+            chunk = os.read(fd, HOOK_MEMORY_MAX)
             if not chunk:
                 break
             data += chunk
         _test_pause("hook-seen-read")  # test hook: holds the window between this read and the write below open
-        seen = data.decode("utf-8", "surrogateescape").split("\n")
-        if key in seen:
+        seen, marks = [], {}
+        for line in data.decode("ascii", "replace").split("\n"):
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not (isinstance(entry, list) and entry and all(isinstance(x, str) for x in entry[:2])):
+                continue
+            if entry[0] == "unread":
+                if len(entry) == 3 and isinstance(entry[2], int):
+                    marks[entry[1]] = entry[2]
+            elif all(isinstance(x, str) for x in entry):
+                seen.append(entry)
+        if not change(seen, marks):
             return False
-        out = ("\n".join((seen + [key])[-HOOK_SEEN_MAX:]) + "\n").encode("utf-8", "surrogateescape")
+        kept, per_kind = [], {}
+        for e in reversed(seen):  # the newest HOOK_SEEN_MAX of each kind
+            per_kind[e[0]] = per_kind.get(e[0], 0) + 1
+            if per_kind[e[0]] <= HOOK_SEEN_MAX:
+                kept.append(e)
+        out = "".join(json.dumps(e) + "\n" for e in kept[::-1] + [["unread", n, i] for n, i in sorted(marks.items())])
+        out = out.encode("ascii")
         os.ftruncate(fd, 0)
         os.lseek(fd, 0, os.SEEK_SET)
         os.write(fd, out)
@@ -12049,47 +12267,65 @@ def hook_pre_tool_use(payload):
     rels = hook_edit_targets(payload, found[0]) if found else []
     if not rels:
         return None
-    name = ident[0]
+    name, sid = ident[0], hook_sid(payload)
+    # A subagent's payload carries its parent's session id and adds agent_id. What a subagent is told goes when it ends,
+    # so its notes are remembered apart from the parent's, and the unread note is left for the parent, whose context keeps it.
+    agent = payload.get("agent_id") if isinstance(payload.get("agent_id"), str) else ""
     t = now()
     live = "typeof(resource)='text' AND expires_at>?"
     on_roster = "EXISTS (SELECT 1 FROM agents WHERE agents.name=claims.agent)"
     con = hook_open(found[0], found[1], read_only=True)
     try:
-        held, unclaimed = False, []
+        held, unclaimed = [], []
         peers = con.execute("SELECT 1 FROM agents WHERE name<>? AND last_seen>=? LIMIT 1", (name, hook_cutoff())).fetchone() is not None
         for rel, paths in rels:
-            own = False
+            own, holders = False, set()
             for where, params in (f for path in paths for f in overlap_filters(path)):
-                if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent<>? AND {on_roster} LIMIT 1",
-                               (*params, t, name)).fetchone():
-                    held = True
+                holders.update(con.execute(f"SELECT agent, claimed_at FROM claims WHERE ({where}) AND {live} AND agent<>? AND {on_roster} "
+                                           "ORDER BY agent, claimed_at LIMIT 20", (*params, t, name)).fetchall())
                 if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent=? LIMIT 1",
                                (*params, t, name)).fetchone():
                     own = True
-            if not own:
+            if holders:
+                # Who holds it and since when, in the memory key: a claim made after the note was said is said again. Never printed.
+                ids = sorted(tuple(v if isinstance(v, str) else repr(v) for v in row) for row in holders)
+                held.append((rel, hashlib.sha256(json.dumps(ids).encode("utf-8", "surrogatepass")).hexdigest()[:16]))
+            elif not own:
                 unclaimed.append(rel)
+        unread, newest, capped = hook_direct_unread(con, name) if sid and not agent else ({}, 0, set())
     finally:
         con.close()
     copy = hook_tool(found[0])
-    if held:
+    notes = [hook_claim_note(sid, found[0], agent, held, unclaimed, peers, copy, name)]
+    if newest and hook_unread_mark(sid, found[0], name, newest):  # once per new message, under this name
+        notes.append(hook_edit_unread_note(unread, capped, copy, name))
+    text = " ".join(n for n in notes if n)
+    return (text, None) if text else None
+
+
+def hook_claim_note(sid, db, agent, held, unclaimed, peers, copy, name):
+    """The claim half of the PreToolUse text, or None. A held file is said once per file, set of claims on it and session
+    (without a session, every time: there is nothing to remember it in), so a new holder is said again; a file with no
+    claim once per session. Every new path is remembered, and one message covers them. Keys are scoped by `agent`."""
+    if [rel for rel, holders in held if sid is None or hook_nudge_once(sid, db, ["held", agent, rel, holders])]:
         return (f"agentbus: a claim under a different name covers this file. See who and why: {copy} --as {name} claims. "
-                "Claims are advisory; ask the holder or work elsewhere."), None
+                "In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching.")
     # Alone on the bus there is nobody to claim against: no nudge.
-    if not peers or not isinstance(payload.get("session_id"), str):
+    if not peers or sid is None:
         return None
-    new = [rel for rel in unclaimed if hook_nudge_once(payload["session_id"], rel)]  # every new path is remembered; one message covers them
+    new = [rel for rel in unclaimed if hook_nudge_once(sid, db, ["path", agent, rel])]  # every new path is remembered; one message covers them
     if not new:
         return None
     first = new[0] if HOOK_PATH_OK.fullmatch(new[0]) else None  # a path is the session's own text, but only a plain one is printed
     if len(new) > 1:
         return (f"agentbus: {first or 'a file'} and {len(new) - 1} more {'file' if len(new) == 2 else 'files'} have no claim. "
-                f"If you are editing them: {copy} --as {name} claim PATH --purpose WHY"), None
+                f"If you are editing them: {copy} --as {name} claim PATH --purpose WHY")
     return (f"agentbus: {first or 'this file'} has no claim. If you are editing it: "
-            f"{copy} --as {name} claim {first or 'PATH'} --purpose WHY"), None
+            f"{copy} --as {name} claim {first or 'PATH'} --purpose WHY")
 
 
 def hook_stop(payload):
-    if payload.get("stop_hook_active") is True or not isinstance(payload.get("session_id"), str):
+    if payload.get("stop_hook_active") is True or hook_sid(payload) is None:
         return None
     ident = hook_identity(payload)
     found = hook_find_bus(payload) if ident else None
@@ -12111,15 +12347,15 @@ def hook_stop(payload):
     if said:
         return None
     # Once per set of claims held and session: holding a claim across turns is normal work.
-    if not hook_nudge_once(payload["session_id"], "stop:" + hashlib.sha256("\0".join(held).encode("utf-8", "replace")).hexdigest()[:16]):
+    if not hook_nudge_once(payload["session_id"], found[0], ["stop", hashlib.sha256("\0".join(held).encode("utf-8", "replace")).hexdigest()[:16]]):
         return None
     # A systemMessage: the person sees it, the agent does not.
     return None, f"agentbus: {name} still holds {count} claim{'' if count == 1 else 's'} and has not posted a handoff or done."
 
 
 def hook_session_end(payload):
-    if isinstance(payload.get("session_id"), str) and payload["session_id"]:
-        hook_state_drop(hook_state_key(payload["session_id"], ".seen"))  # the session is over, whoever it was
+    if hook_sid(payload):
+        hook_memory_drop(payload["session_id"])  # the session is over, whoever it was
     ident = hook_identity(payload)
     if not ident or not ident[1] or payload.get("reason") not in HOOK_END_REASONS:
         return None  # only a name this session derived, and only when the session really ends
@@ -12218,9 +12454,10 @@ def hook_run(argv):
     try:
         result = handler(payload)
     except HookNotice as e:
-        sid = payload.get("session_id")
-        shown = event in ("SessionStart", "UserPromptSubmit") and isinstance(sid, str) and hook_nudge_once(sid, "notice:" + str(e))
-        result = (None, HOOK_NOTICES[str(e)]) if shown else None
+        sid = hook_sid(payload)
+        code, bus = e.args
+        shown = event in ("SessionStart", "UserPromptSubmit") and sid is not None and hook_notice_once(sid, bus, code)
+        result = (None, HOOK_NOTICES[code]) if shown else None
     out = hook_render(event, *result) if result else None
     if out:
         sys.stdout.write(json.dumps(out, separators=(",", ":")) + "\n")
@@ -13791,7 +14028,8 @@ def _brief_show(a, r, limit):
 
     g = r["goal"]
     if g:
-        show("goal: {} (set by {})", _brief_line(g["goal"], BRIEF_GOAL_MAX) + ("..." if g["truncated"] else ""), _brief_line(g["set_by"], 40))
+        show("goal ({}, {}): {}", _brief_line(g["set_by"], 40), goal_age(g["set_at"]),
+             _brief_line(g["goal"], BRIEF_GOAL_MAX) + ("..." if g["truncated"] else ""))
     else:
         show("goal: none set")
 
@@ -14124,6 +14362,20 @@ CONTRACT["commands"]["demo"] = _cmd(
     _o({"steps": _list(_o({"command": _STR, "exit": _INT})), "cleaned": _BOOL}), base=_PLAIN_ERRORS)
 
 
+def join_name(p, a):
+    """`join NAME` is `--as NAME join`. The name decides; a different --as is a usage error naming both. Tested with `is not None`,
+    so `join ''` is refused as a bad name and never falls back to AGENTBUS_AGENT."""
+    if a.cmd != "join" or a.name is None:
+        return
+    if a.name == "":
+        refuse_invalid_name("", a)
+    if a.as_ is not None and a.as_ != a.name:
+        p.leaf_for(a).error(f"join was given two names: --as {a.as_} and {a.name}. Use one",
+                            see=f"agentbus --as {shlex.quote(a.name)} join")
+    a.as_ = a.name
+    a._named_in_join = True
+
+
 def main():
     global _JSON_ERRORS
     argv = sys.argv[1:]
@@ -14143,6 +14395,7 @@ def main():
         _stdout_to_devnull()
         die("the reader closed stdout before the help or version was written", "output_failed")
     _JSON_ERRORS = bool(a.json)
+    join_name(p, a)
     bare = bare_help(p, a)
     if bare is not None:
         a.cmd, a._help = "help", bare  # no command, or a group with no action: print its guide, exit 0
@@ -14239,7 +14492,7 @@ def run(a):
         die(f"{e.strerror or e}: {e.filename or ''}".rstrip(": "), "bus_unavailable")
 
 
-# Commands that only read: run under no name (nothing to touch), they use a read-only open, so they
+# Commands that only read (these, and log show): run under no name (nothing to touch), they use a read-only open, so they
 # work beside a live writer; the open changes no data or schema, and may finish SQLite's recovery of a
 # crashed writer's journal. A bus that needs a write first (no tables yet, an older
 # schema) gets the ordinary open, which creates or migrates it as before.
@@ -14247,7 +14500,7 @@ READ_ONLY_COMMANDS = ("who", "status", "read", "brief")
 
 
 def open_for(a, strict):
-    if a.cmd in READ_ONLY_COMMANDS and not ident(a):
+    if (a.cmd in READ_ONLY_COMMANDS or (a.cmd == "log" and a.action == "show")) and not ident(a):
         try:
             return open_bus(a._db, strict, read_only=True)
         except SystemExit as e:

@@ -95,6 +95,10 @@ SS() { hook SessionStart "$(payload session_start session_id="\"${1:-$SID1}\"")"
 UPS() { hook UserPromptSubmit "$(payload user_prompt_submit session_id="\"${1:-$SID1}\"")"; }
 PRE() { hook PreToolUse "$(patch "${2:-$SID1}" "A $P/$1" "+hi")"; }
 STOP() { hook Stop "$(payload stop session_id="\"${1:-$SID1}\"")"; }
+# forget [SESSION_ID]: drop a session's once-per-session memory (a test that checks one file twice by two spellings)
+forget() { rm -f "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)/${1:-$SID1}".*.seen "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)/${1:-$SID1}.seen"; }
+# memfile [SESSION_ID]: the session's memory file for the one bus it has used since the last forget
+memfile() { local f; for f in "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)/${1:-$SID1}".*.v2.seen; do [ -e "$f" ] && { echo "$f"; return; }; done; fail "no memory file for ${1:-$SID1}"; }
 EVENTS=("SessionStart session_start" "UserPromptSubmit user_prompt_submit" "PreToolUse pre_tool_use_apply_patch" "Stop stop")
 
 echo "TEST 1: a bus copy planted in the project is never run"
@@ -315,34 +319,36 @@ UPS
 ok "silent when empty; counts and kinds when not; unread stays unread"
 
 echo
-echo "TEST 12: PreToolUse on a path covered by another name never names the holder and never denies"
-newbus p12; N=$(dname "$SID1"); SS
+echo "TEST 12: PreToolUse on a path covered by another name says so once per file per session, never names the holder and never denies"
+newbus p12; forget; N=$(dname "$SID1"); SS
 ab --as holder-zq join --tool t >/dev/null; ab --as holder-zq claim src/app.py --purpose p >/dev/null; ab --as holder-zq claim lib/ --purpose p >/dev/null
-held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. Claims are advisory; ask the holder or work elsewhere."
-for path in src/app.py src/app.py lib/deep/file.py; do
-  PRE "$path"; [ "$(text_of)" = "$held" ] || fail "held path $path: rc $RC out $OUT err $ERR"
-done
+held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching."
+PRE src/app.py; [ "$(text_of)" = "$held" ] || fail "held path src/app.py: rc $RC out $OUT err $ERR"
+PRE src/app.py; quiet || fail "the held note fired twice for one file in one session: rc $RC out $OUT"
+PRE lib/deep/file.py; [ "$(text_of)" = "$held" ] || fail "held path lib/deep/file.py: rc $RC out $OUT err $ERR"
 hook PreToolUse "$(patch "$SID1" "U $P/clear.txt" "+x" "A $P/lib/deep/new.py" "+y")"
 [ "$(text_of)" = "$held" ] || fail "a patch with one held file among two: rc $RC out $OUT"
-hook PreToolUse "$(patch "$SID1" "U src/app.py" "+x")"
+hook PreToolUse "$(patch "$SID1" "U $P/clear.txt" "+x" "A $P/lib/deep/new.py" "+y")"
+[ "$(text_of)" = "agentbus: clear.txt has no claim. If you are editing it: agentbus --as $N claim clear.txt --purpose WHY" ] || { grep -qF "this file has no claim" <<<"$OUT" && fail "the no-claim note did not name clear.txt: rc $RC out $OUT"; fail "the same patch again: the held file was not dropped, or the free one not nudged: rc $RC out $OUT"; }
+forget; hook PreToolUse "$(patch "$SID1" "U src/app.py" "+x")"
 [ "$(text_of)" = "$held" ] || fail "a relative path in a patch: rc $RC out $OUT"
-hook PreToolUse "$(patch "$SID1" "U old.txt" "M $P/src/app.py")"
+forget; hook PreToolUse "$(patch "$SID1" "U old.txt" "M $P/src/app.py")"
 [ "$(text_of)" = "$held" ] || fail "a Move to target: rc $RC out $OUT"
-hook PreToolUse "$(patch "$SID1" "D $P/src/app.py")"
+forget; hook PreToolUse "$(patch "$SID1" "D $P/src/app.py")"
 [ "$(text_of)" = "$held" ] || fail "a Delete File: rc $RC out $OUT"
 ! grep -qE 'permissionDecision|"decision"|"deny"|"ask"|"continue"' <<<"$OUT" || fail "PreToolUse emitted a decision: $OUT"
 "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert list(d)==["hookSpecificOutput"] and d["hookSpecificOutput"]["hookEventName"]=="PreToolUse" and list(d["hookSpecificOutput"])==["hookEventName","additionalContext"], d' "$OUT" || fail "PreToolUse JSON shape: $OUT"
 ! grep -qF holder-zq <<<"$OUT" || fail "PreToolUse output names a holder: $OUT"
-ok "held files (absolute, relative, moved to, deleted, one of two) say so as context only, naming nobody"
+ok "held files (absolute, relative, moved to, deleted, one of two) say so once per file and session, as context only, naming nobody"
 
 echo
 echo "TEST 12b: a patch from a linked worktree is matched against claims by its path in the main checkout"
-newbus p12b; N=$(dname "$SID1"); MAIN=$P; WT="$T/p12b-wt"
+newbus p12b; forget; N=$(dname "$SID1"); MAIN=$P; WT="$T/p12b-wt"
 git -C "$MAIN" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base; git -C "$MAIN" worktree add -q "$WT" -b p12b-wt
 mkdir -p "$WT/src"; : >"$WT/src/app.py"
 HCWD="$WT" SS; [ -n "$OUT" ] || fail "a linked worktree did not reach the main checkout's bus for SessionStart: rc $RC err $ERR"
 ab --as holder-zq join --tool t >/dev/null; ab --as holder-zq claim src/app.py --purpose p >/dev/null
-held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. Claims are advisory; ask the holder or work elsewhere."
+held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching."
 HCWD="$WT" hook PreToolUse "$(HCWD="$WT" patch "$SID1" "U $WT/src/app.py" "+x")"
 [ "$(text_of)" = "$held" ] || fail "a patch to a worktree file held in the main checkout was silent: rc $RC out $OUT err $ERR"
 HCWD="$WT" hook PreToolUse "$(HCWD="$WT" patch "$SID1" "U $T/elsewhere-p12b/src/app.py" "+x")"
@@ -353,11 +359,11 @@ echo
 echo "TEST 12c: a patch to a linked worktree inside the bus folder maps to the main checkout too (a worktree under the checkout; a workspace bus above both), and the nudge names the mapped path"
 # Bug it catches: only a path that climbed out of the bus folder was mapped.
 gitc() { git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base; }
-newbus p12c; N=$(dname "$SID1"); MAIN=$P; WT="$MAIN/.claude/worktrees/lane"
+newbus p12c; forget; N=$(dname "$SID1"); MAIN=$P; WT="$MAIN/.claude/worktrees/lane"
 gitc "$MAIN"; mkdir -p "$MAIN/.claude/worktrees"; git -C "$MAIN" worktree add -q "$WT" -b p12c-wt; mkdir -p "$WT/src"
 HCWD="$WT" SS; [ -n "$OUT" ] || fail "a worktree under the checkout did not reach the bus for SessionStart: rc $RC err $ERR"
 ab --as holder-zq join --tool t >/dev/null; ab --as holder-zq claim src/auth.py --purpose p >/dev/null
-held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. Claims are advisory; ask the holder or work elsewhere."
+held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching."
 HCWD="$WT" hook PreToolUse "$(HCWD="$WT" patch "$SID1" "U $WT/src/auth.py" "+x")"
 [ "$(text_of)" = "$held" ] || fail "a claim was missed for a patch in a worktree under the checkout: rc $RC out $OUT err $ERR"
 HCWD="$WT" hook PreToolUse "$(HCWD="$WT" patch "$SID1" "U src/free.py" "+x")"
@@ -369,7 +375,7 @@ HCWD="$W12/feature" hook PreToolUse "$(HCWD="$W12/feature" patch "$SID1" "U $W12
 [ "$(text_of)" = "$held" ] || fail "a claim was missed for a patch in a worktree beside the checkout, under a workspace bus: rc $RC out $OUT err $ERR"
 HCWD="$W12/feature" hook PreToolUse "$(HCWD="$W12/feature" patch "$SID1" "U $W12/feature/src/free.py" "+x")"
 [ "$(text_of)" = "agentbus: app/src/free.py has no claim. If you are editing it: agentbus --as $N claim app/src/free.py --purpose WHY" ] || fail "the nudge under a workspace bus did not name the main checkout's path: rc $RC out $OUT err $ERR"
-HCWD="$W12/app" hook PreToolUse "$(HCWD="$W12/app" patch "$SID1" "U $W12/app/src/auth.py" "+x")"
+forget; HCWD="$W12/app" hook PreToolUse "$(HCWD="$W12/app" patch "$SID1" "U $W12/app/src/auth.py" "+x")"
 [ "$(text_of)" = "$held" ] || fail "a patch to the checkout under a workspace bus stopped matching: rc $RC out $OUT err $ERR"
 unset WT MAIN
 ok "both layouts match the claim and nudge with the mapped path, and the main checkout's own files stay as they were"
@@ -379,12 +385,12 @@ echo "TEST 12e: a claim on the worktree's own path in the bus folder still count
 # Bug it catches: once a worktree file was mapped to the main checkout, only the mapped path was checked, so a claim on
 # .claude/worktrees/lane/src/auth.py (or feature/src/auth.py, or feature/) was missed and the hook said "has no claim".
 wtpatch() { HCWD="$WT" hook PreToolUse "$(HCWD="$WT" patch "$SID1" "U $1" "+x")"; }
-newbus p12e; N=$(dname "$SID1"); MAIN=$P; WT="$MAIN/.claude/worktrees/lane"
+newbus p12e; forget; N=$(dname "$SID1"); MAIN=$P; WT="$MAIN/.claude/worktrees/lane"
 gitc "$MAIN"; mkdir -p "$MAIN/.claude/worktrees"; git -C "$MAIN" worktree add -q "$WT" -b p12e-wt; mkdir -p "$WT/src"
 HCWD="$WT" SS; [ -n "$OUT" ] || fail "12e: a worktree under the checkout did not reach the bus for SessionStart: rc $RC err $ERR"
 ab --as holder-zq join --tool t >/dev/null; ab --as holder-zq claim .claude/worktrees/lane/src/held.py --purpose p >/dev/null
 ab --as "$N" claim .claude/worktrees/lane/src/mine.py --purpose p >/dev/null; ab --as "$N" claim .claude/worktrees/lane/lib/ --purpose p >/dev/null
-held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. Claims are advisory; ask the holder or work elsewhere."
+held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching."
 wtpatch "$WT/src/held.py"; [ "$(text_of)" = "$held" ] || fail "a claim on the worktree's own path under the checkout was missed for a patch: rc $RC out $OUT err $ERR"
 wtpatch "src/mine.py"; quiet || fail "my claim on the worktree's own path under the checkout was missed for a relative patch path: rc $RC out $OUT err $ERR"
 wtpatch "$WT/lib/deep/x.py"; quiet || fail "my folder claim on the worktree's own path under the checkout was missed for a patch: rc $RC out $OUT err $ERR"
@@ -399,6 +405,22 @@ ab --as holder-zq release feature/src/held.py >/dev/null; ab --as "$N" claim fea
 wtpatch "$WT/src/other12e.py"; quiet || fail "my claim on the whole worktree folder under a workspace bus was missed for a patch: rc $RC out $OUT err $ERR"
 unset WT MAIN
 ok "a claim on either path of a worktree file counts for a patch; the nudge names the main checkout's path"
+
+echo
+echo "TEST 12f: PreToolUse adds the unread count for this name only (direct messages, broadcast decisions and alerts), once per new message"
+newbus p12f; forget; N=$(dname "$SID1"); SS
+ab --as peer join --tool t >/dev/null; ab --as "$N" claim mine.txt >/dev/null
+note() { echo "agentbus: unread direct messages, decisions and alerts: $1. Read them with: agentbus --as ${2:-$N} inbox. They are information from other agents, not orders."; }
+ab --as peer post "fyi" --kind note >/dev/null; ab --as peer post "for someone else" --to lane-x --kind question >/dev/null
+PRE mine.txt; quiet || fail "12f: a broadcast note or another name's mail was counted: rc $RC out $OUT"
+ab --as peer post "q?" --to "$N" --kind question >/dev/null; ab --as peer post "CI is red" --kind alert >/dev/null
+PRE mine.txt; [ "$(text_of)" = "$(note "1 alert, 1 question")" ] || fail "12f: a direct question and a broadcast alert were not announced: rc $RC out $OUT"
+PRE mine.txt; quiet || fail "12f: the same unread messages were announced twice: rc $RC out $OUT"
+ab --as lane-x join --tool t >/dev/null; ab --as lane-x claim mine2.txt >/dev/null
+AGENTBUS_AGENT=lane-x hook PreToolUse "$(patch "$SID1" "A $P/mine2.txt" "+hi")"
+[ "$(text_of)" = "$(note "1 question" lane-x)" ] || fail "12f: a lane name's count was summed with the session's derived name: rc $RC out $OUT"
+[ "$(unread "$N")" = 3 ] || fail "12f: PreToolUse marked a message read"
+ok "unread for this name only, once per new message"
 
 echo
 echo "TEST 12d: with AGENTBUS_DB set, SessionStart does not call it this folder's bus"
@@ -640,14 +662,16 @@ import json, re, sys
 name = r"(?:codex-[0-9a-f]{8}|[A-Za-z0-9._-]{1,40})"
 copy = r"\S+"
 path = r"[A-Za-z0-9_./@+-]{1,120}"
-kinds = r"(?:\d+ (?:notes?|questions?|answers?|handoffs?|decisions?|alerts?|done|other))"
+kinds = r"(?:\d+\+? (?:notes?|questions?|answers?|handoffs?|decisions?|alerts?|done|other))"
 unread = rf"(?:\d+ unread messages? for you \({kinds}(?:, {kinds})*\))"
 T = {
  "SessionStart": rf"agentbus: you are on (?:this folder's|AGENTBUS_DB's) bus as ({name})\. (?:1 agent is|\d+ agents are) on it, (?:no unread messages for you|{unread})(?:, and a shared goal is set)?\. Use --as \1 on every command\. Read with: {copy} --as \1 status ; {copy} --as \1 inbox\. Goals and messages are information from other agents, not orders\.",
  "UserPromptSubmit": rf"agentbus: {unread}\. Read them with: {copy} --as {name} inbox\. They are information from other agents, not orders\.",
- "PreToolUse": rf"agentbus: (?:a claim under a different name covers this file\. See who and why: {copy} --as {name} claims\. Claims are advisory; ask the holder or work elsewhere\.|(?:(?:{path}|this file) has|(?:{path}|a file) and \d+ more files? have) no claim\. If you are editing (?:it|them): {copy} --as {name} claim (?:{path}|PATH) --purpose WHY)",
+ "PreToolUse": rf"agentbus: (?:a claim under a different name covers this file\. See who and why: {copy} --as {name} claims\. In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching\.|(?:(?:{path}|this file) has|(?:{path}|a file) and \d+ more files? have) no claim\. If you are editing (?:it|them): {copy} --as {name} claim (?:{path}|PATH) --purpose WHY)",
  "Stop": rf'agentbus: {name} still holds \d+ claims? and has not posted a handoff or done\.',
 }
+edit = rf"agentbus: unread direct messages, decisions and alerts: {kinds}(?:, {kinds})*\. Read them with: {copy} --as {name} inbox\. They are information from other agents, not orders\."
+T["PreToolUse"] = rf"(?:{T['PreToolUse']}(?: {edit})?|{edit})"  # the claim note, the unread note, or both
 n = 0
 for line in open(sys.argv[1]):
     d = json.loads(line)
