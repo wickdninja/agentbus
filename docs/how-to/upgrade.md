@@ -59,7 +59,7 @@ An installer on `PATH` is used only when its file is yours or root's and is not 
 fetches the build backend (`hatchling`) from PyPI:
 
 ```
-uv tool install git+https://github.com/wickdninja/agentbus@v0.2.0
+uv tool install git+https://github.com/wickdninja/agentbus@v0.3.0
 ```
 
 (or `pipx install --force` with the same address; use your fork's address, or `@main`, instead of the tag). `update` does not
@@ -129,7 +129,7 @@ upgraded 2, current 1, skipped 1, failed 1
 ```
 
 - `schema 0 -> 1`: the bus already had the new shape and only got its version stamp. No backup is made for a stamp.
-- A release that changes the database's shape migrates it after a backup in `.agentbus/backups/`; v0.2.0 has no such migration.
+- A release that changes the database's shape migrates it after a backup in `.agentbus/backups/`; v0.3.0 has no such migration.
 - `skipped`: the folder's copy is newer than the tool you ran. It is never downgraded.
 - `failed`: the line says why. The others are still upgraded, and the command exits 1. A bus held
   by another process for more than 5 seconds fails as busy, with nothing changed. When the bus was
