@@ -38,6 +38,17 @@ def load(out):
     return rows, dropped
 
 
+def dropped_summary(dropped):
+    """How many runs were dropped, by reason, without listing every id."""
+    reasons = {}
+    for d in dropped:
+        why = "; ".join(sorted(set(list(d["infra"].values()) + list(d["isolation"])))) or "unknown"
+        reasons[why] = reasons.get(why, 0) + 1
+    lines = ["dropped under the protocol's rule: %d" % len(dropped)]
+    lines += ["  %d %s: %s" % (n, "run" if n == 1 else "runs", why) for why, n in sorted(reasons.items(), key=lambda x: -x[1])]
+    return "\n".join(lines)
+
+
 def tokens(row):
     """Everything the model read or wrote, cache reads included, summed over the run's agents."""
     return sum(sum(c["usage"].values()) for c in row["cost"].values())
@@ -298,7 +309,7 @@ def main(argv):
     ap.add_argument("--cost", action="store_true")
     args = ap.parse_args(argv)
     rows, dropped = load(args.out)
-    print("dropped under the protocol's rule: %d%s" % (len(dropped), "".join("\n  %s: %s %s" % (d["id"], d["infra"], d["isolation"]) for d in dropped)))
+    print(dropped_summary(dropped))
     if args.cost:
         cost_report(rows)
         return 0

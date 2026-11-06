@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shlex
 import shutil
 import signal
@@ -151,10 +152,11 @@ class Agent:
 
 
 class Run:
-    def __init__(self, task_name, seed, condition, pairing, args):
+    def __init__(self, task_name, seed, condition, pairing, args, replaces=None):
         if condition == "builtin" and pairing != "cc":
             raise Refused("builtin is Claude only: it has no cx cell")
         self.task_name, self.seed, self.condition, self.pairing, self.args = task_name, seed, condition, pairing, args
+        self.replaces, self.usage_hit, self.live = replaces, False, []
         self.id = "r" + hashlib.sha256(os.urandom(16)).hexdigest()[:12]   # opaque: graders see only this
         self.task = tasks.build(task_name, seed)
         self.root = assert_outside(tempfile.mkdtemp(prefix="value-run-"))
@@ -386,6 +388,10 @@ class Run:
                 raw.write(json.dumps(wrapped) + "\n")
                 raw.flush()
                 agent.tool_calls += grade.tool_calls_in_line(wrapped["line"], agent.harness)
+                if grade.usage_limited(wrapped["line"]) and not self.usage_hit:
+                    self.usage_hit = True   # the plan is spent: the run is lost, so nothing in it runs on
+                    for other in self.live:
+                        self.stop_agent(other, "usage_limit")
                 if agent.tool_calls > self.args.tool_cap and agent.stop_reason is None:
                     self.stop_agent(agent, "tool_cap")
 
@@ -453,7 +459,10 @@ class Run:
         snapper = threading.Thread(target=self.snapshot_loop, daemon=True)
         snapper.start()
         for stage in self.task.schedule:
+            if self.usage_hit:
+                break
             current = [Agent(r, self.harnesses[r]) for r in stage]
+            self.live = current
             watchers = []
             for a in current:
                 agents[a.role] = a
@@ -568,9 +577,13 @@ class Run:
             self.build()
             agents = self.run_agents()
             infra = {r: why for r, why in self.collect(agents).items() if why}
+            if self.usage_hit:
+                infra = {r: "usage limit" for r in agents}
             bad = self.isolation(agents)
             row = {"id": self.id, "task": self.task_name, "seed": self.seed, "condition": self.condition, "pairing": self.pairing,
                    "infra": infra, "isolation": bad, "ts": time.time(), "tool": sha_file(os.path.join(ROOT, "bin", "agentbus")), "quota": self.quota}
+            if self.replaces:
+                row["replaces"] = self.replaces
             with open(os.path.join(self.args.out, "manifest.jsonl"), "a") as f:
                 f.write(json.dumps(row) + "\n")
             if bad:
@@ -599,6 +612,24 @@ def plan(args):
     return runs
 
 
+def rerun_plan(out, shard):
+    """The protocol's rule for infrastructure failures: each such run again, with the same task, seed, condition and pairing, in the
+    order the batch first ran them. A run already replaced is not replaced twice. shard (i, n) takes every n-th from the i-th."""
+    path = os.path.join(out, "manifest.jsonl")
+    rows = [json.loads(l) for l in open(path)] if os.path.exists(path) else []
+    replaced = {r["replaces"] for r in rows if r.get("replaces")}
+    todo = [(r["task"], r["seed"], r["condition"], r["pairing"], r["id"]) for r in rows if r["infra"] and r["id"] not in replaced]
+    i, n = shard
+    return todo[i - 1::n]
+
+
+def claude_usage(cmd):
+    """The first number a usage command prints: percent of the plan's window used. None if it prints none."""
+    p = subprocess.run(["/bin/sh", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=60)
+    found = re.search(r"\d+(?:\.\d+)?", p.stdout)
+    return float(found.group(0)) if found else None
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--tasks", nargs="+", choices=tasks.TASKS + tasks.RETIRED, default=list(tasks.TASKS))
@@ -623,11 +654,20 @@ def main(argv):
     ap.add_argument("--codex-bin", default="codex")
     ap.add_argument("--codex-budget", type=float, default=CODEX_BUDGET, help="usage points; halt when projected use passes this")
     ap.add_argument("--tool-release", default=TOOL_RELEASE, help="the commit whose bin/agentbus is under test")
+    ap.add_argument("--rerun-infra", action="store_true", help="run again every infrastructure failure already in --out, as the protocol says")
+    ap.add_argument("--shard", default="1/1", help="I/N: with --rerun-infra, this runner's share")
+    ap.add_argument("--claude-usage-cmd", help="a command printing the Claude plan's window use in percent; checked before every run")
+    ap.add_argument("--claude-usage-stop", type=float, default=90.0, help="halt when the plan's use reaches or is projected past this percent")
     args = ap.parse_args(argv)
-    runs = plan(args)
-    log("value eval: %d runs" % len(runs))
+    shard = tuple(int(x) for x in args.shard.split("/"))
+    if args.rerun_infra:
+        runs = rerun_plan(args.out if os.path.isabs(args.out) else os.path.abspath(args.out), shard)
+        log("value eval: %d runs (replacing infrastructure failures)" % len(runs))
+    else:
+        runs = [r + (None,) for r in plan(args)]
+        log("value eval: %d runs" % len(runs))
     for r in runs:
-        log("  %s seed %d %s %s" % (r[0], r[1], r[2], r[3]))
+        log("  %s seed %d %s %s%s" % (r[0], r[1], r[2], r[3], " (replaces %s)" % r[4] if r[4] else ""))
     if args.dry_run:
         return 0
     stub = os.environ.get("VALUE_STUB_DIR")
@@ -637,25 +677,34 @@ def main(argv):
     if not stub and not args.claude_launcher:
         log("not running: name a launcher with --claude-launcher or VALUE_CLAUDE_LAUNCHER.")
         return 2
-    if not stub and "cx" in args.pairings:   # before any run: in cx a real Claude may start first
+    if not stub and any(r[3] == "cx" for r in runs):   # before any run: in cx a real Claude may start first
         if args.codex_route != "exec":
             log("not running: Codex needs --codex-route exec, the route the protocol's addenda set.")
             return 2
         if not args.codex_auth:
             log("not running: --codex-route exec needs --codex-auth or VALUE_CODEX_AUTH.")
             return 2
-    if not stub and "agentbus" in args.conditions and not tool_is_release(ROOT, args.tool_release):
+    if not stub and any(r[2] == "agentbus" for r in runs) and not tool_is_release(ROOT, args.tool_release):
         log("not running: bin/agentbus is not the released %s, and runs test the release." % args.tool_release)
         return 2
     try:
         args.out = assert_outside(args.out if os.path.isabs(args.out) else os.path.abspath(args.out))
         os.makedirs(args.out, exist_ok=True)
-        done, codex_done, start = 0, 0, None
+        done, codex_done, start, use_start = 0, 0, None, None
         codex_total = sum(1 for r in runs if r[3] == "cx")
-        for t, seed, c, p in runs:
-            row = Run(t, seed, c, p, args).execute()
+        for t, seed, c, p, replaces in runs:
+            if args.claude_usage_cmd:
+                use = claude_usage(args.claude_usage_cmd)
+                use_start = use if use_start is None else use_start
+                if use is None or analyze.over_budget(use_start, use, done, len(runs), args.claude_usage_stop - use_start, min_runs=20) or use >= args.claude_usage_stop:
+                    log("Claude usage stop: the plan is at %s%% after %d of %d runs, against a stop at %s%%. Batch halted." % (use, done, len(runs), args.claude_usage_stop))
+                    return 8
+            row = Run(t, seed, c, p, args, replaces).execute()
             done += 1
             log("run %d of %d: %s%s" % (done, len(runs), row["id"], " infra: %s" % row["infra"] if row["infra"] else ""))
+            if "usage limit" in row["infra"].values():
+                log("usage limit: batch stopped after run %s. The plan's usage limit is reached; nothing more runs on it." % row["id"])
+                return 7
             if p == "cx" and row["quota"]:
                 codex_done += 1
                 now = row["quota"]["used_percent"]

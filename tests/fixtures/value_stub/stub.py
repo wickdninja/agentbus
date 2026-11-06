@@ -5,7 +5,7 @@ VALUE_STUB_MODE picks a behaviour: good (default), clobber (bob overwrites alice
 hang (never exits), spam (tool calls forever), hook-leak (reports a hook firing), plugin-leak (reports a user plugin),
 env-dump (writes its environment's names to VALUE_STUB_ENV_OUT and plays good), auth-fail (a sign-in error and no tool call),
 conflict (each role writes its own VERSION), leak-token, auth-refresh, auth-report (Codex sign-in faults and a report on the copy), codex-hooks, codex-skill, codex-state
-(a planted hook or skill, and the state Codex makes for itself), no-hooks, hook-fail (hook outcomes), settings-report (hook install), break-link (bob replaces his ledger link), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
+(a planted hook or skill, and the state Codex makes for itself), usage-limit (a plan limit, after VALUE_STUB_LIMIT_AFTER tool calls), no-hooks, hook-fail (hook outcomes), settings-report (hook install), break-link (bob replaces his ledger link), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
 """
 import json
 import os
@@ -156,6 +156,12 @@ if mode == "settings-report":
 if mode == "break-link" and role == "bob":
     os.remove("COORDINATION.md")
     open("COORDINATION.md", "w").write("10:00 bob NOTE: my own copy\n")
+if mode == "usage-limit" and os.environ.get("VALUE_STUB_LIMIT_ROLE", role) == role:
+    for _ in range(int(os.environ.get("VALUE_STUB_LIMIT_AFTER", "0"))):
+        bash("true")
+    emit({"type": "assistant", "message": {"id": "lim", "content": [{"type": "text", "text": "You've hit your weekly limit \u00b7 resets Nov 8 at 5am"}]}})
+    emit({"type": "result", "subtype": "success", "is_error": True, "result": "You've hit your weekly limit"})
+    sys.exit(1)
 if mode == "hang":
     time.sleep(3600)
 if mode == "spam":

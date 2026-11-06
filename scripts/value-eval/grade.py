@@ -441,6 +441,15 @@ def check_claude_init(lines, condition, tools):
     return bad
 
 
+USAGE_LIMIT = re.compile(r"You've hit your (?:\w+ )?limit|usage_limit_reached")
+
+
+def usage_limited(line):
+    """True when a raw stream line is the provider saying the plan's usage limit is reached. Agent text that merely talks about a
+    limit does not match: the phrases are the provider's own."""
+    return bool(line) and bool(USAGE_LIMIT.search(line))
+
+
 def infra_failure(lines, harness, rc, killed_by_task, stop_reason):
     """A run may be replaced only for one of these (docs/evals/value-protocol.md, Dropping runs). None is a real run, whatever
     its outcome. Timeouts and tool caps are real runs."""

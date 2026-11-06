@@ -4327,5 +4327,32 @@
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "the latest FACT must win"
+  },
+  {
+    "name": "value eval: a usage limit does not stop the batch",
+    "file": "scripts/value-eval/run.py",
+    "find": "            if \\\"usage limit\\\" in row\\[\\\"infra\\\"\\]\\.values\\(\\):\\n",
+    "replace": "            if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "no usage stop"
+  },
+  {
+    "name": "value eval: a usage limit passes as agent text",
+    "file": "scripts/value-eval/grade.py",
+    "find": "return bool\\(line\\) and bool\\(USAGE_LIMIT\\.search\\(line\\)\\)",
+    "replace": "return False",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a usage limit went unseen"
+  },
+  {
+    "name": "value eval: a rerun replaces runs twice",
+    "file": "scripts/value-eval/run.py",
+    "find": "if r\\[\\\"infra\\\"\\] and r\\[\\\"id\\\"\\] not in replaced\\]",
+    "replace": "if r[\"infra\"]]",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a second rerun would replace again"
   }
 ]

@@ -253,6 +253,53 @@ for want in "Holm" "without overlap" "channel bytes back" "channel writes" "S8" 
 done
 ok "Holm, the sensitivity rows, channel cost, S8 and protocol steps all print"
 
+echo "TEST 18: a usage limit stops the batch at once, even mid-run, and the run is infrastructure"
+for after in 0 3; do
+  rc=0; env VALUE_STUB_MODE=usage-limit VALUE_STUB_LIMIT_AFTER=$after VALUE_STUB_LIMIT_ROLE=bob VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions ledger --pairings cc --seeds 1 2 3 --time-cap 60 --out "$T/ul$after" >"$T/log" 2>&1 || rc=$?
+  [ "$rc" = 7 ] && grep -q 'usage limit: batch stopped' "$T/log" || { cat "$T/log"; fail "after $after tool calls: no usage stop (rc $rc)"; }
+  [ "$(wc -l < "$T/ul$after/manifest.jsonl" | tr -d ' ')" = 1 ] || fail "after $after tool calls: the batch burned more runs"
+  [ "$(field "$T/ul$after" 'r["infra"].get("bob")')" = "usage limit" ] || fail "after $after tool calls: not infrastructure: $(field "$T/ul$after" 'r["infra"]')"
+done
+ok "a limit before or after tool calls stops the batch on that run and marks it infrastructure"
+
+echo "TEST 19: --rerun-infra replaces exactly the infrastructure runs, once, and leaves the rest alone"
+stub --tasks control overlap --conditions agentbus ledger --pairings cc --seeds 1 --out "$T/re"
+[ "$rc" = 0 ] || fail "rerun base"
+env VALUE_STUB_MODE=no-hooks VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control overlap --conditions agentbus ledger --pairings cc --seeds 2 --time-cap 60 --out "$T/re" >"$T/log" 2>&1 || true
+cp "$T/re/manifest.jsonl" "$T/before.jsonl"
+out=$("${RUN[@]}" --out "$T/re" --rerun-infra --dry-run)
+[ "$(sed -n 1p <<<"$out")" = "value eval: 4 runs (replacing infrastructure failures)" ] || fail "rerun plan: $out"
+a=$("${RUN[@]}" --out "$T/re" --rerun-infra --dry-run --shard 1/2 | tail -n +2); b=$("${RUN[@]}" --out "$T/re" --rerun-infra --dry-run --shard 2/2 | tail -n +2)
+[ "$(printf '%s\n%s\n' "$a" "$b" | sort)" = "$(tail -n +2 <<<"$out" | sort)" ] && [ -z "$(comm -12 <(sort <<<"$a") <(sort <<<"$b"))" ] || fail "shards overlap or miss runs"
+stub --out "$T/re" --rerun-infra
+[ "$rc" = 0 ] || { cat "$T/log"; fail "rerun: rc $rc"; }
+[ "$(head -c "$(wc -c < "$T/before.jsonl")" "$T/re/manifest.jsonl" | cksum)" = "$(cksum < "$T/before.jsonl")" ] || fail "the rerun changed earlier rows"
+"$PY" -B - "$T/re" <<'CHECK' || fail "replacements"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1] + "/manifest.jsonl")]
+bad = {r["id"]: r for r in rows if r["infra"]}
+new = [r for r in rows if r.get("replaces")]
+assert len(bad) == 4 and len(new) == 4 and {r["replaces"] for r in new} == set(bad), (len(bad), len(new))
+for r in new:
+    old = bad[r["replaces"]]
+    assert (r["task"], r["seed"], r["condition"], r["pairing"]) == (old["task"], old["seed"], old["condition"], old["pairing"]) and not r["infra"], r
+CHECK
+grades "$T/re"
+out=$("$PY" -B "$SCRIPTS/analyze.py" "$T/re" --n 2)
+grep -q '^P2 agentbus minus ledger\|^P2 ' <<<"$out" || grep -q 'Primary' <<<"$out" || fail "a replaced batch did not reach the analysis: $out"
+grep -q "4 runs: hooks did not load" <<<"$out" || fail "the dropped summary: $out"
+[ "$("${RUN[@]}" --out "$T/re" --rerun-infra --dry-run | sed -n 1p)" = "value eval: 0 runs (replacing infrastructure failures)" ] || fail "a second rerun would replace again"
+ok "4 failures replaced with the same task, seed, condition and pairing; earlier rows untouched; shards disjoint; a second rerun finds nothing"
+
+echo "TEST 20: the batch stops when a Claude plan's usage passes its stop, before the first run as well as during"
+printf '#!/bin/sh\nf=%s/use; n=$(cat "$f" 2>/dev/null || echo %s); echo $((n+%s)) > "$f"; echo "$n"\n' "$T" 50 20 > "$T/usage.sh"; chmod +x "$T/usage.sh"
+rc=0; env VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cc --seeds 1 2 3 4 --claude-usage-cmd "$T/usage.sh" --claude-usage-stop 85 --time-cap 60 --out "$T/cu" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 8 ] && grep -q 'Claude usage stop' "$T/log" && [ "$(wc -l < "$T/cu/manifest.jsonl" | tr -d ' ')" = 2 ] || { cat "$T/log"; fail "no Claude usage stop mid-batch (rc $rc)"; }
+echo 95 > "$T/use"
+rc=0; env VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none --pairings cc --seeds 1 --claude-usage-cmd "$T/usage.sh" --claude-usage-stop 85 --out "$T/cu2" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 8 ] && [ ! -e "$T/cu2/manifest.jsonl" ] || { cat "$T/log"; fail "a plan already past its stop started a run (rc $rc)"; }
+ok "50, 70, then 90 halts before the third run; a plan already at 95 never starts"
+
 echo "TEST 13: a run leaves nothing behind"
 [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'value-run-*' | grep -v forbidden || true)" ] || fail "run folders left: $(ls "$TMPDIR")"
 ok "the mktemp folders are gone"

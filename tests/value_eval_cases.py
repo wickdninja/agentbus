@@ -318,6 +318,21 @@ def test_p3_counts_every_token():
     check(math.isclose(point, 2.0), "P3 must be on total tokens as registered: %s" % point)
 
 
+def test_usage_limit_detection():
+    hit = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "You've hit your weekly limit \u00b7 resets Nov 8 at 5am"}]}})
+    api = json.dumps({"type": "result", "is_error": True, "result": "api_error usage_limit_reached"})
+    check(grade.usage_limited(hit) and grade.usage_limited(api), "a usage limit went unseen")
+    for quiet in ('{"type": "assistant", "message": {"content": [{"type": "text", "text": "the claim limit is 2h"}]}}', "not json", ""):
+        check(not grade.usage_limited(quiet), "a false usage limit: %r" % quiet)
+
+
+def test_dropped_summary():
+    rows = [{"id": "r%d" % i, "infra": {"alice": "no tool call and rc 1"}, "isolation": []} for i in range(30)] + [{"id": "rx", "infra": {"bob": "usage limit"}, "isolation": []}]
+    text = analyze.dropped_summary(rows)
+    check(text.splitlines()[0] == "dropped under the protocol's rule: 31", text)
+    check("30 runs: no tool call and rc 1" in text and "1 run: usage limit" in text and "r17" not in text, "the summary lists ids or misses a reason: %s" % text)
+
+
 def test_prompts_differ_only_in_the_channel():
     for name in tasks.TASKS:
         t = tasks.build(name, 3)
