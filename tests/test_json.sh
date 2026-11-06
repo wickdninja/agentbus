@@ -131,13 +131,13 @@ doctor = shape(j('doctor', keep=True), agentbus=str, path=str, contract=int, che
 assert doctor['checks'], doctor
 for check in doctor['checks']:   # scope is there for the checks of a user or project file
     shape(check, id=str, status=str, detail=str, fix=(str, null), hint=(str, null), **({'scope': str} if 'scope' in check else {}))
-brief = shape(j('--as', 'b', 'brief'), bus=str, me=dict, goal=dict, agents=dict, questions=dict, unread=dict, pending_others=dict, facts=dict, omitted=dict, next=str)
+brief = shape(j('--as', 'b', 'brief'), bus=str, me=dict, goal=dict, agents=dict, questions=dict, todos=dict, expired_claims=dict, unread=dict, pending_others=dict, facts=dict, omitted=dict, next=str)
 shape(brief['pending_others'], items=list, next=(str, null))
 shape(brief['me'], name=str, joined=bool)
 shape(brief['goal'], goal=str, set_by=str, set_at=str, truncated=bool)
 shape(brief['agents'], items=list); shape(brief['questions'], items=list)
 shape(brief['unread'], total=int, items=list); shape(brief['facts'], since=(str, null), items=list)
-shape(brief['omitted'], agents=int, questions=int, unread=int, pending_others=int, facts=int)
+shape(brief['omitted'], agents=int, questions=int, todos=int, expired_claims=int, unread=int, pending_others=int, facts=int)
 array(brief['agents']['items'], name=str, role=(str, null), tool=(str, null), last_seen=str, claims=list, claims_omitted=int)
 for row in brief['questions']['items'] + brief['unread']['items']:
     shape(row, id=int, ts=str, sender=str, recipient=str, kind=str, topic=(str, null), body=str, reply_to=(int, null), body_truncated=bool)
