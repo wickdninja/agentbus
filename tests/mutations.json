@@ -51,7 +51,7 @@
     "replace": "    if b[\"idle_min\"] is None:",
     "count": 1,
     "run": "tests/test_claims.sh",
-    "expect": "a holder seen 4 minutes ago was offered a leave"
+    "expect": "a holder seen 4 minutes ago may be gone"
   },
   {
     "name": "a holder seen exactly 30 minutes ago is still live",
