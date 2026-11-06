@@ -153,7 +153,7 @@ e, status = error("schema", "nope")
 assert e["code"] == "bad_input" and e["retryable"] is False, e
 args = {a["name"]: a for a in commands["post"]["args"]}
 assert args["body"]["positional"] is True and args["--to"]["default"] == "*", args
-assert args["--kind"]["choices"] == ["note", "question", "answer", "handoff", "decision", "alert", "done"], args["--kind"]
+assert args["--kind"]["choices"] == ["note", "question", "answer", "handoff", "decision", "alert", "done", "todo", "dropped"], args["--kind"]
 assert args["--request-id"]["type"] == "string" and "default" not in args["--request-id"], args["--request-id"]
 assert commands["who"]["args"][-1]["name"] == "--limit" and commands["who"]["args"][-1]["type"] == "integer"
 # the output-discipline additions (WS L-out): written out here, independently of the registry

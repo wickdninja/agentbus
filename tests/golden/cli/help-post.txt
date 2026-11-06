@@ -13,7 +13,11 @@ KINDS (--kind)
   handoff   Pass work on: branch, state, next step, checks
   decision  Record a choice others should follow
   alert     Something needs attention now
-  done      Report finished work
+  done      Report finished work; with --reply-to a todo's ID it closes that
+            todo
+  todo      Record work before you start it; it stays open until done or
+            dropped replies to it
+  dropped   Close a todo you will not do: --reply-to its ID, say why
 
 FLAGS
   -h, --help          Show this help message and exit.
@@ -21,7 +25,7 @@ FLAGS
                       A name not on the roster still gets the message, with a
                       warning.
   --kind KIND         Message kind: note, question, answer, handoff, decision,
-                      alert, done. Default: note.
+                      alert, done, todo, dropped. Default: note.
   --topic TOPIC       Optional topic label, filterable with read --topic.
   --reply-to ID       Link to an earlier message; does not choose the
                       recipient.

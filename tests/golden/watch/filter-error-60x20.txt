@@ -14,7 +14,7 @@ Messages  0 of 9                                   no match
 
 
 
-
   kind must be one of: note, question (ask), answer (ans),
-  handoff (hand), decision (dec), alert (ALRT), done
+  handoff (hand), decision (dec), alert (ALRT), done, todo,
+  dropped (drop)
 /kind:fyi_                           Enter keep · Esc clear

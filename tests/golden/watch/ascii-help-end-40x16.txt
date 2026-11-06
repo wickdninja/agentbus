@@ -2,8 +2,7 @@
   watch only reads the bus. It never
   marks a message read and never
   changes a claim.
-  ... 81 lines above - PgUp
-                     upgraded; restart
+  ... 82 lines above - PgUp
                      watch to run the
                      new code
 
@@ -11,6 +10,7 @@ Kinds
   kind: takes the word or the short
   code; narrow rows show the code
   hand handoff   ask question
-  ans answer   done   dec decision
+  ans answer   done   todo
+  drop dropped   dec decision
   ALRT alert   note
   j/k scroll - Esc/q back

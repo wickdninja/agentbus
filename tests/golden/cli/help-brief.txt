@@ -7,13 +7,16 @@ handoffs and alerts; facts changed since your last read; and one next: line
 with the command to run. It only reads: it never marks anything read, so run
 inbox afterwards to consume your messages. An open question has the kind
 question, is addressed to you or to everyone, and has no answer: no message of
-kind answer replies to it, directly or through a chain of replies. Pending
-between others are the same unanswered questions, and handoffs and alerts that
-the agent they name has not yet read, when they are addressed to another agent
-by name; next: shows how to read one. Changed facts are those updated since
-the last message you read with inbox (every fact before a first read), except
-your own and the goal. Without --as it shows the bus as a bystander: no
-unread, and only questions to everyone.
+kind answer replies to it directly (an answer to a reply to it does not
+count). Open todos are every todo no done or dropped replies to, whoever owns
+it: the owner is the named recipient, else the sender. Expired claims, when
+their holder is still on the roster, are listed with the plain claim command.
+Pending between others are the same unanswered questions, and handoffs and
+alerts that the agent they name has not yet read, when they are addressed to
+another agent by name; next: shows how to read one. Changed facts are those
+updated since the last message you read with inbox (every fact before a first
+read), except your own and the goal. Without --as it shows the bus as a
+bystander: no unread, and only questions to everyone.
 
 FLAGS
   -h, --help  Show this help message and exit.
@@ -31,4 +34,4 @@ EXAMPLES
   # Show more rows in each section
   agentbus --as alice brief --limit 10
 
-JSON result: {"bus": string, "me": null or {"name": string, "joined": boolean}, "goal": null or BriefGoal, "agents": {"items": [BriefAgent]}, "questions": {"items": [BriefMessage]}, "unread": {"total": integer, "items": [BriefMessage]}, "pending_others": {"items": [BriefMessage], "next": string or null}, "facts": {"since": string or null, "items": [BriefFact]}, "omitted": {"agents": integer, "questions": integer, "unread": integer, "pending_others": integer, "facts": integer}, "next": string}. Retry: safe to repeat.
+JSON result: {"bus": string, "me": null or {"name": string, "joined": boolean}, "goal": null or BriefGoal, "agents": {"items": [BriefAgent]}, "questions": {"items": [BriefMessage]}, "todos": {"items": [BriefTodo]}, "expired_claims": {"items": [BriefExpiredClaim], "next": string or null}, "unread": {"total": integer, "items": [BriefMessage]}, "pending_others": {"items": [BriefMessage], "next": string or null}, "facts": {"since": string or null, "items": [BriefFact]}, "omitted": {"agents": integer, "questions": integer, "todos": integer, "expired_claims": integer, "unread": integer, "pending_others": integer, "facts": integer}, "next": string}. Retry: safe to repeat.

@@ -118,7 +118,7 @@ v = keys(View(), ["/"] + list("kind:fyi"))
 t = frame(v)
 assert g["KIND_ERROR"] in " ".join(l.strip() for l in t[-4:-1]) and W.ids_in(t) == [], t  # wrapped above the input
 assert g["KIND_ERROR"] == ("kind must be one of: note, question (ask), answer (ans), handoff (hand), decision (dec), "
-                           "alert (ALRT), done")
+                           "alert (ALRT), done, todo, dropped (drop)")
 
 # In filter input every printable key is text; only Ctrl-C quits; Esc clears and closes; Enter keeps.
 text = "qjkgprt?1234 Gy/"

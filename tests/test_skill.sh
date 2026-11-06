@@ -28,9 +28,10 @@ n=$(wc -c <"$SKILL" | tr -d ' ')
 ok "marker present; $n bytes (cap 4800)"
 w=$(wc -w <"$SKILL" | tr -d ' ')
 [ "$w" -le 720 ] || fail "SKILL.md is $w words, the cap is 720"
-grep -q '^Kinds: note, question, answer, handoff, decision, alert, done\. Assign work with handoff\.' "$SKILL" || fail "the skill must list all seven kinds on one line and say to assign work with handoff"
+grep -q '^Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped\. Assign work with handoff\.' "$SKILL" || fail "the skill must list all nine kinds on one line and say to assign work with handoff"
+grep -qF 'Promise: `post "WHAT" --kind todo`; close: `post "RESULT" --reply-to ID --kind done`' "$SKILL" || fail "the skill must say how to record a todo and close it"
 if grep -q 'Run `release RESOURCE` when finished' "$SKILL"; then fail "the skill still has the release-before-leave step; leave releases everything"; fi
-ok "$w words (cap 720); the seven kinds and 'assign work with handoff' on one line; no release-before-leave step"
+ok "$w words (cap 720); the nine kinds and 'assign work with handoff' on one line; no release-before-leave step"
 
 echo
 echo "TEST: every required sentence in tests/skill_required.txt is present and within its byte cap"

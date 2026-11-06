@@ -17,7 +17,7 @@ _agentbus() {
         *) key=$cmd ;;
     esac
     case "$key $prev" in
-        "post --kind") COMPREPLY=($(compgen -W "note question answer handoff decision alert done" -- "$cur")); return ;;
+        "post --kind") COMPREPLY=($(compgen -W "note question answer handoff decision alert done todo dropped" -- "$cur")); return ;;
         "setup --scope") COMPREPLY=($(compgen -W "user project" -- "$cur")); return ;;
         "doctor --scope") COMPREPLY=($(compgen -W "user project all" -- "$cur")); return ;;
     esac

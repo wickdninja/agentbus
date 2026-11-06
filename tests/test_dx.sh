@@ -75,7 +75,7 @@ def help_(*args):
     return text
 checks = {
     (): ['Coordinate agents in one local workspace: messages, file claims, and shared facts.', 'Your agent identity; overrides AGENTBUS_AGENT.', 'Select the Nth outer bus (default 0). AGENTBUS_DB takes precedence.', 'Print successful command results as JSON. Check exit status; errors use stderr.', 'Start:', 'Loop:', 'Finish:', 'Humans: agentbus watch', 'Env: AGENTBUS_AGENT', 'AGENTBUS_DB'],
-    ('post',): ['A name not on the roster still gets the message, with a warning.', 'does not choose the recipient.', 'Message kind: note, question, answer, handoff, decision, alert, done. Default: note.', 'Optional topic label, filterable with read --topic.'],
+    ('post',): ['A name not on the roster still gets the message, with a warning.', 'does not choose the recipient.', 'Message kind: note, question, answer, handoff, decision, alert, done, todo, dropped. Default: note.', 'Optional topic label, filterable with read --topic.'],
     ('join',): ['Tool running this session.', 'Model running this session.', 'Working directory for this session.', 'Branch for this session.', 'What you do here (shown in who/watch).', 'Rejoin a name active'],
     ('release',): ['Resource to release; use the spelling from claims.'],
     ('ctx','set'): ['Set a shared fact and record its history.'],
@@ -100,6 +100,6 @@ ok "help describes routing, limits, identity, installation, and action-specific 
 
 out=$(agentbus lgo 2>&1 >/dev/null || true)
 case "$out" in "agentbus: unknown command 'lgo'. Did you mean log? Commands: join, leave, who, "*", brief, demo. See: agentbus --help") ;; *) fail "unknown command hint: $out" ;; esac
-expect_fail "unknown kind 'fyi'; use one of: note, question, answer, handoff, decision, alert, done" agentbus --as claude post hi --kind fyi
+expect_fail "unknown kind 'fyi'; use one of: note, question, answer, handoff, decision, alert, done, todo, dropped" agentbus --as claude post hi --kind fyi
 expect_fail "claude was active less than a minute ago" agentbus --as claude join
 ok "typos get concise suggestions, invalid kinds echo their value, and a recent join reads naturally"

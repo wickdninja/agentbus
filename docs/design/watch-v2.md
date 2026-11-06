@@ -1487,7 +1487,7 @@ Words
   following          the newest messages, as they arrive
   paused at 16:44    the whole view is frozen as it was then; +N new counts what came since
   … N earlier        rows above the window; … N later, … N more: rows not shown
-  … 9 more lines · PgDn
+  … 10 more lines · PgDn
   j/k scroll · Esc/q back
 ```
 
@@ -1511,7 +1511,7 @@ Look closer
   t               show or hide the thread of an open
                   message
   y               copy the selected id, or in a message its
-  … 48 more lines · PgDn
+  … 49 more lines · PgDn
   j/k scroll · Esc/q back
 ```
 
@@ -1813,7 +1813,7 @@ A `kind:` that is neither a kind's start nor its code matches nothing and says w
 
 
   kind must be one of: note, question (ask), answer (ans), handoff (hand), decision (dec), alert
-  (ALRT), done
+  (ALRT), done, todo, dropped (drop)
 /kind:fyi_                                                                   Enter keep · Esc clear
 ```
 
@@ -1847,7 +1847,7 @@ Messages  0 of 9                                                                
 
 
   kind must be one of: note, question (ask), answer (ans), handoff (hand), decision (dec), alert
-  (ALRT), done
+  (ALRT), done, todo, dropped (drop)
 /kind:fyi_                                                                   Enter keep · Esc clear
 ```
 
@@ -1869,9 +1869,9 @@ Messages  0 of 9                                                                
 
 
 
-
   kind must be one of: note, question (ask), answer (ans),
-  handoff (hand), decision (dec), alert (ALRT), done
+  handoff (hand), decision (dec), alert (ALRT), done, todo,
+  dropped (drop)
 /kind:fyi_                           Enter keep · Esc clear
 ```
 
@@ -1893,9 +1893,9 @@ Messages  0 of 9                                   no match
 
 
 
-
   kind must be one of: note, question (ask), answer (ans),
-  handoff (hand), decision (dec), alert (ALRT), done
+  handoff (hand), decision (dec), alert (ALRT), done, todo,
+  dropped (drop)
 /kind:fyi_                           Enter keep · Esc clear
 ```
 
@@ -2897,7 +2897,7 @@ Words
   following          the newest messages, as they arrive
   paused at 16:44    the whole view is frozen as it was then; +N new counts what came since
   ... N earlier      rows above the window; ... N later, ... N more: rows not shown
-  ... 9 more lines - PgDn
+  ... 10 more lines - PgDn
   j/k scroll - Esc/q back
 ```
 

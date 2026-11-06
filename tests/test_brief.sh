@@ -70,7 +70,7 @@ def join(db, *names):
 
 
 def open_ids(db, who=None):
-    args = (["--as", who] if who else []) + ["brief"]
+    args = (["--as", who] if who else []) + ["brief", "--limit", "-1"]
     return [m["id"] for m in jok(db, *args)["questions"]["items"]]
 
 
@@ -90,33 +90,55 @@ q2 = post(db, "lead", "Use WAL?", to="worker", kind="question")                 
 post(db, "worker", "yes", to="lead", kind="answer", reply=q2)
 q3 = post(db, "scout", "Who owns CI?", kind="question")                         # replied to by a note only
 post(db, "worker", "checking", to="scout", kind="note", reply=q3)
-q4 = post(db, "lead", "Ship friday?", kind="question")                          # answered through a reply to a reply
+q4 = post(db, "lead", "Ship friday?", kind="question")                          # an answer to a reply to it does NOT close it (#63)
 r4 = post(db, "worker", "let me ask", to="lead", kind="note", reply=q4)
 post(db, "scout", "yes, friday", to="lead", kind="answer", reply=r4)
 q5 = post(db, "lead", "Scout, can you review?", to="scout", kind="question")    # addressed to scout only
 q6 = post(db, "worker", "Anyone seen the flaky test?", kind="question")         # worker's own, unanswered
-q7 = post(db, "lead", "Retry policy?", kind="question")                         # its clarifying question was answered
+q7 = post(db, "lead", "Retry policy?", kind="question")                         # its clarifying question was answered, it was not (#63)
 q8 = post(db, "worker", "Retry on what?", to="lead", kind="question", reply=q7)
 post(db, "lead", "on 503", to="worker", kind="answer", reply=q8)
 q9 = post(db, "scout", "Direct to nobody here", to="ghost", kind="question")    # addressed to a name that is not here
-# q7 is answered through q8 (a question that replies to it), by the thread rule documented in --help
-check(open_ids(db, "worker") == [q1, q3, q6], "worker's open questions: %s" % open_ids(db, "worker"))
-check(open_ids(db, "scout") == [q1, q3, q5, q6], "scout's open questions: %s" % open_ids(db, "scout"))
-check(open_ids(db) == [q1, q3, q6], "without a name only questions to everyone are open: %s" % open_ids(db))
+# An answer closes only the message it replies to directly. q8 is answered; q7 above it and q4 (answered through a note) are not.
+check(open_ids(db, "worker") == [q1, q3, q4, q6, q7], "worker's open questions: %s" % open_ids(db, "worker"))
+check(open_ids(db, "scout") == [q1, q3, q4, q5, q6, q7], "scout's open questions: %s" % open_ids(db, "scout"))
+check(open_ids(db) == [q1, q3, q4, q6, q7], "without a name only questions to everyone are open: %s" % open_ids(db))
 whole = ok(db, "--as", "worker", "brief")
 out, others = whole.split("pending between others")   # the open questions are above this line; what waits between others is below it
-check("open questions" in out and "#%d" % q1 in out and "#%d" % q2 not in out and "#%d" % q4 not in out
-      and "#%d" % q5 not in out and "#%d" % q9 not in out, "text lists the wrong questions: %r" % out)
+check("open questions" in out and "#%d" % q1 in out and "#%d" % q2 not in out and "#%d" % q4 in out and "#%d" % q7 in out
+      and "#%d" % q8 not in out and "#%d" % q5 not in out and "#%d" % q9 not in out, "text lists the wrong questions: %r" % out)
 check(out.index("#%d" % q1) < out.index("#%d" % q3) < out.index("#%d" % q6), "questions are not oldest first: %r" % out)
 # a question to another agent by name (q5, and q9 to a name that is not here) waits between others; an answered one does not
-check("#%d" % q5 in others and "#%d" % q9 in others and "#%d" % q2 not in others and "#%d" % q4 not in others, "pending between others is wrong: %r" % others)
+check("#%d" % q5 in others and "#%d" % q9 in others and "#%d" % q2 not in others, "pending between others is wrong: %r" % others)
 # a reply cycle planted in the table cannot hang or crash the walk
 x = post(db, "lead", "loop a", kind="question")
 y = post(db, "lead", "loop b", kind="question")
 sql(db, "UPDATE messages SET reply_to=? WHERE id=?", y, x)
 sql(db, "UPDATE messages SET reply_to=? WHERE id=?", x, y)
 check(x in open_ids(db, "worker") and y in open_ids(db, "worker"), "a reply cycle changed which questions are open")
-print("PASS: open questions: unanswered only, replies and replies to replies count, to me or everyone, oldest first, a cycle is safe")
+print("PASS: open questions: unanswered only, only a direct answer counts, to me or everyone, oldest first, a cycle is safe")
+
+# ---- #63: an answer to a clarifying question closes the clarifying question, not the question above it ----
+# Bug it catches: the walk down a reply chain closed every question above an answer, so "Is deployment safe?" dropped off
+# brief (for its asker and for everyone else) after only "Which region?" had been answered.
+db = bus("chain63")
+join(db, "alice", "bob", "carol")
+c1 = post(db, "alice", "Is deployment safe?", to="bob", kind="question")
+c2 = post(db, "bob", "Which region?", to="alice", kind="question", reply=c1)
+c3 = post(db, "alice", "eu-west", to="bob", kind="answer", reply=c2)
+check(open_ids(db, "bob") == [c1], "bob's open questions after the three-message chain: %s (want [#%d])" % (open_ids(db, "bob"), c1))
+check("open questions: none" not in ok(db, "--as", "bob", "brief"), "brief still prints 'open questions: none' with #%d unanswered" % c1)
+c4 = post(db, "bob", "yes, safe", to="alice", kind="answer", reply=c1)
+check(open_ids(db, "bob") == [], "a direct answer did not close #%d: %s" % (c1, open_ids(db, "bob")))
+# the same rule for what waits between others (carol is a bystander to both)
+db = bus("chain63b")
+join(db, "alice", "bob", "carol")
+d1 = post(db, "alice", "Ship it?", to="bob", kind="question")
+d2 = post(db, "bob", "Which build?", to="alice", kind="question", reply=d1)
+post(db, "alice", "build 12", to="bob", kind="answer", reply=d2)
+pend = [m["id"] for m in jok(db, "--as", "carol", "brief")["pending_others"]["items"]]
+check(pend == [d1], "pending between others after the chain: %s (want [#%d])" % (pend, d1))
+print("PASS: #63: an answer closes only the question it replies to, in open questions and in pending between others")
 
 # ---- unread handoffs and alerts: the inbox's own rule, shown without consuming it ----
 db = bus("u")

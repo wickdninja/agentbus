@@ -33,9 +33,9 @@ clean, ab_fit, ab_fit_left = AB["clean"], AB["fit"], AB["fit_left"]
 ago, time_left, tw, share_rows = AB["ago"], AB["time_left"], AB["text_width"], AB["share_rows"]
 role_emoji, colour_map, when = AB["role_emoji"], AB["colour_map"], AB["_when"]
 KIND_EMOJI, KIND_COLOURS = AB["KIND_EMOJI"], AB["KIND_COLOURS"]
-KINDS = ("note", "question", "answer", "handoff", "decision", "alert", "done")
+KINDS = ("note", "question", "answer", "handoff", "decision", "alert", "done", "todo", "dropped")
 KIND_CODE = {"handoff": "hand", "question": "ask", "answer": "ans", "done": "done", "decision": "dec",
-             "alert": "ALRT", "note": "note"}
+             "alert": "ALRT", "note": "note", "todo": "todo", "dropped": "drop"}
 SECTION_EMOJI = {"Agents": "👥", "Claims": "🔒", "Facts": "📌", "Messages": "💬",
                  "Thread": "🧵", "History": "📜", "Mentioned in": "🔗"}
 # Header bar: black on bus yellow, never bold (a terminal that draws bold as bright turns bold black
@@ -1293,7 +1293,7 @@ class Frame:
             rows += entry(self.tx(k), d, W, ww)
         rows.append(Row())
         rows += self.titled("Kinds", "kind: takes the word or the short code; narrow rows show the code")
-        kinds = ["handoff", "question", "answer", "done", "decision", "alert", "note"]
+        kinds = ["handoff", "question", "answer", "done", "todo", "dropped", "decision", "alert", "note"]
         cells = [((KIND_EMOJI[k] + " ") if E else "") + (f"{KIND_CODE[k]} {k}" if KIND_CODE[k] != k else k)
                  for k in kinds]
         rows += self.flow(cells, [str(KIND_COLOURS.get(k, 2)) for k in kinds])
@@ -1689,7 +1689,7 @@ def case_kind_codes():
     assert msgs("kind:dec") == [4] and msgs("kind:ans") == [7]
     t = text_of(100, 30, {"filter": "kind:fyi"})
     assert KIND_ERROR == ("kind must be one of: note, question (ask), answer (ans), handoff (hand), decision (dec), "
-                          "alert (ALRT), done")
+                          "alert (ALRT), done, todo, dropped (drop)")
     assert any("kind must be one of" in l for l in t), "the error stays after Enter"
 
 

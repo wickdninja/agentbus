@@ -2988,20 +2988,20 @@
     "expect": "FAIL: unread handoffs and alerts"
   },
   {
-    "name": "brief counts only direct answers, not answers to replies",
+    "name": "a done replying to a reply closes the todo above it",
     "file": "bin/agentbus",
-    "find": "JOIN thread t ON m\\.reply_to = t\\.id\\)",
-    "replace": "JOIN thread t ON m.reply_to = t.id AND t.root = t.id)",
-    "count": 2,
-    "run": "tests/test_brief.sh",
-    "expect": "worker's open questions"
+    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\\\"",
+    "replace": "WHERE kind IN ({closers}) AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind IN ({closers}) AND p.reply_to IS NOT NULL)\"",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "a done replying to a reply (ancestry) closed the todo"
   },
   {
     "name": "brief treats any reply as an answer",
     "file": "bin/agentbus",
-    "find": "a\\.kind = 'answer'",
-    "replace": "a.id <> t.root",
-    "count": 2,
+    "find": "WHERE kind='answer' AND reply_to IS NOT NULL\\)\\\"",
+    "replace": "WHERE reply_to IS NOT NULL)\"",
+    "count": 1,
     "run": "tests/test_brief.sh",
     "expect": "worker's open questions"
   },
@@ -3125,8 +3125,8 @@
   {
     "name": "SessionStart text is dropped whole at a long path",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ head\\ \\+\\ read\\ \\+\\ tail\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ len\\(text\\)\\ <=\\ HOOK_CONTEXT_MAX:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ return\\ text,\\ notice",
-    "replace": "        text = head + read + tail\n        return (text, notice) if len(text) <= HOOK_CONTEXT_MAX else (None, notice)",
+    "find": "            text = head \\+ read \\+ tail\\n            if len\\(text\\) <= HOOK_CONTEXT_MAX:\\n                return text, notice",
+    "replace": "            text = head + read + tail\n            return (text, notice) if len(text) <= HOOK_CONTEXT_MAX else (None, notice)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "the SessionStart text was dropped whole"
@@ -3917,8 +3917,8 @@
   {
     "name": "Stop talks to the agent, not the person",
     "file": "bin/agentbus",
-    "find": "    return None, f\"agentbus: \\{name\\} still holds \\{count\\} claim\\{\\'\\' if count == 1 else \\'s\\'\\} and has not posted a handoff or done\\.\"",
-    "replace": "    return None, f\"agentbus: you still hold {count} claim{'' if count == 1 else 's'} and have not posted a handoff or done. To finish: {hook_tool(found[0])} post \\\"RESULT\\\" --kind done\"",
+    "find": "    return None, f\"agentbus: \\{name\\} still holds \\{count\\} claim\\{\\'\\' if count == 1 else \\'s\\'\\} and has not posted a handoff or a done that is not a reply\\.\"",
+    "replace": "    return None, f\"agentbus: you still hold {count} claim{'' if count == 1 else 's'} and have not posted a handoff or a done that is not a reply. To finish: {hook_tool(found[0])} post \\\"RESULT\\\" --kind done\"",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
     "expect": "Stop text"
@@ -4745,8 +4745,8 @@
   {
     "name": "goal text drops its age",
     "file": "bin/agentbus",
-    "find": "return \"now\" if age == \"now\" else \"an unknown time ago\" if age == \"\\?\" else age \\+ \" ago\"",
-    "replace": "return \"now\"",
+    "find": "    age = ago\\(set_at, clock\\(\\)\\)\\n    return \\\"now\\\" if age == \\\"now\\\" else \\\"an unknown time ago\\\" if age == \\\"\\?\\\" else age \\+ \\\" ago\\\"",
+    "replace": "    age = ago(set_at, clock())\n    return \"now\"",
     "count": 1,
     "run": "tests/test_goal.sh",
     "expect": "goal shows:"
@@ -5051,8 +5051,8 @@
   {
     "name": "brief's more hint loses --up",
     "file": "bin/agentbus",
-    "find": "more_hint = f\"\\(\\{next_command\\(a, 'brief', '--limit', max\\(limit \\* 4, 20\\)\\)\\}\\)\"",
-    "replace": "more_hint = f\"(agentbus brief --limit {max(limit * 4, 20)})\"",
+    "find": "more_cmd = next_command\\(a, 'brief', '--limit', max\\(limit \\* 4, 20\\)\\)",
+    "replace": "more_cmd = f\"agentbus brief --limit {max(limit * 4, 20)}\"",
     "count": 1,
     "run": "tests/test_discovery.sh",
     "expect": "brief's more hint lost --up"
@@ -5398,5 +5398,230 @@
     "count": 1,
     "run": "tests/test_example.sh",
     "expect": "the example's transcript is not the tour it promises"
+  },
+  {
+    "name": "a note replying to a todo closes it",
+    "file": "bin/agentbus",
+    "find": "TODO_CLOSERS = \\(\"done\", \"dropped\"\\)",
+    "replace": "TODO_CLOSERS = (\"done\", \"dropped\", \"note\")",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "a note replying to the todo closed it"
+  },
+  {
+    "name": "dropped does not close a todo",
+    "file": "bin/agentbus",
+    "find": "TODO_CLOSERS = \\(\"done\", \"dropped\"\\)",
+    "replace": "TODO_CLOSERS = (\"done\",)",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "dropped did not close its todo"
+  },
+  {
+    "name": "a closing row with no reply_to hides every open todo",
+    "file": "bin/agentbus",
+    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\"",
+    "replace": "WHERE kind IN ({closers}))\"",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "a done with no reply_to closed the todo"
+  },
+  {
+    "name": "brief lists a todo only when it is addressed to everyone",
+    "file": "bin/agentbus",
+    "find": "f\\\"WHERE \\{open_todo_where\\('m\\.'\\)\\} ORDER BY m\\.id\\\"\\)",
+    "replace": "f\"WHERE {open_todo_where('m.')} AND m.recipient='*' ORDER BY m.id\")",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "a bystander sees"
+  },
+  {
+    "name": "a todo's owner is always its sender",
+    "file": "bin/agentbus",
+    "find": "\\(CASE WHEN m\\.recipient='\\*' THEN m\\.sender ELSE m\\.recipient END\\)",
+    "replace": "m.sender",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "owners:"
+  },
+  {
+    "name": "dropped without a reply_to is accepted",
+    "file": "bin/agentbus",
+    "find": "if a\\.kind == \"dropped\" and a\\.reply_to is None:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "dropped with no reply_to"
+  },
+  {
+    "name": "a second closer is not told the todo was already closed",
+    "file": "bin/agentbus",
+    "find": "    if prior is None:\\n        return a\\.reply_to, None",
+    "replace": "    if True:\n        return a.reply_to, None",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "is not told the todo was already closed"
+  },
+  {
+    "name": "dropped replying to a non-todo says nothing",
+    "file": "bin/agentbus",
+    "find": "if a\\.kind == \"dropped\" else None\\)",
+    "replace": "if False else None)",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "dropped replying to a note"
+  },
+  {
+    "name": "post reports no closed todo",
+    "file": "bin/agentbus",
+    "find": "result\\[\"closed\"\\] = closed",
+    "replace": "result[\"closed\"] = None",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "reports closed"
+  },
+  {
+    "name": "brief lists expired claims of a holder who left the roster",
+    "file": "bin/agentbus",
+    "find": "FROM claims c JOIN agents r ON r\\.name = c\\.agent",
+    "replace": "FROM claims c LEFT JOIN agents r ON r.name = c.agent",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "expired claims with the holder on the roster"
+  },
+  {
+    "name": "brief lists live claims as expired",
+    "file": "bin/agentbus",
+    "find": "WHERE c\\.expires_at <= \\?",
+    "replace": "WHERE c.expires_at > ?",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "expired claims with the holder on the roster"
+  },
+  {
+    "name": "an answer to a reply closes the question above it",
+    "file": "bin/agentbus",
+    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL\\)\"\\)",
+    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "worker's open questions"
+  },
+  {
+    "name": "pending between others ignores answers",
+    "file": "bin/agentbus",
+    "find": "f\\\"\\(\\{open_question_where\\('q\\.'\\)\\}\\) \\\"",
+    "replace": "f\"(q.kind='question') \"",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "pending between others after the chain"
+  },
+  {
+    "name": "an answer to a reply closes the question above it (unit)",
+    "file": "bin/agentbus",
+    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL\\)\"\\)",
+    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_a_question_is_closed_only_by_a_direct_answer"
+  },
+  {
+    "name": "the open todo query scans the table once per todo",
+    "file": "bin/agentbus",
+    "find": "    return \\(f\"\\{p\\}kind='todo' AND \\{p\\}id NOT IN \"\\n            f\"\\(SELECT reply_to FROM messages WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\"\\)",
+    "replace": "    return (f\"{p}kind='todo' AND NOT EXISTS (SELECT 1 FROM messages c WHERE c.reply_to = {p}id AND c.kind IN ({closers}))\")",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_no_query_scans_the_table_once_per_row"
+  },
+  {
+    "name": "an over-budget todo count raises",
+    "file": "bin/agentbus",
+    "find": "    except sqlite3\\.Error:\\n        _TIMED_OUT = False\\n        return None",
+    "replace": "    except ZeroDivisionError:\n        _TIMED_OUT = False\n        return None",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_over_budget_is_none_not_an_exception"
+  },
+  {
+    "name": "an uncounted todo list prints nothing",
+    "file": "bin/agentbus",
+    "find": "return \", open todos: run brief\"",
+    "replace": "return \"\"",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_the_line_names_the_count_or_says_run_brief"
+  },
+  {
+    "name": "a kind is left out of the hook plural table",
+    "file": "bin/agentbus",
+    "find": "\"todo\": \"todos\", \"dropped\": \"dropped\",",
+    "replace": "\"todo\": \"todos\",",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_every_kind_is_wired_everywhere"
+  },
+  {
+    "name": "a done that closes a todo silences the Stop nudge",
+    "file": "bin/agentbus",
+    "find": "AND \\(kind='handoff' OR \\(kind='done' AND reply_to IS NULL\\)\\) AND ts>=\\? LIMIT 1",
+    "replace": "AND kind IN ('handoff','done') AND ts>=? LIMIT 1",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "closing a todo silenced the Stop nudge"
+  },
+  {
+    "name": "SessionStart leaves out the open todo count",
+    "file": "bin/agentbus",
+    "find": "todo_clause \\+ hook_goal_text\\(goal\\)",
+    "replace": "hook_goal_text(goal)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionStart does not count the 2 open todos"
+  },
+  {
+    "name": "a handoff that replies no longer silences Stop",
+    "file": "bin/agentbus",
+    "find": "AND \\(kind='handoff' OR \\(kind='done' AND reply_to IS NULL\\)\\) AND ts>=\\? LIMIT 1",
+    "replace": "AND kind IN ('handoff','done') AND reply_to IS NULL AND ts>=? LIMIT 1",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a handoff that replies to a message no longer silences Stop"
+  },
+  {
+    "name": "Stop nudges even after a plain done",
+    "file": "bin/agentbus",
+    "find": "    if said:\\n        return None\\n    # Once per set of claims",
+    "replace": "    if False:\n        return None\n    # Once per set of claims",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "Stop after a done post"
+  },
+  {
+    "name": "a repeated closing post loses closed",
+    "file": "bin/agentbus",
+    "find": "dup\\[\"closed\"\\] = closed_by\\(con, old\\[\\'id\\'\\], a\\.reply_to\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "a repeated closing post"
+  },
+  {
+    "name": "brief --limit 0 hides the open todo total",
+    "file": "bin/agentbus",
+    "find": "if td or omitted\\[\"todos\"\\]:",
+    "replace": "if td:",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "--limit 0 hides the todos"
+  },
+  {
+    "name": "brief --limit 0 hides the expired claim total",
+    "file": "bin/agentbus",
+    "find": "if ex or omitted\\[\"expired_claims\"\\]:",
+    "replace": "if ex:",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "--limit 0 hides the expired claims"
   }
 ]
