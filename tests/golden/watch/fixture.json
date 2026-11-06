@@ -7,7 +7,9 @@
   "handoff",
   "decision",
   "alert",
-  "done"
+  "done",
+  "todo",
+  "dropped"
  ],
  "kind_codes": {
   "handoff": "hand",
@@ -16,7 +18,9 @@
   "done": "done",
   "decision": "dec",
   "alert": "ALRT",
-  "note": "note"
+  "note": "note",
+  "todo": "todo",
+  "dropped": "drop"
  },
  "limits": {
   "held": 200,

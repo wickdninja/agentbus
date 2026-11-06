@@ -5398,5 +5398,185 @@
     "count": 1,
     "run": "tests/test_example.sh",
     "expect": "the example's transcript is not the tour it promises"
+  },
+  {
+    "name": "a note replying to a todo closes it",
+    "file": "bin/agentbus",
+    "find": "TODO_CLOSERS = \\(\"done\", \"dropped\"\\)",
+    "replace": "TODO_CLOSERS = (\"done\", \"dropped\", \"note\")",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "a note replying to the todo closed it"
+  },
+  {
+    "name": "dropped does not close a todo",
+    "file": "bin/agentbus",
+    "find": "TODO_CLOSERS = \\(\"done\", \"dropped\"\\)",
+    "replace": "TODO_CLOSERS = (\"done\",)",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "dropped did not close its todo"
+  },
+  {
+    "name": "a closing row with no reply_to hides every open todo",
+    "file": "bin/agentbus",
+    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\"",
+    "replace": "WHERE kind IN ({closers}))\"",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "a done with no reply_to closed the todo"
+  },
+  {
+    "name": "brief lists a todo only when it is addressed to everyone",
+    "file": "bin/agentbus",
+    "find": "f\\\"WHERE \\{open_todo_where\\('m\\.'\\)\\} ORDER BY m\\.id\\\"\\)",
+    "replace": "f\"WHERE {open_todo_where('m.')} AND m.recipient='*' ORDER BY m.id\")",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "a bystander sees"
+  },
+  {
+    "name": "a todo's owner is always its sender",
+    "file": "bin/agentbus",
+    "find": "\\(CASE WHEN m\\.recipient='\\*' THEN m\\.sender ELSE m\\.recipient END\\)",
+    "replace": "m.sender",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "owners:"
+  },
+  {
+    "name": "dropped without a reply_to is accepted",
+    "file": "bin/agentbus",
+    "find": "if a\\.kind == \"dropped\" and a\\.reply_to is None:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "dropped with no reply_to"
+  },
+  {
+    "name": "a second closer is not told the todo was already closed",
+    "file": "bin/agentbus",
+    "find": "    if prior is None:\\n        return a\\.reply_to, None",
+    "replace": "    if True:\n        return a.reply_to, None",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "is not told the todo was already closed"
+  },
+  {
+    "name": "dropped replying to a non-todo says nothing",
+    "file": "bin/agentbus",
+    "find": "if a\\.kind == \"dropped\" else None\\)",
+    "replace": "if False else None)",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "dropped replying to a note"
+  },
+  {
+    "name": "post reports no closed todo",
+    "file": "bin/agentbus",
+    "find": "result\\[\"closed\"\\] = closed",
+    "replace": "result[\"closed\"] = None",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "reports closed"
+  },
+  {
+    "name": "brief lists expired claims of a holder who left the roster",
+    "file": "bin/agentbus",
+    "find": "FROM claims c JOIN agents r ON r\\.name = c\\.agent",
+    "replace": "FROM claims c LEFT JOIN agents r ON r.name = c.agent",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "expired claims with the holder on the roster"
+  },
+  {
+    "name": "brief lists live claims as expired",
+    "file": "bin/agentbus",
+    "find": "WHERE c\\.expires_at <= \\?",
+    "replace": "WHERE c.expires_at > ?",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "expired claims with the holder on the roster"
+  },
+  {
+    "name": "an answer to a reply closes the question above it",
+    "file": "bin/agentbus",
+    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL\\)\"\\)",
+    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "worker's open questions"
+  },
+  {
+    "name": "pending between others ignores answers",
+    "file": "bin/agentbus",
+    "find": "f\\\"\\(\\{open_question_where\\('q\\.'\\)\\}\\) \\\"",
+    "replace": "f\"(q.kind='question') \"",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "pending between others is wrong"
+  },
+  {
+    "name": "an answer to a reply closes the question above it (unit)",
+    "file": "bin/agentbus",
+    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL\\)\"\\)",
+    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_a_question_is_closed_only_by_a_direct_answer"
+  },
+  {
+    "name": "the open todo query scans the table once per todo",
+    "file": "bin/agentbus",
+    "find": "    return \\(f\"\\{p\\}kind='todo' AND \\{p\\}id NOT IN \"\\n            f\"\\(SELECT reply_to FROM messages WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\"\\)",
+    "replace": "    return (f\"{p}kind='todo' AND NOT EXISTS (SELECT 1 FROM messages c WHERE c.reply_to = {p}id AND c.kind IN ({closers}))\")",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_no_query_scans_the_table_once_per_row"
+  },
+  {
+    "name": "an over-budget todo count raises",
+    "file": "bin/agentbus",
+    "find": "    except sqlite3\\.Error:\\n        _TIMED_OUT = False\\n        return None",
+    "replace": "    except ZeroDivisionError:\n        _TIMED_OUT = False\n        return None",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_over_budget_is_none_not_an_exception"
+  },
+  {
+    "name": "an uncounted todo list prints nothing",
+    "file": "bin/agentbus",
+    "find": "return \", open todos: run brief\"",
+    "replace": "return \"\"",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_the_line_names_the_count_or_says_run_brief"
+  },
+  {
+    "name": "a kind is left out of the hook plural table",
+    "file": "bin/agentbus",
+    "find": "\"todo\": \"todos\", \"dropped\": \"dropped\",",
+    "replace": "\"todo\": \"todos\",",
+    "count": 1,
+    "run": "tests/test_unit.sh",
+    "expect": "test_every_kind_is_wired_everywhere"
+  },
+  {
+    "name": "a done that closes a todo silences the Stop nudge",
+    "file": "bin/agentbus",
+    "find": "AND reply_to IS NULL AND ts>=\\? LIMIT 1",
+    "replace": "AND ts>=? LIMIT 1",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "closing a todo silenced the Stop nudge"
+  },
+  {
+    "name": "SessionStart leaves out the open todo count",
+    "file": "bin/agentbus",
+    "find": "todo_clause \\+ hook_goal_text\\(goal\\)",
+    "replace": "hook_goal_text(goal)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionStart does not count the 2 open todos"
   }
 ]

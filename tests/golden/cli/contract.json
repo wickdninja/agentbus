@@ -684,6 +684,100 @@
     }
    }
   },
+  "BriefTodo": {
+   "type": "object",
+   "required": [
+    "id",
+    "ts",
+    "sender",
+    "recipient",
+    "kind",
+    "topic",
+    "body",
+    "reply_to",
+    "body_truncated",
+    "owner",
+    "owner_last_seen",
+    "owner_on_roster"
+   ],
+   "properties": {
+    "id": {
+     "type": "integer"
+    },
+    "ts": {
+     "type": "string"
+    },
+    "sender": {
+     "type": "string"
+    },
+    "recipient": {
+     "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "topic": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "body": {
+     "type": "string"
+    },
+    "reply_to": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "body_truncated": {
+     "type": "boolean"
+    },
+    "owner": {
+     "type": "string"
+    },
+    "owner_last_seen": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "owner_on_roster": {
+     "type": "boolean"
+    }
+   }
+  },
+  "BriefExpiredClaim": {
+   "type": "object",
+   "required": [
+    "resource",
+    "purpose",
+    "expires_at",
+    "holder",
+    "holder_last_seen"
+   ],
+   "properties": {
+    "resource": {
+     "type": "string"
+    },
+    "purpose": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "expires_at": {
+     "type": "string"
+    },
+    "holder": {
+     "type": "string"
+    },
+    "holder_last_seen": {
+     "type": "string"
+    }
+   }
+  },
   "BriefClaim": {
    "type": "object",
    "required": [
@@ -1220,7 +1314,9 @@
      "handoff",
      "decision",
      "alert",
-     "done"
+     "done",
+     "todo",
+     "dropped"
     ]
    }
   },
@@ -1433,6 +1529,12 @@
       "items": {
        "$ref": "#/objects/Warning"
       }
+     },
+     "closed": {
+      "type": [
+       "integer",
+       "null"
+      ]
      }
     }
    },
@@ -3330,6 +3432,8 @@
      "goal",
      "agents",
      "questions",
+     "todos",
+     "expired_claims",
      "unread",
      "pending_others",
      "facts",
@@ -3403,6 +3507,41 @@
        }
       }
      },
+     "todos": {
+      "type": "object",
+      "required": [
+       "items"
+      ],
+      "properties": {
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/BriefTodo"
+        }
+       }
+      }
+     },
+     "expired_claims": {
+      "type": "object",
+      "required": [
+       "items",
+       "next"
+      ],
+      "properties": {
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/BriefExpiredClaim"
+        }
+       },
+       "next": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      }
+     },
      "unread": {
       "type": "object",
       "required": [
@@ -3468,6 +3607,8 @@
       "required": [
        "agents",
        "questions",
+       "todos",
+       "expired_claims",
        "unread",
        "pending_others",
        "facts"
@@ -3477,6 +3618,12 @@
         "type": "integer"
        },
        "questions": {
+        "type": "integer"
+       },
+       "todos": {
+        "type": "integer"
+       },
+       "expired_claims": {
         "type": "integer"
        },
        "unread": {

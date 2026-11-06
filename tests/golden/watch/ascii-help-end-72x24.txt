@@ -19,6 +19,6 @@
 
 Kinds
   kind: takes the word or the short code; narrow rows show the code
-  hand handoff   ask question   ans answer   done   dec decision
-  ALRT alert   note
+  hand handoff   ask question   ans answer   done   todo   drop dropped
+  dec decision   ALRT alert   note
   j/k scroll - Esc/q back

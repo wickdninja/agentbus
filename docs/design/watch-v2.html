@@ -1154,7 +1154,7 @@ table.keys th { background:var(--panel); } code { font-family:ui-monospace, Menl
 <span class="b">  following          </span>the newest messages, as they arrive
 <span class="b">  paused at 16:44    </span>the whole view is frozen as it was then; +N new counts what came since
 <span class="b">  <i class="w1">…</i> N earlier        </span>rows above the window; <i class="w1">…</i> N later, <i class="w1">…</i> N more: rows not shown
-<span class="d">  <i class="w1">…</i> 9 more lines <i class="w1">·</i> PgDn</span>
+<span class="d">  <i class="w1">…</i> 10 more lines <i class="w1">·</i> PgDn</span>
   <span class="b">j/k</span> scroll<span class="d"> <i class="w1">·</i> </span><span class="b">Esc/q</span> back</pre></figure></div><div class=row><figure class='emoji-on s60'><figcaption>help 60x20 emoji</figcaption><pre class=term><span class=dots><b></b><b></b><b></b></span><span class="c30 bg43"> <i class="w2">🚌</i> agentbus  ~/src/acme-api                          </span><span class="c30 bg43">keys</span><span class="c30 bg43"> </span><span class="c30 bg43"></span>
   watch only reads the bus. It never marks a message read
   and never changes a claim.
@@ -1173,7 +1173,7 @@ table.keys th { background:var(--panel); } code { font-family:ui-monospace, Menl
 <span class="b">  t               </span>show or hide the thread of an open
 <span class="b">                  </span>message
 <span class="b">  y               </span>copy the selected id, or in a message its
-<span class="d">  <i class="w1">…</i> 48 more lines <i class="w1">·</i> PgDn</span>
+<span class="d">  <i class="w1">…</i> 49 more lines <i class="w1">·</i> PgDn</span>
   <span class="b">j/k</span> scroll<span class="d"> <i class="w1">·</i> </span><span class="b">Esc/q</span> back</pre></figure><figure class='emoji-off s60'><figcaption>help 60x20 no emoji</figcaption><pre class=term><span class=dots><b></b><b></b><b></b></span><span class="c30 bg43"> agentbus  ~/src/acme-api                             </span><span class="c30 bg43">keys</span><span class="c30 bg43"> </span><span class="c30 bg43"></span>
   watch only reads the bus. It never marks a message read
   and never changes a claim.
@@ -1413,7 +1413,7 @@ table.keys th { background:var(--panel); } code { font-family:ui-monospace, Menl
 
 
 <span class="c31">  kind must be one of: note, question (ask), answer (ans), handoff (hand), decision (dec), alert</span>
-<span class="c31">  (ALRT), done</span>
+<span class="c31">  (ALRT), done, todo, dropped (drop)</span>
 <span class="b c33">/</span>kind:fyi<span class="b c33">_</span>                                                                   <span class="b">Enter</span> keep<span class="d"> <i class="w1">·</i> </span><span class="b">Esc</span> clear</pre></figure><figure class='emoji-off s100'><figcaption>filter-error 100x30 no emoji</figcaption><pre class=term><span class=dots><b></b><b></b><b></b></span><span class="c30 bg43"> agentbus  ~/src/acme-api                                                </span><span class="c30 bg43">1 alert <i class="w1">·</i> 1 open question</span><span class="c30 bg43"> </span><span class="c30 bg43"></span>
 <span class="b c33">  <i class="w1">◆</i> </span><span class="b">auth on the new token API                                                           </span><span class="d">  nate <i class="w1">·</i> 2h</span>
 
@@ -1442,7 +1442,7 @@ table.keys th { background:var(--panel); } code { font-family:ui-monospace, Menl
 
 
 <span class="c31">  kind must be one of: note, question (ask), answer (ans), handoff (hand), decision (dec), alert</span>
-<span class="c31">  (ALRT), done</span>
+<span class="c31">  (ALRT), done, todo, dropped (drop)</span>
 <span class="b c33">/</span>kind:fyi<span class="b c33">_</span>                                                                   <span class="b">Enter</span> keep<span class="d"> <i class="w1">·</i> </span><span class="b">Esc</span> clear</pre></figure></div><div class=row><figure class='emoji-on s60'><figcaption>filter-error 60x20 emoji</figcaption><pre class=term><span class=dots><b></b><b></b><b></b></span><span class="c30 bg43"> <i class="w2">🚌</i> agentbus  ~/src/acme-api                </span><span class="c30 bg43">1 ALRT <i class="w1">·</i> 1 ask</span><span class="c30 bg43"> </span><span class="c30 bg43"></span>
 <span class="b c33">  <i class="w2">🎯</i> </span><span class="b">auth on the new token API                  </span><span class="d">  nate <i class="w1">·</i> 2h</span>
 
@@ -1459,9 +1459,9 @@ table.keys th { background:var(--panel); } code { font-family:ui-monospace, Menl
 
 
 
-
 <span class="c31">  kind must be one of: note, question (ask), answer (ans),</span>
-<span class="c31">  handoff (hand), decision (dec), alert (ALRT), done</span>
+<span class="c31">  handoff (hand), decision (dec), alert (ALRT), done, todo,</span>
+<span class="c31">  dropped (drop)</span>
 <span class="b c33">/</span>kind:fyi<span class="b c33">_</span>                           <span class="b">Enter</span> keep<span class="d"> <i class="w1">·</i> </span><span class="b">Esc</span> clear</pre></figure><figure class='emoji-off s60'><figcaption>filter-error 60x20 no emoji</figcaption><pre class=term><span class=dots><b></b><b></b><b></b></span><span class="c30 bg43"> agentbus  ~/src/acme-api                   </span><span class="c30 bg43">1 ALRT <i class="w1">·</i> 1 ask</span><span class="c30 bg43"> </span><span class="c30 bg43"></span>
 <span class="b c33">  <i class="w1">◆</i> </span><span class="b">auth on the new token API                   </span><span class="d">  nate <i class="w1">·</i> 2h</span>
 
@@ -1478,9 +1478,9 @@ table.keys th { background:var(--panel); } code { font-family:ui-monospace, Menl
 
 
 
-
 <span class="c31">  kind must be one of: note, question (ask), answer (ans),</span>
-<span class="c31">  handoff (hand), decision (dec), alert (ALRT), done</span>
+<span class="c31">  handoff (hand), decision (dec), alert (ALRT), done, todo,</span>
+<span class="c31">  dropped (drop)</span>
 <span class="b c33">/</span>kind:fyi<span class="b c33">_</span>                           <span class="b">Enter</span> keep<span class="d"> <i class="w1">·</i> </span><span class="b">Esc</span> clear</pre></figure></div><h2 id='filter-coverage'>A filter on a bus bigger than the view <code>filter-coverage</code></h2><p class=blurb>209 messages, of which watch holds the newest 200. <code>kind:alert</code> finds none in those 200, and says so: <code>0 of newest 200</code>, and the 9 older messages were not searched (<code>agentbus read</code> reads them). The header says the same of its counts.</p><div class=row><figure class='emoji-on s100'><figcaption>filter-coverage 100x30 emoji</figcaption><pre class=term><span class=dots><b></b><b></b><b></b></span><span class="c30 bg43"> <i class="w2">🚌</i> agentbus  ~/src/acme-api                               </span><span class="c30 bg43">newest 200: 0 alerts <i class="w1">·</i> 0 open questions</span><span class="c30 bg43"> </span><span class="c30 bg43"></span>
 <span class="b c33">  <i class="w2">🎯</i> </span><span class="b">auth on the new token API                                                          </span><span class="d">  nate <i class="w1">·</i> 2h</span>
 
@@ -2277,7 +2277,7 @@ table.keys th { background:var(--panel); } code { font-family:ui-monospace, Menl
 <span class="b">  following          </span>the newest messages, as they arrive
 <span class="b">  paused at 16:44    </span>the whole view is frozen as it was then; +N new counts what came since
 <span class="b">  ... N earlier      </span>rows above the window; ... N later, ... N more: rows not shown
-<span class="d">  ... 9 more lines - PgDn</span>
+<span class="d">  ... 10 more lines - PgDn</span>
   <span class="b">j/k</span> scroll<span class="d"> - </span><span class="b">Esc/q</span> back</pre></figure></div><div class=row><figure class='emoji-off s60'><figcaption>ascii-help 60x20 ASCII</figcaption><pre class=term><span class=dots><b></b><b></b><b></b></span><span class="b rv"> agentbus  ~/src/acme-api                             </span><span class="b rv">keys</span><span class="b rv"> </span><span class="b rv"></span>
   watch only reads the bus. It never marks a message read
   and never changes a claim.

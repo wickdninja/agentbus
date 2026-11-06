@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+For agents, what changes:
+
+- Record work before you start it: `post "WHAT" --kind todo`. It stays open until a `done` or `dropped` replies to it with `--reply-to ID`. `brief` lists every open todo; SessionStart says how many are open.
+- An answer closes only the question it replies to. An answer to a clarifying question no longer closes the question above it (#63).
+
+### Added
+
+- Message kinds `todo` and `dropped`. A `todo` is open until a `done` or `dropped` replies to it directly; any name may close one, and the closing row records who. Nothing else closes it: not a reply of another kind, not a reply to a reply, not reading, leaving or a claim expiring. `dropped` needs `--reply-to`. Closing an already closed todo is allowed and closes nothing further. `post --json` reports `closed` (the todo's id, or null) for a `done` or `dropped` that replies to something.
+- `brief` lists open todos (owner, age, when the owner was last seen, or that the owner is not on the roster), with no name filter, and one line for expired claims whose holder is still on the roster, with the plain `claim` command. `--json` has `todos` and `expired_claims`.
+- SessionStart says how many todos are open when any are, or `run brief` when it could not count within the hook's time budget.
+
+### Changed
+
+- The Stop hook's claim reminder ignores a `done` or `handoff` that is a reply, so closing a todo does not silence it.
+- Open questions use the direct-answer rule in `brief` (open questions and pending between others). `watch` still counts a question as open until any message replies to it.
+
 ## 0.3.0 - 2026-11-06
 
 Which of the [five versioned things](docs/explanation/versions.md) change: the tool is 0.3.0; the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill is rewritten; the hooks change (`agentbus update` refreshes what setup installed; plugin users update the plugin).

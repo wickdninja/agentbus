@@ -26,5 +26,5 @@ Words
   following          the newest messages, as they arrive
   paused at 16:44    the whole view is frozen as it was then; +N new counts what came since
   ... N earlier      rows above the window; ... N later, ... N more: rows not shown
-  ... 9 more lines - PgDn
+  ... 10 more lines - PgDn
   j/k scroll - Esc/q back
