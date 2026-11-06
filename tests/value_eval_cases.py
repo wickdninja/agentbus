@@ -326,6 +326,18 @@ def test_usage_limit_detection():
         check(not grade.usage_limited(quiet), "a false usage limit: %r" % quiet)
 
 
+def test_auth_failure_detection():
+    syn = lambda text: json.dumps({"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": text}]}})
+    res = lambda text: json.dumps({"type": "result", "is_error": True, "result": text})
+    for phrase in ("Failed to authenticate: OAuth session expired and could not be refreshed", "OAuth session expired", "Login expired", "Please run /login"):
+        check(grade.auth_failed(syn(phrase)) and grade.auth_failed(res(phrase)) and grade.auth_failed(phrase), "a sign-in failure went unseen: %s" % phrase)
+    real = json.dumps({"type": "assistant", "message": {"model": "claude-x", "content": [{"type": "text", "text": "the log said: Please run /login"}]}})
+    tool = json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "Failed to authenticate in the fixture"}]}})
+    ok = json.dumps({"type": "result", "is_error": False, "result": "docs mention Login expired"})
+    for quiet in (real, tool, ok, '{"type": "assistant", "message": {"content": []}}', "[]", "", "log in later"):
+        check(not grade.auth_failed(quiet), "a false sign-in failure: %r" % quiet)
+
+
 def test_dropped_summary():
     rows = [{"id": "r%d" % i, "infra": {"alice": "no tool call and rc 1"}, "isolation": []} for i in range(30)] + [{"id": "rx", "infra": {"bob": "usage limit"}, "isolation": []}]
     text = analyze.dropped_summary(rows)

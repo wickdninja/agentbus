@@ -450,6 +450,29 @@ def usage_limited(line):
     return bool(line) and bool(USAGE_LIMIT.search(line))
 
 
+AUTH_FAILURE = re.compile(r"Failed to authenticate|OAuth session expired|Login expired|Please run /login")
+
+
+def auth_failed(line):
+    """True when a line is the launcher or provider saying the sign-in is gone (the plan's sign-in expired, not its usage). Only the
+    provider's own voice counts: an error result, a synthetic assistant message, or a line that is not stream JSON (stderr). A tool
+    result or the model's own text that quotes the phrase does not."""
+    if not line or not AUTH_FAILURE.search(line):
+        return False
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return True
+    if not isinstance(event, dict):
+        return False
+    if event.get("type") == "result":
+        return bool(event.get("is_error")) and bool(AUTH_FAILURE.search(str(event.get("result", ""))))
+    message = event.get("message")
+    if event.get("type") == "assistant" and isinstance(message, dict) and message.get("model") == "<synthetic>":
+        return bool(AUTH_FAILURE.search(json.dumps(message.get("content"))))
+    return False
+
+
 def infra_failure(lines, harness, rc, killed_by_task, stop_reason):
     """A run may be replaced only for one of these (docs/evals/value-protocol.md, Dropping runs). None is a real run, whatever
     its outcome. Timeouts and tool caps are real runs."""

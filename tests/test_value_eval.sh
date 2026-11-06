@@ -262,6 +262,16 @@ for after in 0 3; do
 done
 ok "a limit before or after tool calls stops the batch on that run and marks it infrastructure"
 
+echo "TEST 18b: an expired sign-in stops the batch at once, in the stream or on stderr, and the run is infrastructure"
+for mode in stream stderr; do
+  stderr_only=""; [ "$mode" = stderr ] && stderr_only=1
+  rc=0; env VALUE_STUB_AUTH_STDERR="$stderr_only" VALUE_STUB_MODE=auth-expired VALUE_STUB_LIMIT_ROLE=bob VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions ledger --pairings cc --seeds 1 2 3 --time-cap 60 --out "$T/ae$mode" >"$T/log" 2>&1 || rc=$?
+  [ "$rc" = 9 ] && grep -q 'authentication failed: batch stopped' "$T/log" || { cat "$T/log"; fail "$mode: no sign-in stop (rc $rc)"; }
+  [ "$(wc -l < "$T/ae$mode/manifest.jsonl" | tr -d ' ')" = 1 ] || fail "$mode: the batch burned more runs"
+  [ "$(field "$T/ae$mode" 'r["infra"].get("bob")')" = "authentication failed" ] || fail "$mode: not infrastructure: $(field "$T/ae$mode" 'r["infra"]')"
+done
+ok "an expired sign-in, in the stream or on stderr, stops the batch on that run and marks it infrastructure"
+
 echo "TEST 19: --rerun-infra replaces exactly the infrastructure runs, once, and leaves the rest alone"
 stub --tasks control overlap --conditions agentbus ledger --pairings cc --seeds 1 --out "$T/re"
 [ "$rc" = 0 ] || fail "rerun base"
@@ -290,6 +300,13 @@ grep -q '^P2 agentbus minus ledger\|^P2 ' <<<"$out" || grep -q 'Primary' <<<"$ou
 grep -q "4 runs: hooks did not load" <<<"$out" || fail "the dropped summary: $out"
 [ "$("${RUN[@]}" --out "$T/re" --rerun-infra --dry-run | sed -n 1p)" = "value eval: 0 runs (replacing infrastructure failures)" ] || fail "a second rerun would replace again"
 ok "4 failures replaced with the same task, seed, condition and pairing; earlier rows untouched; shards disjoint; a second rerun finds nothing"
+
+echo "TEST 19b: --skip-done plans only the combinations the output has no row for, so no run is made twice"
+out=$("${RUN[@]}" --tasks control overlap --conditions agentbus ledger --pairings cc --seeds 1 2 3 --out "$T/re" --skip-done --dry-run)
+[ "$(sed -n 1p <<<"$out")" = "value eval: 4 runs" ] && [ "$(tail -n +2 <<<"$out" | grep -c 'seed 3 ')" = 4 ] || fail "skip-done plan: $out"
+[ "$("${RUN[@]}" --tasks control overlap --conditions agentbus ledger --pairings cc --seeds 1 2 --out "$T/re" --skip-done --dry-run | sed -n 1p)" = "value eval: 0 runs" ] || fail "skip-done planned a done run"
+[ "$("${RUN[@]}" --tasks control overlap --conditions agentbus ledger --pairings cc --seeds 1 2 3 --out "$T/none" --skip-done --dry-run | sed -n 1p)" = "value eval: 12 runs" ] || fail "skip-done with no manifest"
+ok "skip-done drops every combination already in the manifest (infrastructure or not) and keeps the rest in plan order"
 
 echo "TEST 20: the batch stops when a Claude plan's usage passes its stop, before the first run as well as during"
 printf '#!/bin/sh\nf=%s/use; n=$(cat "$f" 2>/dev/null || echo %s); echo $((n+%s)) > "$f"; echo "$n"\n' "$T" 50 20 > "$T/usage.sh"; chmod +x "$T/usage.sh"

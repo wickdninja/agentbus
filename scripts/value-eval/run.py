@@ -162,7 +162,7 @@ class Run:
         if condition == "builtin" and pairing != "cc":
             raise Refused("builtin is Claude only: it has no cx cell")
         self.task_name, self.seed, self.condition, self.pairing, self.args = task_name, seed, condition, pairing, args
-        self.replaces, self.usage_hit, self.live = replaces, False, []
+        self.replaces, self.usage_hit, self.halt_reason, self.live = replaces, False, None, []
         self.id = "r" + hashlib.sha256(os.urandom(16)).hexdigest()[:12]   # opaque: graders see only this
         self.task = tasks.build(task_name, seed)
         self.root = assert_outside(tempfile.mkdtemp(prefix="value-run-"))
@@ -397,11 +397,27 @@ class Run:
                 raw.flush()
                 agent.tool_calls += grade.tool_calls_in_line(wrapped["line"], agent.harness)
                 if grade.usage_limited(wrapped["line"]) and not self.usage_hit:
-                    self.usage_hit = True   # the plan is spent: the run is lost, so nothing in it runs on
-                    for other in self.live:
-                        self.stop_agent(other, "usage_limit")
+                    self.halt("usage limit")
+                elif grade.auth_failed(wrapped["line"]) and not self.usage_hit:
+                    self.halt("authentication failed")
                 if agent.tool_calls > self.args.tool_cap and agent.stop_reason is None:
                     self.stop_agent(agent, "tool_cap")
+
+    def halt(self, reason):
+        """The plan is spent or its sign-in is gone: the run is lost, so nothing in it runs on, and the batch stops after it."""
+        self.usage_hit, self.halt_reason = True, reason
+        for other in self.live:
+            self.stop_agent(other, reason.replace(" ", "_"))
+
+    def stderr_halt(self, agents):
+        """A sign-in failure that only reached stderr. Checked when the stage's agents have ended."""
+        if self.usage_hit:
+            return
+        for role in agents:
+            path = os.path.join(self.out, "stderr-%s.txt" % role)
+            if os.path.exists(path) and any(grade.auth_failed(line.rstrip("\n")) for line in open(path, errors="replace")):
+                self.halt("authentication failed")
+                return
 
     def stop_agent(self, agent, reason, hard=False):
         """Only ever signals the group this runner started, and the pid its own shim recorded."""
@@ -490,7 +506,7 @@ class Run:
                 if a.proc is not None and a.ended is None and a.proc.poll() is not None:
                     a.ended = time.time()
             for a in list(later):
-                why = "usage limit" if self.usage_hit else self.late_start_due(current, later, begun)
+                why = self.halt_reason if self.usage_hit else self.late_start_due(current, later, begun)
                 if why:
                     later.remove(a)
                     self.late = {"role": a.role, "at": time.time(), "why": why}
@@ -557,6 +573,7 @@ class Run:
                 if a not in later:
                     self.launch(a)
             self.finish_stage(current, later, agents)
+            self.stderr_halt(agents)
         self.stop_threads.set()
         snapper.join(timeout=30)
         if watcher:
@@ -663,7 +680,7 @@ class Run:
             agents = self.run_agents()
             infra = {r: why for r, why in self.collect(agents).items() if why}
             if self.usage_hit:
-                infra = {r: "usage limit" for r in agents}
+                infra = {r: self.halt_reason for r in agents}
             bad = self.isolation(agents)
             row = {"id": self.id, "task": self.task_name, "seed": self.seed, "condition": self.condition, "pairing": self.pairing,
                    "infra": infra, "isolation": bad, "ts": time.time(), "tool": sha_file(os.path.join(ROOT, "bin", "agentbus")), "quota": self.quota}
@@ -741,6 +758,7 @@ def main(argv):
     ap.add_argument("--tool-release", default=TOOL_RELEASE, help="the commit whose bin/agentbus is under test")
     ap.add_argument("--tool-sha256", default=TOOL_SHA256, help="and the sha256 that bin/agentbus must have")
     ap.add_argument("--rerun-infra", action="store_true", help="run again every infrastructure failure already in --out, as the protocol says")
+    ap.add_argument("--skip-done", action="store_true", help="leave out every task, seed, condition and pairing the manifest in --out already has a row for (a failed one is --rerun-infra's)")
     ap.add_argument("--shard", default="1/1", help="I/N: with --rerun-infra, this runner's share")
     ap.add_argument("--claude-usage-cmd", help="a command printing the Claude plan's window use in percent; checked before every run")
     ap.add_argument("--claude-usage-stop", type=float, default=90.0, help="halt when the plan's use reaches or is projected past this percent")
@@ -751,6 +769,10 @@ def main(argv):
         log("value eval: %d runs (replacing infrastructure failures)" % len(runs))
     else:
         runs = [r + (None,) for r in plan(args)]
+        if args.skip_done:
+            path = os.path.join(args.out if os.path.isabs(args.out) else os.path.abspath(args.out), "manifest.jsonl")
+            have = {(r["task"], r["seed"], r["condition"], r["pairing"]) for r in map(json.loads, open(path))} if os.path.exists(path) else set()
+            runs = [r for r in runs if r[:4] not in have]
         log("value eval: %d runs" % len(runs))
     for r in runs:
         log("  %s seed %d %s %s%s" % (r[0], r[1], r[2], r[3], " (replaces %s)" % r[4] if r[4] else ""))
@@ -791,6 +813,9 @@ def main(argv):
             if "usage limit" in row["infra"].values():
                 log("usage limit: batch stopped after run %s. The plan's usage limit is reached; nothing more runs on it." % row["id"])
                 return 7
+            if "authentication failed" in row["infra"].values():
+                log("authentication failed: batch stopped after run %s. The plan's sign-in is gone; nothing more runs on it." % row["id"])
+                return 9
             if p == "cx" and row["quota"]:
                 codex_done += 1
                 now = row["quota"]["used_percent"]

@@ -4347,6 +4347,33 @@
     "expect": "a usage limit went unseen"
   },
   {
+    "name": "value eval: an expired sign-in does not stop the batch",
+    "file": "scripts/value-eval/run.py",
+    "find": "            if \\\"authentication failed\\\" in row\\[\\\"infra\\\"\\]\\.values\\(\\):\\n",
+    "replace": "            if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "no sign-in stop"
+  },
+  {
+    "name": "value eval: an expired sign-in passes as agent text",
+    "file": "scripts/value-eval/grade.py",
+    "find": "    if not line or not AUTH_FAILURE\\.search\\(line\\):\\n        return False\\n",
+    "replace": "    return False\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a sign-in failure went unseen"
+  },
+  {
+    "name": "value eval: skip-done plans a run that is already done",
+    "file": "scripts/value-eval/run.py",
+    "find": "runs = \\[r for r in runs if r\\[:4\\] not in have\\]",
+    "replace": "runs = runs",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "skip-done plan"
+  },
+  {
     "name": "value eval: a rerun replaces runs twice",
     "file": "scripts/value-eval/run.py",
     "find": "if r\\[\\\"infra\\\"\\] and r\\[\\\"id\\\"\\] not in replaced\\]",
