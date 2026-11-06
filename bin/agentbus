@@ -4191,7 +4191,7 @@ def cmd_join(con, a):
                     request_reused(a.request_id, name, prev["id"], f"join (log #{prev['id']})", "join", "flags")
                 result = join_result(con, a, name, duplicate=True, **flag)
                 g = result["goal"]
-                emit(a, result, "joined as {} on {} (already joined)" + keep_as(a, name), name, a._db)
+                emit(a, result, "joined as {} on {} (already joined){}", name, a._db, keep_as(a, name))
                 if g and not a.json:
                     show("goal ({}, {}): {}", g["set_by"], goal_age(g["set_at"]), g["goal"])
                 return
@@ -4232,7 +4232,7 @@ def cmd_join(con, a):
         log(con, name, "join", json.dumps(detail))
     result = join_result(con, a, name, **flag)
     g = result["goal"]
-    emit(a, result, "joined as {} on {}" + keep_as(a, name), name, tilde(a._db))
+    emit(a, result, "joined as {} on {}{}", name, tilde(a._db), keep_as(a, name))
     if g and not a.json:
         show("goal ({}, {}): {}", g["set_by"], goal_age(g["set_at"]), g["goal"])
 

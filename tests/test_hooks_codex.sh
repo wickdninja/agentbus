@@ -329,7 +329,7 @@ PRE lib/deep/file.py; [ "$(text_of)" = "$held" ] || fail "held path lib/deep/fil
 hook PreToolUse "$(patch "$SID1" "U $P/clear.txt" "+x" "A $P/lib/deep/new.py" "+y")"
 [ "$(text_of)" = "$held" ] || fail "a patch with one held file among two: rc $RC out $OUT"
 hook PreToolUse "$(patch "$SID1" "U $P/clear.txt" "+x" "A $P/lib/deep/new.py" "+y")"
-[ "$(text_of)" = "agentbus: clear.txt has no claim. If you are editing it: agentbus --as $N claim clear.txt --purpose WHY" ] || fail "the same patch again: the held file was not dropped, or the free one not nudged: rc $RC out $OUT"
+[ "$(text_of)" = "agentbus: clear.txt has no claim. If you are editing it: agentbus --as $N claim clear.txt --purpose WHY" ] || { grep -qF "this file has no claim" <<<"$OUT" && fail "the no-claim note did not name clear.txt: rc $RC out $OUT"; fail "the same patch again: the held file was not dropped, or the free one not nudged: rc $RC out $OUT"; }
 forget; hook PreToolUse "$(patch "$SID1" "U src/app.py" "+x")"
 [ "$(text_of)" = "$held" ] || fail "a relative path in a patch: rc $RC out $OUT"
 forget; hook PreToolUse "$(patch "$SID1" "U old.txt" "M $P/src/app.py")"

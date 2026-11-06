@@ -3215,8 +3215,8 @@
   {
     "name": "output: join shows the home folder in full",
     "file": "bin/agentbus",
-    "find": "\"joined as \\{\\} on \\{\\}\" \\+ keep_as\\(a, name\\), name, tilde\\(a\\._db\\)\\)",
-    "replace": "\"joined as {} on {}\" + keep_as(a, name), name, a._db)",
+    "find": "\"joined as \\{\\} on \\{\\}\\{\\}\", name, tilde\\(a\\._db\\), keep_as\\(a, name\\)\\)",
+    "replace": "\"joined as {} on {}{}\", name, a._db, keep_as(a, name))",
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "join shows the home folder in full"
@@ -3381,7 +3381,7 @@
     "replace": "derived = hook_derived_name(sid if isinstance(sid, str) and sid else str(payload.get(\"cwd\")))",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
-    "expect": "an empty session id"
+    "expect": "a payload without an id joined"
   },
   {
     "name": "a Codex SessionEnd leaves the roster",
@@ -3678,7 +3678,7 @@
     "replace": "    return (f\"agentbus: this file has no claim. If you are editing it: \"",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
-    "expect": "the nudge for a relative patch path in a worktree under the checkout did not name the mapped path"
+    "expect": "the no-claim note did not name clear.txt"
   },
   {
     "name": "hook claims: a worktree file ignores a claim on its own bus path (Claude)",

@@ -77,4 +77,4 @@ out=$(review --coordinator claude-brain --json "$TMP/export.json")
 want "$out" "messages 11 since #0"
 want "$out" "claim refusals logged: n/a"
 want "$out" "coordinator unread: claude-brain n/a"
-echo "ALL PASS"
+echo "All wave_review tests passed"
