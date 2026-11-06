@@ -1,5 +1,6 @@
 {
   "tests/test_brief.sh": 30,
+  "tests/test_claim_refusal.sh": 40,
   "tests/test_claims.sh": 15,
   "tests/test_control_chars.sh": 10,
   "tests/test_demo.sh": 5,
