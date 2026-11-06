@@ -346,6 +346,44 @@ rc=0; out=$("$PY" -B "$SCRIPTS/analyze_fix1.py" "$T/lh-good" --n 1) || rc=$?
 [ "$rc" = 3 ] && grep -q 'no contrasts: 6 cells' <<<"$out" || fail "the follow-up analysis must refuse a batch missing cells: $out"
 ok "bob waits for alice's first edit; a live takeover fails on the bus and the ledger, waiting passes; the channel is kept beside final/, never in it"
 
+echo "TEST 22: abandoned (follow-up): alice dies once her first item passes; bob's OPEN.md and his work are graded apart; finished hands over nothing"
+for mode in good say-only; do
+  env VALUE_STUB_MODE=$mode VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks abandoned finished --conditions agentbus ledger none --pairings cc --seeds 1 --time-cap 120 --snap-every 0.5 --out "$T/ab-$mode" >"$T/log" 2>&1 || { cat "$T/log"; fail "abandoned $mode run"; }
+  grades "$T/ab-$mode"
+  "$PY" -B "$SCRIPTS/channel_grade.py" "$T/ab-$mode" >/dev/null || fail "abandoned $mode: channel grade"
+done
+"$PY" -B - "$T" <<'CHECK' || fail "abandoned"
+import json, os, sys
+for mode in ("good", "say-only"):
+    out = os.path.join(sys.argv[1], "ab-" + mode)
+    rows = [json.loads(l) for l in open(os.path.join(out, "manifest.jsonl"))]
+    assert len(rows) == 6 and all(not r["infra"] for r in rows), rows
+    for r in rows:
+        d = os.path.join(out, r["id"])
+        g, c, run = (json.load(open(os.path.join(d, n))) for n in ("grade.json", "channel.json", "run.json"))
+        if r["task"] == "abandoned":
+            assert run["kill"]["fired"] and run["kill"]["done"] == ["first"], ("the kill must land after the first item only", run["kill"])
+            assert run["handover"]["open"] == ["second", "validation"], run["handover"]
+            assert run["agents"]["alice"]["stop"] == "task_kill", run["agents"]
+        else:
+            assert not run["kill"]["fired"] and run["handover"]["open"] == [], (run["kill"], run["handover"])
+        assert g["discovered"], ("the stand-in names exactly what was open", mode, r["task"], g)
+        want = mode == "good" or r["task"] == "finished"
+        assert g["recovered"] is want and g["pass"] is want, ("saying what is open is not recovery", mode, r["task"], g["features"])
+        if r["condition"] != "none":
+            a = c["roles"]["alice"]
+            assert a["named_all"] and a["todos_all"], ("alice's three todos were not seen", r["condition"], a)
+            assert a["closed_all"] is (r["task"] == "finished"), ("alice's closes", r["task"], r["condition"], a)
+CHECK
+rc=0; out=$("${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --tasks abandoned --conditions agentbus --pairings cc 2>&1) || rc=$?
+[ "$rc" = 2 ] && grep -q "is not the pinned $("$PY" -B -c "import sys; sys.path.insert(0, '$SCRIPTS'); import run; print(run.TODO_TOOL[0])")" <<<"$out" || fail "abandoned ran with the v0.3.0 tool: rc $rc: $out"
+rc=0; out=$("${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --tasks abandoned recovery --conditions agentbus --pairings cc 2>&1) || rc=$?
+[ "$rc" = 2 ] && grep -q "mixes tasks that test different builds" <<<"$out" || fail "a batch with two pins started: rc $rc: $out"
+rc=0; out=$(env AGENTBUS_CMD=/bin/true "${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --tasks control --conditions none --pairings cc 2>&1) || rc=$?
+[ "$rc" = 2 ] && grep -q "AGENTBUS_CMD is set" <<<"$out" || fail "a real run took AGENTBUS_CMD: rc $rc: $out"
+[ ! -e "$T/pin" ] || fail "a refused batch made its output folder"
+ok "the kill lands after the first item; OPEN.md alone discovers but does not recover; finished hands over nothing; the todo pin, one pin per batch and no AGENTBUS_CMD are enforced"
+
 echo "TEST 13: a run leaves nothing behind"
 [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'value-run-*' | grep -v forbidden || true)" ] || fail "run folders left: $(ls "$TMPDIR")"
 ok "the mktemp folders are gone"

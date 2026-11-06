@@ -48,11 +48,13 @@ def solved(task, seed, *extra):
 
 
 def test_hidden_both_ways():
-    for task in tasks.TASKS + tasks.FOLLOWUP:
+    for task in tasks.TASKS + tasks.FOLLOWUP + tasks.FOLLOWUP_TODO:
         for seed in (1, 2, 3):
             d, base = solved(task, seed)
             shutil.rmtree(d)
-            check(not any(base.values()), "%s seed %d: a hidden test passes on the unsolved repo: %s" % (task, seed, base))
+            exempt = tasks.build(task, seed).base_pass
+            check(not any(v for k, v in base.items() if k not in exempt), "%s seed %d: a hidden test passes on the unsolved repo: %s" % (task, seed, base))
+            check(all(base[k] for k in exempt), "%s seed %d: a scope test fails on the untouched repo: %s" % (task, seed, base))
             d, ref = solved(task, seed, tasks.reference(task, seed))
             shutil.rmtree(d)
             check(set(ref) == set(tasks.build(task, seed).features), "%s: hidden tests and features differ: %s" % (task, sorted(ref)))
@@ -65,7 +67,7 @@ def test_hidden_both_ways():
 
 
 def test_seeds():
-    for task in tasks.TASKS + tasks.FOLLOWUP:
+    for task in tasks.TASKS + tasks.FOLLOWUP + tasks.FOLLOWUP_TODO:
         a, b = tasks.build(task, 7), tasks.build(task, 7)
         check(a.files == b.files and a.tickets == b.tickets, "%s: one seed gave two repos" % task)
         check(tasks.hidden_tests(task, 7) == tasks.hidden_tests(task, 7), "%s: one seed gave two hidden suites" % task)
@@ -346,7 +348,7 @@ def test_dropped_summary():
 
 
 def test_prompts_differ_only_in_the_channel():
-    for name in tasks.TASKS + tasks.FOLLOWUP:
+    for name in tasks.TASKS + tasks.FOLLOWUP + tasks.FOLLOWUP_TODO:
         t = tasks.build(name, 3)
         for role in t.tickets:
             bare = tasks.prompt(t, role, "none", "claude")
@@ -580,7 +582,7 @@ def test_livehold_steps_gate_alice():
         check(len(set(tasks._livehold_keys(p))) == 5, "seed %d: two steps share a key, so one opens early" % seed)
         d = tempfile.mkdtemp()
         tree(d, t.files)
-        nxt = lambda: subprocess.run([sys.executable, "-B", "tools/steps.py", "next"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # noqa: E731
+        nxt = lambda d=d: subprocess.run([sys.executable, "-B", "tools/steps.py", "next"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # noqa: E731
                                      universal_newlines=True, env=dict(os.environ, STEPS_CHECK_SECONDS="0")).stdout
         check(nxt().startswith("Step 1 of 4"), "seed %d: the first step: %s" % (seed, nxt()))
         data = json.loads(t.files["tools/steps.json"])
@@ -717,6 +719,271 @@ def test_tool_pin_sha():
     root = os.path.dirname(os.path.dirname(sys.argv[1]))
     check(run.TOOL_RELEASE == "02fcfc5" and run.sha_file(os.path.join(root, "bin", "agentbus")) == run.TOOL_SHA256,
           "the branch's bin/agentbus is not the pinned v0.3.0")
+
+
+# ---- follow-up abandoned ----------------------------------------------------------------------------------------------
+
+FIX1_LEDGER_SHA256 = "6c3e757ca96ada6caa8cde9bd98075c1bfb84b01622b35cf24d9d3f67accce0c"
+
+
+def test_fix1_ledger_text_is_unchanged():
+    """The earlier studies ran this text; the abandoned follow-up has its own."""
+    import hashlib
+    check(hashlib.sha256(tasks.LEDGER_SKILL.encode()).hexdigest() == FIX1_LEDGER_SHA256, "the fix1 ledger text changed")
+    check(tasks.ledger_skill(tasks.build("livehold", 1)) == tasks.LEDGER_SKILL, "fix1 tasks must keep the fix1 text")
+    check(tasks.ledger_skill(tasks.build("abandoned", 1)) == tasks.LEDGER_SKILL_TODO, "abandoned runs the todo text")
+
+
+def test_abandoned_design():
+    for seed in (1, 2, 9301):
+        a, f = tasks.build("abandoned", seed), tasks.build("finished", seed)
+        check(a.files == f.files and a.tickets == f.tickets, "seed %d: abandoned and finished must differ only in the kill" % seed)
+        check(a.kill == {"role": "alice", "check": "items"} and f.kill is None, "seed %d: the kill: %s %s" % (seed, a.kill, f.kill))
+        check(a.schedule == [["alice"], ["bob"]] and a.handover == "alice" and a.channel_text == "todo", "seed %d: schedule" % seed)
+        mine, listed = tasks.abandoned_ids(seed)
+        check(len(set(listed)) == 6 and set(mine.values()) <= set(listed), "seed %d: six backlog items, alice's among them" % seed)
+        alice, bob = a.tickets["alice"], a.tickets["bob"]
+        check(alice.index(mine["first"]) < alice.index(mine["second"]) < alice.index(mine["validation"]), "alice's order")
+        check("nobody else knows" in alice, "alice must be told the items are recorded nowhere")
+        check(not any(i in bob for i in listed) and "OPEN.md" in bob and "take" in bob, "bob's ticket names an item or lacks OPEN.md: %s" % bob)
+        p = tasks._abandoned_params(seed)
+        for item in p["items"]:
+            word = item["name"] if item["kind"] == "feature" else tasks.VALIDATIONS[item["name"]]["path"]
+            check(word not in bob, "bob's ticket names %s" % word)
+        val = [i for i in p["items"] if i["role"] == "validation"][0]
+        check(val["kind"] == "validation", "the third item is a validation")
+
+
+def test_csv_reaches_the_tree():
+    """The validation item's data is CSV: the runner's final tree and the kill's check both read it through read_tree."""
+    d = tempfile.mkdtemp()
+    tree(d, {"data/prices.csv": "sku,cents\n", "a.py": ""})
+    check("data/prices.csv" in grade.read_tree(d, grade.CHANNEL_PATHS), "a CSV file is left out of the tree")
+    shutil.rmtree(d)
+
+
+def test_items_done():
+    """What the runner's kill and handover read: which of alice's items pass their checks on a tree."""
+    for seed in (1, 2):
+        d, _ = solved("abandoned", seed)
+        check(grade.items_done(d, "abandoned", seed) == [], "nothing is done on the untouched repo")
+        tree(d, tasks.abandoned_item_reference(seed, "first"))
+        check(grade.items_done(d, "abandoned", seed) == ["first"], "only the first: %s" % grade.items_done(d, "abandoned", seed))
+        tree(d, tasks.reference("abandoned", seed))
+        check(grade.items_done(d, "abandoned", seed) == list(tasks.ITEM_ROLES), "all three")
+        shutil.rmtree(d)
+
+
+def test_discovery():
+    ids = ["B-101", "B-202", "B-303", "B-404"]
+    check(tasks.discovery("B-202 fees\nB-303 data\n", ids, ["B-202", "B-303"]) == (True, ["B-202", "B-303"]), "exact")
+    check(tasks.discovery("- B-303\n- B-202 (late fee)\n", ids, ["B-202", "B-303"])[0], "any order, any wording")
+    check(not tasks.discovery("B-202\n", ids, ["B-202", "B-303"])[0], "one missing")
+    check(not tasks.discovery("B-202\nB-303\nB-101 already done\n", ids, ["B-202", "B-303"])[0], "an extra id, even one called done")
+    check(tasks.discovery("", ids, [])[0] and tasks.discovery("nothing open\n", ids, [])[0], "empty when nothing is open")
+    check(not tasks.discovery(None, ids, [])[0], "no OPEN.md discovers nothing")
+    check(tasks.discovery("B-999 and B-2020\nB-202\n", ids, ["B-202"]) == (True, ["B-202"]), "words that are not backlog ids are ignored")
+
+
+def _abandoned_run(d, seed, open_roles, files, task="abandoned"):
+    t = tasks.build(task, seed)
+    final = os.path.join(d, "final")
+    tree(final, t.files)
+    tree(final, files)
+    mine = tasks.abandoned_ids(seed)[0]
+    done = [r for r in tasks.ITEM_ROLES if r not in open_roles]
+    grade.write_json(os.path.join(d, "run.json"), {"id": "r1", "task": task, "seed": seed, "agents": {"alice": {"stop": "task_kill"}, "bob": {"stop": None}},
+                                                  "seconds": 1, "load": {"max": 1}, "kill": {"fired": True, "done": done},
+                                                  "handover": {"done": done, "open": list(open_roles), "open_ids": [mine[r] for r in open_roles]}})
+    grade.write_json(os.path.join(d, "edits.json"), [])
+    open(os.path.join(d, "snaps.jsonl"), "w").close()
+    return grade.blind_grade(d)
+
+
+def test_blind_grade_abandoned():
+    seed = 4
+    mine = tasks.abandoned_ids(seed)[0]
+    ref = tasks.reference("abandoned", seed)
+    d = tempfile.mkdtemp()
+    g = _abandoned_run(d, seed, ["second", "validation"], dict(ref, **{"OPEN.md": "%s\n%s\n" % (mine["second"], mine["validation"])}))
+    check(g["discovered"] and g["recovered"] and g["pass"] and g["named"] == sorted([mine["second"], mine["validation"]]), "a good handover: %s" % g)
+    shutil.rmtree(d)
+    d = tempfile.mkdtemp()
+    said = dict(tasks.abandoned_item_reference(seed, "first"), **{"OPEN.md": "%s\n%s\n" % (mine["second"], mine["validation"])})
+    g = _abandoned_run(d, seed, ["second", "validation"], said)
+    check(g["discovered"] and not g["recovered"], "saying what remains is not recovery: %s" % g)
+    shutil.rmtree(d)
+    d = tempfile.mkdtemp()
+    g = _abandoned_run(d, seed, ["second", "validation"], ref)
+    check(not g["discovered"] and g["recovered"], "finishing without naming is recovery, not discovery: %s" % g)
+    shutil.rmtree(d)
+    d = tempfile.mkdtemp()
+    g = _abandoned_run(d, seed, [], dict(ref, **{"OPEN.md": ""}), task="finished")
+    check(g["discovered"] and g["recovered"], "finished, nothing open, nothing named: %s" % g)
+    shutil.rmtree(d)
+    d = tempfile.mkdtemp()
+    g = _abandoned_run(d, seed, [], dict(ref, **{"OPEN.md": mine["first"] + "\n"}), task="finished")
+    check(not g["discovered"], "a finished item named as open: %s" % g)
+    shutil.rmtree(d)
+
+
+def test_ledger_todos():
+    import ledger_hook as lh
+    text = ("10:00:00 alice TODO alice-1: B-101 fees\n\n10:00:01 alice TODO alice-2: B-202\n\n10:00:02 alice TODO alice-3: B-303 data\n\n"
+            "10:01:00 alice DONE alice-1: fees in\n\n10:02:00 alice DROPPED alice-3: not needed\n\n10:03:00 alice DONE: all; fees.py; tests\n")
+    entries = lh.parse(text)
+    check([e["kind"] for e in entries] == ["TODO", "TODO", "TODO", "DONE", "DROPPED", "DONE"], "todo kinds: %s" % [e["kind"] for e in entries])
+    check(sorted(lh.open_todos(entries)) == ["alice-2"], "open todos: %s" % lh.open_todos(entries))
+    check(lh.open_todos(lh.parse("10:00 bob TODO: no id\n")) != {}, "a TODO with no id stays open")
+    check(lh.open_todos(lh.parse(text + "\n10:04 bob DONE alice-2: closed by another\n")) == {}, "any name may close a TODO")
+    d, tmp = tempfile.mkdtemp(), tempfile.mkdtemp()
+    tree(d, {"COORDINATION.md": text})
+    got = _hook("SessionStart", {"cwd": d, "session_id": "t1"}, "bob", d, tmp)
+    check("has 6 entries, 0 addressed to bob, 1 open TODO." in got, "the hook counts open TODOs: %s" % got)
+    tree(d, {"COORDINATION.md": "10:01 bob CLAIM: pkg/a.py (tax)\n"})
+    got = _hook("SessionStart", {"cwd": d, "session_id": "t2"}, "alice", d, tmp)
+    check("has 1 entries, 0 addressed to alice." in got and "TODO" not in got, "no TODO clause when none is open: %s" % got)
+    for x in (d, tmp):
+        shutil.rmtree(x)
+
+
+def test_ledger_wait_recipe_works():
+    """The ledger's wait: exits 0 when the file changes, 124 when it does not. Run here with a 2-second timeout."""
+    import threading
+    import time
+    code = tasks.LEDGER_WAIT.replace("time.time() + 600", "time.time() + 2")
+    check(code != tasks.LEDGER_WAIT and "sleep 2" not in code.replace("time.sleep(2)", ""), "the recipe's timeout")
+    d = tempfile.mkdtemp()
+    tree(d, {"COORDINATION.md": "10:00 alice JOIN: x\n"})
+    quiet = subprocess.run(["/bin/sh", "-c", code], cwd=d)
+    check(quiet.returncode == 124, "no change must time out with 124: %s" % quiet.returncode)
+    t = threading.Timer(0.5, lambda: open(os.path.join(d, "COORDINATION.md"), "a").write("\n10:01 bob NOTE: hi\n"))
+    t.start()
+    start = time.time()
+    moved = subprocess.run(["/bin/sh", "-c", code.replace("+ 2", "+ 20")], cwd=d)
+    check(moved.returncode == 0 and time.time() - start < 10, "a change must end the wait with 0: %s" % moved.returncode)
+    shutil.rmtree(d)
+
+
+def test_todo_parity_with_the_pinned_skill():
+    """Each line the pinned tool's skill gives about facts, todos and waiting has its ledger line, word for word on both sides."""
+    import run
+    root = os.path.dirname(os.path.dirname(sys.argv[1]))
+    release = run.TODO_TOOL[0]
+    skill = subprocess.run(["git", "-C", root, "show", "%s:skills/agentbus/SKILL.md" % release], stdout=subprocess.PIPE, universal_newlines=True).stdout
+    check(skill, "the pinned release has no skill")
+    for bus, ledger in tasks.TODO_PARITY:
+        check(bus in skill, "the pinned skill lacks %r: update TODO_PARITY and the ledger text together" % bus)
+        check(ledger in tasks.LEDGER_SKILL_TODO and ledger in tasks.LEDGER_AGENTS_BLOCK_TODO, "the ledger text lacks %r" % ledger)
+    for word in ("ctx set", "--kind todo", "--reply-to", "agentbus", "wait`"):
+        check(word not in tasks.LEDGER_SKILL_TODO, "the ledger text names the tool's command: %s" % word)
+
+
+def test_todo_tool_pin():
+    import run
+    release, sha = run.TODO_TOOL
+    root = os.path.dirname(os.path.dirname(sys.argv[1]))
+    blob = subprocess.run(["git", "-C", root, "show", "%s:bin/agentbus" % release], stdout=subprocess.PIPE).stdout
+    import hashlib
+    check(blob and hashlib.sha256(blob).hexdigest() == sha, "TODO_TOOL's hash is not the hash of its commit's bin/agentbus")
+    check(run.pins_for([tasks.build("abandoned", 1)]) == run.TODO_TOOL and run.pins_for([tasks.build("livehold", 1)]) == (run.TOOL_RELEASE, run.TOOL_SHA256),
+          "each task runs with its study's pin")
+    try:
+        run.pins_for([tasks.build("abandoned", 1), tasks.build("recovery", 1)])
+        check(False, "a batch that mixes two pins must be refused")
+    except run.Refused:
+        pass
+    d = tempfile.mkdtemp()
+    git = ["git", "-c", "user.name=e", "-c", "user.email=e@example.com"]
+    tree(d, {"bin/agentbus": "released\n"})
+    for argv in (["git", "init", "-q"], git + ["add", "."], git + ["commit", "-q", "-m", "x"]):
+        subprocess.run(argv, cwd=d, check=True)
+    elsewhere = os.path.join(d, "elsewhere")
+    tree(elsewhere, {"agentbus": "released\n"})
+    good = run.sha_file(os.path.join(elsewhere, "agentbus"))
+    check(run.tool_pinned(d, "HEAD", good, os.path.join(elsewhere, "agentbus")), "a tool outside the checkout with the release's bytes passes")
+    tree(elsewhere, {"agentbus": "patched\n"})
+    check(not run.tool_pinned(d, "HEAD", run.sha_file(os.path.join(elsewhere, "agentbus")), os.path.join(elsewhere, "agentbus")),
+          "a tool outside the checkout with other bytes passed the pin")
+    shutil.rmtree(d)
+
+
+def test_infra_usage_at_any_point():
+    """A provider's usage-limit or sign-in failure is infrastructure whenever it lands, in both harnesses, by the grader's rule alone."""
+    work = {"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}
+    limit = {"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You've hit your weekly limit · resets 5am"}]}}
+    check(grade.infra_failure(claude_lines(work, limit), "claude", 1, False, None) == "usage limit", "a usage limit after tool calls is infra")
+    res = {"type": "result", "is_error": True, "result": "You've hit your weekly limit"}
+    check(grade.infra_failure(claude_lines(work, res), "claude", 1, False, None) == "usage limit", "a usage-limit result is infra")
+    said = {"type": "assistant", "message": {"model": "claude-x", "content": [{"type": "text", "text": "the doc says You've hit your limit"}]}}
+    out = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "You've hit your weekly limit (from a fixture)"}]}}
+    check(grade.infra_failure(claude_lines(work, said, out), "claude", 0, False, None) is None, "agent text quoting a limit stays in")
+    cx = [{"type": "item.started", "item": {"type": "command_execution"}}, {"type": "error", "message": "You've hit your usage limit. Try again at 5:00 PM."}]
+    check(grade.infra_failure(claude_lines(*cx), "codex", 1, False, None) == "usage limit", "a Codex usage limit after tool calls is infra")
+    cx2 = [{"type": "item.started", "item": {"type": "command_execution"}}, {"type": "turn.failed", "error": {"message": "401 Unauthorized: token could not be refreshed"}}]
+    check(grade.infra_failure(claude_lines(*cx2), "codex", 1, False, None) == "authentication failed", "a Codex sign-in failure is infra")
+    cx3 = [{"type": "item.started", "item": {"type": "command_execution"}},
+           {"type": "item.completed", "item": {"type": "command_execution", "aggregated_output": "You've hit your usage limit 401 Unauthorized"}}]
+    check(grade.infra_failure(claude_lines(*cx3), "codex", 0, False, None) is None, "Codex tool output quoting the words stays in")
+    for stop in ("usage_limit", "authentication_failed"):
+        check(grade.infra_failure(claude_lines(work), "claude", 1, False, stop) is not None, "an agent the batch stopped for %s is infra" % stop)
+    check(grade.infra_failure(claude_lines(work, limit), "claude", 1, False, "time_cap") is None, "a real timeout stays in")
+    check(grade.infra_failure(claude_lines(work, limit), "claude", 1, True, None) is None, "the task's own kill stays in")
+
+
+def test_exact_noninferiority():
+    import analyze_abandoned as aa
+    check(aa.MARGIN == 0.10 and aa.N == 20, "the registered margin and n")
+    ties = aa.exact_ni_p(0, 0, 20, aa.MARGIN)
+    check(ties >= 0.9 ** 20 - 1e-9 and ties > aa.ALPHA, "20 ties must not show non-inferiority: p %.4f" % ties)
+    check(aa.exact_ni_p(0, 0, 20, aa.MARGIN) <= aa.exact_ni_p(0, 1, 20, aa.MARGIN) <= aa.exact_ni_p(0, 3, 20, aa.MARGIN), "more ledger wins, larger p")
+    check(aa.exact_ni_p(8, 0, 20, aa.MARGIN) < aa.ALPHA / 6, "a clear agentbus win must show")
+    # size: on the null boundary, the chance of a rejection at alpha never passes alpha (checked by full enumeration)
+    for p01 in (0.10, 0.15, 0.3, 0.5):
+        size = aa.rejection_rate(20, aa.MARGIN, p01 - aa.MARGIN, p01, aa.ALPHA)
+        check(size <= aa.ALPHA + 1e-9, "the exact test's size at p01=%.2f is %.4f, over alpha" % (p01, size))
+    lo, hi = aa.exact_interval(0, 0, 20)
+    check(lo < -0.10 < 0 <= hi, "20 ties: the interval must reach past the margin: %s" % ((lo, hi),))
+    check(aa.exact_two_sided_p(0, 6, 20) < 0.05 and aa.exact_two_sided_p(0, 0, 20) == 1.0, "the two-sided test of no difference")
+
+
+def _abandoned_rows(flip=None):
+    rows = []
+    for seed in range(aa_seeds()[0], aa_seeds()[0] + 20):
+        for task in ("abandoned", "finished"):
+            for cond in ("agentbus", "ledger"):
+                for pairing in ("cx", "cc"):
+                    g = {"discovered": True, "recovered": True, "pass": True, "named": [], "features": {}, "seconds": 60}
+                    if flip and flip(seed, task, cond, pairing):
+                        g = dict(g, recovered=False)
+                    rows.append({"id": "r%d%s%s%s" % (seed, task, cond, pairing), "task": task, "condition": cond, "pairing": pairing, "seed": seed,
+                                 "grade": g, "cost": {}, "channel": {}})
+    return rows
+
+
+def aa_seeds():
+    import analyze_abandoned as aa
+    return aa.SEEDS
+
+
+def test_abandoned_analysis_all_ties():
+    """Every cell at its ceiling: the analysis must print 'not shown' for every hypothesis, and never non-inferior."""
+    import contextlib
+    import io
+    import analyze_abandoned as aa
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        aa.effects(_abandoned_rows())
+    text = out.getvalue()
+    check(text.count("not shown within the margin") == 6 and "non-inferior:" not in text.replace("not shown", ""), "all ties: %s" % text)
+    check(aa.short_cells(_abandoned_rows(), 20) == [] and len(aa.short_cells(_abandoned_rows(), 21)) == 8, "every registered cell counts")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        aa.effects(_abandoned_rows(lambda s, t, c, p: t == "abandoned" and c == "ledger" and s < aa.SEEDS[0] + 9))
+    text = out.getvalue()
+    wins = [line for line in text.splitlines() if line.startswith(("R-cx", "R-cc"))]
+    check(len(wins) == 2 and all("+0.450" in line and "non-inferior: agentbus within" in line for line in wins),
+          "nine agentbus-only wins in recovery must show in both pairings: %s" % text)
 
 
 for name, fn in sorted(globals().items()):

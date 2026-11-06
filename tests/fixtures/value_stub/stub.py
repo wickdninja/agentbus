@@ -6,7 +6,8 @@ hang (never exits), spam (tool calls forever), hook-leak (reports a hook firing)
 env-dump (writes its environment's names to VALUE_STUB_ENV_OUT and plays good), auth-fail (a sign-in error and no tool call),
 conflict (each role writes its own VERSION), leak-token, auth-refresh, auth-report (Codex sign-in faults and a report on the copy), codex-hooks, codex-skill, codex-state
 (a planted hook or skill, and the state Codex makes for itself), usage-limit (a plan limit, after VALUE_STUB_LIMIT_AFTER tool calls), auth-expired (the sign-in expired: in the stream, or with VALUE_STUB_AUTH_STDERR=1 on stderr only), no-hooks, hook-fail (hook outcomes), settings-report (hook install), break-link (bob replaces his ledger link), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder),
-live-steal and live-wait (livehold: alice claims src/rates.py and keeps working; bob takes her claim while she is alive, or waits for her release).
+live-steal and live-wait (livehold: alice claims src/rates.py and keeps working; bob takes her claim while she is alive, or waits for her release),
+say-only (abandoned, finished: bob writes OPEN.md and finishes nothing).
 """
 import json
 import os
@@ -209,6 +210,41 @@ def live(mode):
     bash("agentbus --as bob leave") if bus else note("RELEASE", "src/rates.py")
 
 
+def handover():
+    """abandoned and finished: alice promises her three items in the channel and does them in order (the runner kills her in abandoned
+    once the first passes); bob reads what is still undone off the tree, names it in OPEN.md and finishes it, unless he only says it."""
+    mine = tasks.abandoned_ids(seed)[0]
+    stamp = "\"$(date +%H:%M:%S)\""
+    if role == "alice":
+        for i, r in enumerate(tasks.ITEM_ROLES, 1):   # the bus is fresh, so her three todos are messages 1 to 3
+            if condition == "ledger":
+                bash("printf '\\n%%s alice TODO alice-%d: %s\\n' %s >> COORDINATION.md" % (i, mine[r], stamp))
+            elif condition == "agentbus":
+                bash("agentbus --as alice join >/dev/null; agentbus --as alice post '%s' --kind todo" % mine[r])
+        for i, r in enumerate(tasks.ITEM_ROLES, 1):
+            for rel, text in tasks.abandoned_item_reference(seed, r).items():
+                write(rel, text)
+            if task_name == "abandoned":
+                time.sleep(10)   # the kill lands here, between the first item and the second
+            elif condition == "ledger":
+                bash("printf '\\n%%s alice DONE alice-%d: in\\n' %s >> COORDINATION.md" % (i, stamp))
+            elif condition == "agentbus":
+                bash("agentbus --as alice post 'in' --kind done --reply-to %d" % i)
+        return
+    import grade
+    left = [r for r in tasks.ITEM_ROLES if r not in grade.items_done(os.getcwd(), task_name, seed)]
+    write("OPEN.md", "".join("%s\n" % mine[r] for r in left))
+    if mode != "say-only":
+        for r in left:
+            for rel, text in tasks.abandoned_item_reference(seed, r).items():
+                write(rel, text)
+    channel("done")
+
+
+if task_name in tasks.FOLLOWUP_TODO:
+    handover()
+    finish()
+    sys.exit(0)
 if task_name == "livehold" and mode in ("live-steal", "live-wait"):
     live(mode)
     finish()

@@ -30,7 +30,7 @@ BUS_WRITES = {"post", "claim", "release", "goal", "join", "leave"}
 LEDGER_WRITE = re.compile(r"""(?:>>|\btee\s+-a)\s*['"]?(?:[^\s'";&|]*/)?COORDINATION\.md""")
 LEDGER_READ = re.compile(r"\b(?:cat|grep|egrep|tail|head|sed|awk|less|more|wc|nl)\b[^;&|\n]*COORDINATION\.md")
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
-TEXT_SUFFIXES = (".py", ".md", ".txt", ".feed", ".json", ".toml", ".cfg", "")
+TEXT_SUFFIXES = (".py", ".md", ".txt", ".feed", ".json", ".toml", ".cfg", ".csv", "")   # .csv: abandoned's data
 HIDDEN_TIMEOUT = 120
 SCRIPT_WRITE = re.compile(r"\.write\(|\.write_text\(|\.write_bytes\(|\.writelines\(")
 
@@ -65,13 +65,13 @@ def is_channel_path(path):
 
 # ---- blind ----------------------------------------------------------------------------------------------------------
 
-def run_hidden(final, task, seed):
-    """Copy the final tree to a temp folder, add the hidden tests, and run each feature in its own process."""
+def run_hidden(final, task, seed, only=None):
+    """Copy the final tree to a temp folder, add the hidden tests, and run each feature in its own process. only: run just these."""
     work = tempfile.mkdtemp(prefix="value-grade-")
     try:
         tree = os.path.join(work, "t")
         shutil.copytree(final, tree)
-        hidden = tasks.hidden_tests(task, seed)
+        hidden = {k: v for k, v in tasks.hidden_tests(task, seed).items() if only is None or k[len("hidden_"):-3] in only}
         for name, text in hidden.items():
             with open(os.path.join(tree, name), "w") as f:
                 f.write(text)
@@ -84,6 +84,22 @@ def run_hidden(final, task, seed):
             except subprocess.TimeoutExpired:
                 out[name[len("hidden_"):-3]] = False
         return out
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def items_done(root, task, seed):
+    """Which of the handing-over agent's items pass their checks on a live tree, in ticket order. The runner's kill and handover read
+    this. Only the tree's small text files are copied (never the channel), so a bus being written is never read here."""
+    work = tempfile.mkdtemp(prefix="value-items-")
+    try:
+        for rel, text in read_tree(root, CHANNEL_PATHS).items():
+            path = os.path.join(work, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
+        got = run_hidden(work, task, seed, only=tasks.ITEM_ROLES)
+        return [r for r in tasks.ITEM_ROLES if got.get(r)]
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -159,7 +175,16 @@ def blind_grade(run_dir):
     grade.update(edit_metrics(edits))
     if task.kill:
         grade["kill_fired"] = bool(run["kill"].get("fired"))
-        grade["killed_with"] = run["kill"].get("files", [])
+        grade["killed_with"] = run["kill"].get("files", run["kill"].get("done", []))
+    if task.handover:
+        # abandoned, finished: discovery (OPEN.md names exactly the items open when alice's session ended) and recovery (every one of
+        # her items passes and nothing nobody took was done) are graded apart. Saying what is open is not finishing it.
+        mine, listed = tasks.abandoned_ids(run["seed"])
+        handover = run.get("handover") or {}
+        open_ids = [mine[r] for r in handover.get("open", [])]
+        found, named = tasks.discovery(final_files.get("OPEN.md"), listed, open_ids)
+        grade.update({"open": handover.get("open"), "done_at_handover": handover.get("done"), "named": named, "discovered": found,
+                      "recovered": grade["pass"], "open_md": "OPEN.md" in final_files})
     return grade
 
 
@@ -473,14 +498,56 @@ def auth_failed(line):
     return False
 
 
+CODEX_AUTH_FAILURE = re.compile(r"401 Unauthorized|token could not be refreshed|refresh_token_reused|not logged in", re.I)
+HALTS = {"usage_limit": "usage limit", "authentication_failed": "authentication failed"}
+
+
+def provider_failure(line, harness):
+    """"usage limit", "authentication failed" or None for one raw line, in the provider's own voice only: a Claude error result or
+    synthetic assistant message, a Codex error or turn.failed event, or a line that is not stream JSON (stderr). The model's text and
+    tool output that quote the words do not count."""
+    if not line:
+        return None
+    try:
+        event = json.loads(line)
+    except ValueError:
+        event = None
+    if event is None:
+        voice = line
+    elif not isinstance(event, dict):
+        return None
+    elif harness == "codex" and event.get("type") in ("error", "turn.failed"):
+        voice = json.dumps(event.get("message") or event.get("error") or "")
+        if CODEX_AUTH_FAILURE.search(voice):
+            return "authentication failed"
+    elif event.get("type") == "result" and event.get("is_error"):
+        voice = str(event.get("result", ""))
+    elif event.get("type") == "assistant" and isinstance(event.get("message"), dict) and event["message"].get("model") == "<synthetic>":
+        voice = json.dumps(event["message"].get("content"))
+    else:
+        return None
+    if USAGE_LIMIT.search(voice):
+        return "usage limit"
+    if AUTH_FAILURE.search(voice):
+        return "authentication failed"
+    return None
+
+
 def infra_failure(lines, harness, rc, killed_by_task, stop_reason, stderr_lines=()):
     """A run may be replaced only for one of these (docs/evals/value-protocol.md, Dropping runs). None is a real run, whatever
-    its outcome. Timeouts and tool caps are real runs. A sign-in failure in the provider's own voice (stream or stderr) is
-    infrastructure whether or not the agent had made tool calls: it is the plan's sign-in, not the agent's work."""
-    if killed_by_task or stop_reason:
+    its outcome. Timeouts, tool caps and the task's own kill are real runs. A usage limit or a sign-in failure in the provider's own
+    voice (stream or stderr), or an agent the batch stopped for one, is infrastructure whether or not the agent had made tool calls:
+    it is the plan, not the agent's work. The rule never looks at the condition, so it is the same in every arm."""
+    if killed_by_task:
         return None
-    if any(auth_failed(w["line"]) for w in lines) or any(auth_failed(line) for line in stderr_lines):
-        return "authentication failed"
+    if stop_reason in HALTS:
+        return HALTS[stop_reason]
+    if stop_reason:
+        return None
+    for line in [w["line"] for w in lines] + list(stderr_lines):
+        why = provider_failure(line, harness)
+        if why:
+            return why
     if not any(tool_calls_in_line(w["line"], harness) for w in lines):
         text = " ".join(w["line"] for w in lines)[-2000:]
         if rc != 0 or re.search(r"authentication|not logged in|overloaded|rate.?limit|usage limit|api error|hit your", text, re.I):

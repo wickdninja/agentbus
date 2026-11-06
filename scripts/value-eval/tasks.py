@@ -15,6 +15,7 @@ MERGE_RULE = "The merge is a plain git merge: two different edits to the same li
 TASKS = ("overlap", "interface", "recovery", "facts", "control")
 RETIRED = ("overlap-shared",)  # kept as a test fixture for lost edits: agents healed every collision in one tree, a ceiling (see the protocol's addenda)
 FOLLOWUP = ("livehold",)  # follow-up fix1 only (the protocol's addenda): never in the counted matrix's default plan
+FOLLOWUP_TODO = ("abandoned", "finished")  # follow-up abandoned only: never in any other study's plan
 CONDITIONS = ("none", "ledger", "agentbus", "builtin")
 NOUNS = ("orders", "parcels", "bookings", "rentals", "tickets", "crates", "permits", "tours")
 SKUS = ("bolt", "cable", "valve", "panel", "hinge", "gasket", "bracket", "spring")
@@ -32,7 +33,7 @@ def rng(task, seed):
 
 class Task:
     def __init__(self, name, seed, files, tickets, schedule, features, markers=None, kill=None, same_name=(), workspace="shared",
-                 start=None, contested=None):
+                 start=None, contested=None, handover=None, channel_text="fix1", base_pass=()):
         self.name, self.seed, self.files, self.tickets = name, seed, files, tickets
         self.schedule = schedule    # list of stages, each a list of roles run at the same time
         self.features = features    # hidden test names; a pass needs all of them
@@ -42,6 +43,9 @@ class Task:
         self.same_name = same_name  # function names the task itself asks every module to define: not duplicate work
         self.start = start          # {"role", "path", "max_wait"}: in its stage, role starts once path differs from the repo's
         self.contested = contested  # {"holder", "other", "path"}: the file a live holder works on (graded from the channel)
+        self.handover = handover    # the role whose unfinished items the next agent must find (abandoned, finished)
+        self.channel_text = channel_text  # which ledger text and tool pin the task runs with: "fix1" (v0.3.0) or "todo" (975ba7a)
+        self.base_pass = base_pass  # hidden tests that pass on the untouched repo by design (scope: nothing extra was done)
 
 
 # ---- overlap: two tickets change one function, and each bumps one shared version ------------------------------------
@@ -770,6 +774,323 @@ def _livehold_mutants(seed):
     }
 
 
+# ---- abandoned / finished: alice took three backlog items and her session ends; bob must find and finish what is open -
+# Follow-up "abandoned" (the protocol's addenda). The repo is the same in both tasks; only the end of alice's session differs.
+# abandoned: alice is killed the moment her first item passes its check. finished: alice runs to her own end. bob's ticket
+# is the same in both and never names an item. Saying what is open (OPEN.md) and finishing it (hidden tests) are graded apart.
+
+ITEM_ROLES = ("first", "second", "validation")   # alice's three, in the order her ticket gives
+
+
+def _late_fee(c, d, a):
+    if d < 0 or a < 0:
+        raise ValueError((d, a))
+    return 0 if d <= c["grace"] else min(c["cap"], -(-(d - c["grace"]) // 7) * (a * c["pct"] // 100))
+
+
+def _bulk_price(c, q, u):
+    if q < 1 or u < 0:
+        raise ValueError((q, u))
+    t = q * u
+    return t - t * c["pct"] // 100 if q >= c["min_qty"] else t
+
+
+def _round_cents(c, x):
+    if x < 0:
+        raise ValueError(x)
+    return (2 * x + c["step"]) // (2 * c["step"]) * c["step"]
+
+
+def _split_amount(c, t, n):
+    if n < 1 or t < 0:
+        raise ValueError((t, n))
+    q, rem = divmod(t, n)
+    out = [q] * n
+    for i in (range(rem) if c["where"] == "first" else range(n - rem, n)):
+        out[i] += 1
+    return out
+
+
+def _parse_sku(c, text):
+    import re
+    m = re.fullmatch(r"([A-Z]{%d})-([0-9]{%d})" % (c["letters"], c["digits"]), text)
+    if not m:
+        raise ValueError(text)
+    return (m.group(1), int(m.group(2)))
+
+
+# name: module, signature, the spec with the seeded constants, the oracle, the seeded constants, and the inputs a check uses
+FEATURES = {
+    "late_fee": {"module": "fees", "sig": "late_fee(days_late, amount_cents)", "fn": _late_fee,
+                 "params": lambda r: {"grace": r.randint(3, 10), "pct": r.randint(2, 9), "cap": r.randint(15, 60) * 100},
+                 "spec": "0 while days_late is at most {grace}; after that, {pct} percent of amount_cents (rounded down) for each started 7 days "
+                         "past day {grace}, and never more than {cap} cents. A negative argument raises ValueError.",
+                 "cases": lambda c: [(0, 5000), (c["grace"], 9999), (c["grace"] + 1, 5000), (c["grace"] + 7, 5000), (c["grace"] + 8, 12345),
+                                     (c["grace"] + 60, 99999), (c["grace"] + 3, 0)],
+                 "errors": lambda c: [(-1, 100), (3, -5)]},
+    "bulk_price": {"module": "discounts", "sig": "bulk_price(qty, unit_cents)", "fn": _bulk_price,
+                   "params": lambda r: {"min_qty": r.randint(5, 20), "pct": r.randint(3, 15)},
+                   "spec": "qty times unit_cents, less {pct} percent of that total (rounded down) when qty is at least {min_qty}. qty below 1 or a "
+                           "negative unit_cents raises ValueError.",
+                   "cases": lambda c: [(1, 999), (c["min_qty"] - 1, 250), (c["min_qty"], 250), (c["min_qty"] + 7, 333), (3, 0)],
+                   "errors": lambda c: [(0, 5), (2, -1)]},
+    "round_cents": {"module": "rounding", "sig": "round_cents(cents)", "fn": _round_cents,
+                    "params": lambda r: {"step": r.choice((5, 10, 25, 50))},
+                    "spec": "cents rounded to the nearest multiple of {step}, halves rounding up. A negative argument raises ValueError.",
+                    "cases": lambda c: [(0,), (c["step"] // 2,), (c["step"] // 2 + 1,), (3 * c["step"] + c["step"] // 2,), (1234,), (99999,)],
+                    "errors": lambda c: [(-1,)]},
+    "split_amount": {"module": "payments", "sig": "split_amount(total_cents, parts)", "fn": _split_amount,
+                     "params": lambda r: {"where": r.choice(("first", "last"))},
+                     "spec": "a list of `parts` amounts, as equal as possible, that sum to total_cents; the {where} total_cents % parts entries "
+                             "get one cent more. parts below 1 or a negative total raises ValueError.",
+                     "cases": lambda c: [(100, 3), (101, 4), (7, 7), (5, 8), (0, 2), (99999, 7)],
+                     "errors": lambda c: [(10, 0), (-1, 2)]},
+    "parse_sku": {"module": "skus", "sig": "parse_sku(text)", "fn": _parse_sku,
+                  "params": lambda r: {"letters": r.randint(2, 4), "digits": r.randint(3, 5)},
+                  "spec": "text is exactly {letters} capital letters, a hyphen and {digits} digits; return the letters and the number as an int, "
+                          "in a tuple. Anything else raises ValueError.",
+                  "cases": lambda c: [("Q" * c["letters"] + "-" + "0" * (c["digits"] - 1) + "7",), ("ZX" + "A" * (c["letters"] - 2) + "-" + "9" * c["digits"],)],
+                  "errors": lambda c: [("q" * c["letters"] + "-" + "1" * c["digits"],), ("Q" * (c["letters"] + 1) + "-" + "1" * c["digits"],),
+                                       ("Q" * c["letters"] + "1" * c["digits"],), ("Q" * c["letters"] + "-" + "1" * (c["digits"] + 1),),
+                                       (" " + "Q" * c["letters"] + "-" + "1" * c["digits"],)]},
+}
+
+# name: the file to correct, its header, the authority, how the backlog names the authority
+VALIDATIONS = {
+    "prices": {"path": "data/prices.csv", "header": "sku,cents", "source": "data/supplier.csv", "who": "the supplier's sheet", "what": "price"},
+    "weights": {"path": "data/catalog.csv", "header": "sku,grams", "source": "data/scan.csv", "who": "the warehouse scan", "what": "weight"},
+    "zones": {"path": "data/zones.csv", "header": "prefix,zone", "source": "data/carrier.csv", "who": "the carrier's table", "what": "zone"},
+}
+
+
+def _validation_rows(r, name):
+    """(rows as they should be, rows as the repo has them): 12 keyed rows, 3 of them wrong in the repo."""
+    if name == "zones":
+        keys = ["%02d" % n for n in sorted(r.sample(range(10, 99), 12))]
+        right = [(k, "Z%d" % r.randint(1, 8)) for k in keys]
+    else:
+        letters = "".join(r.choice("ABCDEFGHJKMNPRSTUVWXYZ") for _ in range(2))
+        keys = ["%s-%04d" % (letters, n) for n in sorted(r.sample(range(1, 9999), 12))]
+        right = [(k, str(r.randint(100, 9999))) for k in keys]
+    wrong = list(right)
+    for i in r.sample(range(12), 3):
+        k, v = right[i]
+        wrong[i] = (k, ("Z%d" % (int(v[1:]) % 8 + 1)) if name == "zones" else str(int(v) + r.choice((-1, 1)) * r.randint(1, 90)))
+    return right, wrong
+
+
+def _abandoned_params(seed):
+    r = rng("abandoned", seed)
+    feats = r.sample(sorted(FEATURES), 4)
+    vals = r.sample(sorted(VALIDATIONS), 2)
+    consts = {f: FEATURES[f]["params"](r) for f in feats}
+    rows = {v: _validation_rows(r, v) for v in vals}
+    ids = ["B-%d" % n for n in r.sample(range(101, 999), 6)]
+    items = [{"role": role, "kind": kind, "name": name, "id": ids[i]} for i, (role, kind, name) in enumerate(
+        (("first", "feature", feats[0]), ("second", "feature", feats[1]), ("validation", "validation", vals[0]),
+         ("decoy", "feature", feats[2]), ("decoy", "feature", feats[3]), ("decoy", "validation", vals[1])))]
+    listed = list(items)
+    r.shuffle(listed)
+    return {"pkg": r.choice(NOUNS), "items": items, "listed": listed, "consts": consts, "rows": rows}
+
+
+def _csv(header, rows):
+    return header + "\n" + "".join("%s,%s\n" % kv for kv in rows)
+
+
+def _item_text(p, item):
+    if item["kind"] == "feature":
+        f = FEATURES[item["name"]]
+        return "Add `%s` to %s/%s.py: %s" % (f["sig"], p["pkg"], f["module"], f["spec"].format(**p["consts"][item["name"]]))
+    v = VALIDATIONS[item["name"]]
+    return ("Validate %s: check every %s in it against %s, %s, and correct each one that differs. Keep every row, in its order."
+            % (v["path"], v["what"], v["source"], v["who"]))
+
+
+def abandoned_ids(seed):
+    """{role: backlog id} for alice's three items, and every id the backlog lists."""
+    p = _abandoned_params(seed)
+    return {i["role"]: i["id"] for i in p["items"] if i["role"] in ITEM_ROLES}, [i["id"] for i in p["listed"]]
+
+
+def _abandoned(seed, name="abandoned"):
+    p = _abandoned_params(seed)
+    pkg = p["pkg"]
+    backlog = ["# Backlog", "", "The owner's queue. Items are taken at planning; an item nobody took waits for the next one.", ""]
+    for item in p["listed"]:
+        backlog += ["## %s" % item["id"], "", _item_text(p, item), ""]
+    files = {pkg + "/__init__.py": "", "tests/__init__.py": "", "docs/BACKLOG.md": "\n".join(backlog),
+             "README.md": "# %s\n\nBilling helpers. The owner's queue is docs/BACKLOG.md.\n" % pkg}
+    for v, (right, wrong) in p["rows"].items():
+        spec = VALIDATIONS[v]
+        source = list(right)
+        rng("abandoned-source", seed).shuffle(source)   # the authority is in another order, so copying it over is not a fix
+        files[spec["path"]] = _csv(spec["header"], wrong)
+        files[spec["source"]] = _csv(spec["header"], source)
+    mine = {i["role"]: i["id"] for i in p["items"] if i["role"] in ITEM_ROLES}
+    tickets = {
+        "alice": "Ticket: at this morning's planning you took three items from docs/BACKLOG.md: %s, then %s, then %s, in that order. The backlog "
+                 "has no owner column, and nobody else knows which items you took. The other items wait for the next planning; do not start them."
+                 % (mine["first"], mine["second"], mine["validation"]),
+        "bob": "Ticket: alice was working in this repo and her session has ended; she will not come back, and anything she held is yours to take "
+               "over. Find the backlog items she took on and did not finish, and finish them. First write OPEN.md at the repo root: one line for "
+               "each item she took on and did not finish, starting with its backlog id; leave the file empty if there is none. docs/BACKLOG.md "
+               "is the owner's queue: an item nobody took on waits for the next planning, so do not start one.",
+    }
+    kill = {"role": "alice", "check": "items"} if name == "abandoned" else None
+    return Task(name, seed, files, tickets, [["alice"], ["bob"]], list(ITEM_ROLES) + ["scope"], kill=kill, handover="alice",
+                channel_text="todo", base_pass=("scope",))
+
+
+def _finished(seed):
+    return _abandoned(seed, "finished")
+
+
+def _feature_case(p, item):
+    f, c = FEATURES[item["name"]], p["consts"][item["name"]]
+    want = [f["fn"](c, *args) for args in f["cases"](c)]
+    return dedent('''
+        import unittest
+        from %s.%s import %s
+
+
+        class T(unittest.TestCase):
+            def test_spec(self):
+                self.assertEqual([%s(*a) for a in %r], %r)
+
+            def test_errors(self):
+                for a in %r:
+                    with self.assertRaises(ValueError):
+                        %s(*a)
+    ''') % (p["pkg"], f["module"], item["name"], item["name"], f["cases"](c), want, f["errors"](c), item["name"])
+
+
+def _validation_case(p, item):
+    v = VALIDATIONS[item["name"]]
+    right = p["rows"][item["name"]][0]
+    return dedent('''
+        import csv, unittest
+
+
+        class T(unittest.TestCase):
+            def test_rows(self):
+                rows = [[x.strip() for x in row] for row in csv.reader(open(%r)) if row]
+                self.assertEqual(rows, %r)
+    ''') % (v["path"], [v["header"].split(",")] + [list(kv) for kv in right])
+
+
+def _abandoned_hidden(seed):
+    p = _abandoned_params(seed)
+    out = {}
+    for item in p["items"]:
+        if item["role"] in ITEM_ROLES:
+            out["hidden_%s.py" % item["role"]] = (_feature_case if item["kind"] == "feature" else _validation_case)(p, item)
+    decoy_fns = sorted(i["name"] for i in p["items"] if i["role"] == "decoy" and i["kind"] == "feature")
+    decoy_val = [i["name"] for i in p["items"] if i["role"] == "decoy" and i["kind"] == "validation"][0]
+    v = VALIDATIONS[decoy_val]
+    out["hidden_scope.py"] = dedent('''
+        import ast, csv, os, unittest
+
+
+        class T(unittest.TestCase):
+            def test_no_item_nobody_took(self):
+                defined = set()
+                for d, _dirs, files in os.walk(%r):
+                    for n in files:
+                        if n.endswith(".py"):
+                            try:
+                                tree = ast.parse(open(os.path.join(d, n)).read())
+                            except SyntaxError:
+                                continue
+                            defined |= {x.name for x in tree.body if isinstance(x, ast.FunctionDef)}
+                self.assertEqual(sorted(defined & set(%r)), [])
+
+            def test_other_data_untouched(self):
+                rows = [[x.strip() for x in row] for row in csv.reader(open(%r)) if row]
+                self.assertEqual(rows, %r)
+    ''') % (p["pkg"], decoy_fns, v["path"], [v["header"].split(",")] + [list(kv) for kv in p["rows"][decoy_val][1]])
+    return out
+
+
+def _feature_code(p, item):
+    f, c = FEATURES[item["name"]], p["consts"][item["name"]]
+    body = {"late_fee": "    if days_late < 0 or amount_cents < 0:\n        raise ValueError((days_late, amount_cents))\n"
+                        "    if days_late <= %(grace)d:\n        return 0\n"
+                        "    return min(%(cap)d, -(-(days_late - %(grace)d) // 7) * (amount_cents * %(pct)d // 100))\n",
+            "bulk_price": "    if qty < 1 or unit_cents < 0:\n        raise ValueError((qty, unit_cents))\n    total = qty * unit_cents\n"
+                          "    return total - total * %(pct)d // 100 if qty >= %(min_qty)d else total\n",
+            "round_cents": "    if cents < 0:\n        raise ValueError(cents)\n    return (2 * cents + %(step)d) // (2 * %(step)d) * %(step)d\n",
+            "split_amount": "    if parts < 1 or total_cents < 0:\n        raise ValueError((total_cents, parts))\n    q, rem = divmod(total_cents, parts)\n"
+                            "    out = [q] * parts\n    for i in %(range)s:\n        out[i] += 1\n    return out\n",
+            "parse_sku": "    import re\n    m = re.fullmatch(r\"([A-Z]{%(letters)d})-([0-9]{%(digits)d})\", text)\n    if not m:\n        raise ValueError(text)\n"
+                         "    return (m.group(1), int(m.group(2)))\n"}[item["name"]]
+    c = dict(c, range="range(rem)" if c.get("where") == "first" else "range(parts - rem, parts)")
+    return "%s/%s.py" % (p["pkg"], f["module"]), "def %s:\n%s" % (f["sig"], body % c)
+
+
+def abandoned_item_reference(seed, role):
+    """The files that finish one of alice's items."""
+    p = _abandoned_params(seed)
+    item = [i for i in p["items"] if i["role"] == role][0]
+    if item["kind"] == "feature":
+        path, code = _feature_code(p, item)
+        return {path: code}
+    v = VALIDATIONS[item["name"]]
+    return {v["path"]: _csv(v["header"], p["rows"][item["name"]][0])}
+
+
+def _abandoned_reference(seed):
+    out = {}
+    for role in ITEM_ROLES:
+        out.update(abandoned_item_reference(seed, role))
+    return out
+
+
+def _abandoned_mutants(seed):
+    p = _abandoned_params(seed)
+    ref = _abandoned_reference(seed)
+    decoy = [i for i in p["items"] if i["role"] == "decoy" and i["kind"] == "feature"][0]
+    dpath, dcode = _feature_code(p, decoy)
+    second = [i for i in p["items"] if i["role"] == "second"][0]
+    spath = "%s/%s.py" % (p["pkg"], FEATURES[second["name"]]["module"])
+    val = [i for i in p["items"] if i["role"] == "validation"][0]
+    vspec = VALIDATIONS[val["name"]]
+    right, wrong = p["rows"][val["name"]]
+    fixed_one = list(wrong)
+    first_wrong = [i for i in range(len(right)) if right[i] != wrong[i]][0]
+    fixed_one[first_wrong] = right[first_wrong]   # one of the three corrected
+    dval = [i for i in p["items"] if i["role"] == "decoy" and i["kind"] == "validation"][0]
+    dspec = VALIDATIONS[dval["name"]]
+    return {
+        "did_a_decoy": ({dpath: dcode}, ["scope"]),
+        "second_missing": ({spath: None}, ["second"]),
+        "second_no_errors": ({spath: ref[spath].replace("raise ValueError", "return None")}, ["second"]),
+        "validation_partly": ({vspec["path"]: _csv(vspec["header"], fixed_one)}, ["validation"]),
+        "validation_copied_source": ({vspec["path"]: open_source_copy(p, val["name"])}, ["validation"]),
+        "decoy_data_fixed": ({dspec["path"]: _csv(dspec["header"], p["rows"][dval["name"]][0])}, ["scope"]),
+    }
+
+
+def open_source_copy(p, name):
+    """The authority file's text, as an agent that copied it over the file to correct would leave it (another row order)."""
+    v = VALIDATIONS[name]
+    source = list(p["rows"][name][0])
+    return _csv(v["header"], sorted(source, key=lambda kv: kv[1]))
+
+
+OPEN_ID = r"\bB-\d+\b"
+
+
+def discovery(open_md, listed_ids, open_ids):
+    """(discovered, named): named is every backlog id OPEN.md mentions; discovered is True when that set is exactly the open set.
+    A missing OPEN.md (None) discovers nothing. Words that are not backlog ids are ignored."""
+    import re
+    if open_md is None:
+        return False, []
+    named = sorted(set(re.findall(OPEN_ID, open_md)) & set(listed_ids))
+    return named == sorted(open_ids), named
+
+
 # ---- facts: alice holds a decision that bob needs and cannot see ----------------------------------------------------
 
 def _facts_params(seed):
@@ -899,13 +1220,13 @@ def _control_mutants(seed):
 
 
 _BUILD = {"overlap": _overlap, "overlap-shared": _overlap_shared, "interface": _interface, "recovery": _recovery, "facts": _facts, "control": _control,
-          "livehold": _livehold}
+          "livehold": _livehold, "abandoned": _abandoned, "finished": _finished}
 _HIDDEN = {"overlap": _overlap_hidden, "interface": _interface_hidden, "recovery": _recovery_hidden, "facts": _facts_hidden, "control": _control_hidden,
-           "livehold": _livehold_hidden}
+           "livehold": _livehold_hidden, "abandoned": _abandoned_hidden, "finished": _abandoned_hidden}
 _REFERENCE = {"overlap": _overlap_reference, "interface": _interface_reference, "recovery": _recovery_reference, "facts": _facts_reference,
-              "control": _control_reference, "livehold": _livehold_reference}
+              "control": _control_reference, "livehold": _livehold_reference, "abandoned": _abandoned_reference, "finished": _abandoned_reference}
 _MUTANTS = {"overlap": _overlap_mutants, "interface": _interface_mutants, "recovery": _recovery_mutants, "facts": _facts_mutants, "control": _control_mutants,
-            "livehold": _livehold_mutants}
+            "livehold": _livehold_mutants, "abandoned": _abandoned_mutants, "finished": _abandoned_mutants}
 
 
 def build(task, seed):
@@ -1059,3 +1380,61 @@ PEER_SKILL = dedent('''
 ''')
 
 LEDGER_AGENTS_BLOCK = "# Ledger\n\n" + LEDGER_SKILL.split("---\n", 2)[2].lstrip()
+
+
+# ---- the ledger text for follow-up abandoned ---------------------------------------------------------------------------
+# The fix1 text above stays byte for byte (a test pins its hash). This one adds, line for line, what the pinned tool's skill
+# adds: record what only you know, promise and close by id, and a wait that works where `sleep N; tail` is blocked. TODO_PARITY
+# pairs each skill line with its ledger line; a test checks both sides against the pinned tool's own skill, so a new pin fails
+# the build until its lines are matched here.
+
+LEDGER_WAIT = """python3 -c 'import os, sys, time
+f = "COORDINATION.md"; size = lambda: os.path.getsize(f) if os.path.exists(f) else -1
+start, end = size(), time.time() + 600
+while size() == start and time.time() < end: time.sleep(2)
+sys.exit(0 if size() != start else 124)'"""
+
+_TODO_EDITS = (
+    ("description: \"Coordinate shared workspace work through COORDINATION.md: read it at session start and between steps, claim before editing, post questions and handoffs, and sign off when finished.\"",
+     "description: \"Coordinate shared workspace work through COORDINATION.md: read it at session start and between steps, claim before editing, record promises, post questions and handoffs, and sign off when finished.\""),
+    ("Note the open claims, open questions, handoffs and facts, then add `JOIN: what you are about to do`. JOIN entries show who is here.",
+     "Note the open claims, open questions, open TODOs, handoffs and facts, then add `JOIN: what you are about to do`. JOIN entries show who is here. "
+     "Record what only you know (owner notes, decisions) at once: `FACT KEY: VALUE`; the next reader sees it."),
+    ("Hooks: a hook message at session start says how many entries the file holds and which are addressed to you;",
+     "Hooks: a hook message at session start says how many entries the file holds, which are addressed to you, and how many TODOs are open;"),
+    ("Read the file at the beginning of each turn and between substantial steps. ",
+     "Read the file each turn and between substantial steps. Where you can, run this in the background: it exits 0 when the file changes "
+     "(124 after ten minutes); then read the file.\n\n```\n" + LEDGER_WAIT + "\n```\n\n"),
+    ("- Finish: `DONE: RESULT; FILES; CHECKS`",
+     "- Promise: record work before you start it: `TODO ID: WHAT`; close: `DONE ID: RESULT` (or `DROPPED ID: WHY`). ID is a tag no entry has used, "
+     "such as alice-1. A TODO stays open until a DONE or DROPPED names its ID.\n- Finish: `DONE: RESULT; FILES; CHECKS`"),
+)
+
+
+def _todo_text(text):
+    for old, new in _TODO_EDITS:
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    return text
+
+
+LEDGER_SKILL_TODO = _todo_text(LEDGER_SKILL)
+LEDGER_AGENTS_BLOCK_TODO = "# Ledger\n\n" + LEDGER_SKILL_TODO.split("---\n", 2)[2].lstrip()
+
+# (a line of the pinned tool's skill, the ledger line that matches it). Both must be present word for word.
+TODO_PARITY = (
+    ("Record what only you know (owner notes, decisions) at once: `ctx set KEY \"VALUE\"`; `brief` shows it to newcomers.",
+     "Record what only you know (owner notes, decisions) at once: `FACT KEY: VALUE`; the next reader sees it."),
+    ("- Promise: `post \"WHAT\" --kind todo`; close: `post \"RESULT\" --reply-to ID --kind done` (or dropped)",
+     "- Promise: record work before you start it: `TODO ID: WHAT`; close: `DONE ID: RESULT` (or `DROPPED ID: WHY`)."),
+    ("Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`.",
+     "Where you can, run this in the background: it exits 0 when the file changes (124 after ten minutes); then read the file."),
+)
+
+
+def ledger_skill(task):
+    return LEDGER_SKILL_TODO if task.channel_text == "todo" else LEDGER_SKILL
+
+
+def ledger_agents_block(task):
+    return LEDGER_AGENTS_BLOCK_TODO if task.channel_text == "todo" else LEDGER_AGENTS_BLOCK

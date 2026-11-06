@@ -10,7 +10,6 @@ that gives it a throwaway config folder and an existing sign-in, and runs `claud
 and an allowlisted environment. Every run ends in isolation checks, and one failure stops the batch.
 """
 import argparse
-import fnmatch
 import glob
 import hashlib
 import json
@@ -45,6 +44,9 @@ TIME_CAP, TOOL_CAP, SNAP_EVERY = 2400, 80, 5
 CODEX_PLANTED = {"auth.json", "hooks.json", "AGENTS.md", "config.toml"}   # all a scratch CODEX_HOME may hold before launch; Codex adds its own state after
 TOOL_RELEASE = "02fcfc5"     # follow-up fix1 tests v0.3.0 (the counted run tested 642009c): runs refuse any other bin/agentbus
 TOOL_SHA256 = "c6f3e9a88e5661380ea06c2365d19aaa7ee2eb338f705560d3677c8cea0f8808"   # sha256 of 02fcfc5:bin/agentbus, checked as well
+# Follow-up abandoned tests the todo build, which is not released: (commit on main, sha256 of its bin/agentbus). This one constant is
+# the pin; a change to it is its own commit, logged in the protocol, and the parity test then checks the ledger text against its skill.
+TODO_TOOL = ("975ba7a", "a74008d1c02c61e971e31b095a66cd856ff0c0f1f43a3faed2c1a15d92b6cdb1")
 CODEX_BUDGET = 40            # usage points; the batch halts when projected use passes this
 CHANNEL_PATHS = grade.CHANNEL_PATHS
 CODEX_FEATURE_PINS = ("multi_agent", "plugins", "apps", "browser_use", "computer_use")
@@ -96,15 +98,24 @@ def bus_roster(db):
         con.close()
 
 
-def tool_is_release(root, release):
-    """True when the working copy of bin/agentbus is byte for byte the released one."""
+def tool_is_release(root, release, path=None):
+    """True when the tool at path (the checkout's bin/agentbus by default) is byte for byte the release's bin/agentbus."""
+    path = path or os.path.join(root, "bin", "agentbus")
     p = subprocess.run(["git", "-C", root, "show", "%s:bin/agentbus" % release], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    return p.returncode == 0 and p.stdout == open(os.path.join(root, "bin", "agentbus"), "rb").read()
+    return p.returncode == 0 and os.path.isfile(path) and p.stdout == open(path, "rb").read()
 
 
-def tool_pinned(root, release, sha256):
+def tool_pinned(root, release, sha256, path=None):
     """The release's bytes and the pinned hash, both: a tag moved later cannot change what a run tested."""
-    return tool_is_release(root, release) and sha_file(os.path.join(root, "bin", "agentbus")) == sha256
+    return tool_is_release(root, release, path) and sha_file(path or os.path.join(root, "bin", "agentbus")) == sha256
+
+
+def pins_for(task_objs):
+    """(release, sha256) the batch's tasks run with: the todo build for follow-up abandoned, v0.3.0 otherwise. One batch, one pin."""
+    kinds = {t.channel_text for t in task_objs}
+    if len(kinds) > 1:
+        raise Refused("this batch mixes tasks that test different builds of the tool (%s); run them as separate batches" % ", ".join(sorted(kinds)))
+    return TODO_TOOL if kinds == {"todo"} else (TOOL_RELEASE, TOOL_SHA256)
 
 
 def harness_of(pairing, role, seed):
@@ -180,7 +191,7 @@ class Run:
         self.stop_threads = threading.Event()
         self.snaps = open(os.path.join(self.out, "snaps.jsonl"), "w")
         self.seen = {}
-        self.loads, self.kill, self.merge, self.late = [], {"fired": False}, None, None
+        self.loads, self.kill, self.merge, self.late, self.handover = [], {"fired": False}, None, None, None
         self.channel_dir = os.path.join(self.out, "channel")
         os.makedirs(self.channel_dir)
         self.worktrees = self.task.workspace == "worktrees"
@@ -294,14 +305,14 @@ class Run:
     def install_channel(self):
         codex = "codex" in self.harnesses.values()
         if self.condition == "ledger":
-            self.write(".claude/skills/ledger/SKILL.md", tasks.LEDGER_SKILL)
+            self.write(".claude/skills/ledger/SKILL.md", tasks.ledger_skill(self.task))
             self.install_ledger_hooks(codex)
             if codex:
-                self.write("AGENTS.md", tasks.LEDGER_AGENTS_BLOCK)
+                self.write("AGENTS.md", tasks.ledger_agents_block(self.task))
         elif self.condition == "builtin":
             self.write(".claude/skills/peer-messages/SKILL.md", tasks.PEER_SKILL)
         elif self.condition == "agentbus":
-            cmd = shlex.split(os.environ.get("AGENTBUS_CMD") or "%s %s" % (shlex.quote(sys.executable), shlex.quote(os.path.join(ROOT, "bin", "agentbus"))))
+            cmd = shlex.split(os.environ.get("AGENTBUS_CMD") or "%s %s" % (shlex.quote(sys.executable), shlex.quote(tool_path(self.args))))
             shim = os.path.join(self.ab, "agentbus")
             with open(shim, "w") as f:
                 f.write('#!/bin/sh\nexec %s "$@"\n' % " ".join(shlex.quote(c) for c in cmd))
@@ -447,9 +458,19 @@ class Run:
         threading.Thread(target=finish, daemon=True).start()
 
     def watch_kill(self, agent):
-        """recovery: the session dies once enough files exist. Files, not tool counts, so both harnesses die at the same point."""
+        """recovery: the session dies once enough files exist. abandoned: it dies the moment one of its items passes its check. Files on
+        disk, not tool counts, so both harnesses die at the same point."""
         spec = self.task.kill
         while agent.proc.poll() is None and not self.stop_threads.is_set():
+            if spec.get("check"):
+                done = grade.items_done(self.proj, self.task_name, self.seed)
+                if done and agent.proc.poll() is None:
+                    self.kill = {"fired": True, "at": time.time(), "done": done}
+                    agent.killed_by_task = True
+                    self.stop_agent(agent, "task_kill", hard=True)
+                    return
+                time.sleep(0.5)
+                continue
             found = [p for p in glob.glob(os.path.join(self.proj, spec["glob"])) if os.path.getsize(p) > 0]
             if len(found) >= spec["at"]:
                 self.kill = {"fired": True, "at": time.time(), "files": sorted(os.path.relpath(p, self.proj) for p in found)}
@@ -574,6 +595,9 @@ class Run:
                     self.launch(a)
             self.finish_stage(current, later, agents)
             self.stderr_halt(agents)
+            if self.task.handover and self.task.handover in stage:
+                done = grade.items_done(self.proj, self.task_name, self.seed)   # what the next agent inherits, read once the session has ended
+                self.handover = {"done": done, "open": [r for r in tasks.ITEM_ROLES if r not in done], "at": time.time()}
         self.stop_threads.set()
         snapper.join(timeout=30)
         if watcher:
@@ -655,7 +679,7 @@ class Run:
                                 "tool_calls": a.tool_calls, "t_start": a.started, "t_end": a.ended} for a in agents.values()},
             "seconds": round(max(a.ended for a in agents.values()) - min(a.started for a in agents.values()), 1),
             "load": {"max": max(self.loads or [0]), "mean": round(sum(self.loads or [0]) / max(1, len(self.loads)), 1)},
-            "kill": self.kill, "merge": self.merge, "late_start": self.late})
+            "kill": self.kill, "merge": self.merge, "late_start": self.late, "handover": self.handover})
         cost = {a.role: grade.cost_of(a.lines, a.harness, self.condition) for a in agents.values()}
         for a in agents.values():
             link = os.path.join(self.workdir(a.role), "COORDINATION.md")
@@ -683,7 +707,7 @@ class Run:
                 infra = {r: self.halt_reason for r in agents}
             bad = self.isolation(agents)
             row = {"id": self.id, "task": self.task_name, "seed": self.seed, "condition": self.condition, "pairing": self.pairing,
-                   "infra": infra, "isolation": bad, "ts": time.time(), "tool": sha_file(os.path.join(ROOT, "bin", "agentbus")), "quota": self.quota}
+                   "infra": infra, "isolation": bad, "ts": time.time(), "tool": sha_file(tool_path(self.args)), "quota": self.quota}
             if self.replaces:
                 row["replaces"] = self.replaces
             with open(os.path.join(self.args.out, "manifest.jsonl"), "a") as f:
@@ -700,6 +724,11 @@ class Run:
                 log("kept %s" % self.root)
             else:
                 shutil.rmtree(self.root, ignore_errors=True)
+
+
+def tool_path(args):
+    """The bin/agentbus a run installs: --tool-bin when given (a build outside the checkout), else the checkout's own."""
+    return getattr(args, "tool_bin", None) or os.path.join(ROOT, "bin", "agentbus")
 
 
 def plan(args):
@@ -734,7 +763,7 @@ def claude_usage(cmd):
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--tasks", nargs="+", choices=tasks.TASKS + tasks.RETIRED + tasks.FOLLOWUP, default=list(tasks.TASKS))
+    ap.add_argument("--tasks", nargs="+", choices=tasks.TASKS + tasks.RETIRED + tasks.FOLLOWUP + tasks.FOLLOWUP_TODO, default=list(tasks.TASKS))
     ap.add_argument("--conditions", nargs="+", choices=tasks.CONDITIONS, default=list(tasks.CONDITIONS))
     ap.add_argument("--pairings", nargs="+", choices=PAIRINGS, default=list(PAIRINGS))
     ap.add_argument("--seeds", nargs="+", type=int, default=[1])
@@ -755,8 +784,9 @@ def main(argv):
     ap.add_argument("--codex-auth", default=os.environ.get("VALUE_CODEX_AUTH"), help="auth.json to copy into the scratch CODEX_HOME")
     ap.add_argument("--codex-bin", default="codex")
     ap.add_argument("--codex-budget", type=float, default=CODEX_BUDGET, help="usage points; halt when projected use passes this")
-    ap.add_argument("--tool-release", default=TOOL_RELEASE, help="the commit whose bin/agentbus is under test")
-    ap.add_argument("--tool-sha256", default=TOOL_SHA256, help="and the sha256 that bin/agentbus must have")
+    ap.add_argument("--tool-release", help="the commit whose bin/agentbus is under test (default: the tasks' own pin)")
+    ap.add_argument("--tool-sha256", help="and the sha256 that bin/agentbus must have (default: the tasks' own pin)")
+    ap.add_argument("--tool-bin", help="the bin/agentbus to install, when it is not the checkout's own (a build of an unreleased commit)")
     ap.add_argument("--rerun-infra", action="store_true", help="run again every infrastructure failure already in --out, as the protocol says")
     ap.add_argument("--skip-done", action="store_true", help="leave out every task, seed, condition and pairing the manifest in --out already has a row for (a failed one is --rerun-infra's)")
     ap.add_argument("--shard", default="1/1", help="I/N: with --rerun-infra, this runner's share")
@@ -792,8 +822,17 @@ def main(argv):
         if not args.codex_auth:
             log("not running: --codex-route exec needs --codex-auth or VALUE_CODEX_AUTH.")
             return 2
-    if not stub and any(r[2] == "agentbus" for r in runs) and not tool_pinned(ROOT, args.tool_release, args.tool_sha256):
-        log("not running: bin/agentbus is not the released %s (sha256 %s), and runs test the release." % (args.tool_release, args.tool_sha256))
+    try:
+        release, sha256 = pins_for([tasks.build(t, 1) for t in sorted({r[0] for r in runs})] or [tasks.build("control", 1)])
+    except Refused as e:
+        log("refused: %s" % e)
+        return 2
+    release, sha256 = args.tool_release or release, args.tool_sha256 or sha256
+    if not stub and os.environ.get("AGENTBUS_CMD"):
+        log("not running: AGENTBUS_CMD is set, which would replace the pinned tool. Unset it.")
+        return 2
+    if not stub and any(r[2] == "agentbus" for r in runs) and not tool_pinned(ROOT, release, sha256, args.tool_bin):
+        log("not running: %s is not the pinned %s (sha256 %s), and runs test that build." % (tool_path(args), release, sha256))
         return 2
     try:
         args.out = assert_outside(args.out if os.path.isabs(args.out) else os.path.abspath(args.out))

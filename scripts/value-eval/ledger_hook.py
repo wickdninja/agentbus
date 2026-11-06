@@ -2,7 +2,8 @@
 """Hooks for the ledger condition, the counterpart of the hooks `agentbus setup` installs (docs/evals/value-protocol.md, addenda).
 Hooks are a harness feature, not the tool's, so the flat file gets them too, on the same events:
 
-  SessionStart  how many entries COORDINATION.md holds, and the entries addressed to you
+  SessionStart  how many entries COORDINATION.md holds, the entries addressed to you, and how many TODOs are open (only when any
+                are, as the tool's own hook counts open todos)
   PreToolUse    before an edit: a warning when someone else holds an open CLAIM on the path, and once per path a nudge when the
                 path has no claim at all
 
@@ -19,7 +20,7 @@ import tempfile
 
 LEDGER = "COORDINATION.md"
 # TIME NAME KIND[ to NAME| KEY]: TEXT   (a FACT names its key where a message names its recipient)
-HEADER = re.compile(r"^(\d{1,2}:\d{2}(?::\d{2})?)\s+([A-Za-z0-9_.-]+)\s+(JOIN|CLAIM|RELEASE|QUESTION|ANSWER|HANDOFF|DONE|FACT|NOTE)"
+HEADER = re.compile(r"^(\d{1,2}:\d{2}(?::\d{2})?)\s+([A-Za-z0-9_.-]+)\s+(JOIN|CLAIM|RELEASE|QUESTION|ANSWER|HANDOFF|DONE|FACT|NOTE|TODO|DROPPED)"
                     r"(?:\s+to\s+([A-Za-z0-9_.-]+)|\s+([^:\s]+))?\s*:\s?(.*)$")
 PATCH_MARKERS = ("*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: ")
 MAX_SHOWN = 6
@@ -46,6 +47,18 @@ def facts(entries):
         if e["kind"] == "FACT" and e["key"]:
             out[e["key"]] = e["text"]
     return out
+
+
+def open_todos(entries):
+    """{ID: entry} for every TODO that no later DONE ID or DROPPED ID names. Any name may close one. A TODO with no ID can never be
+    closed, so it stays open under its position in the file."""
+    open_ = {}
+    for i, e in enumerate(entries):
+        if e["kind"] == "TODO":
+            open_[e["key"] or "#%d" % i] = e
+        elif e["kind"] in ("DONE", "DROPPED") and e["key"]:
+            open_.pop(e["key"], None)
+    return open_
 
 
 def _paths(text):
@@ -122,7 +135,9 @@ def context(event, payload, name):
             return "ledger: there is no %s here yet. Create it with your first entry." % LEDGER
         entries = parse(open(os.path.join(root, LEDGER), errors="replace").read())
         mine = [e for e in entries if name and e["to"] == name]
-        lines = ["ledger: %s has %d entries, %d addressed to %s." % (LEDGER, len(entries), len(mine), name or "you")]
+        todos = len(open_todos(entries))
+        clause = ", %d open TODO%s" % (todos, "" if todos == 1 else "s") if todos else ""
+        lines = ["ledger: %s has %d entries, %d addressed to %s%s." % (LEDGER, len(entries), len(mine), name or "you", clause)]
         for e in mine[-MAX_SHOWN:]:
             lines.append("  %s %s %s to %s: %s" % (e["time"], e["name"], e["kind"], e["to"], e["text"].split("\n", 1)[0][:200]))
         lines.append("Read the whole file with: cat %s" % LEDGER)
@@ -147,7 +162,7 @@ def context(event, payload, name):
 
 
 def main(argv):
-    harness, event = argv[0], argv[1]
+    event = argv[1]   # argv[0] names the harness; both get the same text
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except ValueError:

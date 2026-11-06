@@ -60,7 +60,7 @@ def read_bus(channel_dir):
         try:
             log = [dict(r) for r in con.execute("SELECT ts, agent, action, detail FROM log ORDER BY id")]
             facts = [dict(r) for r in con.execute("SELECT key, value, updated_by, updated_at FROM context_history WHERE key != 'goal' ORDER BY id")]
-            messages = [dict(r) for r in con.execute("SELECT ts, sender, recipient, kind, body FROM messages ORDER BY id")]
+            messages = [dict(r) for r in con.execute("SELECT id, ts, sender, recipient, kind, body, reply_to FROM messages ORDER BY id")]
         finally:
             con.close()
         return log, facts, messages
@@ -157,6 +157,41 @@ def bus_verbs(lines, harness):
     return verbs
 
 
+def todo_records(bus, entries):
+    """[{"by", "text", "closed_by"}] for every promise in the channel: a bus todo (closed by a done or dropped that replies to it) or a
+    ledger TODO (closed by a DONE or DROPPED naming its ID). Mechanical, the same for both channels; never a pass rule."""
+    out = []
+    if bus is not None:
+        messages = bus[2]
+        for m in messages:
+            if m["kind"] == "todo":
+                closers = [x["sender"] for x in messages if x["kind"] in ("done", "dropped") and x.get("reply_to") == m["id"]]
+                out.append({"by": m["sender"], "text": m["body"] or "", "closed_by": closers[0] if closers else None})
+    else:
+        for i, e in enumerate(entries):
+            if e["kind"] == "TODO":
+                closers = [x["name"] for x in entries[i + 1:] if x["kind"] in ("DONE", "DROPPED") and e["key"] and x["key"] == e["key"]]
+                out.append({"by": e["name"], "text": "%s %s" % (e["key"] or "", e["text"]), "closed_by": closers[0] if closers else None})
+    return out
+
+
+def handover_stats(run, role, todos, written):
+    """For abandoned and finished: did alice record her three items, as todos, and close what she finished; did bob close what he
+    took over. None where the question does not arise."""
+    mine = tasks.abandoned_ids(run["seed"])[0]
+    handover = run.get("handover") or {"done": [], "open": []}
+    about = lambda rid: [t for t in todos if mine[rid] in t["text"]]  # noqa: E731
+    if role == "alice":
+        done = handover.get("done") or []
+        return {"named_all": all(any(mine[r] in w for w in written) for r in mine),
+                "todos_all": all(any(t["by"] == "alice" for t in about(r)) for r in mine),
+                "closed_done": all(any(t["closed_by"] == "alice" for t in about(r)) for r in done) if done else None,
+                "closed_all": all(any(t["closed_by"] == "alice" for t in about(r)) for r in mine)}
+    opened = handover.get("open") or []
+    return {"closed_all": all(any(t["closed_by"] == "bob" for t in about(r)) for r in opened) if opened else None,
+            "todos": sum(1 for t in todos if t["by"] == role)}
+
+
 def trace_lines(run_dir, role):
     path = os.path.join(run_dir, "trace-%s.jsonl" % role)
     return [json.loads(l) for l in open(path)] if os.path.isfile(path) else []
@@ -171,6 +206,7 @@ def channel_grade(run_dir, row):
     bus = read_bus(channel_dir) if row["condition"] == "agentbus" else None
     timed = ledger_timed(channel_dir) if row["condition"] == "ledger" else None
     entries = [e for _a, _b, e in timed] if timed else []
+    todos = todo_records(bus, entries) if row["condition"] in ("agentbus", "ledger") else []
     for role, info in run["agents"].items():
         lines = trace_lines(run_dir, role)
         verbs = bus_verbs(lines, info["harness"]) if row["condition"] == "agentbus" else []
@@ -194,6 +230,9 @@ def channel_grade(run_dir, row):
             skip, factor = p["mods"][4], str(p["new_factor"])
             r["notes_in_channel"] = {"skip": any(skip in t for t in sent + written), "factor": any(factor in t for t in sent + written)}
             r["notes_as_facts"] = {"skip": any(skip in t for t in written), "factor": any(factor in t for t in written)}
+        if task.handover:
+            keyed = ["%s %s" % (e["key"] or "", e["text"]) for e in entries if e["name"] == role]   # a ledger TODO's ID can carry the item
+            r.update(handover_stats(run, role, todos, sent + written + keyed))
         out["roles"][role] = r
     if task.contested:
         holder, other = task.contested["holder"], task.contested["other"]

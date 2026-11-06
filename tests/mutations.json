@@ -4250,7 +4250,7 @@
   {
     "name": "value eval: a patched tool passes the release check",
     "file": "scripts/value-eval/run.py",
-    "find": "return p\\.returncode == 0 and p\\.stdout == open\\(os\\.path\\.join\\(root, \\\"bin\\\", \\\"agentbus\\\"\\), \\\"rb\\\"\\)\\.read\\(\\)",
+    "find": "return\\ p\\.returncode\\ ==\\ 0\\ and\\ os\\.path\\.isfile\\(path\\)\\ and\\ p\\.stdout\\ ==\\ open\\(path,\\ \"rb\"\\)\\.read\\(\\)",
     "replace": "return p.returncode == 0",
     "count": 1,
     "run": "tests/test_value_eval.sh",
@@ -4430,8 +4430,8 @@
   {
     "name": "value eval fix1: the tool pin skips the hash",
     "file": "scripts/value-eval/run.py",
-    "find": "return\\ tool_is_release\\(root,\\ release\\)\\ and\\ sha_file\\(os\\.path\\.join\\(root,\\ \"bin\",\\ \"agentbus\"\\)\\)\\ ==\\ sha256",
-    "replace": "return tool_is_release(root, release)",
+    "find": "return\\ tool_is_release\\(root,\\ release,\\ path\\)\\ and\\ sha_file\\(path\\ or\\ os\\.path\\.join\\(root,\\ \"bin\",\\ \"agentbus\"\\)\\)\\ ==\\ sha256",
+    "replace": "return tool_is_release(root, release, path)",
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "a release with another hash passed the pin"
@@ -4448,7 +4448,7 @@
   {
     "name": "value eval: a sign-in failure after tool calls is not infrastructure",
     "file": "scripts/value-eval/grade.py",
-    "find": "    if any\\(auth_failed\\(w\\[\"line\"\\]\\) for w in lines\\) or any\\(auth_failed\\(line\\) for line in stderr_lines\\):\\n        return \"authentication failed\"\\n",
+    "find": "\\ \\ \\ \\ for\\ line\\ in\\ \\[w\\[\"line\"\\]\\ for\\ w\\ in\\ lines\\]\\ \\+\\ list\\(stderr_lines\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ why\\ =\\ provider_failure\\(line,\\ harness\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ why:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ return\\ why\\\n",
     "replace": "",
     "count": 1,
     "run": "tests/test_value_eval.sh",
@@ -4471,5 +4471,149 @@
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "a dry regrade rewrote the manifest"
+  },
+  {
+    "name": "value eval abandoned: non-inferiority read off the point estimate",
+    "file": "scripts/value-eval/analyze_abandoned.py",
+    "find": "\\ \\ \\ \\ return\\ _p_values\\(n,\\ \\-margin,\\ \"above\"\\)\\[\\(a10,\\ a01\\)\\]\\\n",
+    "replace": "    return 0.0 if a10 >= a01 else 1.0\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "20 ties must not show non-inferiority"
+  },
+  {
+    "name": "value eval abandoned: the exact p takes the last nuisance value, not the largest",
+    "file": "scripts/value-eval/analyze_abandoned.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ run\\ >\\ best\\[g\\]:\\\n",
+    "replace": "            if True:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "over alpha"
+  },
+  {
+    "name": "value eval abandoned: OPEN.md naming extra items still discovers",
+    "file": "scripts/value-eval/tasks.py",
+    "find": "\\ \\ \\ \\ return\\ named\\ ==\\ sorted\\(open_ids\\),\\ named\\\n",
+    "replace": "    return set(open_ids) <= set(named), named\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "an extra id, even one called done"
+  },
+  {
+    "name": "value eval abandoned: saying what is open counts as recovery",
+    "file": "scripts/value-eval/grade.py",
+    "find": "\"recovered\":\\ grade\\[\"pass\"\\]",
+    "replace": "\"recovered\": found",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "saying what remains is not recovery"
+  },
+  {
+    "name": "value eval abandoned: the kill waits for two items",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ done\\ and\\ agent\\.proc\\.poll\\(\\)\\ is\\ None:\\\n",
+    "replace": "                if len(done) >= 2 and agent.proc.poll() is None:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: the kill ignores the item check",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ spec\\.get\\(\"check\"\\):\\\n",
+    "replace": "            if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: no handover is recorded",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ self\\.handover\\ =\\ \\{\"done\":\\ done,\\ \"open\":\\ \\[r\\ for\\ r\\ in\\ tasks\\.ITEM_ROLES\\ if\\ r\\ not\\ in\\ done\\],\\ \"at\":\\ time\\.time\\(\\)\\}",
+    "replace": "                self.handover = None",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: a batch may mix two pins",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ if\\ len\\(kinds\\)\\ >\\ 1:\\\n",
+    "replace": "    if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a batch that mixes two pins must be refused"
+  },
+  {
+    "name": "value eval abandoned: a real run takes AGENTBUS_CMD",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ if\\ not\\ stub\\ and\\ os\\.environ\\.get\\(\"AGENTBUS_CMD\"\\):\\\n",
+    "replace": "    if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a real run took AGENTBUS_CMD"
+  },
+  {
+    "name": "value eval abandoned: the todo pin is not the pin abandoned runs with",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ return\\ TODO_TOOL\\ if\\ kinds\\ ==\\ \\{\"todo\"\\}\\ else\\ \\(TOOL_RELEASE,\\ TOOL_SHA256\\)",
+    "replace": "    return (TOOL_RELEASE, TOOL_SHA256)",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "each task runs with its study's pin"
+  },
+  {
+    "name": "value eval abandoned: a ledger DONE never closes a TODO",
+    "file": "scripts/value-eval/ledger_hook.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ open_\\.pop\\(e\\[\"key\"\\],\\ None\\)\\\n",
+    "replace": "            pass\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "open todos:"
+  },
+  {
+    "name": "value eval abandoned: the ledger hook never counts TODOs",
+    "file": "scripts/value-eval/ledger_hook.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ clause\\ =\\ \",\\ %d\\ open\\ TODO%s\"\\ %\\ \\(todos,\\ \"\"\\ if\\ todos\\ ==\\ 1\\ else\\ \"s\"\\)\\ if\\ todos\\ else\\ \"\"\\\n",
+    "replace": "        clause = \"\"\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "the hook counts open TODOs"
+  },
+  {
+    "name": "value eval abandoned: a usage limit after tool calls is not infrastructure",
+    "file": "scripts/value-eval/grade.py",
+    "find": "\\ \\ \\ \\ if\\ USAGE_LIMIT\\.search\\(voice\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ \"usage\\ limit\"\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a usage limit after tool calls is infra"
+  },
+  {
+    "name": "value eval abandoned: an agent the batch stopped is not infrastructure",
+    "file": "scripts/value-eval/grade.py",
+    "find": "\\ \\ \\ \\ if\\ stop_reason\\ in\\ HALTS:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ HALTS\\[stop_reason\\]\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "an agent the batch stopped for"
+  },
+  {
+    "name": "value eval abandoned: CSV data never reaches the tree",
+    "file": "scripts/value-eval/grade.py",
+    "find": "\"\\.cfg\",\\ \"\\.csv\",\\ \"\"",
+    "replace": "\".cfg\", \"\"",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a CSV file is left out of the tree"
+  },
+  {
+    "name": "value eval abandoned: the ledger text drops the record-what-you-know line",
+    "file": "scripts/value-eval/tasks.py",
+    "find": "JOIN\\ entries\\ show\\ who\\ is\\ here\\.\\ \"\\\n\\ \\ \\ \\ \\ \"Record\\ what\\ only\\ you\\ know",
+    "replace": "JOIN entries show who is here. \"\n     \"Note what only you know",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "the ledger text lacks"
   }
 ]
