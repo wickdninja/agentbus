@@ -645,6 +645,8 @@ ab --as "$N" claim b.txt >/dev/null
 STOP; [ -n "$OUT" ] || fail "premise: a new claim did not bring the nudge back: rc $RC"
 ab --as "$N" claim c.txt >/dev/null; ab --as "$N" post "handing c.txt to the next agent" --kind handoff --reply-to "$tid" >/dev/null
 STOP; quiet || fail "a handoff that replies to a message no longer silences Stop: rc $RC out $OUT"
+# The bus stamps whole seconds: without a gap the reply handoff above can share the new claim's second and silence Stop alone.
+"$PY" -c 'import time; time.sleep(1.1)'
 ab --as "$N" claim d.txt >/dev/null; ab --as "$N" post "all finished" --kind done >/dev/null
 STOP; quiet || fail "a plain done no longer silences Stop: rc $RC out $OUT"
 ok "Stop: a done that closes a todo is not a handoff; a reply handoff and a plain done still are"

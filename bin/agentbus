@@ -14346,7 +14346,7 @@ def cmd_brief(con, a):
     result = {"bus": a._db, "me": {"name": me_name, "joined": joined} if me_name else None, "goal": goal,
               "agents": {"items": agents}, "questions": {"items": questions},
               "todos": {"items": todos},
-              "expired_claims": {"items": expired, "next": next_command(a, "--as", me_name or "NAME", "claim", "PATH", "--purpose", "WHY", as_=False) if expired else None},
+              "expired_claims": {"items": expired, "next": next_command(a, "--as", me_name or "NAME", "claim", "PATH", "--purpose", "WHY", as_=False) if expired or expired_more else None},
               "unread": {"total": unread_total, "items": unread},
               "pending_others": {"items": others, "next": next_command(a, "read", "--id", others[0]["id"], as_=False) if others else None},
               "facts": {"since": since, "items": _brief_rows(fact_rows)},
