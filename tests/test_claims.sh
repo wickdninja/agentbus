@@ -262,6 +262,7 @@ c.execute("INSERT INTO claims VALUES('dd.py','dx','',?,'2999-01-01T00:00:00Z')",
 c.execute("INSERT INTO claims VALUES('./dd.py','dy','',?,'2998-01-01T00:00:00Z')", (t,))
 c.commit()
 PY
+outof agentbus claims >/dev/null   # an ordinary open normalises them (log show only reads)
 logs=$(outof agentbus --json log show --limit 200)
 for pair in "cc.py held by cy" "./dd.py held by dy"; do
   printf '%s' "$logs" | python3 -c 'import json,sys; w=sys.argv[1]; sys.exit(0 if any(w in (r["detail"] or "") and "dropped" in r["detail"] for r in json.load(sys.stdin)["items"]) else 1)' "$pair" \
@@ -352,7 +353,7 @@ assert d['claimed_at'] == '2001-02-03T04:05:06Z', d
 assert d['resource'] == 'renew' and d['agent'] == 'renew', d
 PY
   want='original purpose'; [ "$purpose" = preserve ] || want='new purpose'
-  expect_fail "(purpose: \"$want\"). If you share a checkout with renew, wait or ask:" agentbus --as rival claim renew/sub.py
+  expect_fail "(purpose: \"$want\"). In a shared checkout, leave it until renew answers or releases it; ask:" agentbus --as rival claim renew/sub.py
   agentbus --json claims | "$PY" -c 'import json,sys; r=next(r for r in json.load(sys.stdin)["items"] if r["resource"]=="renew"); assert r["purpose"]==sys.argv[1] and r["claimed_at"]=="2001-02-03T04:05:06Z"' "$want"
 done
 ok "renewal retains purpose and claimed_at; an explicit purpose replaces it in storage, JSON and conflicts"
@@ -398,7 +399,7 @@ agentbus --as mb claim n/b.py --purpose "b work" >/dev/null
 agentbus --as mc claim n/dir/ --purpose "dir work" >/dev/null
 err=$(mktemp)
 if agentbus --as ma claim n/a.py n/b.py n/dir/x.py n/c.py 2>"$err"; then fail "a batch with held resources succeeded"; fi
-for w in "nothing claimed" "n/b.py is claimed by mb" "n/dir/x.py overlaps n/dir/, claimed by mc" "b work" "dir work" "wait or ask mb:"; do
+for w in "nothing claimed" "n/b.py is claimed by mb" "n/dir/x.py overlaps n/dir/, claimed by mc" "b work" "dir work" "ask mb:"; do
   grep -qF -- "$w" "$err" || { cat "$err"; fail "the refusal lacks '$w'"; }
 done
 left=$(agentbus --json claims | "$PY" -c 'import json,sys; print(" ".join(sorted(r["resource"] for r in json.load(sys.stdin)["items"] if r["resource"].startswith("n/"))))')
@@ -480,10 +481,10 @@ seen_ago dg 180
 seen_ago dl 4
 err=$(mktemp)
 agentbus --as dh claim d/gone.py 2>"$err" && fail "claim of a gone holder's file succeeded"
-for w in "dg was last seen 3h ago." "dg may be gone" "agentbus --as dg leave" "wait or ask: agentbus --as dh post QUESTION --to dg"; do grep -qF -- "$w" "$err" || { cat "$err"; fail "the refusal for a gone holder lacks '$w'"; }; done
+for w in "dg was last seen 3h ago." "dg may be gone" "agentbus --as dg leave" "ask: agentbus --as dh post QUESTION --to dg"; do grep -qF -- "$w" "$err" || { cat "$err"; fail "the refusal for a gone holder lacks '$w'"; }; done
 agentbus --as dh claim d/live.py 2>"$err" && fail "claim of a live holder's file succeeded"
 grep -qF "dl was last seen 4m ago." "$err" || { cat "$err"; fail "the refusal for a recent holder lacks its age"; }
-grep -qF "leave" "$err" && { cat "$err"; fail "a holder seen 4 minutes ago was offered a leave"; }
+grep -qF -- "--as dl leave" "$err" && { cat "$err"; fail "a holder seen 4 minutes ago was offered a leave"; }
 agentbus --json --as dh claim d/gone.py 2>"$err" && fail "json claim of a gone holder succeeded"
 "$PY" - "$err" <<'PY' || fail "JSON conflict fields for a gone holder"
 import json, sys

@@ -4,12 +4,13 @@
   wave_review.py --coordinator NAME[,NAME] [--since ID] [--append FILE]
                  [--json EXPORT.json] [--cli "python3 bin/agentbus"]
 
-Reads `read`, `log show`, `who` and `watch` (all --json, none with --as, and AGENTBUS_AGENT dropped, so no agent's
-last-seen or cursor moves) from the bus the environment names (AGENTBUS_DB or the nearest bus), or one `read --json`
-export given with --json (no log, no roster). A coordinator's unread count is the one `watch --json` reports, which
-covers the first 200 agents by join time. Friction posts are `[key] text` or `+1 [key]`; a key at 3 or more gets an issue.
+Reads `read`, `log show`, `who` and `status` (all --json, none with --as, AGENTBUS_AGENT dropped: each opens the bus
+read-only) from the bus the environment names (AGENTBUS_DB or the nearest bus), or one `read --json` export given with
+--json (no log, no roster). No command reads another agent's cursor without acting as it, so a coordinator's unread
+count is read from the bus file itself, opened read-only, by inbox's rule. Friction posts are `[key] text` or
+`+1 [key]`; a key at 3 or more gets an issue.
 """
-import argparse, collections, datetime, json, os, re, shlex, subprocess, sys
+import argparse, collections, datetime, json, os, re, shlex, sqlite3, subprocess, sys, urllib.parse
 
 
 def run(cli, *args):
@@ -18,6 +19,28 @@ def run(cli, *args):
     if p.returncode:
         sys.exit("wave_review: %s failed: %s" % (" ".join(args), p.stderr.strip()))
     return json.loads(p.stdout)
+
+
+def unread_counts(db, names):
+    """{name: unread} for the names that have a cursor, by inbox's rule (direct after the cursor, broadcasts after the
+    cursor and since the name first joined, not its own), from the bus file opened the way the CLI's read-only commands
+    open it: never created (mode=rw), exclusive locking (the WAL index stays in memory, no -shm), and query_only."""
+    con = sqlite3.connect("file:%s?mode=rw" % urllib.parse.quote(db), uri=True, timeout=5)
+    try:
+        con.execute("PRAGMA trusted_schema=OFF")
+        con.execute("PRAGMA locking_mode=EXCLUSIVE")
+        con.execute("PRAGMA query_only=ON")
+        out = {}
+        for name in names:
+            row = con.execute("SELECT last_read_id, bcast_from FROM cursors WHERE agent=?", (name,)).fetchone()
+            if row:
+                out[name] = con.execute(
+                    "SELECT (SELECT COUNT(*) FROM messages WHERE recipient=? AND id>? AND sender<>?)"
+                    " + (SELECT COUNT(*) FROM messages WHERE recipient='*' AND id>? AND sender<>?)",
+                    (name, row[0], name, max(row[0], row[1]), name)).fetchone()[0]
+        return out
+    finally:
+        con.close()
 
 
 def main():
@@ -39,8 +62,8 @@ def main():
         cut = run(a.cli, "read", "--id", str(a.since))["ts"] if a.since else ""
         log = [r for r in run(a.cli, "log", "show", "--limit", "-1")["items"] if r["ts"] >= cut]
         roster = {r["name"] for r in run(a.cli, "who", "--limit", "-1")["items"]}
-        counts = run(a.cli, "watch")["unread"]
-        waiting = {c: counts[c] for c in names if c in roster and c in counts}
+        counts = unread_counts(run(a.cli, "status", "--limit", "1")["bus"], [c for c in names if c in roster])
+        waiting = counts
     unread = [(c, waiting.get(c, "n/a") if waiting is not None else "n/a") for c in names]
     def where(m):
         if m["sender"] in coord: return "from brain"

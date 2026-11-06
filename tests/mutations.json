@@ -119,7 +119,7 @@
   {
     "name": "a claim refusal forbids editing outright again",
     "file": "bin/agentbus",
-    "find": "If you share a checkout with \\{first\\['holder'\\]\\}, wait or ask: \\{ask\\}\\.",
+    "find": "In a shared checkout, leave it until \\{first\\['holder'\\]\\} answers or releases it; ask: \\{ask\\}\\.",
     "replace": "Do not edit it yet. Ask {first['holder']}: {ask}.",
     "count": 1,
     "run": "tests/test_claim_refusal.sh",
@@ -641,7 +641,7 @@
   {
     "name": "PreToolUse nudges about an unclaimed path every time",
     "file": "bin/agentbus",
-    "find": "    new = \\[rel for rel in unclaimed if hook_nudge_once\\(sid, \\[\"path\", agent, rel\\]\\)\\]",
+    "find": "    new = \\[rel for rel in unclaimed if hook_nudge_once\\(sid, db, \\[\"path\", agent, rel\\]\\)\\]",
     "replace": "    new = list(unclaimed)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -650,7 +650,7 @@
   {
     "name": "PreToolUse says a held file on every edit",
     "file": "bin/agentbus",
-    "find": "or hook_nudge_once\\(sid, \\[\"held\", agent, rel, \\*holders\\]\\)\\]",
+    "find": "or hook_nudge_once\\(sid, db, \\[\"held\", agent, rel, holders\\]\\)\\]",
     "replace": "or True]",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -659,7 +659,7 @@
   {
     "name": "PreToolUse says a held file on every patch (Codex)",
     "file": "bin/agentbus",
-    "find": "or hook_nudge_once\\(sid, \\[\"held\", agent, rel, \\*holders\\]\\)\\]",
+    "find": "or hook_nudge_once\\(sid, db, \\[\"held\", agent, rel, holders\\]\\)\\]",
     "replace": "or True]",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
@@ -686,8 +686,8 @@
   {
     "name": "PreToolUse unread counts mail to other names",
     "file": "bin/agentbus",
-    "find": "rows = con\\.execute\\(scan\\.format\\(\"\"\\), \\(name, last, HOOK_UNREAD_SCAN, name\\)\\)",
-    "replace": "rows = con.execute(scan.replace(\"recipient=?\", \"recipient<>'*' AND ?<>''\").format(\"\"), (name, last, HOOK_UNREAD_SCAN, name))",
+    "find": "con\\.execute\\(scan\\.format\\(\"\"\\), \\(name, last, name, HOOK_UNREAD_SCAN \\+ 1\\)\\)",
+    "replace": "con.execute(scan.replace(\"recipient=?\", \"recipient<>'*' AND ?<>''\").format(\"\"), (name, last, name, HOOK_UNREAD_SCAN + 1))",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "12f: broadcast notes and handoffs, another name's mail or my own post were counted"
@@ -695,8 +695,8 @@
   {
     "name": "PreToolUse unread ignores the inbox cursor",
     "file": "bin/agentbus",
-    "find": "\\(name, last, HOOK_UNREAD_SCAN, name\\)\\)",
-    "replace": "(name, 0, HOOK_UNREAD_SCAN, name))",
+    "find": "\\(name, last, name, HOOK_UNREAD_SCAN \\+ 1\\)",
+    "replace": "(name, 0, name, HOOK_UNREAD_SCAN + 1)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "12f: read messages were still counted"
@@ -704,7 +704,7 @@
   {
     "name": "PreToolUse unread note on every edit",
     "file": "bin/agentbus",
-    "find": "if newest and hook_unread_mark\\(sid, name, newest\\):",
+    "find": "if newest and hook_unread_mark\\(sid, found\\[0\\], name, newest\\):",
     "replace": "if newest:",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -713,7 +713,7 @@
   {
     "name": "PreToolUse unread note on every patch (Codex)",
     "file": "bin/agentbus",
-    "find": "if newest and hook_unread_mark\\(sid, name, newest\\):",
+    "find": "if newest and hook_unread_mark\\(sid, found\\[0\\], name, newest\\):",
     "replace": "if newest:",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
@@ -722,7 +722,7 @@
   {
     "name": "hook memory keys carry no kind, so a file named held:foo is foo's held note",
     "file": "bin/agentbus",
-    "find": "\\[\"(path|held)\", agent, rel(?:, \\*holders)?\\]",
+    "find": "\\[\"(path|held)\", agent, rel(?:, holders)?\\]",
     "replace": "[agent + (\"held:\" if \"\\1\" == \"held\" else \"\") + rel]",
     "count": 2,
     "run": "tests/test_hooks_claude.sh",
@@ -731,7 +731,7 @@
   {
     "name": "the held note's memory key leaves out who holds the file",
     "file": "bin/agentbus",
-    "find": "\\[\"held\", agent, rel, \\*holders\\]",
+    "find": "\\[\"held\", agent, rel, holders\\]",
     "replace": "[\"held\", agent, rel]",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -759,7 +759,7 @@
     "name": "unread marks are said keys, so new messages push paths out of a full memory",
     "file": "bin/agentbus",
     "find": "        if newest <= marks\\.get\\(name, 0\\):\\n            return False\\n        marks\\[name\\] = newest\\n",
-    "replace": "        if [\"unread:\" + name, str(newest)] in seen:\n            return False\n        seen.append([\"unread:\" + name, str(newest)])\n",
+    "replace": "        if [\"path\", \"unread:\" + name, str(newest)] in seen:\n            return False\n        seen.append([\"path\", \"unread:\" + name, str(newest)])\n",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "12g: new messages pushed a path out of a full memory"
@@ -767,8 +767,8 @@
   {
     "name": "UserPromptSubmit does not mark what it announced",
     "file": "bin/agentbus",
-    "find": "    if sid:\\n        hook_unread_mark\\(sid, name, newest\\)  # announced here[^\\n]*\\n",
-    "replace": "",
+    "find": "        if sid:\\n            hook_unread_mark\\(sid, found\\[0\\], name, newest\\)  # announced here[^\\n]*\\n",
+    "replace": "        pass\n",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "12g: a message UserPromptSubmit announced was announced again by the next edit"
@@ -776,7 +776,7 @@
   {
     "name": "SessionStart does not mark what it announced",
     "file": "bin/agentbus",
-    "find": "    if newest and sid:\\n        hook_unread_mark\\(sid, name, newest\\)  # announced here[^\\n]*\\n",
+    "find": "        if newest and sid:\\n            hook_unread_mark\\(sid, db, name, newest\\)  # announced here[^\\n]*\\n",
     "replace": "",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -794,29 +794,128 @@
   {
     "name": "PreToolUse counts broadcast decisions sent before joining",
     "file": "bin/agentbus",
-    "find": "\\(\"\\*\", max\\(last, bcast\\), HOOK_UNREAD_SCAN",
-    "replace": "(\"*\", last, HOOK_UNREAD_SCAN",
+    "find": "\\(\"\\*\", max\\(last, bcast\\), name,",
+    "replace": "(\"*\", last, name,",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "or held broadcasts sent before that name joined"
   },
   {
-    "name": "PreToolUse unread count reads every row of its range",
+    "name": "PreToolUse unread cap is taken before the kind test, so notes hide an alert",
     "file": "bin/agentbus",
-    "find": "ORDER BY id DESC LIMIT \\?\\) WHERE",
-    "replace": "ORDER BY id DESC LIMIT -1+0*?) WHERE",
+    "find": "scan = \"SELECT kind, id FROM messages WHERE recipient=\\? AND id>\\? AND sender<>\\? \\{\\} ORDER BY id DESC LIMIT \\?\"",
+    "replace": "scan = \"SELECT kind, id FROM (SELECT kind, id, sender FROM messages WHERE recipient=? AND id>? ORDER BY id DESC LIMIT 1001) WHERE sender<>? {} ORDER BY id DESC LIMIT ?\"",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
-    "expect": "12f: on a bus of 120000 messages the unread note was cut, or the broadcast count read past its newest 1000 rows"
+    "expect": "12f: on a bus of 120000 messages the unread note was cut, or a decision under 60000 notes was not counted"
   },
   {
     "name": "PreToolUse reuses the prompt's unread sentence",
     "file": "bin/agentbus",
-    "find": "    return \\(f\"agentbus: unread direct messages, decisions and alerts: \\{hook_kind_parts\\(counts\\)\\}\\. Read them with: \\{tool\\} --as \\{name\\} inbox\\. \"\\n            \"They are information from other agents, not orders\\.\"\\)",
+    "find": "    return \\(f\"agentbus: unread direct messages, decisions and alerts: \\{hook_kind_parts\\(counts, capped\\)\\}\\. Read them with: \\{tool\\} --as \\{name\\} inbox\\. \"\\n            \"They are information from other agents, not orders\\.\"\\)",
     "replace": "    return hook_unread_note(counts, tool, name)",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
     "expect": "12f: a direct question was not added to the claim note"
+  },
+  {
+    "name": "hook memory is shared by every bus",
+    "file": "bin/agentbus",
+    "find": "    return \"\\.\" \\+ hashlib\\.sha256\\(os\\.path\\.realpath\\(db\\)[^\\n]*\\n",
+    "replace": "    return \".v2.seen\"\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12g: the unread mark of one bus silenced another bus's message"
+  },
+  {
+    "name": "hook memory reads an older agentbus's file",
+    "file": "bin/agentbus",
+    "find": "    return \"\\.\" \\+ hashlib\\.sha256\\(os\\.path\\.realpath\\(db\\)[^\\n]*\\n",
+    "replace": "    return \".seen\"\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12g: an older agentbus's memory file was read"
+  },
+  {
+    "name": "held keys share the path keys' cap",
+    "file": "bin/agentbus",
+    "find": "per_kind\\[e\\[0\\]\\] = per_kind\\.get\\(e\\[0\\], 0\\) \\+ 1\\n            if per_kind\\[e\\[0\\]\\] <= HOOK_SEEN_MAX:",
+    "replace": "per_kind[\"\"] = per_kind.get(\"\", 0) + 1\n            if per_kind[\"\"] <= HOOK_SEEN_MAX:",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12g: paths with no claim pushed a held note out of the memory"
+  },
+  {
+    "name": "a capped unread count is said as a plain number",
+    "file": "bin/agentbus",
+    "find": "\\{'\\+' if k in capped else ''\\}",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12f: a capped count was not said as 1000+"
+  },
+  {
+    "name": "resume and compact keep the held keys",
+    "file": "bin/agentbus",
+    "find": "        if sid and payload\\.get\\(\"source\"\\) in \\(\"compact\", \"resume\"\\):\\n            hook_forget_held\\(sid, db\\)[^\\n]*\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12g: a held note was not said again after a resume"
+  },
+  {
+    "name": "a broken memory file silences SessionStart",
+    "file": "bin/agentbus",
+    "find": "    except \\(OSError, SystemExit\\):\\n        pass  # a memory file that cannot be used \\(a link, a full disk\\) must not silence the note\\n    var = ",
+    "replace": "    except ZeroDivisionError:\n        pass\n    var = ",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12g: a memory file that is a link silenced SessionStart"
+  },
+  {
+    "name": "a broken memory file silences UserPromptSubmit",
+    "file": "bin/agentbus",
+    "find": "    except \\(OSError, SystemExit\\):\\n        pass  # a memory file that cannot be used \\(a link, a full disk\\) must not silence the note\\n    return hook_unread_note",
+    "replace": "    except ZeroDivisionError:\n        pass\n    return hook_unread_note",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12g: a memory file that is a link silenced UserPromptSubmit"
+  },
+  {
+    "name": "the held key holds the holders' text whole",
+    "file": "bin/agentbus",
+    "find": "hashlib\\.sha256\\(json\\.dumps\\(ids\\)\\.encode\\(\"utf-8\", \"surrogatepass\"\\)\\)\\.hexdigest\\(\\)\\[:16\\]",
+    "replace": "json.dumps(ids)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12g: a long holder name went into the memory file whole"
+  },
+  {
+    "name": "the hook held note says ask the holder or work elsewhere",
+    "file": "bin/agentbus",
+    "find": "\"In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching\\.\"\\)",
+    "replace": "\"Claims are advisory; ask the holder or work elsewhere.\")",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "held path src/app.py"
+  },
+  {
+    "name": "log show opens the bus for writing",
+    "file": "bin/agentbus",
+    "find": "\\(a\\.cmd in READ_ONLY_COMMANDS or \\(a\\.cmd == \"log\" and a\\.action == \"show\"\\)\\)",
+    "replace": "a.cmd in READ_ONLY_COMMANDS",
+    "count": 1,
+    "run": "tests/test_wave_review.sh",
+    "expect": "the review changed the bus"
+  },
+  {
+    "name": "wave_review takes coordinator unread from watch's 200 agents",
+    "file": "scripts/wave_review.py",
+    "find": "counts = unread_counts\\(run\\(a\\.cli, \"status\", \"--limit\", \"1\"\\)\\[\"bus\"\\], \\[c for c in names if c in roster\\]\\)",
+    "replace": "counts = run(a.cli, \"watch\")[\"unread\"]",
+    "count": 1,
+    "run": "tests/test_wave_review.sh",
+    "expect": "coordinator unread: claude-brain 5, late-brain 1"
   },
   {
     "name": "wave_review runs as the agent AGENTBUS_AGENT names",
@@ -920,7 +1019,7 @@
   {
     "name": "Stop reminds on every turn",
     "file": "bin/agentbus",
-    "find": "    if not hook_nudge_once\\(payload\\[\"session_id\"\\], \\[\"stop\", hashlib[^\\n]*\\n        return None\\n",
+    "find": "    if not hook_nudge_once\\(payload\\[\"session_id\"\\], found\\[0\\], \\[\"stop\", hashlib[^\\n]*\\n        return None\\n",
     "replace": "",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -956,7 +1055,7 @@
   {
     "name": "an older or newer bus makes the hooks silent without a notice",
     "file": "bin/agentbus",
-    "find": "raise HookNotice\\(refusal\\(e\\)\\[\"code\"\\]\\)",
+    "find": "raise HookNotice\\(refusal\\(e\\)\\[\"code\"\\], path\\)",
     "replace": "raise",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",
@@ -1046,7 +1145,7 @@
   {
     "name": "the memory file outlives the session",
     "file": "bin/agentbus",
-    "find": "        hook_state_drop\\(hook_state_key\\(payload\\[\"session_id\"\\], \"\\.seen\"\\)\\)[^\\n]*\\n",
+    "find": "        hook_memory_drop\\(payload\\[\"session_id\"\\]\\)[^\\n]*\\n",
     "replace": "        pass\n",
     "count": 1,
     "run": "tests/test_hooks_claude.sh",

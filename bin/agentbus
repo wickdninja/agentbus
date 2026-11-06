@@ -621,7 +621,7 @@ CONTRACT = {
                                       "resource and holder are the first blocked resource, and conflicts lists every blocked one as {resource, holder, held, "
                                       "claimed_at, expires_at, purpose, holder_last_seen, holder_idle_min, takeover} (held is the claim in the way, the resource "
                                       "itself or a folder above or inside it).",
-                           "action": "If you share a checkout with the holder, wait or ask. If you are on a separate branch, post what you are touching; the merge decides. "
+                           "action": "In a shared checkout, leave it until the holder answers or releases it. On a separate branch, post what you are touching; the merge decides. "
                                      "If takeover is given and the holder does not answer, run it and claim again. "
                                      "With several resources, leave the blocked ones out and claim the rest."},
         "not_held": {"exit": 1, "retryable": False, "fields": ["resource"], "optional_fields": ["resources"],
@@ -4710,7 +4710,7 @@ def refuse_claim(a, name, blocked, total, many):
     """Exit claim_conflict. blocked: [(resource, blocker)] in the order asked; total: how many distinct resources were
     asked for; many: more than one was typed. One resource: the one-resource message and fields. Several: nothing was
     claimed, and every blocked resource and its holder is named. The message says who holds it, why and since when, then
-    both branches, true wherever the caller runs (a shared checkout waits or asks; a separate branch posts what it
+    both branches, true wherever the caller runs (a shared checkout leaves it until the holder answers or releases it; a separate branch posts what it
     touches and the merge decides), never a guess from the working folder. A holder not seen for LIVE_WINDOW_MIN minutes
     or more may be gone: the message then says what clears its claims, and the fields carry the command."""
     first_res, first = blocked[0]
@@ -4728,13 +4728,13 @@ def refuse_claim(a, name, blocked, total, many):
         seen += (f" {names} may be gone: ask first, and take over only if no answer comes, by clearing {'its claims' if len(gone) == 1 else 'their claims'} with: "
                  + "; ".join(c for _, c in gone[:CONFLICTS_SHOWN]))
     if not many:
-        die(claim_phrase(first_res, first) + f". If you share a checkout with {first['holder']}, wait or ask: {ask}. {SEPARATE_BRANCH}" + seen,
+        die(claim_phrase(first_res, first) + f". In a shared checkout, leave it until {first['holder']} answers or releases it; ask: {ask}. {SEPARATE_BRANCH}" + seen,
             "claim_conflict", next=ask, **fields)
     shown = "; ".join(claim_phrase(res, b) for res, b in blocked[:CONFLICTS_SHOWN])
     if len(blocked) > CONFLICTS_SHOWN:
         shown += f"; and {len(blocked) - CONFLICTS_SHOWN} more (--json lists them all)"
     die(f"nothing claimed: {len(blocked)} of {total} resources are held by others. {shown}. "
-        f"If you share a checkout with them, wait or ask {first['holder']}: {ask} (and the others), "
+        f"In a shared checkout, leave them until the holders answer or release them; ask {first['holder']}: {ask} (and the others), "
         f"or leave these out and claim the rest. {SEPARATE_BRANCH}" + seen,
         "claim_conflict", next=ask, **fields,
         conflicts=[{**conflict_fields(a, res, b), "held": b["held"]} for res, b in blocked])
@@ -8611,7 +8611,7 @@ SKILL_TEXT = (
     '\n'
     'Read `inbox` at the beginning of each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
     '\n'
-    "If refused, wait or ask first; on a separate branch, post what you're touching. The error also gives the holder's last-seen: minutes ago is busy; 30 or more may be gone: ask first, take over only if no answer, with the command it gives. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.\n"
+    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. The error gives the holder's last-seen: minutes ago is busy; 30 or more may be gone: ask first, take over only if unanswered, with its command. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` is 1 to 10080 minutes.\n"
     '\n'
     '## Communicate\n'
     '\n'
@@ -11115,7 +11115,7 @@ HOOK_NOTICES = {
 
 
 class HookNotice(Exception):
-    """A reason the hooks are off that the user should see once (a key of HOOK_NOTICES)."""
+    """A reason the hooks are off that the user should see once: args are (a key of HOOK_NOTICES, the bus path)."""
 
 
 def hook_cutoff():
@@ -11174,6 +11174,15 @@ def hook_state_drop(key):
         os.unlink(os.path.join(hook_state_dir(), key))
     except (OSError, SystemExit):
         pass
+
+
+def hook_memory_drop(session_id):
+    """Remove the session's memory files, one per bus it used (and an older agentbus's SESSION.seen)."""
+    key = hook_state_key(session_id, "")
+    with os.scandir(hook_state_dir()) as entries:
+        for entry in entries:
+            if entry.name == key + ".seen" or (entry.name.startswith(key + ".") and entry.name.endswith(".v2.seen")):
+                hook_state_drop(entry.name)
 
 
 def hook_pid_alive(pid):
@@ -11838,7 +11847,7 @@ def hook_open(path, strict, read_only):
         return open_bus(path, strict, migrate=False, read_only=read_only, busy_wait=HOOK_BUSY_S, hold=HOOK_HOLD_S)
     except SystemExit as e:
         if refusal(e)["code"] in HOOK_NOTICES:
-            raise HookNotice(refusal(e)["code"])
+            raise HookNotice(refusal(e)["code"], path)
         raise
 
 
@@ -11883,17 +11892,25 @@ def hook_unread(con, name):
 
 
 def hook_direct_unread(con, name):
-    """({kind: count}, newest id) of the unread messages worth breaking an edit for: those addressed to `name` itself, plus
-    broadcast decisions and alerts. inbox's rule otherwise (after the cursor, broadcasts since the agent first joined, not
-    its own). Each scan reads at most the newest HOOK_UNREAD_SCAN rows of its index range (idx_messages_recipient), so a
-    backlog of any size stays inside the hook's hold budget; what it counts is among those. Nothing is marked read."""
+    """({kind: count}, newest id, capped kinds) of the unread messages worth breaking an edit for: those addressed to `name`
+    itself, plus broadcast decisions and alerts. inbox's rule otherwise (after the cursor, broadcasts since the agent first
+    joined, not its own). Each scan walks idx_messages_recipient from the newest row and stops at HOOK_UNREAD_SCAN messages
+    it counts (the kind and sender tests are inside the limit, so notes between never hide an alert); a kind counted in a
+    scan that stopped there is capped, said as N+. Nothing is marked read."""
     last, bcast = hook_cursor(con, name)
     marks = ",".join("?" * len(HOOK_EDIT_BCAST))
-    scan = ("SELECT kind, COUNT(*), MAX(id) FROM (SELECT kind, id, sender FROM messages WHERE recipient=? AND id>? "
-            "ORDER BY id DESC LIMIT ?) WHERE sender<>? {} GROUP BY kind")
-    rows = con.execute(scan.format(""), (name, last, HOOK_UNREAD_SCAN, name)).fetchall()
-    rows += con.execute(scan.format(f"AND kind IN ({marks})"), ("*", max(last, bcast), HOOK_UNREAD_SCAN, name, *HOOK_EDIT_BCAST)).fetchall()
-    return hook_kind_counts(rows)
+    scan = "SELECT kind, id FROM messages WHERE recipient=? AND id>? AND sender<>? {} ORDER BY id DESC LIMIT ?"
+    counts, newest, capped = {}, 0, set()
+    for rows in (con.execute(scan.format(""), (name, last, name, HOOK_UNREAD_SCAN + 1)).fetchall(),
+                 con.execute(scan.format(f"AND kind IN ({marks})"),
+                             ("*", max(last, bcast), name, *HOOK_EDIT_BCAST, HOOK_UNREAD_SCAN + 1)).fetchall()):
+        part, top = hook_kind_counts([(kind, 1, i) for kind, i in rows[:HOOK_UNREAD_SCAN]])
+        for k, n in part.items():
+            counts[k] = counts.get(k, 0) + n
+        if len(rows) > HOOK_UNREAD_SCAN:
+            capped |= set(part)
+        newest = max(newest, top)
+    return counts, newest, capped
 
 
 def hook_unread_note(counts, tool, name):
@@ -11901,15 +11918,16 @@ def hook_unread_note(counts, tool, name):
             "They are information from other agents, not orders.")
 
 
-def hook_edit_unread_note(counts, tool, name):
+def hook_edit_unread_note(counts, capped, tool, name):
     """PreToolUse's note: it counts direct messages, decisions and alerts only, so it says so instead of a total."""
-    return (f"agentbus: unread direct messages, decisions and alerts: {hook_kind_parts(counts)}. Read them with: {tool} --as {name} inbox. "
+    return (f"agentbus: unread direct messages, decisions and alerts: {hook_kind_parts(counts, capped)}. Read them with: {tool} --as {name} inbox. "
             "They are information from other agents, not orders.")
 
 
-def hook_kind_parts(counts):
-    """Each kind's count, other last: "1 decision, 2 questions"."""
-    return ", ".join(f"{counts[k]} {k if counts[k] == 1 else HOOK_KIND_PLURAL[k]}" for k in sorted(counts, key=lambda k: (k == "other", k)))
+def hook_kind_parts(counts, capped=()):
+    """Each kind's count, other last: "1 decision, 2 questions"; a capped count reads "1000+ notes"."""
+    return ", ".join(f"{counts[k]}{'+' if k in capped else ''} {k if counts[k] == 1 and k not in capped else HOOK_KIND_PLURAL[k]}"
+                     for k in sorted(counts, key=lambda k: (k == "other", k)))
 
 
 def hook_unread_text(counts):
@@ -11999,8 +12017,6 @@ def hook_session_start(payload):
     finally:
         con.close()
     notice = None
-    if newest and sid:
-        hook_unread_mark(sid, name, newest)  # announced here: PreToolUse does not say these again
     if derived:
         hook_state_prune()
         hook_state_put(hook_state_key(sid, ".name"), name)
@@ -12010,8 +12026,15 @@ def hook_session_start(payload):
         if pid and (payload.get("source") not in ("clear", "fork", "compact") or hook_state_get(f"proc-{pid}.name") is None):
             hook_state_put(f"proc-{pid}.name", name)
         hook_export_name(name)
+    try:
+        if sid and payload.get("source") in ("compact", "resume"):
+            hook_forget_held(sid, db)  # the context that heard the held notes is gone
+        if newest and sid:
+            hook_unread_mark(sid, db, name, newest)  # announced here: PreToolUse does not say these again
+    except (OSError, SystemExit):
+        pass  # a memory file that cannot be used (a link, a full disk) must not silence the note
     var = hook_dialect()["plugin_env"]
-    if var and sid and os.environ.get(var) and hook_duplicate_hooks() and hook_nudge_once(sid, ["notice", "duplicate"]):
+    if var and sid and os.environ.get(var) and hook_duplicate_hooks() and hook_nudge_once(sid, db, ["notice", "duplicate"]):
         notice = HOOK_NOTICES["duplicate"]
     tool = hook_tool(db)
     base = (f"{max(agents, 1)} agent{' is' if agents == 1 else 's are'} on it, {hook_unread_text(unread)}"
@@ -12049,8 +12072,11 @@ def hook_user_prompt(payload):
         con.close()
     if not newest:
         return None
-    if sid:
-        hook_unread_mark(sid, name, newest)  # announced here: PreToolUse does not say these again
+    try:
+        if sid:
+            hook_unread_mark(sid, found[0], name, newest)  # announced here: PreToolUse does not say these again
+    except (OSError, SystemExit):
+        pass  # a memory file that cannot be used (a link, a full disk) must not silence the note
     return hook_unread_note(unread, hook_tool(found[0]), name), None
 
 
@@ -12060,19 +12086,19 @@ def hook_sid(payload):
     return sid if isinstance(sid, str) and sid else None
 
 
-def hook_nudge_once(session_id, key):
-    """True the first time `key` is said in this session; remembered, at most HOOK_SEEN_MAX keys, the oldest dropped.
-    A key is a list of text whose first item is its kind ("path", "held", "notice", "stop"), so no path can pass for
-    another kind's key."""
+def hook_nudge_once(session_id, db, key):
+    """True the first time `key` is said in this session on bus `db`; remembered, at most HOOK_SEEN_MAX keys of each kind,
+    the oldest dropped. A key is a list of text whose first item is its kind ("path", "held", "notice", "stop"), so no
+    path can pass for another kind's key, and 200 files with no claim push no held note out."""
     def change(seen, marks):
         if key in seen:
             return False
         seen.append(key)
         return True
-    return hook_memory(session_id, change)
+    return hook_memory(session_id, db, change)
 
 
-def hook_unread_mark(session_id, name, newest):
+def hook_unread_mark(session_id, db, name, newest):
     """True when message `newest` is past the newest one already announced to `name` in this session; it is then
     remembered. One mark per name, kept apart from the said keys, so new messages never push a path out."""
     def change(seen, marks):
@@ -12080,15 +12106,29 @@ def hook_unread_mark(session_id, name, newest):
             return False
         marks[name] = newest
         return True
-    return hook_memory(session_id, change)
+    return hook_memory(session_id, db, change)
 
 
-def hook_memory(session_id, change):
-    """Run change(seen, marks) on this session's memory and save it when change returns True; returns that. The file
-    holds one JSON list per line: the said keys, then ["unread", name, id] marks. A line that is not one (an older
-    agentbus wrote it) is dropped. Updated under an exclusive lock on the file, so hooks running at once (a subagent's,
-    parallel tool calls) lose none. A link or another user's file there is an error (the hook is silent)."""
-    path = os.path.join(hook_state_dir(), hook_state_key(session_id, ".seen"))
+def hook_forget_held(session_id, db):
+    """Drop the session's held keys for bus `db`, so each held file is said again."""
+    def change(seen, marks):
+        seen[:] = [e for e in seen if e[0] != "held"]
+        return True
+    return hook_memory(session_id, db, change)
+
+
+def hook_memory_suffix(db):
+    """The memory file's name after the session's part: the bus (a hash of its real path, so two buses never share a mark
+    or a key) and the format. An older agentbus's SESSION.seen has another name and is never read."""
+    return "." + hashlib.sha256(os.path.realpath(db).encode("utf-8", "surrogateescape")).hexdigest()[:12] + ".v2.seen"
+
+
+def hook_memory(session_id, db, change):
+    """Run change(seen, marks) on this session's memory for bus `db` and save it when change returns True; returns that.
+    The file holds one JSON list per line: the said keys, then ["unread", name, id] marks. Updated under an exclusive lock
+    on the file, so hooks running at once (a subagent's, parallel tool calls) lose none. A link or another user's file
+    there is an error (the hook is silent)."""
+    path = os.path.join(hook_state_dir(), hook_state_key(session_id, hook_memory_suffix(db)))
     fd = os.open(path, os.O_RDWR | os.O_CREAT | NOFOLLOW | NONBLOCK, 0o600)
     try:
         st = os.fstat(fd)
@@ -12118,7 +12158,12 @@ def hook_memory(session_id, change):
                 seen.append(entry)
         if not change(seen, marks):
             return False
-        out = "".join(json.dumps(e) + "\n" for e in seen[-HOOK_SEEN_MAX:] + [["unread", n, i] for n, i in sorted(marks.items())])
+        kept, per_kind = [], {}
+        for e in reversed(seen):  # the newest HOOK_SEEN_MAX of each kind
+            per_kind[e[0]] = per_kind.get(e[0], 0) + 1
+            if per_kind[e[0]] <= HOOK_SEEN_MAX:
+                kept.append(e)
+        out = "".join(json.dumps(e) + "\n" for e in kept[::-1] + [["unread", n, i] for n, i in sorted(marks.items())])
         out = out.encode("ascii")
         os.ftruncate(fd, 0)
         os.lseek(fd, 0, os.SEEK_SET)
@@ -12232,31 +12277,31 @@ def hook_pre_tool_use(payload):
             if holders:
                 # Who holds it and since when, in the memory key: a claim made after the note was said is said again. Never printed.
                 ids = sorted(tuple(v if isinstance(v, str) else repr(v) for v in row) for row in holders)
-                held.append((rel, [x for pair in ids for x in pair]))
+                held.append((rel, hashlib.sha256(json.dumps(ids).encode("utf-8", "surrogatepass")).hexdigest()[:16]))
             elif not own:
                 unclaimed.append(rel)
-        unread, newest = hook_direct_unread(con, name) if sid and not agent else ({}, 0)
+        unread, newest, capped = hook_direct_unread(con, name) if sid and not agent else ({}, 0, set())
     finally:
         con.close()
     copy = hook_tool(found[0])
-    notes = [hook_claim_note(sid, agent, held, unclaimed, peers, copy, name)]
-    if newest and hook_unread_mark(sid, name, newest):  # once per new message, under this name
-        notes.append(hook_edit_unread_note(unread, copy, name))
+    notes = [hook_claim_note(sid, found[0], agent, held, unclaimed, peers, copy, name)]
+    if newest and hook_unread_mark(sid, found[0], name, newest):  # once per new message, under this name
+        notes.append(hook_edit_unread_note(unread, capped, copy, name))
     text = " ".join(n for n in notes if n)
     return (text, None) if text else None
 
 
-def hook_claim_note(sid, agent, held, unclaimed, peers, copy, name):
+def hook_claim_note(sid, db, agent, held, unclaimed, peers, copy, name):
     """The claim half of the PreToolUse text, or None. A held file is said once per file, set of claims on it and session
     (without a session, every time: there is nothing to remember it in), so a new holder is said again; a file with no
     claim once per session. Every new path is remembered, and one message covers them. Keys are scoped by `agent`."""
-    if [rel for rel, holders in held if sid is None or hook_nudge_once(sid, ["held", agent, rel, *holders])]:
+    if [rel for rel, holders in held if sid is None or hook_nudge_once(sid, db, ["held", agent, rel, holders])]:
         return (f"agentbus: a claim under a different name covers this file. See who and why: {copy} --as {name} claims. "
-                "Claims are advisory; ask the holder or work elsewhere.")
+                "In a shared checkout, leave it until the holder answers or releases it; on a separate branch, post what you are touching.")
     # Alone on the bus there is nobody to claim against: no nudge.
     if not peers or sid is None:
         return None
-    new = [rel for rel in unclaimed if hook_nudge_once(sid, ["path", agent, rel])]  # every new path is remembered; one message covers them
+    new = [rel for rel in unclaimed if hook_nudge_once(sid, db, ["path", agent, rel])]  # every new path is remembered; one message covers them
     if not new:
         return None
     first = new[0] if HOOK_PATH_OK.fullmatch(new[0]) else None  # a path is the session's own text, but only a plain one is printed
@@ -12290,15 +12335,15 @@ def hook_stop(payload):
     if said:
         return None
     # Once per set of claims held and session: holding a claim across turns is normal work.
-    if not hook_nudge_once(payload["session_id"], ["stop", hashlib.sha256("\0".join(held).encode("utf-8", "replace")).hexdigest()[:16]]):
+    if not hook_nudge_once(payload["session_id"], found[0], ["stop", hashlib.sha256("\0".join(held).encode("utf-8", "replace")).hexdigest()[:16]]):
         return None
     # A systemMessage: the person sees it, the agent does not.
     return None, f"agentbus: {name} still holds {count} claim{'' if count == 1 else 's'} and has not posted a handoff or done."
 
 
 def hook_session_end(payload):
-    if isinstance(payload.get("session_id"), str) and payload["session_id"]:
-        hook_state_drop(hook_state_key(payload["session_id"], ".seen"))  # the session is over, whoever it was
+    if hook_sid(payload):
+        hook_memory_drop(payload["session_id"])  # the session is over, whoever it was
     ident = hook_identity(payload)
     if not ident or not ident[1] or payload.get("reason") not in HOOK_END_REASONS:
         return None  # only a name this session derived, and only when the session really ends
@@ -12398,8 +12443,9 @@ def hook_run(argv):
         result = handler(payload)
     except HookNotice as e:
         sid = hook_sid(payload)
-        shown = event in ("SessionStart", "UserPromptSubmit") and sid is not None and hook_nudge_once(sid, ["notice", str(e)])
-        result = (None, HOOK_NOTICES[str(e)]) if shown else None
+        code, bus = e.args
+        shown = event in ("SessionStart", "UserPromptSubmit") and sid is not None and hook_nudge_once(sid, bus, ["notice", code])
+        result = (None, HOOK_NOTICES[code]) if shown else None
     out = hook_render(event, *result) if result else None
     if out:
         sys.stdout.write(json.dumps(out, separators=(",", ":")) + "\n")
@@ -14434,7 +14480,7 @@ def run(a):
         die(f"{e.strerror or e}: {e.filename or ''}".rstrip(": "), "bus_unavailable")
 
 
-# Commands that only read: run under no name (nothing to touch), they use a read-only open, so they
+# Commands that only read (these, and log show): run under no name (nothing to touch), they use a read-only open, so they
 # work beside a live writer; the open changes no data or schema, and may finish SQLite's recovery of a
 # crashed writer's journal. A bus that needs a write first (no tables yet, an older
 # schema) gets the ordinary open, which creates or migrates it as before.
@@ -14442,7 +14488,7 @@ READ_ONLY_COMMANDS = ("who", "status", "read", "brief")
 
 
 def open_for(a, strict):
-    if a.cmd in READ_ONLY_COMMANDS and not ident(a):
+    if (a.cmd in READ_ONLY_COMMANDS or (a.cmd == "log" and a.action == "show")) and not ident(a):
         try:
             return open_bus(a._db, strict, read_only=True)
         except SystemExit as e:

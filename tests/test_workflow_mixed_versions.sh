@@ -32,7 +32,7 @@ ok "each version reads what the other wrote"
 
 echo "CELL 2: claims and facts written by one version are enforced and shown by the other"
 old --as legacy claim src/a.py --purpose "old claim" >/dev/null
-refuse 1 "agentbus: src/a.py is claimed by legacy since <TS> until <TS> (purpose: \"old claim\"). If you share a checkout with legacy, wait or ask: agentbus --as current post QUESTION --to legacy --kind question. On a separate branch, post what you are touching; the merge decides. legacy was last seen <ago>." \
+refuse 1 "agentbus: src/a.py is claimed by legacy since <TS> until <TS> (purpose: \"old claim\"). In a shared checkout, leave it until legacy answers or releases it; ask: agentbus --as current post QUESTION --to legacy --kind question. On a separate branch, post what you are touching; the merge decides. legacy was last seen <ago>." \
   agentbus --as current claim src/a.py
 agentbus --as current claim src/b.py --purpose "new claim" >/dev/null
 refuse 1 "agentbus: src/b.py is claimed by current until <TS> (new claim). Do not edit it yet. Ask current with post --to current --kind question, or choose another resource." \
