@@ -16,7 +16,7 @@ echo "TEST: a refusal is always true: who, why, since when, and both branches; c
 # said nothing of since when, and left no row to count refusals from. A cwd guess about the checkout would be wrong in
 # the other direction, so the text is the same wherever the claim runs.
 RF_SAME='wait or ask'
-RF_BRANCH='If you are on a separate branch, post what you are touching; the merge decides.'
+RF_BRANCH='On a separate branch, post what you are touching; the merge decides.'
 for n in rh1 rh2 rw; do agentbus --as $n join --tool t >/dev/null; done
 agentbus --as rh1 claim r/a.py --purpose "auth work" >/dev/null
 agentbus --as rh2 claim r/b.py --purpose "tests" >/dev/null
@@ -28,7 +28,7 @@ grep -qF 'r/a.py is claimed by rh1 since ' "$err" || { cat "$err"; fail "the ref
 grep -qF 'purpose: "auth work"' "$err" || { cat "$err"; fail "the refusal lacks why"; }
 grep -qF "Do not edit" "$err" && { cat "$err"; fail "the refusal still forbids editing outright"; }
 agentbus --as rw claim r/a.py r/b.py 2>"$err" && fail "batch claim of held files succeeded"
-grep -qF "If you share a checkout with the holders, wait or ask rh1: agentbus --as rw post QUESTION --to rh1 --kind question (and the others the same way), or leave these out and claim the rest." "$err" || { cat "$err"; fail "the batch refusal lacks the same-checkout branch"; }
+grep -qF "nothing claimed: 2 of 2 resources are held by others. " "$err" && grep -qF "If you share a checkout with them, wait or ask rh1: agentbus --as rw post QUESTION --to rh1 --kind question (and the others), or leave these out and claim the rest." "$err" || { cat "$err"; fail "the batch refusal lacks the same-checkout branch"; }
 grep -qF "$RF_BRANCH" "$err" || { cat "$err"; fail "the batch refusal lacks the separate-branch branch"; }
 # no inference from where the claim runs: the same text from a plain folder and from inside a git checkout
 mkdir -p "$TMP/plain" "$TMP/repo"; git -C "$TMP/repo" init -q 2>/dev/null

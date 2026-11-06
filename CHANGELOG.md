@@ -7,12 +7,12 @@
 - `claim` and `release` take several resources in one call, all or none (up to 100). If another agent holds any of them, nothing is claimed and the error names every blocked resource and its holder. `--json` keeps the claim object for one resource and returns `{"claims": [...], "claimed_count": N}` for several; the error gains `conflicts`. `release` refuses the lot, naming every resource you do not hold, unless `--if-held`.
 - A claim conflict says when the holder was last seen. Once the holder has been silent for 30 minutes it also gives the command that clears its claims (`agentbus --as HOLDER leave`; `takeover` in `--json`), so a dead session no longer holds a file for up to two hours with no way out.
 - `agentbus --as NAME wait [--timeout SECONDS]` blocks until you have an unread message, then prints how many and the command that reads them. It marks nothing read and does not hold the bus while it waits. Exit 0 on messages, 124 (`wait_timeout`) when the timeout (600 s by default, at most 1800) ends first. Run it as a background command to be told when work arrives; it does not wake an idle session.
-- The hook before an edit (Claude Code and Codex) also says how many messages wait for this session's name: those sent to it, plus broadcast decisions and alerts. It says so once for each new message, so an agent deep in edits hears of a question without a new prompt.
+- The hook before an edit (Claude Code and Codex) also says how many messages wait for this session's name: those sent to it, plus broadcast decisions and alerts. It says so once for each message not already announced (at SessionStart, on a prompt or at an earlier edit), so an agent deep in edits hears of a question without a new prompt. A subagent is not told: its parent hears it.
 
 ### Changed
 
-- The hook note that another name holds a claim on a file now comes once per file per session, not on every edit of it.
-- A claim refusal now says who holds the file, why and since when, then both branches: "If you share a checkout with HOLDER, wait or ask" and "If you are on a separate branch, post what you are touching; the merge decides." It is the same wherever you run it and no longer says "Do not edit it yet" outright. `--json` errors (and each entry of `conflicts`) carry the holder's `claimed_at`.
+- The hook note that another name holds a claim on a file now comes once per file and holder per session, not on every edit of it.
+- A claim refusal now says who holds the file, why and since when, then both branches: "If you share a checkout with HOLDER, wait or ask" and "On a separate branch, post what you are touching; the merge decides." It is the same wherever you run it and no longer says "Do not edit it yet" outright. `--json` errors (and each entry of `conflicts`) carry the holder's `claimed_at`.
 - Every refused claim writes a `claim_refused` row to the log, with JSON detail `{"conflicts": [{resource, held, holder, claimed_at}]}`, so refusals can be counted. A busy bus never turns the refusal into another error.
 - `--request-id` replays a write only for `post` and `join`, where the bus stores the token. On `leave`, `claim`, `release`, `ctx set` and `goal` it is accepted and ignored: the help, `schema`, the skill and the reference say what a repeat really does (`ctx set` and `goal` set the value again over a change made since), and an error after one of them saved is `retryable: false`.
 - Every open sets `PRAGMA synchronous=FULL`, so a write is synced before its command reports it, whatever default the SQLite build has.
@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- The hooks' once-per-session memory keeps file paths apart from its other entries, so a file named like one of them can no longer silence a note, and a payload with an empty session id no longer shares one memory file with every other such payload.
 - `setup` can no longer be redirected by a folder swapped for a link while it runs: every write, backup and removal goes through a folder held open with `O_NOFOLLOW`, and a link that appears in the way is refused by name.
 - `agentbus init` on the home folder no longer prints a `cd` and `join` step that fails: discovery never looks in the home folder, so it says to pick a project folder instead.
 - `doctor` finds a second bus above worktrees made with `worktree.useRelativePaths`, and prints a path in its hints as `~/'my dir'`, never `'~/my dir'`.

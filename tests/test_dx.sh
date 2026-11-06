@@ -55,7 +55,7 @@ pin = os.environ.get("AGENTBUS_TEST_NOW")   # a test-only hook: the clock starts
 today = (datetime.strptime(pin, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone() if pin else datetime.now()).date()
 print(t.strftime("%H:%M") if t.date() == today else t.strftime("%b ") + str(t.day) + t.strftime(" %H:%M"))' "$1"; }
 exp=$(when expires_at); since=$(when claimed_at)
-refusal_rest() { echo "If you share a checkout with claude, wait or ask: agentbus --as codex post QUESTION --to claude --kind question. If you are on a separate branch, post what you are touching; the merge decides."; }
+refusal_rest() { echo "If you share a checkout with claude, wait or ask: agentbus --as codex post QUESTION --to claude --kind question. On a separate branch, post what you are touching; the merge decides."; }
 expect_fail "src/api/ is claimed by claude since $since until $exp (purpose: \"review\"). $(refusal_rest)" agentbus --as codex claim src/api/
 expect_fail "src/api/a.py overlaps src/api/, claimed by claude since $since until $exp (purpose: \"review\"). $(refusal_rest)" agentbus --as codex claim src/api/a.py
 ok "claim conflicts name holder, expiry, and recovery"

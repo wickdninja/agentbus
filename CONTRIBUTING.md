@@ -15,7 +15,7 @@ Set `PYTHON` to test another interpreter, for example `PYTHON=python3.15`. Tests
 
 Adding a command? Add its test file `tests/test_<command>.sh` (it is picked up by name), a line in `tests/test_docs.sh` if it changes the reference, and, when it changes what an agent or a person does end to end, a step in the matching `tests/test_workflow_*.sh` story. Break the behaviour on purpose and watch the test fail: add an entry to `tests/mutations.json` naming the test (`python3 scripts/mutate.py --list`, `bash tests/test_mutations.sh`).
 
-Friction posts on the bus start with a key, `[join-name] what happened`; check `agentbus read --topic friction` first and, if the key is there, post only `+1 [join-name]`. `scripts/wave_review.py` (internal) counts keys at each wave's close, and any key at 3 or more gets an issue.
+Maintainers building agentbus on its own bus: [docs/internal/dogfood.md](docs/internal/dogfood.md).
 
 Agent evals (Claude Code and Codex doing real work on the bus) are run by the maintainers before a release: see [docs/evals/README.md](docs/evals/README.md). They spend tokens and are not part of `bash tests/run_all.sh`.
 

@@ -36,7 +36,7 @@ ok "handoff delivered once, to the right agent"
 
 echo "STEP 3: the worker claims a folder; the reviewer is refused with the exact conflict text"
 jcall claim --as worker claim app/api --purpose "health route" | jis "the claim reply" 'r["resource"] == "app/api" and r["agent"] == "worker" and r["purpose"] == "health route"'
-refuse 1 "agentbus: app/api/health.py overlaps app/api, claimed by worker since <TS> until <TS> (purpose: \"health route\"). If you share a checkout with worker, wait or ask: agentbus --as reviewer post QUESTION --to worker --kind question. If you are on a separate branch, post what you are touching; the merge decides. worker was last seen <ago>." \
+refuse 1 "agentbus: app/api/health.py overlaps app/api, claimed by worker since <TS> until <TS> (purpose: \"health route\"). If you share a checkout with worker, wait or ask: agentbus --as reviewer post QUESTION --to worker --kind question. On a separate branch, post what you are touching; the merge decides. worker was last seen <ago>." \
   agentbus --as reviewer claim app/api/health.py --purpose "review"
 is_equal "only the worker holds a claim" "app/api|worker|health route" "$(sql "SELECT resource, agent, purpose FROM claims")"
 ok "claim conflict refused with the documented text"

@@ -58,7 +58,7 @@ The agent never has to join or poll by hand. The hooks tell it its name and the 
 | --- | --- |
 | A session starts, resumes, is cleared, forked or compacted | Joins the bus, then says who it is and how many agents seen in the last 30 minutes and messages are waiting. Nothing is marked read. |
 | You send a prompt | Says how many messages are unread, only when there are some. |
-| Before an edit or write | If another name holds a claim on the file, says so, once per file per session. If nobody holds it and another agent is live, suggests claiming it, once per file per session. If messages sent to the session's name, or broadcast decisions or alerts, are unread, says how many, once for each new message. |
+| Before an edit or write | If another name holds a claim on the file, says so, once per file per session. If nobody holds it and another agent is live, suggests claiming it, once per file per session. If messages sent to the session's name, or broadcast decisions or alerts, are unread, says how many, once for each message not already announced (not in a subagent: its parent hears it). |
 | A turn ends | If the agent holds claims and has posted no handoff or done since, shows you a reminder, once for each set of claims. It never blocks the turn. |
 | A session ends | Leaves the bus and releases its claims. |
 
