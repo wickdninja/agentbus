@@ -5523,7 +5523,8 @@ def limit_arg(parser, default=LISTING_LIMIT, what="rows"):
 def register_join(sub):
     j = sub("join", help="Register yourself; refuses a name active in the last 30 min unless --takeover",
             description="Register yourself on the roster under a name. Give it either way: agentbus --as NAME join, or agentbus join NAME. "
-                        "Every other command takes the name with --as (or AGENTBUS_AGENT) only.")
+                        "Every other command takes the name with --as (or AGENTBUS_AGENT) only. "
+                        "It refuses a name active in the last 30 min unless --takeover.")
     j.add_argument("name", nargs="?", metavar="NAME", help="Your name, the same as --as NAME before the command.")
     j.add_argument("--tool", help="Tool running this session.")
     j.add_argument("--model", help="Model running this session.")
