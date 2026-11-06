@@ -300,6 +300,35 @@ rc=0; env VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions none -
 [ "$rc" = 8 ] && [ ! -e "$T/cu2/manifest.jsonl" ] || { cat "$T/log"; fail "a plan already past its stop started a run (rc $rc)"; }
 ok "50, 70, then 90 halts before the third run; a plan already at 95 never starts"
 
+echo "TEST 21: livehold (follow-up fix1): bob starts on alice's first edit; taking her live claim fails, waiting for it passes, on both channels"
+for mode in good live-steal live-wait; do
+  env VALUE_STUB_MODE=$mode VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks livehold --conditions agentbus ledger --pairings cc --seeds 1 --time-cap 60 --snap-every 0.2 --out "$T/lh-$mode" >"$T/log" 2>&1 || { cat "$T/log"; fail "livehold $mode run"; }
+  grades "$T/lh-$mode"
+  "$PY" -B "$SCRIPTS/channel_grade.py" "$T/lh-$mode" >/dev/null || fail "livehold $mode: channel grade"
+done
+"$PY" -B - "$T" <<'CHECK' || fail "livehold"
+import glob, json, os, sys
+for mode, want in (("good", True), ("live-steal", False), ("live-wait", True)):
+    rows = [json.loads(l) for l in open(os.path.join(sys.argv[1], "lh-" + mode, "manifest.jsonl"))]
+    assert {r["condition"] for r in rows} == {"agentbus", "ledger"}, rows
+    for r in rows:
+        d = os.path.join(sys.argv[1], "lh-" + mode, r["id"])
+        g, c, run = (json.load(open(os.path.join(d, n))) for n in ("grade.json", "channel.json", "run.json"))
+        assert g["pass"], (mode, r["condition"], "the hidden tests must pass in every mode", g["features"])
+        first = min(e["ts"] for e in json.load(open(os.path.join(d, "edits.json"))) if e["agent"] == "alice" and e["path"] == "src/rates.py")
+        assert run["late_start"]["why"] == "changed" and run["agents"]["bob"]["t_start"] >= first, ("bob started before alice's first edit", run, first)
+        assert c["live"]["live_ok"] is want, ("a live takeover was graded wrong", mode, r["condition"], c["live"])
+        if mode == "live-steal":
+            assert c["live"]["takeovers_while_alive"] == 1 and c["live"]["edits_under_live_claim"] >= 1, ("a live takeover was not counted", r["condition"], c["live"])
+        kept = os.listdir(os.path.join(d, "channel"))
+        assert ("bus.db" in kept) if r["condition"] == "agentbus" else ({"COORDINATION.md", "ledger-watch.jsonl"} <= set(kept)), ("no channel kept", kept)
+        names = {n for _d, ds, fs in os.walk(os.path.join(d, "final")) for n in ds + fs}
+        assert not names & {".agentbus", "COORDINATION.md", "channel"}, names
+CHECK
+rc=0; out=$("$PY" -B "$SCRIPTS/analyze_fix1.py" "$T/lh-good" --n 1) || rc=$?
+[ "$rc" = 3 ] && grep -q 'no contrasts: 6 cells' <<<"$out" || fail "the follow-up analysis must refuse a batch missing cells: $out"
+ok "bob waits for alice's first edit; a live takeover fails on the bus and the ledger, waiting passes; the channel is kept beside final/, never in it"
+
 echo "TEST 13: a run leaves nothing behind"
 [ -z "$(find "$TMPDIR" -maxdepth 1 -name 'value-run-*' | grep -v forbidden || true)" ] || fail "run folders left: $(ls "$TMPDIR")"
 ok "the mktemp folders are gone"

@@ -5,7 +5,8 @@ VALUE_STUB_MODE picks a behaviour: good (default), clobber (bob overwrites alice
 hang (never exits), spam (tool calls forever), hook-leak (reports a hook firing), plugin-leak (reports a user plugin),
 env-dump (writes its environment's names to VALUE_STUB_ENV_OUT and plays good), auth-fail (a sign-in error and no tool call),
 conflict (each role writes its own VERSION), leak-token, auth-refresh, auth-report (Codex sign-in faults and a report on the copy), codex-hooks, codex-skill, codex-state
-(a planted hook or skill, and the state Codex makes for itself), usage-limit (a plan limit, after VALUE_STUB_LIMIT_AFTER tool calls), no-hooks, hook-fail (hook outcomes), settings-report (hook install), break-link (bob replaces his ledger link), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder).
+(a planted hook or skill, and the state Codex makes for itself), usage-limit (a plan limit, after VALUE_STUB_LIMIT_AFTER tool calls), no-hooks, hook-fail (hook outcomes), settings-report (hook install), break-link (bob replaces his ledger link), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder),
+live-steal and live-wait (livehold: alice claims src/rates.py and keeps working; bob takes her claim while she is alive, or waits for her release).
 """
 import json
 import os
@@ -171,8 +172,44 @@ if mode == "lazy":
     finish()
     sys.exit(0)
 
+
+
+def live(mode):
+    """livehold with real claims, on the bus or the ledger: alice holds src/rates.py across two edits; bob takes it from her while she
+    is alive (live-steal) or waits until she lets it go (live-wait). Both end with every hidden test passing."""
+    bus = condition == "agentbus"
+    note = lambda kind, text: bash("printf '\\n%%s %s %s: %s\\n' \"$(date +%%H:%%M:%%S)\" >> COORDINATION.md" % (role, kind, text))  # noqa: E731
+    if role == "alice":
+        bash("agentbus --as alice join && agentbus --as alice claim src/rates.py --purpose steps") if bus else note("CLAIM", "src/rates.py (steps)")
+        mine = tasks.livehold_alice_reference(seed)["src/rates.py"]
+        write("src/rates.py", mine)
+        time.sleep(3)
+        write("src/rates.py", mine)
+        time.sleep(3)
+        bash("agentbus --as alice leave") if bus else note("RELEASE", "src/rates.py")
+        return
+    bash("agentbus --as bob join") if bus else note("JOIN", "promo codes")
+    if mode == "live-steal":
+        time.sleep(4)
+        bash("agentbus --as bob claim src/rates.py --from alice --purpose promo") if bus else note("CLAIM", "src/rates.py (promo)")
+    else:
+        bash("until ! agentbus claims | grep -q alice; do sleep 0.3; done; agentbus --as bob claim src/rates.py --purpose promo" if bus else
+             "until grep -q 'alice RELEASE' COORDINATION.md; do sleep 0.3; done")
+        if not bus:
+            note("CLAIM", "src/rates.py (promo)")
+    for rel, text in tasks.reference(task_name, seed).items():
+        write(rel, text)
+    bash("agentbus --as bob leave") if bus else note("RELEASE", "src/rates.py")
+
+
+if task_name == "livehold" and mode in ("live-steal", "live-wait"):
+    live(mode)
+    finish()
+    sys.exit(0)
 channel("starting")
 ref = tasks.reference(task_name, seed)
+if task_name == "livehold" and role == "alice":
+    ref = tasks.livehold_alice_reference(seed)
 task = tasks.build(task_name, seed)
 if task_name == "recovery" and role == "alice":
     wanted = sorted(k for k in ref if k.startswith("src/") and not k.endswith("__init__.py"))[:3]

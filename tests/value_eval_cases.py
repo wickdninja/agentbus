@@ -48,7 +48,7 @@ def solved(task, seed, *extra):
 
 
 def test_hidden_both_ways():
-    for task in tasks.TASKS:
+    for task in tasks.TASKS + tasks.FOLLOWUP:
         for seed in (1, 2, 3):
             d, base = solved(task, seed)
             shutil.rmtree(d)
@@ -65,7 +65,7 @@ def test_hidden_both_ways():
 
 
 def test_seeds():
-    for task in tasks.TASKS:
+    for task in tasks.TASKS + tasks.FOLLOWUP:
         a, b = tasks.build(task, 7), tasks.build(task, 7)
         check(a.files == b.files and a.tickets == b.tickets, "%s: one seed gave two repos" % task)
         check(tasks.hidden_tests(task, 7) == tasks.hidden_tests(task, 7), "%s: one seed gave two hidden suites" % task)
@@ -334,7 +334,7 @@ def test_dropped_summary():
 
 
 def test_prompts_differ_only_in_the_channel():
-    for name in tasks.TASKS:
+    for name in tasks.TASKS + tasks.FOLLOWUP:
         t = tasks.build(name, 3)
         for role in t.tickets:
             bare = tasks.prompt(t, role, "none", "claude")
@@ -500,6 +500,140 @@ def test_blind_grade_opens_only_blind_files():
     os.remove(os.path.join(d, "manifest.jsonl"))
     check(grade.blind_grade(run) == first, "the grade depends on a file that knows the condition")
     shutil.rmtree(d)
+
+
+# ---- follow-up fix1 -------------------------------------------------------------------------------------------------
+
+def test_livehold_steps_gate_alice():
+    """The steps open one at a time, each only on the results of the step before; the numbers are not readable on disk."""
+    for seed in (1, 21, 9201):
+        t = tasks.build("livehold", seed)
+        p = tasks._livehold_params(seed)
+        check(len(set(tasks._livehold_keys(p))) == 5, "seed %d: two steps share a key, so one opens early" % seed)
+        d = tempfile.mkdtemp()
+        tree(d, t.files)
+        nxt = lambda: subprocess.run([sys.executable, "-B", "tools/steps.py", "next"], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # noqa: E731
+                                     universal_newlines=True).stdout
+        check(nxt().startswith("Step 1 of 4"), "seed %d: the first step: %s" % (seed, nxt()))
+        data = json.loads(t.files["tools/steps.json"])
+        check(all(all(c in "0123456789abcdef" for c in blob) for blob in data["steps"]) and "Step" not in t.files["tools/steps.json"],
+              "seed %d: a step sits in the clear" % seed)
+        final = tasks.livehold_alice_reference(seed)["src/rates.py"]
+        tree(d, {"src/rates.py": final.replace("return max(price, MINIMUM)", "return price")})
+        check(nxt().startswith("Step 4 of 4"), "seed %d: three steps in must open the fourth: %s" % (seed, nxt()))
+        tree(d, {"src/rates.py": final})
+        check(nxt().startswith("All 4 steps are in"), "seed %d: a finished rework: %s" % (seed, nxt()))
+        tree(d, {"src/rates.py": "def quote(w, z):\n    return 1\n"})
+        check("no step opens" in nxt(), "seed %d: a wrong file opened a step: %s" % (seed, nxt()))
+        shutil.rmtree(d)
+
+
+def test_livehold_bob_is_not_given_alices_work():
+    for seed in (1, 2, 21):
+        t = tasks.build("livehold", seed)
+        bob = t.tickets["bob"].lower()
+        check("alice" not in bob and "take over" not in bob and "yours" not in bob, "bob's ticket hands him alice's work: %s" % t.tickets["bob"])
+        check("mid-change" in t.tickets["alice"], "alice's ticket must say the file is mid-change until her last step")
+        check(t.start == {"role": "bob", "path": "src/rates.py", "max_wait": 600} and t.schedule == [["alice", "bob"]], "bob starts on alice's first edit")
+        check(t.contested == {"holder": "alice", "other": "bob", "path": "src/rates.py"} and t.workspace == "shared", "the contested file")
+    check("livehold" not in tasks.TASKS, "the follow-up task must stay out of the counted matrix's default plan")
+
+
+def _bus_log(rows):
+    return [{"ts": "2026-11-06T10:00:%02dZ" % t, "agent": a, "action": act, "detail": det} for t, a, act, det in rows]
+
+
+def test_channel_grade_bus_live_takeover():
+    import channel_grade as cg
+    t0 = cg.bus_time("2026-11-06T10:00:00Z")
+    log = _bus_log([(1, "alice", "claim", "src/rates.py until 2026-11-06T12:00:01Z: steps"),
+                    (5, "bob", "claim_refused", "{}"),
+                    (8, "bob", "claim_taken", json.dumps({"from": "alice", "resources": ["src/rates.py"], "count": 1})),
+                    (8, "bob", "claim", "src/rates.py until 2026-11-06T12:00:08Z: promo"),
+                    (20, "alice", "leave", "released 0 claims: (none)")])
+    holds, took = cg.bus_events(log, "alice")
+    check(holds == [["src/rates.py", t0 + 2, t0 + 20]], "a takeover must not end the holder's hold: %s" % holds)
+    check([x[1] for x in took] == ["bob"], "the takeover: %s" % took)
+    edits = [{"ts": t0 + 9, "agent": "bob", "path": "src/rates.py"}, {"ts": t0 + 3, "agent": "bob", "path": "src/codes.py"}]
+    got = cg.live_grade(holds, took, edits, "alice", "bob", t0 + 30)
+    check(got["takeovers_while_alive"] == 1 and got["edits_under_live_claim"] == 1 and not got["live_ok"], "a live takeover was not counted: %s" % got)
+    after = cg.live_grade(holds, took, edits, "alice", "bob", t0 + 7)
+    check(after["live_ok"] and after["takeovers_while_alive"] == 0, "a takeover after the holder's session ended counted: %s" % after)
+    waited = cg.live_grade(holds, [], [{"ts": t0 + 21, "agent": "bob", "path": "src/rates.py"}], "alice", "bob", t0 + 30)
+    check(waited["live_ok"] and waited["holder_claimed"], "an edit after the holder released counted: %s" % waited)
+    ignored = cg.live_grade(holds, [], [{"ts": t0 + 4, "agent": "bob", "path": "src/rates.py"}], "alice", "bob", t0 + 30)
+    check(ignored["edits_under_live_claim"] == 1 and not ignored["live_ok"], "an edit under a live claim, with no takeover, was not counted: %s" % ignored)
+    holds, _ = cg.bus_events(_bus_log([(1, "alice", "claim", "src until 2026-11-06T12:00:01Z"), (6, "alice", "release", "src")]), "alice")
+    check(holds == [["src", t0 + 2, t0 + 6]], "a release by name: %s" % holds)
+    folder = cg.live_grade(holds, [], [{"ts": t0 + 2, "agent": "bob", "path": "src/codes.py"}], "alice", "bob", None)
+    check(folder["edits_under_live_claim"] == 1, "a folder claim must cover a new file in it: %s" % folder)
+    holds, _ = cg.bus_events(_bus_log([(1, "alice", "claim", "a.py until x"), (2, "alice", "claim", "b.py until x"), (3, "alice", "release", "all 2 claims: a.py, b.py")]), "alice")
+    check([h[2] for h in holds] == [t0 + 3, t0 + 3], "release --all: %s" % holds)
+
+
+def test_channel_grade_ledger_live_takeover():
+    import channel_grade as cg
+    import ledger_hook as lh
+    d = tempfile.mkdtemp()
+    text = ""
+    snaps = []
+    for ts, line in ((100, "10:00:00 alice CLAIM: src/ (steps)"), (103, "10:00:03 bob CLAIM: src/rates.py (promo)"), (108, "10:00:08 alice RELEASE: src/"),
+                     (110, "10:00:10 bob CLAIM: src/codes.py (promo)")):
+        text += "\n" + line + "\n"
+        snaps.append(json.dumps({"ts": ts, "prev": ts - 0.2, "text": text}))
+    tree(d, {"ledger-watch.jsonl": "\n".join(snaps) + "\n"})
+    timed = cg.ledger_timed(d)
+    check([(a, b) for a, b, _e in timed] == [(99.8, 100), (102.8, 103), (107.8, 108), (109.8, 110)], "entries land between two polls: %s" % timed)
+    holds, took = cg.ledger_events(timed, "alice")
+    check(holds == [["src", 100, 107.8]] and took == [(103, "bob", ["src/rates.py"])], "ledger holds and takeovers: %s %s" % (holds, took))
+    edge = cg.live_grade(holds, [], [{"ts": 107.9, "agent": "bob", "path": "src/rates.py"}], "alice", "bob", 120)
+    check(edge["live_ok"], "an edit that may have come after the release counted against the ledger: %s" % edge)
+    got = cg.live_grade(holds, took, [{"ts": 104, "agent": "bob", "path": "src/rates.py"}], "alice", "bob", 120)
+    check(not got["live_ok"] and got["takeovers_while_alive"] == 1 and got["edits_under_live_claim"] == 1, "a ledger takeover was not counted: %s" % got)
+    check(lh.parse(text)[1]["kind"] == "CLAIM", "the parser the hook uses")
+    check(cg.ledger_timed(os.path.join(d, "none")) is None, "no watch means no timing")
+    shutil.rmtree(d)
+
+
+def _fix1_rows(diff_task=None, flip=0):
+    rows = []
+    for seed in range(21, 41):
+        for task in ("recovery", "livehold"):
+            for cond in ("agentbus", "ledger"):
+                for pairing in ("cx", "cc"):
+                    ok = not (task == diff_task and cond == "agentbus" and seed < 21 + flip)
+                    rows.append({"task": task, "condition": cond, "pairing": pairing, "seed": seed, "ok": ok})
+    return rows
+
+
+def test_fix1_noninferiority():
+    import analyze_fix1 as af
+    check(af.MARGIN == -0.10, "the registered margin is -0.10")
+    point, lo, hi, p = af.noninferiority(_fix1_rows(), "recovery", "cx")
+    check(point == 0 and p < 0.001, "equal cells must be closed: %s" % ((point, lo, hi, p),))
+    point, lo, hi, p = af.noninferiority(_fix1_rows("recovery", 4), "recovery", "cx")
+    check(abs(point + 0.2) < 1e-9 and p > 0.5, "a 20-point deficit passed as closed: %s" % ((point, lo, hi, p),))
+    point, lo, hi, p = af.noninferiority(_fix1_rows("recovery", 1), "recovery", "cc")
+    check(abs(point + 0.05) < 1e-9 and p > af.ALPHA, "a deficit inside the margin is not shown closed on 1 of 20 discordant: %s" % ((point, lo, hi, p),))
+    check(af.short_cells(_fix1_rows(), 20) == [] and len(af.short_cells(_fix1_rows(), 21)) == 8, "every registered cell counts")
+    check(len(af.short_cells([r for r in _fix1_rows() if r["task"] == "recovery"], 20)) == 4, "a missing task's cells count as short")
+
+
+def test_tool_pin_sha():
+    """The release's bytes and the pinned hash, both."""
+    import run
+    d = tempfile.mkdtemp()
+    git = ["git", "-c", "user.name=e", "-c", "user.email=e@example.com"]
+    tree(d, {"bin/agentbus": "released\n"})
+    for argv in (["git", "init", "-q"], git + ["add", "."], git + ["commit", "-q", "-m", "x"]):
+        subprocess.run(argv, cwd=d, check=True)
+    sha = run.sha_file(os.path.join(d, "bin", "agentbus"))
+    check(run.tool_pinned(d, "HEAD", sha), "the pinned release must pass")
+    check(not run.tool_pinned(d, "HEAD", "0" * 64), "a release with another hash passed the pin")
+    shutil.rmtree(d)
+    root = os.path.dirname(os.path.dirname(sys.argv[1]))
+    check(run.TOOL_RELEASE == "02fcfc5" and run.sha_file(os.path.join(root, "bin", "agentbus")) == run.TOOL_SHA256,
+          "the branch's bin/agentbus is not the pinned v0.3.0")
 
 
 for name, fn in sorted(globals().items()):

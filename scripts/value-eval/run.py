@@ -43,7 +43,8 @@ BUILTIN_TOOLS = ["ListAgents", "SendMessage", "ToolSearch"]
 CLAUDE_MODEL, CODEX_MODEL = "sonnet", "gpt-6.1-sol"
 TIME_CAP, TOOL_CAP, SNAP_EVERY = 2400, 80, 5
 CODEX_PLANTED = {"auth.json", "hooks.json", "AGENTS.md", "config.toml"}   # all a scratch CODEX_HOME may hold before launch; Codex adds its own state after
-TOOL_RELEASE = "642009c"     # the released tool under test: runs refuse any other bin/agentbus
+TOOL_RELEASE = "02fcfc5"     # follow-up fix1 tests v0.3.0 (the counted run tested 642009c): runs refuse any other bin/agentbus
+TOOL_SHA256 = "c6f3e9a88e5661380ea06c2365d19aaa7ee2eb338f705560d3677c8cea0f8808"   # sha256 of 02fcfc5:bin/agentbus, checked as well
 CODEX_BUDGET = 40            # usage points; the batch halts when projected use passes this
 CHANNEL_PATHS = grade.CHANNEL_PATHS
 CODEX_FEATURE_PINS = ("multi_agent", "plugins", "apps", "browser_use", "computer_use")
@@ -99,6 +100,11 @@ def tool_is_release(root, release):
     """True when the working copy of bin/agentbus is byte for byte the released one."""
     p = subprocess.run(["git", "-C", root, "show", "%s:bin/agentbus" % release], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     return p.returncode == 0 and p.stdout == open(os.path.join(root, "bin", "agentbus"), "rb").read()
+
+
+def tool_pinned(root, release, sha256):
+    """The release's bytes and the pinned hash, both: a tag moved later cannot change what a run tested."""
+    return tool_is_release(root, release) and sha_file(os.path.join(root, "bin", "agentbus")) == sha256
 
 
 def harness_of(pairing, role, seed):
@@ -174,7 +180,9 @@ class Run:
         self.stop_threads = threading.Event()
         self.snaps = open(os.path.join(self.out, "snaps.jsonl"), "w")
         self.seen = {}
-        self.loads, self.kill, self.merge = [], {"fired": False}, None
+        self.loads, self.kill, self.merge, self.late = [], {"fired": False}, None, None
+        self.channel_dir = os.path.join(self.out, "channel")
+        os.makedirs(self.channel_dir)
         self.worktrees = self.task.workspace == "worktrees"
         self.auth_sha = None
         self.codex_at_launch = set()
@@ -397,7 +405,7 @@ class Run:
 
     def stop_agent(self, agent, reason, hard=False):
         """Only ever signals the group this runner started, and the pid its own shim recorded."""
-        if agent.proc.poll() is not None:
+        if agent.proc is None or agent.proc.poll() is not None:
             return
         if agent.stop_reason is None:
             agent.stop_reason = reason
@@ -454,31 +462,108 @@ class Run:
             self.snaps.flush()
             self.seen = files
 
+    def launch(self, agent):
+        self.start(agent)
+        if self.task.kill and self.task.kill["role"] == agent.role:
+            threading.Thread(target=self.watch_kill, args=(agent,), daemon=True).start()
+
+    def late_start_due(self, current, later, begun):
+        """Why a delayed agent starts now, or None: its file changed from the repo's, every peer in its stage has ended, or its
+        wait ran out. livehold: bob starts once alice's first edit to src/rates.py is on disk."""
+        spec = self.task.start
+        try:
+            with open(os.path.join(self.proj, spec["path"]), errors="replace") as f:
+                changed = f.read() != self.task.files.get(spec["path"])
+        except OSError:
+            changed = False
+        if changed:
+            return "changed"
+        if all(o.ended is not None for o in current if o not in later):
+            return "peers ended"
+        return "max wait" if time.time() - begun > spec.get("max_wait", 600) else None
+
+    def finish_stage(self, current, later, agents):
+        """Wait for every agent in a stage, starting a delayed one when it is due, and record each end when its process exits."""
+        begun = time.time()
+        while True:
+            for a in current:
+                if a.proc is not None and a.ended is None and a.proc.poll() is not None:
+                    a.ended = time.time()
+            for a in list(later):
+                why = "usage limit" if self.usage_hit else self.late_start_due(current, later, begun)
+                if why:
+                    later.remove(a)
+                    self.late = {"role": a.role, "at": time.time(), "why": why}
+                    if self.usage_hit:
+                        agents.pop(a.role)   # never started: the run is infrastructure anyway
+                    else:
+                        self.launch(a)
+            if not later and all(a.ended is not None for a in current if a.proc is not None):
+                break
+            time.sleep(0.2)
+        for a in current:
+            if a.proc is not None:
+                a.timer.cancel()
+                a.reader.join(timeout=30)
+
+    def watch_channel(self):
+        """The ledger's growth, timed: each change of COORDINATION.md as it lands, so a grader can tell when a claim opened and
+        closed. Each change is written with the poll that saw it (ts) and the poll before (prev), so an entry landed between the
+        two. Not blind: these files sit under channel/, which no blind grader opens. The bus times its own log."""
+        path, size, prev = os.path.join(self.proj, "COORDINATION.md"), -1, time.time()
+        with open(os.path.join(self.channel_dir, "ledger-watch.jsonl"), "w") as out:
+            while True:
+                stop = self.stop_threads.is_set()
+                now = time.time()
+                try:
+                    with open(path, errors="replace") as f:
+                        text = f.read()
+                except OSError:
+                    text = None
+                if text is not None and len(text) != size:
+                    out.write(json.dumps({"ts": now, "prev": prev, "text": text}) + "\n")
+                    out.flush()
+                    size = len(text)
+                if stop:
+                    return
+                prev = now
+                self.stop_threads.wait(0.2)
+
+    def keep_channel(self):
+        """The channel as the agents left it, beside the run and never in final/: the bus file (and its WAL, if any), or the ledger."""
+        if self.condition == "agentbus":
+            for name in ("bus.db", "bus.db-wal"):
+                src = os.path.join(self.proj, ".agentbus", name)
+                if os.path.isfile(src):
+                    shutil.copyfile(src, os.path.join(self.channel_dir, name))
+        elif self.condition == "ledger" and os.path.isfile(os.path.join(self.proj, "COORDINATION.md")):
+            shutil.copyfile(os.path.join(self.proj, "COORDINATION.md"), os.path.join(self.channel_dir, "COORDINATION.md"))
+
     def run_agents(self):
         agents = {}
         snapper = threading.Thread(target=self.snapshot_loop, daemon=True)
         snapper.start()
+        watcher = threading.Thread(target=self.watch_channel, daemon=True) if self.condition == "ledger" else None
+        if watcher:
+            watcher.start()
         for stage in self.task.schedule:
             if self.usage_hit:
                 break
             current = [Agent(r, self.harnesses[r]) for r in stage]
             self.live = current
-            watchers = []
+            later = [a for a in current if self.task.start and a.role == self.task.start["role"]]
             for a in current:
                 agents[a.role] = a
-                self.start(a)
-                if self.task.kill and self.task.kill["role"] == a.role:
-                    watchers.append(threading.Thread(target=self.watch_kill, args=(a,), daemon=True))
-                    watchers[-1].start()
-            for a in current:
-                a.proc.wait()
-                a.ended = time.time()
-                a.timer.cancel()
-                a.reader.join(timeout=30)
+                if a not in later:
+                    self.launch(a)
+            self.finish_stage(current, later, agents)
         self.stop_threads.set()
         snapper.join(timeout=30)
+        if watcher:
+            watcher.join(timeout=30)
         self.take_snapshot()
         self.snaps.close()
+        self.keep_channel()
         if self.worktrees:
             self.merge_lanes()
         return agents
@@ -521,7 +606,7 @@ class Run:
                 bad.append("the real Codex sign-in changed during the run")
             if sha_file(auth) != self.auth_sha["copy"]:
                 bad.append("the run refreshed its copy of the Codex token; the real sign-in may now be stale")
-            kept = [os.path.join(self.out, n) for n in os.listdir(self.out) if os.path.isfile(os.path.join(self.out, n))]
+            kept = [os.path.join(d, n) for d in (self.out, self.channel_dir) for n in os.listdir(d) if os.path.isfile(os.path.join(d, n))]
             leaks = grade.secret_leaks(auth, kept)
             if leaks:
                 bad.append("a Codex credential is in %s" % leaks)
@@ -550,10 +635,10 @@ class Run:
         grade.write_json(os.path.join(self.out, "run.json"), {
             "id": self.id, "task": self.task_name, "seed": self.seed, "harnesses": self.harnesses,
             "agents": {a.role: {"harness": a.harness, "seconds": round(a.ended - a.started, 1), "rc": a.proc.returncode, "stop": a.stop_reason,
-                                "tool_calls": a.tool_calls} for a in agents.values()},
+                                "tool_calls": a.tool_calls, "t_start": a.started, "t_end": a.ended} for a in agents.values()},
             "seconds": round(max(a.ended for a in agents.values()) - min(a.started for a in agents.values()), 1),
             "load": {"max": max(self.loads or [0]), "mean": round(sum(self.loads or [0]) / max(1, len(self.loads)), 1)},
-            "kill": self.kill, "merge": self.merge})
+            "kill": self.kill, "merge": self.merge, "late_start": self.late})
         cost = {a.role: grade.cost_of(a.lines, a.harness, self.condition) for a in agents.values()}
         for a in agents.values():
             link = os.path.join(self.workdir(a.role), "COORDINATION.md")
@@ -632,7 +717,7 @@ def claude_usage(cmd):
 
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--tasks", nargs="+", choices=tasks.TASKS + tasks.RETIRED, default=list(tasks.TASKS))
+    ap.add_argument("--tasks", nargs="+", choices=tasks.TASKS + tasks.RETIRED + tasks.FOLLOWUP, default=list(tasks.TASKS))
     ap.add_argument("--conditions", nargs="+", choices=tasks.CONDITIONS, default=list(tasks.CONDITIONS))
     ap.add_argument("--pairings", nargs="+", choices=PAIRINGS, default=list(PAIRINGS))
     ap.add_argument("--seeds", nargs="+", type=int, default=[1])
@@ -654,6 +739,7 @@ def main(argv):
     ap.add_argument("--codex-bin", default="codex")
     ap.add_argument("--codex-budget", type=float, default=CODEX_BUDGET, help="usage points; halt when projected use passes this")
     ap.add_argument("--tool-release", default=TOOL_RELEASE, help="the commit whose bin/agentbus is under test")
+    ap.add_argument("--tool-sha256", default=TOOL_SHA256, help="and the sha256 that bin/agentbus must have")
     ap.add_argument("--rerun-infra", action="store_true", help="run again every infrastructure failure already in --out, as the protocol says")
     ap.add_argument("--shard", default="1/1", help="I/N: with --rerun-infra, this runner's share")
     ap.add_argument("--claude-usage-cmd", help="a command printing the Claude plan's window use in percent; checked before every run")
@@ -684,8 +770,8 @@ def main(argv):
         if not args.codex_auth:
             log("not running: --codex-route exec needs --codex-auth or VALUE_CODEX_AUTH.")
             return 2
-    if not stub and any(r[2] == "agentbus" for r in runs) and not tool_is_release(ROOT, args.tool_release):
-        log("not running: bin/agentbus is not the released %s, and runs test the release." % args.tool_release)
+    if not stub and any(r[2] == "agentbus" for r in runs) and not tool_pinned(ROOT, args.tool_release, args.tool_sha256):
+        log("not running: bin/agentbus is not the released %s (sha256 %s), and runs test the release." % (args.tool_release, args.tool_sha256))
         return 2
     try:
         args.out = assert_outside(args.out if os.path.isabs(args.out) else os.path.abspath(args.out))

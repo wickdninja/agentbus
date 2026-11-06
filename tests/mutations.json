@@ -4354,5 +4354,68 @@
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "a second rerun would replace again"
+  },
+  {
+    "name": "value eval fix1: a live takeover is not counted",
+    "file": "scripts/value-eval/channel_grade.py",
+    "find": "took\\ =\\ \\[t\\ for\\ t\\ in\\ takeovers\\ if\\ t\\[1\\]\\ ==\\ other\\ and\\ alive\\(t\\[0\\]\\)\\]",
+    "replace": "took = []",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a live takeover was not counted"
+  },
+  {
+    "name": "value eval fix1: an edit under a live claim is not counted",
+    "file": "scripts/value-eval/channel_grade.py",
+    "find": "under\\.append\\(e\\[\"path\"\\]\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "an edit under a live claim, with no takeover, was not counted"
+  },
+  {
+    "name": "value eval fix1: the ledger's release is timed late, against the ledger",
+    "file": "scripts/value-eval/channel_grade.py",
+    "find": "h\\[2\\]\\ =\\ earliest",
+    "replace": "h[2] = latest",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "an edit that may have come after the release counted against the ledger"
+  },
+  {
+    "name": "value eval fix1: bob starts before alice's first edit",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ changed:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ return\\ \"changed\"\\\n",
+    "replace": "        return \"changed\"\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "livehold"
+  },
+  {
+    "name": "value eval fix1: the channel is not kept",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ self\\.keep_channel\\(\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "livehold"
+  },
+  {
+    "name": "value eval fix1: the tool pin skips the hash",
+    "file": "scripts/value-eval/run.py",
+    "find": "return\\ tool_is_release\\(root,\\ release\\)\\ and\\ sha_file\\(os\\.path\\.join\\(root,\\ \"bin\",\\ \"agentbus\"\\)\\)\\ ==\\ sha256",
+    "replace": "return tool_is_release(root, release)",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a release with another hash passed the pin"
+  },
+  {
+    "name": "value eval fix1: non-inferiority tested against zero, not the margin",
+    "file": "scripts/value-eval/analyze_fix1.py",
+    "find": "analyze\\.boot_p\\(draws,\\ MARGIN,\\ \"above\"\\)",
+    "replace": "analyze.boot_p(draws, 0.0, \"above\")",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "equal cells must be closed"
   }
 ]

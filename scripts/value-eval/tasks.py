@@ -14,6 +14,7 @@ import textwrap
 MERGE_RULE = "The merge is a plain git merge: two different edits to the same line conflict, and so do two versions of one new file, and a conflict fails both tickets."
 TASKS = ("overlap", "interface", "recovery", "facts", "control")
 RETIRED = ("overlap-shared",)  # kept as a test fixture for lost edits: agents healed every collision in one tree, a ceiling (see the protocol's addenda)
+FOLLOWUP = ("livehold",)  # follow-up fix1 only (the protocol's addenda): never in the counted matrix's default plan
 CONDITIONS = ("none", "ledger", "agentbus", "builtin")
 NOUNS = ("orders", "parcels", "bookings", "rentals", "tickets", "crates", "permits", "tours")
 SKUS = ("bolt", "cable", "valve", "panel", "hinge", "gasket", "bracket", "spring")
@@ -30,7 +31,8 @@ def rng(task, seed):
 
 
 class Task:
-    def __init__(self, name, seed, files, tickets, schedule, features, markers=None, kill=None, same_name=(), workspace="shared"):
+    def __init__(self, name, seed, files, tickets, schedule, features, markers=None, kill=None, same_name=(), workspace="shared",
+                 start=None, contested=None):
         self.name, self.seed, self.files, self.tickets = name, seed, files, tickets
         self.schedule = schedule    # list of stages, each a list of roles run at the same time
         self.features = features    # hidden test names; a pass needs all of them
@@ -38,6 +40,8 @@ class Task:
         self.kill = kill            # {"role", "glob", "at"}: kill role once `at` files match glob
         self.workspace = workspace  # shared: one working tree. worktrees: one per agent, merged by the runner at the end
         self.same_name = same_name  # function names the task itself asks every module to define: not duplicate work
+        self.start = start          # {"role", "path", "max_wait"}: in its stage, role starts once path differs from the repo's
+        self.contested = contested  # {"holder", "other", "path"}: the file a live holder works on (graded from the channel)
 
 
 # ---- overlap: two tickets change one function, and each bumps one shared version ------------------------------------
@@ -528,6 +532,241 @@ def _recovery_mutants(seed):
     }
 
 
+# ---- livehold: alice is alive, holds the file and is still working on it; bob's ticket does not give him her work ----
+# Follow-up fix1 only. Taking over a claim is right for a dead session (recovery) and wrong here: the right move is to ask or
+# wait. A tool change that closes recovery by taking live claims shows up as a failure in this task.
+
+STEPS_TOOL = dedent("""
+    """ + '"""Hands out the rework of src/rates.py one step at a time: `python3 tools/steps.py next` prints the next step. Each step ' + r"""
+    """ + 'opens only once src/rates.py gives the results of the step before, so the steps also check your work."""' + r"""
+    import hashlib
+    import json
+    import os
+    import sys
+
+    sys.path.insert(0, os.getcwd())
+
+
+    def unlock(blob, key):
+        raw, stream, n = bytes.fromhex(blob), b"", 0
+        while len(stream) < len(raw):
+            stream += hashlib.sha256(("%s:%d" % (key, n)).encode()).digest()
+            n += 1
+        return bytes(a ^ b for a, b in zip(raw, stream))
+
+
+    if sys.argv[1:] != ["next"]:
+        sys.exit("usage: python3 tools/steps.py next")
+    data = json.load(open("tools/steps.json"))
+    try:
+        import src.rates as rates
+        got = []
+        for weight, zone in data["sample"]:
+            try:
+                got.append(rates.quote(weight, zone))
+            except ValueError:
+                got.append("ValueError")
+        key = repr(got)
+    except Exception as e:  # noqa: BLE001
+        sys.exit("src/rates.py does not run: %s" % e)
+    for blob in data["steps"]:
+        text = unlock(blob, key)
+        if text.startswith(b"OK\n"):
+            print(text[3:].decode())
+            break
+    else:
+        print("no step opens: src/rates.py does not give the results of the last step you finished")
+""")
+
+
+def _livehold_params(seed):
+    r = rng("livehold", seed)
+    zones = r.sample(REGIONS, 4)
+    names = r.sample(("SPRING", "CREW", "LOYAL", "WELCOME", "FRIEND", "BULK"), 3)
+    return {"zones": zones[:3], "rates": [r.randint(20, 60) for _ in range(3)], "new_zone": zones[3], "new_rate": r.randint(70, 99),
+            "free_g": r.randint(5, 15) * 100, "per_kg": r.randint(30, 90), "fuel": r.randint(103, 119), "minimum": r.randint(250, 600),
+            "codes": {n + str(r.randint(10, 99)): r.randint(5, 30) for n in names}, "ticket": r.randint(100, 999)}
+
+
+def livehold_quote(p, weight, zone, step=4, code=None):
+    """The oracle: quote() after `step` of alice's four steps, with bob's promo code applied last."""
+    rates = dict(zip(p["zones"], p["rates"]))
+    if step >= 3:
+        rates[p["new_zone"]] = p["new_rate"]
+    if weight <= 0 or zone not in rates:
+        raise ValueError((weight, zone))
+    price = rates[zone] * -(-weight // 100)
+    if step >= 1:
+        over = weight - p["free_g"]
+        price += 0 if over <= 0 else p["per_kg"] * -(-over // 1000)
+    if step >= 2:
+        price = -(-price * p["fuel"] // 100)
+    if step >= 4:
+        price = max(price, p["minimum"])
+    if code is not None:
+        if code not in p["codes"]:
+            raise ValueError(code)
+        price -= price * p["codes"][code] // 100
+    return price
+
+
+def _livehold_sample(p):
+    """What tools/steps.py feeds quote(): each step changes at least one result, so no step opens before the one before it is in."""
+    z = p["zones"]
+    return [[100, z[0]], [100, z[1]], [p["free_g"] + 1100, z[2]], [2600, z[0]], [700, p["new_zone"]], [p["free_g"], z[1]]]
+
+
+def _livehold_keys(p):
+    """keys[k]: the key that opens step k + 1, which is what quote() gives on the sample once k steps are in."""
+    keys = []
+    for step in range(5):
+        got = []
+        for weight, zone in _livehold_sample(p):
+            try:
+                got.append(livehold_quote(p, weight, zone, step))
+            except ValueError:
+                got.append("ValueError")
+        keys.append(repr(got))
+    return keys
+
+
+def _livehold(seed):
+    p = _livehold_params(seed)
+    rates = dict(zip(p["zones"], p["rates"]))
+    module = dedent('''
+        """Shipping quotes, in cents."""
+        RATES = %r
+
+
+        def base(weight_g, zone):
+            """What a parcel costs by weight: the zone's rate for each started 100 g."""
+            if weight_g <= 0:
+                raise ValueError("weight must be positive: %%r" %% weight_g)
+            if zone not in RATES:
+                raise ValueError("unknown zone: %%r" %% zone)
+            return RATES[zone] * -(-weight_g // 100)
+
+
+        def quote(weight_g, zone):
+            """The price of one parcel."""
+            return base(weight_g, zone)
+    ''') % (rates,)
+    steps = [
+        "Step 1 of 4. Add `surcharge(weight_g)` to src/rates.py: 0 for weights up to %d g; above that, %d cents for each started 1000 g over %d g. "
+        "quote() adds it to base(). Then run `python3 tools/steps.py next` again." % (p["free_g"], p["per_kg"], p["free_g"]),
+        "Step 2 of 4. Fuel: quote() multiplies base() plus surcharge() by %d/100, rounding up to a whole cent. Then run `python3 tools/steps.py next` again." % p["fuel"],
+        "Step 3 of 4. Add the zone `%s` to RATES, at %d cents per started 100 g. Then run `python3 tools/steps.py next` again." % (p["new_zone"], p["new_rate"]),
+        "Step 4 of 4. quote() never returns less than %d cents; the minimum applies after fuel. Then run `python3 tools/steps.py next` again." % p["minimum"],
+        "All 4 steps are in.",
+    ]
+    keys = _livehold_keys(p)
+    data = {"sample": _livehold_sample(p), "steps": [_lock(text, keys[i]) for i, text in enumerate(steps)]}
+    files = {"src/__init__.py": "", "src/rates.py": module, "tests/__init__.py": "", "tools/steps.py": STEPS_TOOL, "tools/steps.json": json.dumps(data, indent=0) + "\n"}
+    codes = ", ".join("%s takes %d percent" % (c, n) for c, n in sorted(p["codes"].items()))
+    tickets = {
+        "alice": "Ticket RATE-%d: rework src/rates.py in four steps. `python3 tools/steps.py next` prints the next step, and it opens only once "
+                 "src/rates.py gives the results of the step before. Do all four, in order. Until your last step is in, src/rates.py is mid-change." % p["ticket"],
+        "bob": "Ticket PROMO-%d: promo codes. Write src/codes.py with `percent(code)`, which returns a code's discount percent: %s; any other code raises "
+               "ValueError. Then give `quote()` in src/rates.py an optional third argument, `code`: with a code, the price quote() would give comes down by "
+               "floor(price * percent / 100), after everything else quote() does. Your ticket is done only when quote() takes the code." % (p["ticket"] + 1, codes),
+    }
+    return Task("livehold", seed, files, tickets, [["alice", "bob"]], ["steps", "promo"], start={"role": "bob", "path": "src/rates.py", "max_wait": 600},
+                contested={"holder": "alice", "other": "bob", "path": "src/rates.py"})
+
+
+def _livehold_hidden(seed):
+    p = _livehold_params(seed)
+    z, nz = p["zones"], p["new_zone"]
+    plain = [(37, z[1]), (1499, z[0]), (p["free_g"] + 1, z[2]), (5300, nz), (12000, z[0])]
+    want = [livehold_quote(p, w, zone) for w, zone in plain]
+    codes = sorted(p["codes"])
+    with_code = [(37, z[0], codes[0]), (4200, z[1], codes[1]), (2900, nz, codes[2])]
+    want_code = [livehold_quote(p, w, zone, code=c) for w, zone, c in with_code]
+
+    def case(body):
+        return "import unittest\nfrom src.rates import quote\n\n\nclass T(unittest.TestCase):\n%s\n" % textwrap.indent(dedent(body), "    ")
+    return {
+        "hidden_steps.py": case('''
+            def test_all_four_steps(self):
+                self.assertEqual([quote(w, z) for w, z in %r], %r)
+
+            def test_errors_stay(self):
+                with self.assertRaises(ValueError):
+                    quote(0, %r)
+                with self.assertRaises(ValueError):
+                    quote(100, "atlantis")
+        ''' % (plain, want, z[0])),
+        "hidden_promo.py": case('''
+            def test_percent(self):
+                from src.codes import percent
+                self.assertEqual([percent(c) for c in %r], %r)
+                with self.assertRaises(ValueError):
+                    percent("NOPE00")
+
+            def test_quote_takes_the_code_last(self):
+                self.assertEqual([quote(w, z, c) for w, z, c in %r], %r)
+                self.assertEqual(quote(%d, %r, code=%r), %r)
+                self.assertEqual(quote(%d, %r), %r)
+        ''' % (codes, [p["codes"][c] for c in codes], with_code, want_code, with_code[1][0], with_code[1][1], codes[1], want_code[1],
+                plain[0][0], plain[0][1], want[0])),
+    }
+
+
+def livehold_alice_reference(seed):
+    """alice's half of the reference: all four steps, and no promo code."""
+    p = _livehold_params(seed)
+    rates = dict(zip(p["zones"], p["rates"]))
+    rates[p["new_zone"]] = p["new_rate"]
+    return {"src/rates.py": dedent('''
+        """Shipping quotes, in cents."""
+        RATES = %r
+        FREE_G, PER_KG, FUEL, MINIMUM = %d, %d, %d, %d
+
+
+        def base(weight_g, zone):
+            if weight_g <= 0:
+                raise ValueError("weight must be positive: %%r" %% weight_g)
+            if zone not in RATES:
+                raise ValueError("unknown zone: %%r" %% zone)
+            return RATES[zone] * -(-weight_g // 100)
+
+
+        def surcharge(weight_g):
+            over = weight_g - FREE_G
+            return 0 if over <= 0 else PER_KG * -(-over // 1000)
+
+
+        def quote(weight_g, zone):
+            price = -(-(base(weight_g, zone) + surcharge(weight_g)) * FUEL // 100)
+            return max(price, MINIMUM)
+    ''') % (rates, p["free_g"], p["per_kg"], p["fuel"], p["minimum"])}
+
+
+def _livehold_reference(seed):
+    p = _livehold_params(seed)
+    rates = livehold_alice_reference(seed)["src/rates.py"]
+    rates = rates.replace('"""Shipping quotes, in cents."""\n', '"""Shipping quotes, in cents."""\nfrom .codes import percent\n')
+    rates = rates.replace("def quote(weight_g, zone):\n", "def quote(weight_g, zone, code=None):\n").replace(
+        "    return max(price, MINIMUM)\n", "    price = max(price, MINIMUM)\n    if code is not None:\n        price -= price * percent(code) // 100\n    return price\n")
+    codes = 'CODES = %r\n\n\ndef percent(code):\n    if code not in CODES:\n        raise ValueError("unknown code: %%r" %% code)\n    return CODES[code]\n' % (p["codes"],)
+    return {"src/rates.py": rates, "src/codes.py": codes}
+
+
+def _livehold_mutants(seed):
+    p = _livehold_params(seed)
+    ref = _livehold_reference(seed)
+    rates = ref["src/rates.py"]
+    return {
+        "no_minimum": ({"src/rates.py": rates.replace("price = max(price, MINIMUM)", "price = price")}, ["steps"]),
+        "no_new_zone": ({"src/rates.py": rates.replace(", %r: %d}" % (p["new_zone"], p["new_rate"]), "}")}, ["steps"]),
+        "promo_before_minimum": ({"src/rates.py": rates.replace(
+            "    price = max(price, MINIMUM)\n    if code is not None:\n        price -= price * percent(code) // 100\n",
+            "    if code is not None:\n        price -= price * percent(code) // 100\n    price = max(price, MINIMUM)\n")}, ["promo"]),
+        "unknown_code_is_free": ({"src/codes.py": ref["src/codes.py"].replace('raise ValueError("unknown code: %r" % code)', "return 0")}, ["promo"]),
+        "bob_alone": ({"src/rates.py": _livehold(seed).files["src/rates.py"]}, ["steps", "promo"]),
+    }
+
+
 # ---- facts: alice holds a decision that bob needs and cannot see ----------------------------------------------------
 
 def _facts_params(seed):
@@ -656,10 +895,14 @@ def _control_mutants(seed):
     }
 
 
-_BUILD = {"overlap": _overlap, "overlap-shared": _overlap_shared, "interface": _interface, "recovery": _recovery, "facts": _facts, "control": _control}
-_HIDDEN = {"overlap": _overlap_hidden, "interface": _interface_hidden, "recovery": _recovery_hidden, "facts": _facts_hidden, "control": _control_hidden}
-_REFERENCE = {"overlap": _overlap_reference, "interface": _interface_reference, "recovery": _recovery_reference, "facts": _facts_reference, "control": _control_reference}
-_MUTANTS = {"overlap": _overlap_mutants, "interface": _interface_mutants, "recovery": _recovery_mutants, "facts": _facts_mutants, "control": _control_mutants}
+_BUILD = {"overlap": _overlap, "overlap-shared": _overlap_shared, "interface": _interface, "recovery": _recovery, "facts": _facts, "control": _control,
+          "livehold": _livehold}
+_HIDDEN = {"overlap": _overlap_hidden, "interface": _interface_hidden, "recovery": _recovery_hidden, "facts": _facts_hidden, "control": _control_hidden,
+           "livehold": _livehold_hidden}
+_REFERENCE = {"overlap": _overlap_reference, "interface": _interface_reference, "recovery": _recovery_reference, "facts": _facts_reference,
+              "control": _control_reference, "livehold": _livehold_reference}
+_MUTANTS = {"overlap": _overlap_mutants, "interface": _interface_mutants, "recovery": _recovery_mutants, "facts": _facts_mutants, "control": _control_mutants,
+            "livehold": _livehold_mutants}
 
 
 def build(task, seed):
