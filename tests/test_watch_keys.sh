@@ -878,4 +878,24 @@ print("watch hints are shell safe")
 PY
 ok "the ctx history hint quotes the key; the unread hint names NAME for an unsafe agent name"
 
+echo "TEST 27: a negative span reads 0s, and fit to zero columns is empty"
+"$PY" - <<'PY' || fail "human_span and fit edges"
+import os, sys
+sys.path.insert(0, os.environ["TESTS_DIR"])
+from watch_case import W
+g = W.g
+span, fit = g["human_span"], g["fit"]
+for seconds, want in ((-5, "0s"), (-3600, "0s"), (0, "0s"), (45, "45s"), (60, "1m"), (3599, "59m"), (3600, "1h"), (7140, "1h 59m"), (86400, "1d"), (601200, "6d 23h")):
+    assert span(seconds) == want, (seconds, span(seconds), want)
+assert fit("hello", 0) == "" and fit("", 0) == "" and fit("世界", 0) == "", (fit("hello", 0), fit("世界", 0))
+assert fit("hello", -3) == "", repr(fit("hello", -3))
+for text in ("hello world", "世界世界", "ab"):
+    for n in range(1, 12):
+        out = fit(text, n)
+        assert g["text_width"](out) == n, (text, n, out)   # always exactly n columns
+assert fit("hello world", 1) == "…" and fit("hello world", 5) == "hell…", (fit("hello world", 1), fit("hello world", 5))
+print("human_span and fit edges")
+PY
+ok "human_span(-5) is 0s, not -1m; fit(text, 0) is empty, not a one-column ellipsis; fit is exactly n columns for n 1 to 11"
+
 echo "All watch key tests passed"

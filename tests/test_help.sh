@@ -78,15 +78,21 @@ p = run("--project", "who")
 if p.returncode != 2 or "unrecognized arguments: --project" not in p.stderr or "See: agentbus --help" not in p.stderr: fail("top-level usage error: " + p.stderr)
 p = run("completion")
 if p.returncode != 2 or "Usage: agentbus completion {bash,zsh,fish}" not in " ".join(p.stderr.split()): fail("completion without a shell: " + p.stderr)
-# `join NAME` is the likeliest slip: the error names the form that works, as text and as the JSON next.
-p = run("join", "rel-prep")
+# `join NAME` is the likeliest first guess and joins as NAME; a different --as is a usage error naming both names.
+jdb = {"AGENTBUS_DB": os.path.join(os.environ["T"], "join-name.db")}
+p = run("join", "rel-prep", env=jdb)
+if p.returncode != 0 or not p.stdout.startswith("joined as rel-prep on ") or "Keep using --as rel-prep" not in p.stdout: fail("join NAME: rc %s %s %s" % (p.returncode, p.stdout, p.stderr))
+p = run("--as", "bob", "join", "rel-prep", env=jdb)
 err = " ".join(p.stderr.split())
-if p.returncode != 2 or p.stdout or "unrecognized arguments: rel-prep" not in err or "give it with --as" not in err or not err.endswith("See: agentbus --as rel-prep join"): fail("join NAME: rc %s %s" % (p.returncode, err))
-e = json.loads(run("--json", "join", "rel-prep").stderr)["error"]
-if e["code"] != "bad_input" or e["next"] != "agentbus --as rel-prep join": fail("join NAME --json: " + repr(e))
+if p.returncode != 2 or p.stdout or "--as bob" not in err or "and rel-prep" not in err or not err.endswith("See: agentbus --as rel-prep join"): fail("join NAME with another --as: rc %s %s" % (p.returncode, err))
+e = json.loads(run("--json", "--as", "bob", "join", "rel-prep", env=jdb).stderr)["error"]
+if e["code"] != "bad_input" or e["next"] != "agentbus --as rel-prep join" or "--as bob" not in e["message"]: fail("join NAME with another --as --json: " + repr(e))
 p = run("join", "--bogus")
-if "give it with --as" in p.stderr or "See: agentbus join --help" not in " ".join(p.stderr.split()): fail("a bad flag on join got the name hint: " + p.stderr)
-print("PASS: usage errors are scoped to the command; join NAME names agentbus --as NAME join")
+if "See: agentbus join --help" not in " ".join(p.stderr.split()): fail("a bad flag on join: " + p.stderr)
+p = run("join", "one", "two")
+if p.returncode != 2 or "unrecognized arguments: two" not in p.stderr or "give it with --as" in p.stderr: fail("join with two names: " + p.stderr)
+if "agentbus join NAME" not in " ".join(help_("join").split()): fail("join --help does not show the join NAME form")
+print("PASS: usage errors are scoped to the command; join NAME joins as NAME")
 PY
 ok "usage errors are scoped"
 
