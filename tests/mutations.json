@@ -5514,7 +5514,7 @@
     "replace": "f\"(q.kind='question') \"",
     "count": 1,
     "run": "tests/test_brief.sh",
-    "expect": "pending between others is wrong"
+    "expect": "pending between others after the chain"
   },
   {
     "name": "an answer to a reply closes the question above it (unit)",

@@ -111,10 +111,10 @@ a = pid(db, "alice", "validate X", kind="todo")
 b = pid(db, "alice", "validate Y", to="bob", kind="todo")
 c = pid(db, "alice", "validate Z", kind="todo")
 r = post(db, "carol", "X validated; 12 checks green", kind="done", reply=a)
-check(r["closed"] == a, "done replying to a todo reports closed %s, want %s" % (r.get("closed"), a))
+check(r.get("closed") == a, "done replying to a todo reports closed %s, want %s" % (r.get("closed"), a))
 check(open_todos(db) == [b, c], "after done on #%d the open todos are %s" % (a, open_todos(db)))
 r = post(db, "bob", "Y no longer needed, the API was removed", kind="dropped", reply=b)
-check(r["closed"] == b and open_todos(db) == [c], "dropped did not close its todo: %s %s" % (r, open_todos(db)))
+check(r.get("closed") == b and open_todos(db) == [c], "dropped did not close its todo: %s %s" % (r, open_todos(db)))
 check(sql(db, "SELECT sender, kind, reply_to FROM messages WHERE reply_to=? ORDER BY id", a) == [("carol", "done", a)],
       "the closer is not recorded by the closing row itself")
 print("PASS: done and dropped replying to a todo close it, from any name, and the closer is the row's sender")
@@ -147,17 +147,17 @@ first = post(db, "alice", "validated", kind="done", reply=t)
 p = run(db, "--as", "bob", "--json", "post", "also validated", "--kind", "done", "--reply-to", str(t))
 check(p.returncode == 0, "a second done on a closed todo was refused: %s" % p.stderr)
 second = json.loads(p.stdout)
-check(second["closed"] is None and "already closed by #%d" % first["id"] in p.stderr and "done by alice" in p.stderr,
+check(second.get("closed", "missing") is None and "already closed by #%d" % first["id"] in p.stderr and "done by alice" in p.stderr,
       "a second closer is not told the todo was already closed by #%d: closed=%s stderr=%r" % (first["id"], second.get("closed"), p.stderr))
 check(sql(db, "SELECT COUNT(*) FROM messages WHERE reply_to=?", t)[0][0] == 2, "the second closer's row was not kept")
 p = run(db, "--as", "bob", "post", "dropping it too", "--kind", "dropped", "--reply-to", str(t))
 check(p.returncode == 0 and "already closed by #%d" % first["id"] in p.stderr, "a dropped on a closed todo: rc %s %r" % (p.returncode, p.stderr))
 note = pid(db, "alice", "just a note")
 p = run(db, "--as", "bob", "--json", "post", "never mind", "--kind", "dropped", "--reply-to", str(note))
-check(p.returncode == 0 and json.loads(p.stdout)["closed"] is None and "#%d is not a todo" % note in p.stderr,
+check(p.returncode == 0 and json.loads(p.stdout).get("closed", "missing") is None and "#%d is not a todo" % note in p.stderr,
       "dropped replying to a note: rc %s closed? %s stderr %r" % (p.returncode, p.stdout, p.stderr))
 p = run(db, "--as", "bob", "--json", "post", "reply as before", "--kind", "done", "--reply-to", str(note))
-check(p.returncode == 0 and p.stderr == "" and json.loads(p.stdout)["closed"] is None,
+check(p.returncode == 0 and p.stderr == "" and json.loads(p.stdout).get("closed", "missing") is None,
       "a done replying to a non-todo changed (it is the plain reply it always was): rc %s %r" % (p.returncode, p.stderr))
 p = run(db, "--as", "bob", "--json", "post", "plain", "--kind", "note", "--reply-to", str(t))
 check("closed" not in json.loads(p.stdout), "a note reports a closed field")
