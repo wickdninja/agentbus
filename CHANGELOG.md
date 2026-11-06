@@ -24,7 +24,7 @@
 
 ### Fixed
 
-- The hooks' once-per-session memory is kept per bus and keeps file paths apart from its other entries, so a file named like one of them can no longer silence a note, and a payload with an empty session id no longer shares one memory file with every other such payload. A memory file that cannot be written no longer silences SessionStart or the prompt note.
+- The hooks' once-per-session memory is kept per bus and keeps file paths apart from its other entries, so a file named like one of them can no longer silence a note, and a payload with an empty session id no longer shares one memory file with every other such payload. A memory file or folder that cannot be used no longer silences SessionStart, the prompt note or a notice, and no longer stops SessionEnd from leaving.
 - `log show` opens the bus read-only when run without a name, like `read`: it no longer rewrites stored claims or logs while it reads.
 - `schema --json` marks the same arguments required on every Python. Below 3.12 it marked `goal TEXT`, `schema COMMAND`, `help COMMAND` and `update DIR` required, and 3.12 and later did not mark `ctx set VALUE` or `log add DETAIL`; both now follow the command's real rule.
 - `watch` shows a span from a clock that ran backwards as `0s`, not `-1m`, and a field squeezed to zero columns is empty, not a one-column ellipsis.

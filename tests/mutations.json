@@ -882,6 +882,42 @@
     "expect": "12g: a memory file that is a link silenced UserPromptSubmit"
   },
   {
+    "name": "SessionEnd stops at a memory folder that is a link",
+    "file": "bin/agentbus",
+    "find": "    except \\(OSError, SystemExit\\):\\n        pass  # a memory folder that cannot be used must not stop SessionEnd from leaving",
+    "replace": "    except ZeroDivisionError:\n        pass",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "SessionEnd with the memory folder a link left the name on the roster"
+  },
+  {
+    "name": "a broken memory file silences the duplicate notice",
+    "file": "bin/agentbus",
+    "find": "hook_notice_once\\(sid, db, \"duplicate\"\\)",
+    "replace": "hook_nudge_once(sid, db, [\"notice\", \"duplicate\"])",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a memory file that is a link silenced SessionStart's duplicate notice"
+  },
+  {
+    "name": "a broken memory file silences the schema notice",
+    "file": "bin/agentbus",
+    "find": "hook_notice_once\\(sid, bus, code\\)",
+    "replace": "hook_nudge_once(sid, bus, [\"notice\", code])",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "a memory file that is a link silenced the newer-bus notice"
+  },
+  {
+    "name": "a capped unread scan puts + on every kind it counted",
+    "file": "bin/agentbus",
+    "find": "capped\\.add\\(max\\(part, key=part\\.get\\)\\)",
+    "replace": "capped |= set(part)",
+    "count": 1,
+    "run": "tests/test_hooks_claude.sh",
+    "expect": "12f: a capped scan put + on a kind it did not fill"
+  },
+  {
     "name": "the held key holds the holders' text whole",
     "file": "bin/agentbus",
     "find": "hashlib\\.sha256\\(json\\.dumps\\(ids\\)\\.encode\\(\"utf-8\", \"surrogatepass\"\\)\\)\\.hexdigest\\(\\)\\[:16\\]",

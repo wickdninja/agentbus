@@ -11179,10 +11179,13 @@ def hook_state_drop(key):
 def hook_memory_drop(session_id):
     """Remove the session's memory files, one per bus it used (and an older agentbus's SESSION.seen)."""
     key = hook_state_key(session_id, "")
-    with os.scandir(hook_state_dir()) as entries:
-        for entry in entries:
-            if entry.name == key + ".seen" or (entry.name.startswith(key + ".") and entry.name.endswith(".v2.seen")):
-                hook_state_drop(entry.name)
+    try:
+        with os.scandir(hook_state_dir()) as entries:
+            for entry in entries:
+                if entry.name == key + ".seen" or (entry.name.startswith(key + ".") and entry.name.endswith(".v2.seen")):
+                    hook_state_drop(entry.name)
+    except (OSError, SystemExit):
+        pass  # a memory folder that cannot be used must not stop SessionEnd from leaving
 
 
 def hook_pid_alive(pid):
@@ -11895,8 +11898,8 @@ def hook_direct_unread(con, name):
     """({kind: count}, newest id, capped kinds) of the unread messages worth breaking an edit for: those addressed to `name`
     itself, plus broadcast decisions and alerts. inbox's rule otherwise (after the cursor, broadcasts since the agent first
     joined, not its own). Each scan walks idx_messages_recipient from the newest row and stops at HOOK_UNREAD_SCAN messages
-    it counts (the kind and sender tests are inside the limit, so notes between never hide an alert); a kind counted in a
-    scan that stopped there is capped, said as N+. Nothing is marked read."""
+    it counts (the kind and sender tests are inside the limit, so notes between never hide an alert); in a scan that
+    stopped there, the kind that filled it is capped, said as N+. Nothing is marked read."""
     last, bcast = hook_cursor(con, name)
     marks = ",".join("?" * len(HOOK_EDIT_BCAST))
     scan = "SELECT kind, id FROM messages WHERE recipient=? AND id>? AND sender<>? {} ORDER BY id DESC LIMIT ?"
@@ -11908,7 +11911,7 @@ def hook_direct_unread(con, name):
         for k, n in part.items():
             counts[k] = counts.get(k, 0) + n
         if len(rows) > HOOK_UNREAD_SCAN:
-            capped |= set(part)
+            capped.add(max(part, key=part.get))  # the kind that filled the scan; the others are said as counted
         newest = max(newest, top)
     return counts, newest, capped
 
@@ -12034,7 +12037,7 @@ def hook_session_start(payload):
     except (OSError, SystemExit):
         pass  # a memory file that cannot be used (a link, a full disk) must not silence the note
     var = hook_dialect()["plugin_env"]
-    if var and sid and os.environ.get(var) and hook_duplicate_hooks() and hook_nudge_once(sid, db, ["notice", "duplicate"]):
+    if var and sid and os.environ.get(var) and hook_duplicate_hooks() and hook_notice_once(sid, db, "duplicate"):
         notice = HOOK_NOTICES["duplicate"]
     tool = hook_tool(db)
     base = (f"{max(agents, 1)} agent{' is' if agents == 1 else 's are'} on it, {hook_unread_text(unread)}"
@@ -12096,6 +12099,15 @@ def hook_nudge_once(session_id, db, key):
         seen.append(key)
         return True
     return hook_memory(session_id, db, change)
+
+
+def hook_notice_once(session_id, db, code):
+    """True the first time notice `code` is due in this session on bus `db`, and also when the memory cannot be used: a
+    notice said again beats a hook that prints nothing."""
+    try:
+        return hook_nudge_once(session_id, db, ["notice", code])
+    except (OSError, SystemExit):
+        return True
 
 
 def hook_unread_mark(session_id, db, name, newest):
@@ -12444,7 +12456,7 @@ def hook_run(argv):
     except HookNotice as e:
         sid = hook_sid(payload)
         code, bus = e.args
-        shown = event in ("SessionStart", "UserPromptSubmit") and sid is not None and hook_nudge_once(sid, bus, ["notice", code])
+        shown = event in ("SessionStart", "UserPromptSubmit") and sid is not None and hook_notice_once(sid, bus, code)
         result = (None, HOOK_NOTICES[code]) if shown else None
     out = hook_render(event, *result) if result else None
     if out:

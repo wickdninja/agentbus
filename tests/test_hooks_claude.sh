@@ -93,6 +93,8 @@ STOP() { hook Stop "$(payload stop session_id="\"${1:-$SID1}\"")"; }
 END() { hook SessionEnd "$(payload session_end_other session_id="\"${2:-$SID1}\"" reason="\"${1:-other}\"")"; }
 # forget [SESSION_ID]: drop a session's once-per-session memory (a test that checks one file twice by two spellings)
 forget() { rm -f "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)/${1:-$SID1}".*.seen "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)/${1:-$SID1}.seen"; }
+# memname BUS_DB [SESSION_ID]: the path a session's memory file for that bus has (it need not exist)
+memname() { "$PY" -c 'import hashlib,os,re,sys; print(os.path.join(sys.argv[1], re.sub(r"[^A-Za-z0-9_-]", "_", sys.argv[2])[:64] + "." + hashlib.sha256(os.path.realpath(sys.argv[3]).encode()).hexdigest()[:12] + ".v2.seen"))' "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)" "${2:-$SID1}" "$1"; }
 # memfile [SESSION_ID]: the session's memory file for the one bus it has used since the last forget
 memfile() { local f; for f in "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)/${1:-$SID1}".*.v2.seen; do [ -e "$f" ] && { echo "$f"; return; }; done; fail "no memory file for ${1:-$SID1}"; }
 
@@ -216,6 +218,9 @@ newbus p4b; ab --as a join --tool t >/dev/null; sql "$P/.agentbus/bus.db" "PRAGM
 LAUNCH=("${AB[@]}"); WANT="agentbus: this folder's bus is newer than this agentbus, so the hooks are off for it. Update agentbus (or the plugin), then start a new session." run_all_events
 [ -z "$BAD" ] || fail "a newer bus was not left alone:$BAD"
 [ "$(sha "$P/.agentbus/bus.db")" = "$before" ] || fail "a newer bus was changed"
+SIDN=aaaaaaaa-0000-4000-8000-000000000041; mkdir -p "${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; ln -s "$T/nowhere-4" "$(memname "$P/.agentbus/bus.db" "$SIDN")"
+SS "$SIDN"; grep -qF "this folder's bus is newer than this agentbus" <<<"$OUT" || fail "a memory file that is a link silenced the newer-bus notice: rc $RC out $OUT"
+forget "$SIDN"
 newbus p4c; ab --as a join --tool t >/dev/null; sql "$P/.agentbus/bus.db" "ALTER TABLE log ADD COLUMN junk TEXT"; before=$(sha "$P/.agentbus/bus.db")
 WANT="" run_all_events
 [ -z "$BAD" ] || fail "a refused bus was not left alone:$BAD"
@@ -476,6 +481,14 @@ con.executemany("INSERT INTO messages(ts,sender,recipient,kind,body) VALUES('202
 con.commit(); con.close()
 PY
 PRE mine.txt; [ "$(text_of)" = "$(note "1 answer, 1000+ decisions, 1 handoff")" ] || fail "12f: a capped count was not said as 1000+: rc $RC out $OUT"
+# 999 direct notes after the answer and the handoff: the cut leaves the answer out; only the kind that fills it gets +.
+"$PY" -I - "$P/.agentbus/bus.db" "$N" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.executemany("INSERT INTO messages(ts,sender,recipient,kind,body) VALUES('2026-11-02T00:00:00Z','peer',?,'note','n')", ((sys.argv[2],) for _ in range(999)))
+con.commit(); con.close()
+PY
+PRE mine.txt; [ "$(text_of)" = "$(note "1000+ decisions, 1 handoff, 999+ notes")" ] || fail "12f: a capped scan put + on a kind it did not fill: rc $RC out $OUT"
 ok "unread for this name only, once per new message, a bounded count within the hook's budget on a big bus"
 
 echo
@@ -547,7 +560,6 @@ ab --as a post "on the other bus" --to "$N" --kind question >/dev/null
 PRE m3.txt; [ "$(text_of)" = "$(note "1 question")" ] || fail "12g: the unread mark of one bus silenced another bus's message: rc $RC out $OUT"
 P=$P12G
 # A memory file that cannot be used (here a link) silences neither SessionStart nor the prompt note.
-memname() { "$PY" -c 'import hashlib,os,re,sys; print(os.path.join(sys.argv[1], re.sub(r"[^A-Za-z0-9_-]", "_", sys.argv[2])[:64] + "." + hashlib.sha256(os.path.realpath(sys.argv[3]).encode()).hexdigest()[:12] + ".v2.seen"))' "$STATE" "${2:-$SID1}" "$1"; }
 forget; ln -s "$T/nowhere-memory" "$(memname "$P/.agentbus/bus.db")"
 SS; grep -qF "you are on this folder's bus as $N." <<<"$(text_of)" || fail "12g: a memory file that is a link silenced SessionStart: rc $RC out $OUT"
 UPS; grep -qF "unread messages for you" <<<"$(text_of)" || fail "12g: a memory file that is a link silenced UserPromptSubmit: rc $RC out $OUT"
@@ -890,6 +902,10 @@ CLAUDE_PLUGIN_ROOT=/x hook SessionStart "$(payload session_start_startup_print s
 "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["systemMessage"]=="agentbus: the plugin and agentbus setup both register hooks, so every hook runs twice. Run: agentbus setup claude --uninstall" and "hookSpecificOutput" in d, d' "$OUT" || fail "the duplicate notice is missing or wrong: $OUT"
 CLAUDE_PLUGIN_ROOT=/x hook SessionStart "$(payload session_start_startup_print session_id="\"$SID2\"")"
 ! grep -q systemMessage <<<"$OUT" || fail "the duplicate notice repeated in the same session: $OUT"
+SIDD=aaaaaaaa-0000-4000-8000-000000000042; ln -s "$T/nowhere-29" "$(memname "$P/.agentbus/bus.db" "$SIDD")"
+CLAUDE_PLUGIN_ROOT=/x hook SessionStart "$(payload session_start_startup_print session_id="\"$SIDD\"")"
+grep -qF "you are on this folder's bus as" <<<"$(text_of)" && grep -qF "every hook runs twice" <<<"$OUT" || fail "a memory file that is a link silenced SessionStart's duplicate notice: rc $RC out $OUT"
+forget "$SIDD"
 rm -f "$HOME/.claude/settings.json"
 CLAUDE_PLUGIN_ROOT=/x hook SessionStart "$(payload session_start_startup_print session_id="\"$SID3\"")"
 ! grep -q systemMessage <<<"$OUT" || fail "a notice without a duplicate: $OUT"
@@ -944,6 +960,13 @@ wait "$PIDA" "$PIDB" || true
 MEMH=$(memfile "$SIDH"); [ "$(grep -c 'seen-[ab].txt' "$MEMH")" = 2 ] || fail "parallel hooks lost memory updates: kept $(tr '\n' ' ' <"$MEMH")"
 END other "$SIDH"; ! ls "$STATE" | grep -q "^$SIDH\." || fail "the memory file outlived the session"
 rm -f "$STATE"/bulk-*.seen "$STATE/proc-$$.name"
+# The memory folder replaced by a link: SessionEnd still leaves.
+SIDK=aaaaaaaa-0000-4000-8000-000000000024; NK=$(dname "$SIDK"); SS "$SIDK"
+[[ " $(roster) " == *" $NK "* ]] || fail "31: setup: $NK did not join"
+mv "$STATE" "$STATE.real"; ln -s "$STATE.real" "$STATE"
+END other "$SIDK"
+rm "$STATE"; mv "$STATE.real" "$STATE"
+[[ " $(roster) " != *" $NK "* ]] || fail "SessionEnd with the memory folder a link left the name on the roster: $(roster)"
 ok "dead pids pruned, links ignored, two forced-interleaved updates both kept, memory dropped at SessionEnd"
 
 echo
