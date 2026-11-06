@@ -3080,8 +3080,8 @@
   {
     "name": "output: join shows the home folder in full",
     "file": "bin/agentbus",
-    "find": "\"joined\\ as\\ \\{\\}\\ on\\ \\{\\}\",\\ name,\\ tilde\\(a\\._db\\)\\)",
-    "replace": "\"joined as {} on {}\", name, a._db)",
+    "find": "\"joined as \\{\\} on \\{\\}\" \\+ keep_as\\(a, name\\), name, tilde\\(a\\._db\\)\\)",
+    "replace": "\"joined as {} on {}\" + keep_as(a, name), name, a._db)",
     "count": 1,
     "run": "tests/test_output.sh",
     "expect": "join shows the home folder in full"
@@ -4320,13 +4320,139 @@
     "expect": "a fresh copy of the tree is not current"
   },
   {
-    "name": "join NAME gets no hint naming --as",
+    "name": "join NAME is not used as the identity",
     "file": "bin/agentbus",
-    "find": "            if leaf\\.cmd_path == \\(\\\"join\\\",\\) and len\\(bare\\) == 1:",
-    "replace": "            if False:",
+    "find": "    a\\.as_ = a\\.name\\n",
+    "replace": "    pass\n",
     "count": 1,
-    "run": "tests/test_help.sh",
-    "expect": "join NAME:"
+    "run": "tests/test_identity.sh",
+    "expect": "join pa-name was refused"
+  },
+  {
+    "name": "join NAME accepts a different --as",
+    "file": "bin/agentbus",
+    "find": "if a\\.as_ is not None and a\\.as_ != a\\.name:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "--as bob join alice was not a usage error"
+  },
+  {
+    "name": "join '' falls through to the env name",
+    "file": "bin/agentbus",
+    "find": "if a\\.cmd != \"join\" or a\\.name is None:",
+    "replace": "if a.cmd != \"join\" or not a.name:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "join '' was not bad_input"
+  },
+  {
+    "name": "join NAME does not say to keep using --as",
+    "file": "bin/agentbus",
+    "find": "if getattr\\(a, \"_named_in_join\", False\\) and os\\.environ\\.get\\(\"AGENTBUS_AGENT\"\\) != name:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_identity.sh",
+    "expect": "the success line does not say to keep using --as"
+  },
+  {
+    "name": "goal text drops its age",
+    "file": "bin/agentbus",
+    "find": "return \"now\" if age == \"now\" else \"an unknown time ago\" if age == \"\\?\" else age \\+ \" ago\"",
+    "replace": "return \"now\"",
+    "count": 1,
+    "run": "tests/test_goal.sh",
+    "expect": "goal shows:"
+  },
+  {
+    "name": "join shows the goal without its age",
+    "file": "bin/agentbus",
+    "find": "show\\(\"goal \\(\\{\\}, \\{\\}\\): \\{\\}\", g\\[\"set_by\"\\], goal_age\\(g\\[\"set_at\"\\]\\), g\\[\"goal\"\\]\\)\\n\\n\\ndef cwd_text",
+    "replace": "show(\"goal ({}, {}): {}\", g[\"set_by\"], \"now\", g[\"goal\"])\n\n\ndef cwd_text",
+    "count": 1,
+    "run": "tests/test_goal.sh",
+    "expect": "join does not show the age"
+  },
+  {
+    "name": "status shows the goal without its age",
+    "file": "bin/agentbus",
+    "find": "show\\(\"== goal \\(\\{\\}, \\{\\}\\): \\{\\}\", g\\[\"set_by\"\\], goal_age\\(g\\[\"set_at\"\\]\\)",
+    "replace": "show(\"== goal ({}, {}): {}\", g[\"set_by\"], \"now\"",
+    "count": 1,
+    "run": "tests/test_goal.sh",
+    "expect": "status does not show the age"
+  },
+  {
+    "name": "brief shows the goal without its age",
+    "file": "bin/agentbus",
+    "find": "_brief_line\\(g\\[\"set_by\"\\], 40\\), goal_age\\(g\\[\"set_at\"\\]\\)",
+    "replace": "_brief_line(g[\"set_by\"], 40), \"now\"",
+    "count": 1,
+    "run": "tests/test_goal.sh",
+    "expect": "brief does not show the age"
+  },
+  {
+    "name": "the SessionStart note hides a stale goal's age",
+    "file": "bin/agentbus",
+    "find": "if age\\.endswith\\(\"d\"\\) else \", and a shared goal is set\"",
+    "replace": "if False else \", and a shared goal is set\"",
+    "count": 1,
+    "run": "tests/test_goal.sh",
+    "expect": "a stale goal:"
+  },
+  {
+    "name": "schema marks every positional required",
+    "file": "bin/agentbus",
+    "find": "if \\(action\\.nargs in \\(None, \"\\+\"\\)\\) if positional else action\\.required:",
+    "replace": "if True if positional else action.required:",
+    "count": 1,
+    "run": "tests/test_contract.sh",
+    "expect": "required arguments on Python"
+  },
+  {
+    "name": "schema looks up a positional's arg_notes by its upper-case metavar",
+    "file": "bin/agentbus",
+    "find": "e\\.update\\(notes\\.get\\(name\\.lower\\(\\) if positional else name, \\{\\}\\)\\)",
+    "replace": "e.update(notes.get(name, {}))",
+    "count": 1,
+    "run": "tests/test_contract.sh",
+    "expect": "required arguments on Python"
+  },
+  {
+    "name": "human_span shows a negative span",
+    "file": "bin/agentbus",
+    "find": "    seconds = max\\(int\\(seconds\\), 0\\)   # a clock that ran backwards is 0s, not -1m\\n",
+    "replace": "    seconds = int(seconds)\n",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "human_span and fit edges"
+  },
+  {
+    "name": "fit to zero columns prints an ellipsis",
+    "file": "bin/agentbus",
+    "find": "    if n == 0:\\n        return \"\"   # no column to put even the ellipsis in\\n    out, w = \\[\\], 0\\n    for c in s:",
+    "replace": "    out, w = [], 0\n    for c in s:",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "human_span and fit edges"
+  },
+  {
+    "name": "fit_left at zero columns prints an ellipsis",
+    "file": "bin/agentbus",
+    "find": "    if n == 0:\\n        return \"\"   # no column to put even the ellipsis in\\n    out, w = \\[\\], 0\\n    for c in reversed\\(s\\):",
+    "replace": "    out, w = [], 0\n    for c in reversed(s):",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "fit_left and the ASCII fits overflow narrow fields"
+  },
+  {
+    "name": "fit_left_ascii prints all three dots in one or two columns",
+    "file": "bin/agentbus",
+    "find": "    return \"\\.\\.\\.\"\\[:n - w\\] \\+ \"\".join\\(reversed\\(out\\)\\)",
+    "replace": "    return \"...\" + \"\".join(reversed(out))",
+    "count": 1,
+    "run": "tests/test_watch_keys.sh",
+    "expect": "fit_left and the ASCII fits overflow narrow fields"
   },
   {
     "name": "init from a clone does not say to install agentbus first",

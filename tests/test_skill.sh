@@ -110,8 +110,9 @@ grep -qF 'this copy' "$T/skill.out" && fail "the skill says 'this copy', which a
 grep -qF '.agentbus/bin/agentbus' "$T/skill.out" && fail "the skill names the project copy"
 ok "the printed skill says delivery can repeat"
 
-echo "TEST: docs/how-to/setup.md's dry-run example is what setup claude --dry-run prints, byte count included"
-# Bug it catches: the example said 4,277 bytes after the skill had grown to 4,317.
+echo "TEST: docs/how-to/setup.md's dry-run example is what setup claude --dry-run prints, with the byte count read from the real skill"
+# Bug it catches: the example said 4,277 bytes after the skill had grown to 4,317. The doc does not pin the count any more
+# (every branch that touched SKILL.md edited that one line); the count is checked against the file here and masked for the diff.
 mkdir -p "$T/dryhome"
 got=$(cd "$T" && HOME="$T/dryhome" "${AB[@]}" setup claude --dry-run) || fail "setup claude --dry-run failed: $got"
 want=$("$PY" - "$ROOT/docs/how-to/setup.md" <<'PY'
@@ -122,7 +123,11 @@ assert m, "no dry-run example in docs/how-to/setup.md"
 print(m.group(1), end="")
 PY
 ) || fail "could not read the example"
-[ "$got" = "$want" ] || fail "docs/how-to/setup.md's dry-run example differs: wanted (the real output)
+real=$(wc -c <"$ROOT/skills/agentbus/SKILL.md" | tr -d ' ')
+real=$("$PY" -c 'import sys; print(format(int(sys.argv[1]), ","))' "$real")
+grep -qF "(${real} bytes)" <<<"$got" || fail "setup claude --dry-run does not name the real skill size ($real bytes): $got"
+got=$(sed -E 's/\([0-9][0-9,]* bytes\)/(N bytes)/' <<<"$got")
+[ "$got" = "$want" ] || fail "docs/how-to/setup.md's dry-run example differs: wanted (the real output, byte count masked)
 $got
 the doc shows
 $want"

@@ -240,4 +240,26 @@ assert "Warning" in d["objects"]
 ' <<<"$j"
 ok "schema --json carries the warning, the new error fields and --request-id on every write"
 
+echo "TEST 15: join NAME joins as NAME; --as NAME join still works with any AGENTBUS_AGENT; join '' is bad_input, never the env name"
+rm -rf "$T/bus"; mkdir -p "$T/bus"
+out=$(agentbus join pa-name) || fail "join pa-name was refused"
+grep -qF "Keep using --as pa-name" <<<"$out" || fail "the success line does not say to keep using --as: $out"
+[ "$(rows "SELECT name FROM agents")" = pa-name ] || fail "join pa-name did not register pa-name"
+set +e; agentbus post hello >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 2 ] || fail "a bare post after join NAME exits $rc, not 2"
+must agentbus --as pa-name post hello
+agentbus --json join pa-json | pyj 'assert d["joined"] == "pa-json"'
+out=$(AGENTBUS_AGENT=env-name agentbus --as pa-flag join) || fail "--as pa-flag join under another AGENTBUS_AGENT was refused"
+grep -qF "joined as pa-flag" <<<"$out" && ! grep -qF "Keep using" <<<"$out" || fail "--as join: $out"
+out=$(AGENTBUS_AGENT=pa-env agentbus join pa-env) || fail "join NAME equal to AGENTBUS_AGENT was refused"
+grep -qF "Keep using" <<<"$out" && fail "keep-using line shown although AGENTBUS_AGENT already carries the name: $out"
+e=$(AGENTBUS_AGENT=env-name jfail bad_input "${AB[@]}" --json join '') || fail "join '' was not bad_input"
+grep -qF "is not a valid name" <<<"$e" || fail "join '' message: $e"
+[ "$(rows "SELECT COUNT(*) FROM agents WHERE name='env-name'")" = 0 ] || fail "join '' joined the env name"
+e=$(jfail bad_input "${AB[@]}" --json --as bob join alice) || fail "--as bob join alice was not a usage error"
+grep -qF -- "--as bob" <<<"$e" && grep -qF "alice" <<<"$e" || fail "the usage error does not name both names: $e"
+[ "$(rows "SELECT COUNT(*) FROM agents WHERE name IN ('bob','alice')")" = 0 ] || fail "a refused join registered a name"
+must agentbus --as same join same   # the same name twice is not a conflict
+ok "join NAME joins, says to keep --as, refuses a different --as naming both, and join '' never becomes the env name"
+
 echo "All identity tests passed"

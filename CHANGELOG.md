@@ -14,6 +14,9 @@
 - The hook note that another name holds a claim on a file now comes once per file and holder per session, not on every edit of it.
 - A claim refusal now says who holds the file, why and since when, then both branches: "If you share a checkout with HOLDER, wait or ask" and "On a separate branch, post what you are touching; the merge decides." It is the same wherever you run it and no longer says "Do not edit it yet" outright. `--json` errors (and each entry of `conflicts`) carry the holder's `claimed_at`.
 - Every refused claim writes a `claim_refused` row to the log, with JSON detail `{"conflicts": [{resource, held, holder, claimed_at}]}`, so refusals can be counted. A busy bus never turns the refusal into another error.
+- `join NAME` works: it joins as NAME, the same as `--as NAME join`, and the success line says to keep using `--as NAME` on later commands (`post` and the rest still take the name only with `--as` or `AGENTBUS_AGENT`). `--as bob join alice` is a usage error naming both names, and `join ''` is a bad name, never the name in `AGENTBUS_AGENT`.
+- The goal reads `goal (alice, 2d ago): TEXT` in `join`, `brief`, `goal` and `status`, and the SessionStart note says how old the goal is once it is a day old. `--json` is unchanged.
+- docs/how-to/setup.md shows `(N bytes)` for the skill size instead of a number every edit to SKILL.md had to change; the test checks the real size.
 - `--request-id` replays a write only for `post` and `join`, where the bus stores the token. On `leave`, `claim`, `release`, `ctx set` and `goal` it is accepted and ignored: the help, `schema`, the skill and the reference say what a repeat really does (`ctx set` and `goal` set the value again over a change made since), and an error after one of them saved is `retryable: false`.
 - Every open sets `PRAGMA synchronous=FULL`, so a write is synced before its command reports it, whatever default the SQLite build has.
 - The wait for a busy bus is timed on the monotonic clock; a wall-clock change no longer ends it early or stretches it.
@@ -22,6 +25,9 @@
 ### Fixed
 
 - The hooks' once-per-session memory keeps file paths apart from its other entries, so a file named like one of them can no longer silence a note, and a payload with an empty session id no longer shares one memory file with every other such payload.
+- `schema --json` marks the same arguments required on every Python. Below 3.12 it marked `goal TEXT`, `schema COMMAND`, `help COMMAND` and `update DIR` required, and 3.12 and later did not mark `ctx set VALUE` or `log add DETAIL`; both now follow the command's real rule.
+- `watch` shows a span from a clock that ran backwards as `0s`, not `-1m`, and a field squeezed to zero columns is empty, not a one-column ellipsis.
+- A path field `watch` cuts from the left is empty at zero columns, and in `--ascii` one or two columns hold one or two dots, not three: a narrow field no longer widens the row.
 - `setup` can no longer be redirected by a folder swapped for a link while it runs: every write, backup and removal goes through a folder held open with `O_NOFOLLOW`, and a link that appears in the way is refused by name.
 - `agentbus init` on the home folder no longer prints a `cd` and `join` step that fails: discovery never looks in the home folder, so it says to pick a project folder instead.
 - `doctor` finds a second bus above worktrees made with `worktree.useRelativePaths`, and prints a path in its hints as `~/'my dir'`, never `'~/my dir'`.

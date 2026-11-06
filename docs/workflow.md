@@ -17,7 +17,7 @@ sequenceDiagram
 
     you->>bus: goal "auth on the new token API"
     claude->>bus: join
-    bus-->>claude: goal: auth on the new token API
+    bus-->>claude: goal (you, now): auth on the new token API
     Note over codex,bus: codex and tests join too,<br/>and see the same goal
 
     claude->>bus: post "auth refactor is yours" --to codex --kind handoff
