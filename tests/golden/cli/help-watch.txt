@@ -1,0 +1,26 @@
+usage: agentbus watch [--interval SECONDS] [--once]
+
+A live view of the bus: agents, claims, facts and messages, updated in place.
+Keys: j/k move, Tab section, Enter open, / filter, p pause, y copy, ? help, q
+quit. Read-only. Esc and q go back; q quits from the main view, Esc never
+quits. --once prints one frame (so do a pipe and TERM=dumb); --json prints one
+snapshot.
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --interval SECONDS  Seconds between refreshes, 0.2 to 60; default 1.
+  --once              Print one frame and exit (what it does anyway when
+                      stdout is not a terminal).
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Open the live view
+  agentbus watch
+  # Print one frame and exit
+  agentbus watch --once
+
+JSON result: {"bus": string, "directory": string, "agents": [{"name": string, "role": string or null, "last_seen": string, "joined_at": string}], "claims": [{"resource": string, "agent": string, "purpose": string or null, "expires_at": string}], "goal": null or Goal, "context": [Fact], "messages": [{"id": integer, "ts": string, "sender": string, "recipient": string, "kind": string, "topic": string or null, "body": string, "reply_to": integer or null}], "unread": object, "counts": {"agents": integer, "claims": integer, "messages": integer}, "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}. Retry: safe to repeat.

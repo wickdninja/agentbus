@@ -1,0 +1,44 @@
+usage: agentbus post BODY [--to NAME] [--kind KIND] [--topic TOPIC]
+    [--reply-to ID] [--request-id TOKEN]
+
+Send a message (body '-' reads stdin)
+
+ARGUMENTS
+  BODY  The message. Several words are joined; - reads it from stdin.
+
+KINDS (--kind)
+  note      General update (the default)
+  question  Ask someone; they answer with --reply-to ID
+  answer    Reply to a question
+  handoff   Pass work on: branch, state, next step, checks
+  decision  Record a choice others should follow
+  alert     Something needs attention now
+  done      Report finished work
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --to NAME           Deliver to this one agent name; omitted means broadcast.
+                      A name not on the roster still gets the message, with a
+                      warning.
+  --kind KIND         Message kind: note, question, answer, handoff, decision,
+                      alert, done. Default: note.
+  --topic TOPIC       Optional topic label, filterable with read --topic.
+  --reply-to ID       Link to an earlier message; does not choose the
+                      recipient.
+  --request-id TOKEN  Retry safely with the same sender and token; a changed
+                      payload is refused.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Hand work to bob
+  agentbus --as alice post "schema is ready; tests pass" --to bob --kind handoff
+  # Ask everyone a question
+  agentbus --as alice post "who owns the migration?" --kind question
+  # Read a long body from a file
+  agentbus --as alice post - --kind done < summary.txt
+
+JSON result: {"id": integer, "warnings": [Warning]}. Retry: only with --request-id.

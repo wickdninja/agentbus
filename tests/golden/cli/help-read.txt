@@ -1,0 +1,27 @@
+usage: agentbus read [--since ID] [--topic TOPIC] [--before NEXT] [--id ID]
+    [--limit N]
+
+Recent messages, anyone's
+
+FLAGS
+  -h, --help     Show this help message and exit.
+  --since ID     The messages after this id, oldest first
+  --topic TOPIC  Only messages with this topic label.
+  --before NEXT  Older messages than the previous page (its next value).
+  --id ID        Show this one message, whole (a listing cuts a body at 2 KB).
+  --limit N      Maximum messages; default 50. Use -1 for all.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # The latest messages
+  agentbus read --limit 10
+  # Everything after message 42
+  agentbus read --since 42
+  # One topic
+  agentbus read --topic release
+
+JSON result: {"items": [Message], "has_more": boolean, "next": string or null}, or with --id a Message. Retry: safe to repeat.

@@ -1,0 +1,24 @@
+usage: agentbus wait [--timeout SECONDS]
+
+Wait until you have an unread message, then print how many and the command
+that reads them. It marks nothing read and does not hold the bus while it
+waits; it looks every 2 seconds. Run it as a background command to be told
+when work arrives. It does not wake a session that is idle by itself. Exit 0
+when messages are waiting, 124 when the timeout ends first.
+
+FLAGS
+  -h, --help         Show this help message and exit.
+  --timeout SECONDS  Give up after this many seconds: 1-1800; default 600.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Wait for mail, up to ten minutes
+  agentbus --as alice wait
+  # Give up after 30 seconds
+  agentbus --as alice wait --timeout 30
+
+JSON result: {"name": string, "unread": integer, "waited_s": integer, "next": string}. Retry: safe to repeat.

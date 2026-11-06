@@ -1,0 +1,19 @@
+usage: agentbus buses
+
+List buses from nearest to outermost, without creating bus.db
+
+FLAGS
+  -h, --help  Show this help message and exit.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Which buses this folder can reach
+  agentbus buses
+  # As JSON
+  agentbus --json buses
+
+JSON result: {"items": [BusLevel], "has_more": boolean, "next": string or null}. Retry: safe to repeat.

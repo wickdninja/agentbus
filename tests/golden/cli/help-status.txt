@@ -1,0 +1,23 @@
+usage: agentbus status [--limit N]
+
+The overview for people: the goal, agents, facts, claims and recent messages,
+a section each. An agent starts with brief instead, which is shorter and shows
+open questions and what waits for it.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --limit N   At most this many rows in each section (agents, facts, claims,
+              the latest messages); default 20. Use -1 for all.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # The whole picture
+  agentbus status
+  # Keep each section short
+  agentbus status --limit 5
+
+JSON result: {"bus": string, "goal": null or Goal, "agents": [Agent], "context": [Fact], "claims": [Claim], "messages": [Message], "omitted": {"agents": integer, "context": integer, "claims": integer, "messages": integer}}. Retry: safe to repeat.

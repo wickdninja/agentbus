@@ -1,0 +1,24 @@
+usage: agentbus ctx get [KEY] [--limit N]
+
+Get a fact, or list all facts.
+
+ARGUMENTS
+  KEY  The fact's name; omit to list all facts.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --limit N   Maximum facts (get) or values (history); default 50. Use -1 for
+              all.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # List every fact
+  agentbus ctx get
+  # One fact
+  agentbus ctx get test-command
+
+JSON result: a Fact, or {"items": [Fact], "has_more": boolean, "next": string or null}. Retry: safe to repeat.

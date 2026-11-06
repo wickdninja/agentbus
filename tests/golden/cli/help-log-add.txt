@@ -1,0 +1,23 @@
+usage: agentbus log add ACTION DETAIL
+
+Append an activity log entry.
+
+ARGUMENTS
+  ACTION  What kind of entry: one word, for example test or deploy.
+  DETAIL  What happened. Several words are joined; - reads it from stdin.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Record what you did
+  agentbus --as alice log add test "unit suite green"
+  # Another entry
+  agentbus --as alice log add deploy "staging is live"
+
+JSON result: {"id": integer, "logged": boolean, "agent": string, "action": string, "detail": string}. Retry: appends each time.

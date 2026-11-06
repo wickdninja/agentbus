@@ -1,0 +1,26 @@
+usage: agentbus ctx {set,get,history} ...
+
+Shared facts (key/value): lasting notes every agent can read
+
+ACTIONS
+  set KEY VALUE  Set a shared fact and record its history.
+  get [KEY]      Get a fact, or list all facts.
+  history KEY    Show the history of a fact.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --limit N   At most this many facts (get) or values (history) (default 50).
+              Use -1 for all.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Save a fact
+  agentbus --as alice ctx set test-command "npm test"
+  # Read one back
+  agentbus ctx get test-command
+
+See: agentbus help ctx ACTION

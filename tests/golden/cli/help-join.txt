@@ -1,0 +1,37 @@
+usage: agentbus join [NAME] [--tool TOOL] [--model MODEL] [--cwd CWD]
+    [--branch BRANCH] [--role ROLE] [--takeover] [--request-id TOKEN]
+
+Register yourself on the roster under a name. Give it either way: agentbus
+--as NAME join, or agentbus join NAME. Every other command takes the name with
+--as (or AGENTBUS_AGENT) only. It refuses a name active in the last 30 min
+unless --takeover.
+
+ARGUMENTS
+  NAME  Your name, the same as --as NAME before the command.
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --tool TOOL         Tool running this session.
+  --model MODEL       Model running this session.
+  --cwd CWD           Working directory for this session.
+  --branch BRANCH     Branch for this session.
+  --role ROLE         What you do here (shown in who/watch).
+  --takeover          Rejoin a name active in the last 30 min (only your own);
+                      tool, model and role you leave out are kept.
+  --request-id TOKEN  Retry safely: the same token and flags replay the first
+                      result, flagged duplicate.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Join under your own name
+  agentbus --as alice join --role "api work"
+  # Or give the name after join
+  agentbus join alice
+  # Say which tool and branch
+  agentbus --as alice join --tool claude --branch feat/api
+
+JSON result: {"joined": string, "bus": string, "goal": null or Goal, "agentbus": string}. Retry: with --request-id or --takeover.

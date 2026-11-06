@@ -1,0 +1,105 @@
+#compdef agentbus
+# zsh completion for agentbus, written by: agentbus completion zsh
+# Load it for this shell (after compinit): source <(agentbus completion zsh)
+_agentbus() {
+    local curcontext="$curcontext" state line ret=1
+    typeset -A opt_args
+    local -a global=(
+        '--as=[Your agent identity]:name:'
+        '--json[Print the result as JSON]'
+        '--up=[Use the Nth outer bus]:level:'
+    )
+    _arguments -C "${global[@]}" \
+        '(- *)--help[Show help]' '(- *)--version[Show the version]' \
+        '1: :->command' '*:: :->args' && ret=0
+    case $state in
+        command)
+            local -a commands=(
+                'join:Join the roster and see the shared goal'
+                'leave:Leave the roster and release your claims'
+                'who:List the agents on the bus'
+                'post:Send a message to one agent or to everyone'
+                'inbox:Read your unread messages, then mark them read'
+                'wait:Wait until you have an unread message'
+                'read:Read recent messages, anyone'\''s'
+                'ctx:Shared facts (key/value)'
+                'claim:Claim a file or resource before you edit it'
+                'release:Release a claim'
+                'claims:List claims'
+                'log:Activity log'
+                'status:The overview for people; agents start with brief'
+                'goal:Show or set the shared goal'
+                'watch:A live view for people (read-only)'
+                'buses:List buses from nearest to outermost'
+                'init:Add a bus to a folder'
+                'upgrade:Update a folder'\''s bus copy and database'
+                'schema:Result shapes, errors and retry rules, for tools'
+                'help:Show help for a command'
+                'completion:Print a tab-completion script (bash, zsh, fish)'
+                'skill:Print the agent protocol'
+                'setup:Teach Claude Code or Codex the protocol'
+                'update:Install the latest release, then upgrade the bus folders and refresh the skill and AGENTS.md block'
+                'hooks:Print the hooks your agent needs - codex (hooks.json) or claude (the hooks block of settings.json)'
+                'doctor:Check the install and each agent'\''s setup'
+                'brief:Your first call - the goal, who holds what, open questions'
+                'demo:A 30-second tour of two agents on a throwaway bus'
+            )
+            _describe -t commands 'agentbus command' commands && ret=0 ;;
+        args)
+            case $line[1] in
+                join) _arguments "${global[@]}" '--tool=[Tool running this session]:value:' '--model=[Model running this session]:value:' '--cwd=[Working directory for this session]:value:' '--branch=[Branch for this session]:value:' '--role=[What you do here (shown in who/watch)]:value:' '--takeover[Rejoin a name active in the last 30 min (only your own); tool, model and role you leave out are kept]' '--request-id=[Retry safely - the same token and flags replay the first result, flagged duplicate]:value:' '*:value:' && ret=0 ;;
+                leave) _arguments "${global[@]}" '--request-id=[Accepted and ignored - the bus does not store it]:value:' '*:value:' && ret=0 ;;
+                who) _arguments "${global[@]}" '--limit=[At most this many agents (default 50)]:value:' '*:value:' && ret=0 ;;
+                post) _arguments "${global[@]}" '--to=[Deliver to this one agent name; omitted means broadcast]:value:' '--kind=[Message kind - note, question, answer, handoff, decision, alert, done]:value:(note question answer handoff decision alert done)' '--topic=[Optional topic label, filterable with read --topic]:value:' '--reply-to=[Link to an earlier message; does not choose the recipient]:value:' '--request-id=[Retry safely with the same sender and token; a changed payload is refused]:value:' '*:value:' && ret=0 ;;
+                inbox) _arguments "${global[@]}" '--peek[Do not mark read]' '--after=[With --peek - continue after the previous page (its next value)]:value:' '--limit=[At most this many messages (the oldest unread; the rest stay unread) (default 20)]:value:' '*:value:' && ret=0 ;;
+                wait) _arguments "${global[@]}" '--timeout=[Give up after this many seconds - 1-1800; default 600]:value:' '*:value:' && ret=0 ;;
+                read) _arguments "${global[@]}" '--since=[The messages after this id, oldest first]:value:' '--topic=[Only messages with this topic label]:value:' '--before=[Older messages than the previous page (its next value)]:value:' '--id=[Show this one message, whole (a listing cuts a body at 2 KB)]:value:' '--limit=[Maximum messages; default 50]:value:' '*:value:' && ret=0 ;;
+                ctx)
+                    if (( CURRENT == 2 )); then
+                        local -a actions=('set:Set a shared fact and record its history.' 'get:Get a fact, or list all facts.' 'history:Show the history of a fact.')
+                        _describe -t actions 'ctx action' actions && ret=0
+                    else
+                        case $words[2] in
+                            set) _arguments "${global[@]}" '--request-id=[Accepted and ignored - the bus does not store it]:value:' '*:value:' && ret=0 ;;
+                            get) _arguments "${global[@]}" '--limit=[Maximum facts (get) or values (history); default 50]:value:' '*:value:' && ret=0 ;;
+                            history) _arguments "${global[@]}" '--limit=[Maximum facts (get) or values (history); default 50]:value:' '--before=[Older values than the previous page (its next value)]:value:' '*:value:' && ret=0 ;;
+                        esac
+                    fi ;;
+                claim) _arguments "${global[@]}" '--purpose=[Why you hold it; shown to anyone who runs into the claim]:value:' '--request-id=[Accepted and ignored - the bus does not store it]:value:' '--ttl-min=[Claim lifetime in minutes - 1-10080; default 120]:value:' '--from=[Take the claims in the way from HOLDER, only when your user or a handoff gave you its work; repeat for several holders]:value:' '*:value:' && ret=0 ;;
+                release) _arguments "${global[@]}" '--all[Release all your claims]' '--if-held[With resources - skip any you do not hold instead of refusing, for cleanup]' '--request-id=[Accepted and ignored - the bus does not store it]:value:' '*:value:' && ret=0 ;;
+                claims) _arguments "${global[@]}" '--stale[Show claims held by agents not on roster]' '--limit=[At most this many claims (default 50)]:value:' '*:value:' && ret=0 ;;
+                log)
+                    if (( CURRENT == 2 )); then
+                        local -a actions=('add:Append an activity log entry.' 'show:Show recent activity log entries.')
+                        _describe -t actions 'log action' actions && ret=0
+                    else
+                        case $words[2] in
+                            add) _arguments "${global[@]}"  '*:value:' && ret=0 ;;
+                            show) _arguments "${global[@]}" '--limit=[Maximum entries; default 50]:value:' '--before=[Older entries than the previous page (its next value)]:value:' '*:value:' && ret=0 ;;
+                        esac
+                    fi ;;
+                status) _arguments "${global[@]}" '--limit=[At most this many rows in each section (agents, facts, claims, the latest messages); default 20]:value:' '*:value:' && ret=0 ;;
+                goal) _arguments "${global[@]}" '--request-id=[Accepted and ignored - the bus does not store it]:value:' '*:value:' && ret=0 ;;
+                watch) _arguments "${global[@]}" '--interval=[Seconds between refreshes, 0.2 to 60; default 1]:value:' '--once[Print one frame and exit (what it does anyway when stdout is not a terminal)]' '*:value:' && ret=0 ;;
+                buses) _arguments "${global[@]}"  '*:value:' && ret=0 ;;
+                init) _arguments "${global[@]}" '--second-bus[Make a bus in DIR even though DIR holds linked worktrees of a repo that already has one, or lies inside a linked worktree (by default init refuses - one repo, one bus, and agents in those worktrees use the repo'\''s)]' '1:directory:_files -/' && ret=0 ;;
+                upgrade) _arguments "${global[@]}" '--all[Upgrade every bus folder under DIR]' '--depth=[With --all - how many levels below DIR to look (default 5)]:value:' '--dry-run[Change nothing; report what would change]' '1:directory:_files -/' && ret=0 ;;
+                schema) _arguments "${global[@]}" '--index[Only each command'\''s argument names and its own error codes (under 3 KB)]' '--full[With COMMAND and --json, also the global arguments, environment, exit codes and the definitions of the errors every command can raise (left out by default)]' '*:command:(join leave who post inbox wait read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo)' && ret=0 ;;
+                help) _arguments "${global[@]}"  '*:command:(join leave who post inbox wait read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hooks doctor brief demo)' && ret=0 ;;
+                completion) _arguments "${global[@]}"  '1:value:(bash zsh fish)' && ret=0 ;;
+                skill) _arguments "${global[@]}" '--agents-md[Print the block for an AGENTS.md file instead]' '*:value:' && ret=0 ;;
+                setup) _arguments "${global[@]}" '--scope=[user - your own config (default); project - files under the current directory]:value:(user project)' '--dry-run[Show what would change; write nothing]' '--uninstall[Remove what setup added]' '--refresh[Bring what setup installed up to date; add nothing, keep a skill or AGENTS.md block you edited, and rewrite hooks tagged agentbus -managed, with a backup (what agentbus update runs)]' '1:value:(claude codex)' && ret=0 ;;
+                update) _arguments "${global[@]}" '--check[Only say whether a newer release exists]' '--dry-run[Change nothing; print what would run]' '--all-buses[In an agent session, cover every known bus folder and run setup]' '--no-buses[Skip the bus folders]' '--no-setup[Skip the skill and AGENTS.md refresh]' '1:directory:_files -/' && ret=0 ;;
+                hooks) _arguments "${global[@]}"  '1:value:(claude codex)' && ret=0 ;;
+                doctor) _arguments "${global[@]}" '--scope=[user - your own config; project - files under the current directory; all - both (default)]:value:(user project all)' '*:value:' && ret=0 ;;
+                brief) _arguments "${global[@]}" '--limit=[At most this many rows in each section (default 5)]:value:' '*:value:' && ret=0 ;;
+                demo) _arguments "${global[@]}" '--no-pause[Do not pause between commands, and do not offer watch (for scripts and tests)]' '--watch[Open watch on the demo bus when the tour ends, without asking (needs a terminal)]' '*:value:' && ret=0 ;;
+            esac ;;
+    esac
+    return ret
+}
+if [ "$funcstack[1]" = "_agentbus" ]; then
+    _agentbus "$@"
+else
+    compdef _agentbus agentbus
+fi

@@ -1,0 +1,19 @@
+usage: agentbus hooks {claude,codex}
+
+Print the hooks your agent needs: codex (hooks.json) or claude (the hooks
+block of settings.json)
+
+ARGUMENTS
+  {claude,codex}  codex: a hooks.json document (Codex runs the hooks only
+                  after you trust them with /hooks); claude: the hooks block
+                  for .claude/settings.json
+
+FLAGS
+  -h, --help  Show this help message and exit.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+JSON result: {"hooks": {EVENT: [{"matcher": string (optional), "hooks": [{"type": string, "timeout": integer, "command": string}]}]}}. Retry: safe to repeat.

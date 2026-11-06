@@ -1,0 +1,27 @@
+usage: agentbus init [DIR] [--second-bus]
+
+Install this tool into DIR/.agentbus/ (installed tool or clone only)
+
+ARGUMENTS
+  DIR  Directory to initialize, created (with its parents) if missing; default
+       current directory. Run from the installed tool or source clone.
+
+FLAGS
+  -h, --help    Show this help message and exit.
+  --second-bus  Make a bus in DIR even though DIR holds linked worktrees of a
+                repo that already has one, or lies inside a linked worktree
+                (by default init refuses: one repo, one bus, and agents in
+                those worktrees use the repo's)
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Add a bus to your project
+  agentbus init ~/src/app
+  # Add one to the current folder
+  agentbus init
+
+JSON result: {"directory": string, "copy": string, "old": string, "new": string, "exclude_added": boolean, "gitignore_rule": boolean, "outer": string or null}. Retry: safe to repeat.

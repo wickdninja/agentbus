@@ -1,0 +1,25 @@
+usage: agentbus goal [TEXT] [--request-id TOKEN]
+
+The shared goal every agent sees first: set it with text, show it without
+
+ARGUMENTS
+  TEXT  The goal; '-' reads it from stdin. Omit to show the current goal.
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --request-id TOKEN  Accepted and ignored: the bus does not store it.
+                      Repeating goal sets the text again, over a change made
+                      since: goal first.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Set the shared goal
+  agentbus --as alice goal "ship the importer"
+  # Show it
+  agentbus goal
+
+JSON result: a Goal, or {"goal": null, "set_by": null, "set_at": null} when none is set. Retry: repeat if unchanged since.

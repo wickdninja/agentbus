@@ -1,0 +1,30 @@
+usage: agentbus release [RESOURCE... | --all] [--if-held] [--request-id TOKEN]
+
+Release one or several claims, all or none
+
+ARGUMENTS
+  RESOURCE...  Resource to release; use the spelling from claims. Name several
+               to release them all or none.
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --all               Release all your claims
+  --if-held           With resources: skip any you do not hold instead of
+                      refusing, for cleanup.
+  --request-id TOKEN  Accepted and ignored: the bus does not store it. To
+                      repeat a release, add --if-held.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Release one claim
+  agentbus --as alice release src/api/
+  # Release several
+  agentbus --as alice release src/a.py src/b.py
+  # Release everything you hold
+  agentbus --as alice release --all
+
+JSON result: {"released": [string], "released_count": integer}. Retry: with --if-held.

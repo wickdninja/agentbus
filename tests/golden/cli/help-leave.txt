@@ -1,0 +1,22 @@
+usage: agentbus leave [--request-id TOKEN]
+
+Leave the roster and release all your claims
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --request-id TOKEN  Accepted and ignored: the bus does not store it.
+                      Repeating leave is safe: it leaves again and releases
+                      what you hold then.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Leave and release everything you hold
+  agentbus --as alice leave
+  # As JSON, for a script
+  agentbus --as alice --json leave
+
+JSON result: {"left": string, "was_joined": boolean, "released": [string], "released_count": integer}. Retry: safe to repeat.

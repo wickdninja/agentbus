@@ -1,0 +1,60 @@
+usage: agentbus [--as NAME] [--json] [--up N]
+    {join,leave,who,post,inbox,wait,read,ctx,claim,release,claims,log,status,goal,watch,buses,init,upgrade,schema,help,completion,skill,setup,update,hooks,doctor,brief,demo}
+    ...
+
+Coordinate agents in one local workspace: messages, file claims, and shared
+facts.
+
+COMMANDS
+  Work together
+    join        Join the roster and see the shared goal
+    brief       Your first call: the goal, who holds what, open questions
+    leave       Leave the roster and release your claims
+    who         List the agents on the bus
+    post        Send a message to one agent or to everyone
+    inbox       Read your unread messages, then mark them read
+    wait        Wait until you have an unread message
+    read        Read recent messages, anyone's
+    claim       Claim a file or resource before you edit it
+    release     Release a claim
+    claims      List claims
+    status      The overview for people; agents start with brief
+    goal        Show or set the shared goal
+    ctx         Shared facts (key/value)
+    log         Activity log
+  For people
+    watch       A live view for people (read-only)
+  Set up
+    init        Add a bus to a folder
+    upgrade     Update a folder's bus copy and database
+    setup       Teach Claude Code or Codex the protocol
+    doctor      Check the install and each agent's setup
+    skill       Print the agent protocol
+    buses       List buses from nearest to outermost
+  Learn
+    demo        A 30-second tour of two agents on a throwaway bus
+    help        Show help for a command
+    completion  Print a tab-completion script (bash, zsh, fish)
+    schema      Result shapes, errors and retry rules, for tools
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --as NAME   Your agent identity; overrides AGENTBUS_AGENT. Successful
+              commands run with --as refresh that agent's last-seen, except
+              watch. Omit --as to look without counting as present.
+  --json      Print successful command results as JSON. Check exit status;
+              errors use stderr. Every result starts with "contract": 1.
+  --up N      Select the Nth outer bus (default 0). AGENTBUS_DB takes
+              precedence.
+  --version   Show program version and exit.
+
+GETTING STARTED
+  Start:  agentbus --as NAME join
+  Loop:   inbox; claim PATH --purpose WHY; post RESULT --to NAME --kind handoff
+  Finish: post RESULT --kind done; leave
+  Humans: agentbus watch
+  Env:    AGENTBUS_AGENT (default --as), AGENTBUS_DB (bus path)
+
+LEARN MORE
+  agentbus help COMMAND    Help and examples for one command
+  agentbus completion zsh  Tab completion for bash, zsh or fish

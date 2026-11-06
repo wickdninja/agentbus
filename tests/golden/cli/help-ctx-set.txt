@@ -1,0 +1,26 @@
+usage: agentbus ctx set KEY VALUE [--request-id TOKEN]
+
+Set a shared fact and record its history.
+
+ARGUMENTS
+  KEY    The fact's name, for example test-command.
+  VALUE  The fact's value. Several words are joined; - reads it from stdin.
+
+FLAGS
+  -h, --help          Show this help message and exit.
+  --request-id TOKEN  Accepted and ignored: the bus does not store it.
+                      Repeating ctx set sets the value again, over a change
+                      made since: ctx get KEY first.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Save a fact
+  agentbus --as alice ctx set test-command "npm test"
+  # Read the value from a file
+  agentbus --as alice ctx set notes - < notes.txt
+
+JSON result: Fact. Retry: repeat if unchanged since.

@@ -1,0 +1,23 @@
+usage: agentbus help [COMMAND]
+
+Show help for a command (the same text as COMMAND --help)
+
+ARGUMENTS
+  COMMAND  The command, for example post or ctx set; omit for the list of
+           commands.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # Help for one command
+  agentbus help post
+  # A subcommand
+  agentbus help ctx set
+
+JSON result: {"command": string or null, "text": string}. Retry: safe to repeat.

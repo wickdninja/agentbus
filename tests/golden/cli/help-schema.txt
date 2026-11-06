@@ -1,0 +1,27 @@
+usage: agentbus schema [COMMAND] [--index] [--full]
+
+Result shapes, errors, exit codes and retry rules of every command
+
+ARGUMENTS
+  COMMAND  One command (for example post, or ctx get); omit for all.
+
+FLAGS
+  -h, --help  Show this help message and exit.
+  --index     Only each command's argument names and its own error codes
+              (under 3 KB).
+  --full      With COMMAND and --json, also the global arguments, environment,
+              exit codes and the definitions of the errors every command can
+              raise (left out by default).
+
+INHERITED FLAGS
+  --as NAME  Your agent identity (or AGENTBUS_AGENT)
+  --json     Print the result as JSON
+  --up N     Use the Nth outer bus (default 0)
+
+EXAMPLES
+  # The shape of one command's result
+  agentbus schema post
+  # Everything, for tools
+  agentbus --json schema
+
+JSON result: the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, "errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command's commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env and every error it can raise); with --index {"contract": integer, "agentbus": string, "commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}. Retry: safe to repeat.
