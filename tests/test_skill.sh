@@ -37,7 +37,7 @@ grep -qF 'At start, post each job you own as its own todo.' "$SKILL" || fail "th
 grep -qF 'Close each with a linked done' "$SKILL" || fail "the skill must say to close each todo with a linked done"
 grep -qF 'every unfinished job must be an open todo' "$SKILL" || fail "the skill must say every unfinished job is left as an open todo before stopping"
 grep -qF 'not a line inside a done' "$SKILL" || fail "the skill must say unfinished work is never written inside a done"
-grep -qF 'You may finish a todo whose owner left: claim its files as usual, with `claim RESOURCE --from HOLDER` if a claim is in the way.' "$SKILL" || fail "the skill must say a todo whose owner left may be finished, claiming as usual"
+grep -qF 'You may finish a todo whose owner left: claim its files as usual (`--from`, below, if a claim is in the way).' "$SKILL" || fail "the skill must say a todo whose owner left may be finished, claiming as usual"
 # Bug it catches: the skill said decisions are read with `read --topic decision`, but a decision posted with --kind alone has
 # no topic, so that read answered "no messages". The post line it teaches sets the topic the read line asks for.
 grep -qF 'post "WHAT" --kind decision --topic decision' "$SKILL" || fail "the skill must teach posting a decision with --topic decision, the topic it reads back"
