@@ -4615,5 +4615,41 @@
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "the ledger text lacks"
+  },
+  {
+    "name": "value eval abandoned: every spec opens at once",
+    "file": "scripts/value-eval/tasks.py",
+    "find": "text\\ =\\ unlock\\(data\\[\"items\"\\]\\[want\\]\\[\"start\"\\],\\ \"start\"\\)\\ if\\ last\\ is\\ None\\ else\\ unlock\\(",
+    "replace": "text = unlock(data[\"items\"][want][\"start\"], \"start\") if True else unlock(",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a second item opened early"
+  },
+  {
+    "name": "value eval abandoned: alice's opened specs reach bob",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ os\\.remove\\(os\\.path\\.join\\(self\\.proj,\\ rel\\)\\)\\\n",
+    "replace": "                        pass\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: a killed agent's commands run on",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ kids\\ =\\ descendants\\(root\\)\\ if\\ hard\\ else\\ \\[\\]\\\n",
+    "replace": "        kids = []\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: bob may rewrite OPEN.md",
+    "file": "scripts/value-eval/tasks.py",
+    "find": "Do\\ not\\ change\\ OPEN\\.md\\ after\\ that:\\ it\\ records\\ what\\ she\\ left\\.\\ ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "bob's ticket must keep OPEN.md as written"
   }
 ]

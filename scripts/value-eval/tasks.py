@@ -33,7 +33,7 @@ def rng(task, seed):
 
 class Task:
     def __init__(self, name, seed, files, tickets, schedule, features, markers=None, kill=None, same_name=(), workspace="shared",
-                 start=None, contested=None, handover=None, channel_text="fix1", base_pass=()):
+                 start=None, contested=None, handover=None, channel_text="fix1", base_pass=(), session_files=()):
         self.name, self.seed, self.files, self.tickets = name, seed, files, tickets
         self.schedule = schedule    # list of stages, each a list of roles run at the same time
         self.features = features    # hidden test names; a pass needs all of them
@@ -46,6 +46,7 @@ class Task:
         self.handover = handover    # the role whose unfinished items the next agent must find (abandoned, finished)
         self.channel_text = channel_text  # which ledger text and tool pin the task runs with: "fix1" (v0.3.0) or "todo" (975ba7a)
         self.base_pass = base_pass  # hidden tests that pass on the untouched repo by design (scope: nothing extra was done)
+        self.session_files = session_files  # the handing-over agent's own session state, removed at the handover (tools/.opened)
 
 
 # ---- overlap: two tickets change one function, and each bumps one shared version ------------------------------------
@@ -913,13 +914,123 @@ def abandoned_ids(seed):
     return {i["role"]: i["id"] for i in p["items"] if i["role"] in ITEM_ROLES}, [i["id"] for i in p["listed"]]
 
 
+SPEC_TOOL = dedent("""
+    """ + '"""Prints a backlog item\'s spec: `python3 tools/spec.py ID`. Specs open one item at a time: an item opens only once the item ' + r"""
+    """ + 'opened before it passes its checks, so the tool also checks your work."""' + r"""
+    import hashlib
+    import importlib
+    import json
+    import os
+    import sys
+
+    sys.path.insert(0, os.getcwd())
+    STATE = "tools/.opened"
+
+
+    def unlock(blob, key):
+        raw, stream, n = bytes.fromhex(blob), b"", 0
+        while len(stream) < len(raw):
+            stream += hashlib.sha256(("%s:%d" % (key, n)).encode()).digest()
+            n += 1
+        return bytes(a ^ b for a, b in zip(raw, stream))
+
+
+    def probe(spec):
+        if spec["kind"] == "validation":
+            try:
+                lines = open(spec["path"]).read().splitlines()
+            except OSError:
+                return "missing"
+            return repr([[x.strip() for x in line.split(",")] for line in lines if line.strip()])
+        try:
+            fn = getattr(importlib.import_module(spec["module"]), spec["fn"])
+        except Exception:  # noqa: BLE001
+            return "missing"
+        got = []
+        for args in spec["inputs"]:
+            try:
+                got.append(fn(*args))
+            except ValueError:
+                got.append("ValueError")
+            except Exception as e:  # noqa: BLE001
+                got.append(type(e).__name__)
+        return repr(got)
+
+
+    if len(sys.argv) != 2:
+        sys.exit("usage: python3 tools/spec.py ID")
+    data = json.load(open("tools/specs.json"))
+    want = sys.argv[1]
+    if want not in data["items"]:
+        sys.exit("no backlog item %s" % want)
+    opened = json.load(open(STATE)) if os.path.exists(STATE) else []
+    seen = {o["id"]: o["text"] for o in opened}
+    if want in seen:
+        print(seen[want])
+        sys.exit(0)
+    last = opened[-1]["id"] if opened else None
+    text = unlock(data["items"][want]["start"], "start") if last is None else unlock(data["items"][want]["after"][last], probe(data["probes"][last]))
+    if not text.startswith(b"OK\n"):
+        sys.exit("%s opens once %s, the item opened before it, passes its checks; it does not yet." % (want, last))
+    text = text[3:].decode()
+    with open(STATE, "w") as f:
+        json.dump(opened + [{"id": want, "text": text}], f)
+    print(text)
+""")
+
+
+def _item_title(p, item):
+    if item["kind"] == "feature":
+        f = FEATURES[item["name"]]
+        return "Add `%s` to %s/%s.py." % (f["sig"], p["pkg"], f["module"])
+    v = VALIDATIONS[item["name"]]
+    return "Validate %s against %s, %s." % (v["path"], v["source"], v["who"])
+
+
+def _probe_spec(p, item):
+    if item["kind"] == "validation":
+        return {"kind": "validation", "path": VALIDATIONS[item["name"]]["path"]}
+    f, c = FEATURES[item["name"]], p["consts"][item["name"]]
+    return {"kind": "feature", "module": "%s.%s" % (p["pkg"], f["module"]), "fn": item["name"], "inputs": f["cases"](c) + f["errors"](c)}
+
+
+def _probe_answer(p, item):
+    """What tools/spec.py's probe reads off an item done right: the key that opens the item opened after it."""
+    if item["kind"] == "validation":
+        v = VALIDATIONS[item["name"]]
+        return repr([v["header"].split(",")] + [list(kv) for kv in p["rows"][item["name"]][0]])
+    f, c = FEATURES[item["name"]], p["consts"][item["name"]]
+    got = []
+    for args in f["cases"](c) + f["errors"](c):
+        try:
+            got.append(f["fn"](c, *args))
+        except ValueError:
+            got.append("ValueError")
+    return repr(got)
+
+
+def _spec_data(p):
+    """tools/specs.json: every item's spec, locked. An item opens first with the key "start", or after another item with the probe of
+    that item done right. Nothing in it reads in the clear except what the backlog's titles already say."""
+    items, probes = {}, {}
+    for item in p["listed"]:
+        text = _item_text(p, item)
+        items[item["id"]] = {"start": _lock(text, "start"),
+                             "after": {o["id"]: _lock(text, _probe_answer(p, o)) for o in p["listed"] if o["id"] != item["id"]}}
+        probes[item["id"]] = _probe_spec(p, item)
+    return {"items": items, "probes": probes}
+
+
 def _abandoned(seed, name="abandoned"):
     p = _abandoned_params(seed)
     pkg = p["pkg"]
-    backlog = ["# Backlog", "", "The owner's queue. Items are taken at planning; an item nobody took waits for the next one.", ""]
+    backlog = ["# Backlog", "", "The owner's queue. Items are taken at planning; an item nobody took waits for the next one.", "",
+               "An item's spec: `python3 tools/spec.py ID`. Specs open one item at a time: an item opens once the item opened before it "
+               "passes its checks.", ""]
     for item in p["listed"]:
-        backlog += ["## %s" % item["id"], "", _item_text(p, item), ""]
+        backlog += ["## %s" % item["id"], "", _item_title(p, item), ""]
     files = {pkg + "/__init__.py": "", "tests/__init__.py": "", "docs/BACKLOG.md": "\n".join(backlog),
+             "tools/spec.py": SPEC_TOOL, "tools/specs.json": json.dumps(_spec_data(p), indent=0) + "\n",
              "README.md": "# %s\n\nBilling helpers. The owner's queue is docs/BACKLOG.md.\n" % pkg}
     for v, (right, wrong) in p["rows"].items():
         spec = VALIDATIONS[v]
@@ -933,13 +1044,14 @@ def _abandoned(seed, name="abandoned"):
                  "has no owner column, and nobody else knows which items you took. The other items wait for the next planning; do not start them."
                  % (mine["first"], mine["second"], mine["validation"]),
         "bob": "Ticket: alice was working in this repo and her session has ended; she will not come back, and anything she held is yours to take "
-               "over. Find the backlog items she took on and did not finish, and finish them. First write OPEN.md at the repo root: one line for "
-               "each item she took on and did not finish, starting with its backlog id; leave the file empty if there is none. docs/BACKLOG.md "
+               "over. Find the backlog items she took on and did not finish, and finish them. First, before changing anything else, write OPEN.md at "
+               "the repo root: one line for each item she took on and had not finished when her session ended, starting with its backlog id; "
+               "leave the file empty if there is none. Do not change OPEN.md after that: it records what she left. docs/BACKLOG.md "
                "is the owner's queue: an item nobody took on waits for the next planning, so do not start one.",
     }
     kill = {"role": "alice", "check": "items"} if name == "abandoned" else None
     return Task(name, seed, files, tickets, [["alice"], ["bob"]], list(ITEM_ROLES) + ["scope"], kill=kill, handover="alice",
-                channel_text="todo", base_pass=("scope",))
+                channel_text="todo", base_pass=("scope",), session_files=("tools/.opened",))
 
 
 def _finished(seed):

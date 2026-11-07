@@ -222,9 +222,13 @@ def handover():
             elif condition == "agentbus":
                 bash("agentbus --as alice join >/dev/null; agentbus --as alice post '%s' --kind todo" % mine[r])
         for i, r in enumerate(tasks.ITEM_ROLES, 1):
+            if os.path.exists("tools/spec.py"):
+                bash("python3 tools/spec.py %s" % mine[r])
             for rel, text in tasks.abandoned_item_reference(seed, r).items():
                 write(rel, text)
             if task_name == "abandoned":
+                if os.environ.get("VALUE_STUB_LATE_FILE"):   # a command still running when she dies, in a session of its own
+                    subprocess.Popen(["/bin/sh", "-c", "sleep 4; echo late > %s" % os.environ["VALUE_STUB_LATE_FILE"]], start_new_session=True)
                 time.sleep(10)   # the kill lands here, between the first item and the second
             elif condition == "ledger":
                 bash("printf '\\n%%s alice DONE alice-%d: in\\n' %s >> COORDINATION.md" % (i, stamp))

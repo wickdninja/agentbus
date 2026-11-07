@@ -348,7 +348,7 @@ ok "bob waits for alice's first edit; a live takeover fails on the bus and the l
 
 echo "TEST 22: abandoned (follow-up): alice dies once her first item passes; bob's OPEN.md and his work are graded apart; finished hands over nothing"
 for mode in good say-only; do
-  env VALUE_STUB_MODE=$mode VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks abandoned finished --conditions agentbus ledger none --pairings cc --seeds 1 --time-cap 120 --snap-every 0.5 --out "$T/ab-$mode" >"$T/log" 2>&1 || { cat "$T/log"; fail "abandoned $mode run"; }
+  env VALUE_STUB_MODE=$mode VALUE_STUB_LATE_FILE=late.txt VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks abandoned finished --conditions agentbus ledger none --pairings cc --seeds 1 --time-cap 120 --snap-every 0.5 --out "$T/ab-$mode" >"$T/log" 2>&1 || { cat "$T/log"; fail "abandoned $mode run"; }
   grades "$T/ab-$mode"
   "$PY" -B "$SCRIPTS/channel_grade.py" "$T/ab-$mode" >/dev/null || fail "abandoned $mode: channel grade"
 done
@@ -365,9 +365,11 @@ for mode in ("good", "say-only"):
             assert run["kill"]["fired"] and run["kill"]["done"] == ["first"], ("the kill must land after the first item only", run["kill"])
             assert run["handover"]["open"] == ["second", "validation"], run["handover"]
             assert run["agents"]["alice"]["stop"] == "task_kill", run["agents"]
+            assert not os.path.exists(os.path.join(d, "final", "late.txt")), "a command of alice's outlived her session"
         else:
             assert not run["kill"]["fired"] and run["handover"]["open"] == [], (run["kill"], run["handover"])
         assert g["discovered"], ("the stand-in names exactly what was open", mode, r["task"], g)
+        assert not os.path.exists(os.path.join(d, "final", "tools", ".opened")), "alice's opened specs reached bob"
         want = mode == "good" or r["task"] == "finished"
         assert g["recovered"] is want and g["pass"] is want, ("saying what is open is not recovery", mode, r["task"], g["features"])
         if r["condition"] != "none":

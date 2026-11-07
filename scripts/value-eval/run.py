@@ -118,6 +118,23 @@ def pins_for(task_objs):
     return TODO_TOOL if kinds == {"todo"} else (TOOL_RELEASE, TOOL_SHA256)
 
 
+def descendants(pid):
+    """Every process below pid, from one `ps` listing: children, their children, and so on."""
+    p = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
+    below = {}
+    for line in p.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            below.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, todo = [], [pid]
+    while todo:
+        for child in below.get(todo.pop(), []):
+            if child not in found and child != os.getpid():
+                found.append(child)
+                todo.append(child)
+    return found
+
+
 def harness_of(pairing, role, seed):
     """cc: both Claude. cx: which harness plays which role alternates by seed."""
     if pairing == "cc":
@@ -244,7 +261,7 @@ class Run:
         self.sh(GIT + ["add", "."])
         self.sh(GIT + ["commit", "-q", "-m", "project"])
         with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
-            f.write("\n__pycache__/\n.claude/\nAGENTS.md\nCOORDINATION.md\n")
+            f.write("\n__pycache__/\n.claude/\nAGENTS.md\nCOORDINATION.md\ntools/.opened\n")
         self.install_channel()
         if self.worktrees:
             self.make_worktrees()
@@ -439,12 +456,28 @@ class Run:
         pidfile = os.path.join(self.tmp, "%s.pid" % agent.role)
         sig = signal.SIGKILL if hard else signal.SIGTERM
         try:
+            root = int(open(pidfile).read().strip()) if os.path.exists(pidfile) else agent.proc.pid
+        except ValueError:
+            root = agent.proc.pid
+        # The task's own kill is a session dying: the commands it was running die with it. A tool command can sit in a process group
+        # of its own, so the agent's descendants are listed before any signal (after it, they belong to no one we can find).
+        kids = descendants(root) if hard else []
+        try:
             if os.path.exists(pidfile):
-                os.kill(int(open(pidfile).read().strip()), sig)   # the real agent first, so the launcher stays up and cleans its folder
+                os.kill(root, sig)   # the real agent first, so the launcher stays up and cleans its folder
+        except OSError:
+            pass
+        for pid in kids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        try:
+            if os.path.exists(pidfile):
                 time.sleep(2)
             if agent.proc.poll() is None:
                 os.killpg(agent.proc.pid, sig)
-        except (OSError, ValueError):
+        except OSError:
             pass
 
         def finish():
@@ -598,6 +631,9 @@ class Run:
             if self.task.handover and self.task.handover in stage:
                 done = grade.items_done(self.proj, self.task_name, self.seed)   # what the next agent inherits, read once the session has ended
                 self.handover = {"done": done, "open": [r for r in tasks.ITEM_ROLES if r not in done], "at": time.time()}
+                for rel in self.task.session_files:   # her session's own state goes with her: it would name what she opened
+                    if os.path.lexists(os.path.join(self.proj, rel)):
+                        os.remove(os.path.join(self.proj, rel))
         self.stop_threads.set()
         snapper.join(timeout=30)
         if watcher:

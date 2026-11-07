@@ -762,6 +762,45 @@ def test_csv_reaches_the_tree():
     shutil.rmtree(d)
 
 
+def test_abandoned_specs_open_one_at_a_time():
+    """Pilot pass 1: with every spec in the backlog, alice wrote all three items in one command, so the kill could not land between them.
+    Specs now open one item at a time, the next only once the item opened before it passes; the backlog keeps titles only."""
+    for seed in (1, 41, 9301):
+        t = tasks.build("abandoned", seed)
+        p = tasks._abandoned_params(seed)
+        mine = tasks.abandoned_ids(seed)[0]
+        for item in p["items"]:
+            text = tasks._item_text(p, item)
+            check(text not in t.files["docs/BACKLOG.md"] and text not in t.files["tools/specs.json"], "seed %d: a spec sits in the clear" % seed)
+            check(item["id"] in t.files["docs/BACKLOG.md"], "seed %d: the backlog lists %s" % (seed, item["id"]))
+        d = tempfile.mkdtemp()
+        tree(d, t.files)
+        spec = lambda i, d=d: subprocess.run([sys.executable, "-B", "tools/spec.py", i], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # noqa: E731
+                                             universal_newlines=True)
+        text = {i["role"]: tasks._item_text(p, i) for i in p["items"] if i["role"] in tasks.ITEM_ROLES}
+        first = spec(mine["first"])
+        check(first.returncode == 0 and text["first"] in first.stdout, "seed %d: the first spec: %s" % (seed, first.stdout))
+        second = spec(mine["second"])
+        check(second.returncode != 0 and "opens once" in second.stdout and text["second"] not in second.stdout, "seed %d: a second item opened early: %s" % (seed, second.stdout))
+        tree(d, tasks.abandoned_item_reference(seed, "first"))
+        second = spec(mine["second"])
+        check(second.returncode == 0 and text["second"] in second.stdout, "seed %d: the second must open once the first passes: %s" % (seed, second.stdout))
+        check(text["first"] in spec(mine["first"]).stdout, "seed %d: an opened spec must print again" % seed)
+        tree(d, tasks.abandoned_item_reference(seed, "second"))
+        third = spec(mine["validation"])
+        check(third.returncode == 0 and text["validation"] in third.stdout, "seed %d: the validation after the second: %s" % (seed, third.stdout))
+        os.remove(os.path.join(d, "tools", ".opened"))
+        check(spec(mine["validation"]).returncode == 0, "seed %d: with no session state, any item opens first" % seed)
+        check(t.session_files == ("tools/.opened",), "the spec state is alice's session state, removed at the handover")
+        shutil.rmtree(d)
+
+
+def test_open_md_is_kept():
+    """Pilot pass 1: a bob emptied OPEN.md once he had finished the items, as if it were a live list."""
+    bob = tasks.build("abandoned", 1).tickets["bob"]
+    check("Do not change OPEN.md after that" in bob and "before changing anything else" in bob, "bob's ticket must keep OPEN.md as written: %s" % bob)
+
+
 def test_items_done():
     """What the runner's kill and handover read: which of alice's items pass their checks on a tree."""
     for seed in (1, 2):
