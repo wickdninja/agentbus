@@ -121,6 +121,8 @@ grep -qF 'Use `agentbus` from PATH; if it is not on PATH, stop and tell the user
 grep -qF 'If a dispatcher assigned an absolute CLI path too, use it.' "$T/skill.out" || fail "the skill lost the sandbox case: a dispatcher that assigns the CLI by absolute path"
 grep -qF 'this copy' "$T/skill.out" && fail "the skill says 'this copy', which assumes the project copy"
 grep -qF '.agentbus/bin/agentbus' "$T/skill.out" && fail "the skill names the project copy"
+grep -qF 'every unfinished job must be an open todo' "$T/skill.out" || fail "the printed skill lost the rule that unfinished jobs stay open todos"
+grep -qF 'post "WHAT" --kind decision --topic decision' "$T/skill.out" || fail "the printed skill lost the decision post line"
 ok "the printed skill says delivery can repeat"
 
 echo "TEST: docs/how-to/setup.md's dry-run example is what setup claude --dry-run prints, with the byte count read from the real skill"

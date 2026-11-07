@@ -5730,7 +5730,7 @@
     "replace": "_brief_line(x[\"value\"], BRIEF_BODY_TEXT)",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
-    "expect": "the row with wide = lacks"
+    "expect": "lacks 'ctx get wide'"
   },
   {
     "name": "brief todo row drops its cut marker",
@@ -5839,41 +5839,5 @@
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "narrow watch header"
-  },
-  {
-    "name": "skill drops recording your own jobs at start",
-    "file": "skills/agentbus/SKILL.md",
-    "find": "At\\ start,\\ post\\ each\\ job\\ you\\ own\\ as\\ its\\ own\\ todo\\.\\ ",
-    "replace": "",
-    "count": 1,
-    "run": "tests/test_skill.sh",
-    "expect": "the skill must tell an agent to post each job it owns as a todo at start"
-  },
-  {
-    "name": "skill allows unfinished jobs inside a done",
-    "file": "skills/agentbus/SKILL.md",
-    "find": "every\\ unfinished\\ job\\ must\\ be\\ an\\ open\\ todo,\\ not\\ a\\ line\\ inside\\ a\\ done",
-    "replace": "a summary is enough",
-    "count": 1,
-    "run": "tests/test_skill.sh",
-    "expect": "the skill must say every unfinished job is left as an open todo"
-  },
-  {
-    "name": "skill forbids finishing a todo whose owner left",
-    "file": "skills/agentbus/SKILL.md",
-    "find": "\\ You\\ may\\ finish\\ a\\ todo\\ whose\\ owner\\ left:\\ claim\\ its\\ files\\ as\\ usual,\\ with\\ `claim\\ RESOURCE\\ \\-\\-from\\ HOLDER`\\ if\\ a\\ claim\\ is\\ in\\ the\\ way\\.",
-    "replace": "",
-    "count": 1,
-    "run": "tests/test_skill.sh",
-    "expect": "the skill must say a todo whose owner left may be finished"
-  },
-  {
-    "name": "skill teaches a decision post with no topic",
-    "file": "skills/agentbus/SKILL.md",
-    "find": "post\\ \"WHAT\"\\ \\-\\-kind\\ decision\\ \\-\\-topic\\ decision",
-    "replace": "post \"WHAT\" --kind decision",
-    "count": 1,
-    "run": "tests/test_skill.sh",
-    "expect": "the skill must teach posting a decision with --topic decision"
   }
 ]

@@ -27,7 +27,7 @@ At start, post each job you own as its own todo. Close each with a linked done (
 
 Read `inbox` each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail, 124 on timeout; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
 
-If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims expire after 120 minutes by default. Claim again to renew.
+If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims expire after 120 minutes; claim again to renew.
 
 ## Communicate
 
@@ -45,7 +45,7 @@ Without `--to`, a message is broadcast.
 
 Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or inspect with `inbox --peek`. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.
 
-A nonzero exit does not imply rollback. When a `post` or `join` might be retried, add `--request-id` with a token; a repeat returns the original.
+A nonzero exit does not imply rollback. When a `post` or `join` might be retried, add `--request-id` with a token; a repeat returns the original. Other writes ignore it.
 
 ## Finish the session
 
