@@ -10,6 +10,7 @@ They count, and never decide a pass.
 python3 scripts/value-eval/grade.py OUT writes grade.json into each run folder under OUT.
 """
 import ast
+import hashlib
 import json
 import os
 import re
@@ -35,6 +36,10 @@ HIDDEN_TIMEOUT = 120
 SCRIPT_WRITE = re.compile(r"\.write\(|\.write_text\(|\.write_bytes\(|\.writelines\(")
 
 
+class Ungradable(Exception):
+    """A run folder that lacks what its task's grade needs. It is never scored as a pass or a fail."""
+
+
 def write_json(path, value):
     with open(path, "w") as f:
         json.dump(value, f, indent=1, sort_keys=True)
@@ -55,6 +60,19 @@ def read_tree(root, skip):
             except OSError:
                 pass
     return found
+
+
+def text_digest(text):
+    """sha256 of a file's text as read_tree reads it, or None for a missing file: the runner's handover and the grader compare these."""
+    return None if text is None else hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def file_digest(path):
+    try:
+        with open(path, errors="replace") as f:
+            return text_digest(f.read(200000))
+    except OSError:
+        return None
 
 
 def is_channel_path(path):
@@ -88,7 +106,7 @@ def run_hidden(final, task, seed, only=None):
         shutil.rmtree(work, ignore_errors=True)
 
 
-def items_done(root, task, seed):
+def items_done(root, task, seed, only=None):
     """Which of the handing-over agent's items pass their checks on a live tree, in ticket order. The runner's kill and handover read
     this. Only the tree's small text files are copied (never the channel), so a bus being written is never read here."""
     work = tempfile.mkdtemp(prefix="value-items-")
@@ -98,8 +116,9 @@ def items_done(root, task, seed):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
                 f.write(text)
-        got = run_hidden(work, task, seed, only=tasks.ITEM_ROLES)
-        return [r for r in tasks.ITEM_ROLES if got.get(r)]
+        roles = [r for r in tasks.ITEM_ROLES if only is None or r in only]
+        got = run_hidden(work, task, seed, only=roles)
+        return [r for r in roles if got.get(r)]
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -179,12 +198,22 @@ def blind_grade(run_dir):
     if task.handover:
         # abandoned, finished: discovery (OPEN.md names exactly the items open when alice's session ended) and recovery (every one of
         # her items passes and nothing nobody took was done) are graded apart. Saying what is open is not finishing it.
+        # A finished item whose file bob changed was redone: in finished that fails clean, whether or not it still passes.
         mine, listed = tasks.abandoned_ids(run["seed"])
-        handover = run.get("handover") or {}
-        open_ids = [mine[r] for r in handover.get("open", [])]
+        handover = run.get("handover")
+        if not (isinstance(handover, dict) and isinstance(handover.get("done"), list) and isinstance(handover.get("open"), list)
+                and isinstance(handover.get("digests"), dict)):
+            raise Ungradable("%s: no handover record; the run cannot be graded" % run["id"])
+        open_ids = [mine[r] for r in handover["open"]]
         found, named = tasks.discovery(final_files.get("OPEN.md"), listed, open_ids)
-        grade.update({"open": handover.get("open"), "done_at_handover": handover.get("done"), "named": named, "discovered": found,
-                      "recovered": grade["pass"], "open_md": "OPEN.md" in final_files})
+        paths = tasks.abandoned_item_paths(run["seed"])
+        redone = []
+        for role in handover["done"]:
+            if text_digest(final_files.get(paths[role])) != handover["digests"].get(paths[role]):
+                redone.append(role)
+        grade.update({"open": handover["open"], "done_at_handover": handover["done"], "named": named, "discovered": found,
+                      "recovered": grade["pass"], "redone": redone, "clean": found and grade["pass"] and not redone,
+                      "open_md": "OPEN.md" in final_files})
     return grade
 
 
@@ -470,32 +499,20 @@ USAGE_LIMIT = re.compile(r"You've hit your (?:\w+ )?limit|usage_limit_reached")
 
 
 def usage_limited(line):
-    """True when a raw stream line is the provider saying the plan's usage limit is reached. Agent text that merely talks about a
-    limit does not match: the phrases are the provider's own."""
-    return bool(line) and bool(USAGE_LIMIT.search(line))
+    """True when a raw line is the provider saying the plan's usage limit is reached, in either harness. One rule with the grader:
+    provider_failure. Agent text and tool output that quote the words do not match."""
+    return any(provider_failure(line, h) == "usage limit" for h in ("claude", "codex"))
 
 
 AUTH_FAILURE = re.compile(r"Failed to authenticate|OAuth session expired|Login expired|Please run /login")
 
 
 def auth_failed(line):
-    """True when a line is the launcher or provider saying the sign-in is gone (the plan's sign-in expired, not its usage). Only the
-    provider's own voice counts: an error result, a synthetic assistant message, or a line that is not stream JSON (stderr). A tool
-    result or the model's own text that quotes the phrase does not."""
-    if not line or not AUTH_FAILURE.search(line):
+    """True when a raw line is the launcher or provider saying the sign-in is gone, in either harness. One rule with the grader:
+    provider_failure. A tool result or the model's own text that quotes the phrase does not match."""
+    if not line or not (AUTH_FAILURE.search(line) or CODEX_AUTH_FAILURE.search(line)):
         return False
-    try:
-        event = json.loads(line)
-    except ValueError:
-        return True
-    if not isinstance(event, dict):
-        return False
-    if event.get("type") == "result":
-        return bool(event.get("is_error")) and bool(AUTH_FAILURE.search(str(event.get("result", ""))))
-    message = event.get("message")
-    if event.get("type") == "assistant" and isinstance(message, dict) and message.get("model") == "<synthetic>":
-        return bool(AUTH_FAILURE.search(json.dumps(message.get("content"))))
-    return False
+    return any(provider_failure(line, h) == "authentication failed" for h in ("claude", "codex"))
 
 
 CODEX_AUTH_FAILURE = re.compile(r"401 Unauthorized|token could not be refreshed|refresh_token_reused|not logged in", re.I)
@@ -538,16 +555,19 @@ def infra_failure(lines, harness, rc, killed_by_task, stop_reason, stderr_lines=
     its outcome. Timeouts, tool caps and the task's own kill are real runs. A usage limit or a sign-in failure in the provider's own
     voice (stream or stderr), or an agent the batch stopped for one, is infrastructure whether or not the agent had made tool calls:
     it is the plan, not the agent's work. The rule never looks at the condition, so it is the same in every arm."""
-    if killed_by_task:
-        return None
+    # Precedence, stated: the batch's own halt; then the task's own kill (the experiment's event: a killed session can say nothing
+    # after it); then a provider failure anywhere in the stream or on stderr; then a timeout or tool cap. A failure the provider
+    # reported is the plan's, so a timeout or cap that came after it does not make the run count.
     if stop_reason in HALTS:
         return HALTS[stop_reason]
-    if stop_reason:
+    if killed_by_task:
         return None
     for line in [w["line"] for w in lines] + list(stderr_lines):
         why = provider_failure(line, harness)
         if why:
             return why
+    if stop_reason:
+        return None
     if not any(tool_calls_in_line(w["line"], harness) for w in lines):
         text = " ".join(w["line"] for w in lines)[-2000:]
         if rc != 0 or re.search(r"authentication|not logged in|overloaded|rate.?limit|usage limit|api error|hit your", text, re.I):

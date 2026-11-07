@@ -4491,15 +4491,6 @@
     "expect": "over alpha"
   },
   {
-    "name": "value eval abandoned: OPEN.md naming extra items still discovers",
-    "file": "scripts/value-eval/tasks.py",
-    "find": "\\ \\ \\ \\ return\\ named\\ ==\\ sorted\\(open_ids\\),\\ named\\\n",
-    "replace": "    return set(open_ids) <= set(named), named\n",
-    "count": 1,
-    "run": "tests/test_value_eval.sh",
-    "expect": "an extra id, even one called done"
-  },
-  {
     "name": "value eval abandoned: saying what is open counts as recovery",
     "file": "scripts/value-eval/grade.py",
     "find": "\"recovered\":\\ grade\\[\"pass\"\\]",
@@ -4507,24 +4498,6 @@
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "saying what remains is not recovery"
-  },
-  {
-    "name": "value eval abandoned: the kill waits for two items",
-    "file": "scripts/value-eval/run.py",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ done\\ and\\ agent\\.proc\\.poll\\(\\)\\ is\\ None:\\\n",
-    "replace": "                if len(done) >= 2 and agent.proc.poll() is None:\n",
-    "count": 1,
-    "run": "tests/test_value_eval.sh",
-    "expect": "abandoned"
-  },
-  {
-    "name": "value eval abandoned: the kill ignores the item check",
-    "file": "scripts/value-eval/run.py",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ spec\\.get\\(\"check\"\\):\\\n",
-    "replace": "            if False:\n",
-    "count": 1,
-    "run": "tests/test_value_eval.sh",
-    "expect": "abandoned"
   },
   {
     "name": "value eval abandoned: no handover is recorded",
@@ -4617,24 +4590,6 @@
     "expect": "the ledger text lacks"
   },
   {
-    "name": "value eval abandoned: every spec opens at once",
-    "file": "scripts/value-eval/tasks.py",
-    "find": "text\\ =\\ unlock\\(data\\[\"items\"\\]\\[want\\]\\[\"start\"\\],\\ \"start\"\\)\\ if\\ last\\ is\\ None\\ else\\ unlock\\(",
-    "replace": "text = unlock(data[\"items\"][want][\"start\"], \"start\") if True else unlock(",
-    "count": 1,
-    "run": "tests/test_value_eval.sh",
-    "expect": "a second item opened early"
-  },
-  {
-    "name": "value eval abandoned: alice's opened specs reach bob",
-    "file": "scripts/value-eval/run.py",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ os\\.remove\\(os\\.path\\.join\\(self\\.proj,\\ rel\\)\\)\\\n",
-    "replace": "                        pass\n",
-    "count": 1,
-    "run": "tests/test_value_eval.sh",
-    "expect": "abandoned"
-  },
-  {
     "name": "value eval abandoned: a killed agent's commands run on",
     "file": "scripts/value-eval/run.py",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ kids\\ =\\ descendants\\(root\\)\\ if\\ hard\\ else\\ \\[\\]\\\n",
@@ -4644,12 +4599,210 @@
     "expect": "abandoned"
   },
   {
+    "name": "value eval abandoned: the kill releases the next spec instead",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ self\\.task\\.kill\\ and\\ agent\\.proc\\.poll\\(\\)\\ is\\ None:\\\n",
+    "replace": "            if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: no item watch",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ self\\.task\\.release\\ and\\ self\\.task\\.release\\[\"role\"\\]\\ ==\\ agent\\.role:\\\n",
+    "replace": "        if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: bob does not get every spec",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ for\\ item_id\\ in\\ tasks\\.abandoned_ids\\(self\\.seed\\)\\[1\\]:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ self\\.release_spec\\(item_id\\)\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: a spec is released before the kill",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ self\\.task\\.kill\\ and\\ agent\\.proc\\.poll\\(\\)\\ is\\ None:\\\n",
+    "replace": "            if current + 1 < len(order):\n                self.release_spec(mine[order[current + 1]])\n            if self.task.kill and agent.proc.poll() is None:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "abandoned"
+  },
+  {
+    "name": "value eval abandoned: an uninterrupted run counts",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ self\\.excluded\\ =\\ \"not\\ interrupted:\\ the\\ kill\\ never\\ fired\"\\\n",
+    "replace": "            pass\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "an abandoned run with no kill was not excluded"
+  },
+  {
     "name": "value eval abandoned: bob may rewrite OPEN.md",
     "file": "scripts/value-eval/tasks.py",
-    "find": "Do\\ not\\ change\\ OPEN\\.md\\ after\\ that:\\ it\\ records\\ what\\ she\\ left\\.\\ ",
+    "find": "Do\\ not\\ change\\ OPEN\\.md\\ after\\ that:\\ it\\ records\\ ",
     "replace": "",
     "count": 1,
     "run": "tests/test_value_eval.sh",
     "expect": "bob's ticket must keep OPEN.md as written"
+  },
+  {
+    "name": "value eval abandoned: bob must write OPEN.md before looking",
+    "file": "scripts/value-eval/tasks.py",
+    "find": "Read\\ and\\ check\\ whatever\\ you\\ need\\ first;\\ then,\\ before\\ ",
+    "replace": "First, before ",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "bob must be free to inspect"
+  },
+  {
+    "name": "value eval abandoned: OPEN.md naming extra items still discovers",
+    "file": "scripts/value-eval/tasks.py",
+    "find": "\\ \\ \\ \\ return\\ named\\ ==\\ sorted\\(open_ids\\)\\ and\\ found\\ <=\\ set\\(listed_ids\\),\\ named\\\n",
+    "replace": "    return set(open_ids) <= set(named), named\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "an extra id, even one called done"
+  },
+  {
+    "name": "value eval abandoned: an unknown id in OPEN.md is ignored",
+    "file": "scripts/value-eval/tasks.py",
+    "find": "\\ \\ \\ \\ return\\ named\\ ==\\ sorted\\(open_ids\\)\\ and\\ found\\ <=\\ set\\(listed_ids\\),\\ named\\\n",
+    "replace": "    return named == sorted(open_ids), named\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "an unknown id passed discovery"
+  },
+  {
+    "name": "value eval review: the live stop matches any quoted limit",
+    "file": "scripts/value-eval/grade.py",
+    "find": "\\ \\ \\ \\ return\\ any\\(provider_failure\\(line,\\ h\\)\\ ==\\ \"usage\\ limit\"\\ for\\ h\\ in\\ \\(\"claude\",\\ \"codex\"\\)\\)\\\n",
+    "replace": "    return bool(line) and bool(USAGE_LIMIT.search(line))\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "agent text quoting a limit halted the batch"
+  },
+  {
+    "name": "value eval review: the stderr stop sees sign-in failures only",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ why\\ =\\ grade\\.provider_failure\\(line,\\ a\\.harness\\)\\\n",
+    "replace": "                why = \"authentication failed\" if grade.auth_failed(line) else None\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a usage limit only on stderr"
+  },
+  {
+    "name": "value eval review: a timeout masks a provider failure",
+    "file": "scripts/value-eval/grade.py",
+    "find": "\\ \\ \\ \\ if\\ killed_by_task:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ None\\\n\\ \\ \\ \\ for\\ line\\ in",
+    "replace": "    if killed_by_task or stop_reason:\n        return None\n    for line in",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a sign-in failure wins over a later timeout"
+  },
+  {
+    "name": "value eval review: two kept runs for one combination pass the gate",
+    "file": "scripts/value-eval/analyze_abandoned.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ len\\(kept\\)\\ !=\\ 1:\\\n",
+    "replace": "        if len(kept) < 1:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "two kept rows for one combination passed"
+  },
+  {
+    "name": "value eval review: a budget-stop analysis needs no recorded stop",
+    "file": "scripts/value-eval/analyze_abandoned.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ stop\\.get\\(\"reason\"\\)\\ not\\ in\\ BUDGET_STOPS:\\\n",
+    "replace": "        if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a budget-stop analysis ran with no recorded stop"
+  },
+  {
+    "name": "value eval review: clean ignores redone work",
+    "file": "scripts/value-eval/grade.py",
+    "find": "\"clean\":\\ found\\ and\\ grade\\[\"pass\"\\]\\ and\\ not\\ redone",
+    "replace": "\"clean\": found and grade[\"pass\"]",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "bob changed finished work and stayed clean"
+  },
+  {
+    "name": "value eval review: a run with no handover is graded",
+    "file": "scripts/value-eval/grade.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ raise\\ Ungradable\\(\"%s:\\ no\\ handover\\ record;\\ the\\ run\\ cannot\\ be\\ graded\"\\ %\\ run\\[\"id\"\\]\\)\\\n",
+    "replace": "            handover = {\"done\": [], \"open\": [], \"digests\": {}}\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a run with no handover was graded"
+  },
+  {
+    "name": "value eval review: scope reads function names only",
+    "file": "scripts/value-eval/tasks.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ exported\\ \\|=\\ \\{x\\ for\\ x\\ in\\ %r\\ if\\ hasattr\\(mod,\\ x\\)\\}\\\n",
+    "replace": "                            pass\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a decoy exported by globals passed scope"
+  },
+  {
+    "name": "value eval review: superiority is not corrected",
+    "file": "scripts/value-eval/analyze_abandoned.py",
+    "find": "\\ \\ \\ \\ twos_adj\\ =\\ analyze\\.holm\\(twos\\)",
+    "replace": "    twos_adj = twos",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "declared a winner without correction"
+  },
+  {
+    "name": "value eval review: the ledger has no prompt hook",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \"todo\":\\ \\{\"claude\":\\ \\[\\(\"SessionStart\",\\ \"startup\\|resume\\|clear\\|compact\\|fork\"\\),\\ \\(\"UserPromptSubmit\",\\ None\\),\\ \\(\"PreToolUse\",\\ \"Edit\\|Write\\|MultiEdit\\|NotebookEdit\"\\)\\],",
+    "replace": "    \"todo\": {\"claude\": [(\"SessionStart\", \"startup|resume|clear|compact|fork\"), (\"PreToolUse\", \"Edit|Write|MultiEdit|NotebookEdit\")],",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "the ledger hook it names is not installed"
+  },
+  {
+    "name": "value eval review: a ledger takeover leaves the holder's claim",
+    "file": "scripts/value-eval/ledger_hook.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ held\\.pop\\(\\(taken\\.group\\(1\\),\\ p\\.rstrip\\(\"/\"\\)\\ or\\ p\\),\\ None\\)\\\n",
+    "replace": "                    pass\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a takeover left the holder's claim open"
+  },
+  {
+    "name": "value eval review: the ledger prompt note never fires",
+    "file": "scripts/value-eval/ledger_hook.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ n:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ return\\ \"ledger:\\ %d\\ %s\\ addressed\\ to\\ %s\\ since\\ you\\ last\\ read\\.",
+    "replace": "        if False:\n            return \"ledger: %d %s addressed to %s since you last read.",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "the prompt note"
+  },
+  {
+    "name": "value eval review: a resumed batch may change the build",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ differ\\ =\\ sorted\\(k\\ for\\ k\\ in\\ want\\ if\\ rec\\.get\\(k\\)\\ !=\\ want\\[k\\]\\)\\\n",
+    "replace": "    differ = []\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "a resumed batch with another build passed"
+  },
+  {
+    "name": "value eval review: the Claude usage stop is optional",
+    "file": "scripts/value-eval/run.py",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ not\\ args\\.claude_usage_cmd:\\\n",
+    "replace": "        if False:\n",
+    "count": 1,
+    "run": "tests/test_value_eval.sh",
+    "expect": "the study's configuration was not enforced"
   }
 ]

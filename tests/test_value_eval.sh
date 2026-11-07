@@ -260,8 +260,15 @@ for after in 0 3; do
   [ "$(wc -l < "$T/ul$after/manifest.jsonl" | tr -d ' ')" = 1 ] || fail "after $after tool calls: the batch burned more runs"
   [ "$(field "$T/ul$after" 'r["infra"].get("bob")')" = "usage limit" ] || fail "after $after tool calls: not infrastructure: $(field "$T/ul$after" 'r["infra"]')"
 done
-ok "a limit before or after tool calls stops the batch on that run and marks it infrastructure"
+rc=0; env VALUE_STUB_MODE=usage-limit VALUE_STUB_LIMIT_AFTER=3 VALUE_STUB_LIMIT_STDERR=1 VALUE_STUB_LIMIT_ROLE=bob VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions ledger --pairings cc --seeds 1 2 3 --time-cap 60 --out "$T/ulerr" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 7 ] && [ "$(wc -l < "$T/ulerr/manifest.jsonl" | tr -d ' ')" = 1 ] && [ "$(field "$T/ulerr" 'r["infra"].get("bob")')" = "usage limit" ] || { cat "$T/log"; fail "a usage limit only on stderr, after tool calls, did not stop the batch (rc $rc)"; }
+ok "a limit before or after tool calls, in the stream or only on stderr, stops the batch on that run and marks it infrastructure"
 
+# a peer halted before it printed its first line is not an isolation failure (a race the load exposed)
+for i in 1 2 3; do
+  rc=0; env VALUE_STUB_MODE=usage-limit VALUE_STUB_LIMIT_AFTER=0 VALUE_STUB_LIMIT_ROLE=bob VALUE_STUB_ONLY_ROLE=bob VALUE_STUB_SLOW_INIT=alice VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks control --conditions ledger --pairings cc --seeds 1 2 --time-cap 60 --out "$T/ulrace$i" >"$T/log" 2>&1 || rc=$?
+  [ "$rc" = 7 ] || { cat "$T/log"; fail "a peer stopped before its first line made the halt an isolation failure (rc $rc)"; }
+done
 echo "TEST 18b: an expired sign-in stops the batch at once, in the stream or on stderr, and the run is infrastructure"
 for mode in stream stderr; do
   stderr_only=""; [ "$mode" = stderr ] && stderr_only=1
@@ -347,13 +354,19 @@ rc=0; out=$("$PY" -B "$SCRIPTS/analyze_fix1.py" "$T/lh-good" --n 1) || rc=$?
 ok "bob waits for alice's first edit; a live takeover fails on the bus and the ledger, waiting passes; the channel is kept beside final/, never in it"
 
 echo "TEST 22: abandoned (follow-up): alice dies once her first item passes; bob's OPEN.md and his work are graded apart; finished hands over nothing"
+# these tasks run the pinned todo build, not this branch's bin/agentbus
+PIN=$("$PY" -B -c "import sys; sys.path.insert(0, '$SCRIPTS'); import run; print(run.TODO_TOOL[0])")
+git -C "$ROOT" show "$PIN:bin/agentbus" > "$T/pinned-agentbus" || fail "the pinned build $PIN is not in this clone"
 for mode in good say-only; do
-  env VALUE_STUB_MODE=$mode VALUE_STUB_LATE_FILE=late.txt VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks abandoned finished --conditions agentbus ledger none --pairings cc --seeds 1 --time-cap 120 --snap-every 0.5 --out "$T/ab-$mode" >"$T/log" 2>&1 || { cat "$T/log"; fail "abandoned $mode run"; }
+  env AGENTBUS_CMD="$PY $T/pinned-agentbus" VALUE_STUB_MODE=$mode VALUE_STUB_LATE_FILE=late.txt VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks abandoned finished --conditions agentbus ledger none --pairings cc --seeds 1 --time-cap 120 --snap-every 0.5 --out "$T/ab-$mode" >"$T/log" 2>&1 || { cat "$T/log"; fail "abandoned $mode run"; }
   grades "$T/ab-$mode"
   "$PY" -B "$SCRIPTS/channel_grade.py" "$T/ab-$mode" >/dev/null || fail "abandoned $mode: channel grade"
 done
-"$PY" -B - "$T" <<'CHECK' || fail "abandoned"
+SCRIPTS="$SCRIPTS" "$PY" -B - "$T" <<'CHECK' || fail "abandoned"
 import json, os, sys
+sys.path.insert(0, os.environ["SCRIPTS"])
+import tasks
+tasks_paths = lambda seed: tasks.abandoned_item_paths(seed).values()  # noqa: E731
 for mode in ("good", "say-only"):
     out = os.path.join(sys.argv[1], "ab-" + mode)
     rows = [json.loads(l) for l in open(os.path.join(out, "manifest.jsonl"))]
@@ -363,13 +376,20 @@ for mode in ("good", "say-only"):
         g, c, run = (json.load(open(os.path.join(d, n))) for n in ("grade.json", "channel.json", "run.json"))
         if r["task"] == "abandoned":
             assert run["kill"]["fired"] and run["kill"]["done"] == ["first"], ("the kill must land after the first item only", run["kill"])
+            mine = tasks.abandoned_ids(run["seed"])[0]
+            assert run["watch"]["released"] == [mine["first"]], ("a spec reached alice after her first item passed", run["watch"])
             assert run["handover"]["open"] == ["second", "validation"], run["handover"]
             assert run["agents"]["alice"]["stop"] == "task_kill", run["agents"]
             assert not os.path.exists(os.path.join(d, "final", "late.txt")), "a command of alice's outlived her session"
         else:
             assert not run["kill"]["fired"] and run["handover"]["open"] == [], (run["kill"], run["handover"])
+            assert run["watch"]["released"] == [tasks.abandoned_ids(run["seed"])[0][r] for r in tasks.ITEM_ROLES], run["watch"]
+        assert run["watch"]["interval"] == 0.5 and run["watch"]["checks"] >= 1, ("the item watch", run["watch"])
+        assert sorted(run["handover"]["digests"]) == sorted(tasks_paths(run["seed"])), run["handover"]
         assert g["discovered"], ("the stand-in names exactly what was open", mode, r["task"], g)
-        assert not os.path.exists(os.path.join(d, "final", "tools", ".opened")), "alice's opened specs reached bob"
+        specs = sorted(os.listdir(os.path.join(d, "final", "docs", "specs")))
+        assert len(specs) == 6 and not os.path.exists(os.path.join(d, "final", "tools")), ("bob gets every spec and no spec tool", specs)
+        assert not g["redone"] and g["clean"] is (g["discovered"] and g["recovered"]), g
         want = mode == "good" or r["task"] == "finished"
         assert g["recovered"] is want and g["pass"] is want, ("saying what is open is not recovery", mode, r["task"], g["features"])
         if r["condition"] != "none":
@@ -377,13 +397,23 @@ for mode in ("good", "say-only"):
             assert a["named_all"] and a["todos_all"], ("alice's three todos were not seen", r["condition"], a)
             assert a["closed_all"] is (r["task"] == "finished"), ("alice's closes", r["task"], r["condition"], a)
 CHECK
-rc=0; out=$("${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --tasks abandoned --conditions agentbus --pairings cc 2>&1) || rc=$?
+rc=0; out=$(env -u AGENTBUS_CMD "${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --claude-usage-cmd "echo 1" --tasks abandoned --conditions agentbus --pairings cc 2>&1) || rc=$?
 [ "$rc" = 2 ] && grep -q "is not the pinned $("$PY" -B -c "import sys; sys.path.insert(0, '$SCRIPTS'); import run; print(run.TODO_TOOL[0])")" <<<"$out" || fail "abandoned ran with the v0.3.0 tool: rc $rc: $out"
-rc=0; out=$("${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --tasks abandoned recovery --conditions agentbus --pairings cc 2>&1) || rc=$?
+rc=0; out=$(env -u AGENTBUS_CMD "${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --tasks abandoned recovery --conditions agentbus --pairings cc 2>&1) || rc=$?
 [ "$rc" = 2 ] && grep -q "mixes tasks that test different builds" <<<"$out" || fail "a batch with two pins started: rc $rc: $out"
 rc=0; out=$(env AGENTBUS_CMD=/bin/true "${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --tasks control --conditions none --pairings cc 2>&1) || rc=$?
 [ "$rc" = 2 ] && grep -q "AGENTBUS_CMD is set" <<<"$out" || fail "a real run took AGENTBUS_CMD: rc $rc: $out"
+for bad in "--tool-release 975ba7a --claude-usage-cmd true:the build is fixed by the study" "--claude-usage-cmd true --codex-budget 40:fixes the Codex budget at 15" ":needs the Claude usage stop on"; do
+  rc=0; out=$(env -u AGENTBUS_CMD "${RUN[@]}" --out "$T/pin" --go --claude-launcher /bin/false --tasks abandoned --conditions ledger --pairings cc ${bad%%:*} 2>&1) || rc=$?
+  [ "$rc" = 2 ] && grep -q "${bad#*:}" <<<"$out" || fail "the study's configuration was not enforced (${bad%%:*}): rc $rc: $out"
+done
 [ ! -e "$T/pin" ] || fail "a refused batch made its output folder"
+mkdir -p "$T/resume" && printf '{"study": "todo", "pin": ["0000000", "%s"], "codex_budget": 15, "claude_usage_stop": 90.0}' "$(printf '0%.0s' $(seq 64))" > "$T/resume/study.json"
+rc=0; env VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks abandoned --conditions ledger --pairings cc --seeds 1 --time-cap 60 --out "$T/resume" >"$T/log" 2>&1 || rc=$?
+[ "$rc" = 2 ] && grep -q "was started with another pin" "$T/log" && [ ! -e "$T/resume/manifest.jsonl" ] || { cat "$T/log"; fail "a resumed batch with another build ran (rc $rc)"; }
+env VALUE_STUB_MODE=give-up VALUE_STUB_DIR="$STUB" "${RUN[@]}" --tasks abandoned --conditions ledger --pairings cc --seeds 1 --time-cap 60 --snap-every 0.5 --out "$T/giveup" >"$T/log" 2>&1 || { cat "$T/log"; fail "give-up run"; }
+[ "$(field "$T/giveup" 'r.get("excluded")')" = "not interrupted: the kill never fired" ] || fail "an abandoned run with no kill was not excluded: $(field "$T/giveup" 'r')"
+[ "$("${RUN[@]}" --out "$T/giveup" --rerun-infra --dry-run | sed -n 1p)" = "value eval: 1 runs (replacing infrastructure failures)" ] || fail "an excluded run is not replaced"
 ok "the kill lands after the first item; OPEN.md alone discovers but does not recover; finished hands over nothing; the todo pin, one pin per batch and no AGENTBUS_CMD are enforced"
 
 echo "TEST 13: a run leaves nothing behind"

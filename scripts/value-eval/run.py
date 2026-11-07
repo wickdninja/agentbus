@@ -110,6 +110,35 @@ def tool_pinned(root, release, sha256, path=None):
     return tool_is_release(root, release, path) and sha_file(path or os.path.join(root, "bin", "agentbus")) == sha256
 
 
+# The registered configuration of a study, fixed for its real runs: the build under test, the Codex budget in points and the Claude
+# usage stop in percent. Real runs refuse any flag that would change one, and an output folder keeps the first values in study.json,
+# so a resumed batch must match them and goes on counting its budgets from where the batch started.
+STUDIES = {"todo": {"pin": TODO_TOOL, "codex_budget": 15, "claude_usage_stop": 90.0}}
+
+
+def check_study(out, key):
+    """The study record in out: written by the first run, then every later run must match it. Returns the record."""
+    path = os.path.join(out, "study.json")
+    want = {"study": key, "pin": list(STUDIES[key]["pin"]), "codex_budget": STUDIES[key]["codex_budget"],
+            "claude_usage_stop": STUDIES[key]["claude_usage_stop"]}
+    if not os.path.exists(path):
+        grade.write_json(path, dict(want, codex_start=None, claude_start=None))
+        return dict(want, codex_start=None, claude_start=None)
+    with open(path) as f:
+        rec = json.load(f)
+    differ = sorted(k for k in want if rec.get(k) != want[k])
+    if differ:
+        raise Refused("%s was started with another %s; a resumed batch must keep the study's configuration" % (out, ", ".join(differ)))
+    return rec
+
+
+def note_study(out, rec, field, value):
+    """Keep the first budget reading of the batch, across resumes."""
+    if rec is not None and rec.get(field) is None and value is not None:
+        rec[field] = value
+        grade.write_json(os.path.join(out, "study.json"), rec)
+
+
 def pins_for(task_objs):
     """(release, sha256) the batch's tasks run with: the todo build for follow-up abandoned, v0.3.0 otherwise. One batch, one pin."""
     kinds = {t.channel_text for t in task_objs}
@@ -133,6 +162,14 @@ def descendants(pid):
                 found.append(child)
                 todo.append(child)
     return found
+
+
+WATCH_INTERVAL = 0.5   # seconds between the item watch's looks, fixed whatever a check takes
+
+
+def next_tick(t0, now, interval):
+    """The first tick of the schedule t0, t0 + interval, ... that is after now."""
+    return t0 + interval * (int((now - t0) // interval) + 1)
 
 
 def harness_of(pairing, role, seed):
@@ -209,6 +246,7 @@ class Run:
         self.snaps = open(os.path.join(self.out, "snaps.jsonl"), "w")
         self.seen = {}
         self.loads, self.kill, self.merge, self.late, self.handover = [], {"fired": False}, None, None, None
+        self.watch, self.excluded, self.released = None, None, []
         self.channel_dir = os.path.join(self.out, "channel")
         os.makedirs(self.channel_dir)
         self.worktrees = self.task.workspace == "worktrees"
@@ -261,7 +299,7 @@ class Run:
         self.sh(GIT + ["add", "."])
         self.sh(GIT + ["commit", "-q", "-m", "project"])
         with open(os.path.join(self.proj, ".git", "info", "exclude"), "a") as f:
-            f.write("\n__pycache__/\n.claude/\nAGENTS.md\nCOORDINATION.md\ntools/.opened\n")
+            f.write("\n__pycache__/\n.claude/\nAGENTS.md\nCOORDINATION.md\n")
         self.install_channel()
         if self.worktrees:
             self.make_worktrees()
@@ -322,10 +360,11 @@ class Run:
     def install_channel(self):
         codex = "codex" in self.harnesses.values()
         if self.condition == "ledger":
-            self.write(".claude/skills/ledger/SKILL.md", tasks.ledger_skill(self.task))
+            sha = getattr(self.args, "skill_sha", None)
+            self.write(".claude/skills/ledger/SKILL.md", tasks.ledger_skill(self.task, sha))
             self.install_ledger_hooks(codex)
             if codex:
-                self.write("AGENTS.md", tasks.ledger_agents_block(self.task))
+                self.write("AGENTS.md", tasks.ledger_agents_block(self.task, sha))
         elif self.condition == "builtin":
             self.write(".claude/skills/peer-messages/SKILL.md", tasks.PEER_SKILL)
         elif self.condition == "agentbus":
@@ -353,13 +392,12 @@ class Run:
             if matcher:
                 group["matcher"] = matcher
             return [group]
-        claude = {"hooks": {"SessionStart": entry("claude", "SessionStart", "startup|resume|clear|compact|fork"),
-                            "PreToolUse": entry("claude", "PreToolUse", "Edit|Write|MultiEdit|NotebookEdit")}}
+        events = LEDGER_HOOKS["todo" if self.task.channel_text == "todo" else "fix1"]
+        claude = {"hooks": {event: entry("claude", event, matcher) for event, matcher in events["claude"]}}
         self.write(".claude/settings.json", json.dumps(claude, indent=2) + "\n")
         if codex:
             with open(os.path.join(self.codex_home, "hooks.json"), "w") as f:
-                json.dump({"hooks": {"SessionStart": entry("codex", "SessionStart", None),
-                                     "PreToolUse": entry("codex", "PreToolUse", "apply_patch|Edit|Write")}}, f, indent=2)
+                json.dump({"hooks": {event: entry("codex", event, matcher) for event, matcher in events["codex"]}}, f, indent=2)
 
     def channel_name(self, role):
         """How each tool learns the agent's name before it starts, so hooks and prompt agree."""
@@ -424,10 +462,9 @@ class Run:
                 raw.write(json.dumps(wrapped) + "\n")
                 raw.flush()
                 agent.tool_calls += grade.tool_calls_in_line(wrapped["line"], agent.harness)
-                if grade.usage_limited(wrapped["line"]) and not self.usage_hit:
-                    self.halt("usage limit")
-                elif grade.auth_failed(wrapped["line"]) and not self.usage_hit:
-                    self.halt("authentication failed")
+                why = grade.provider_failure(wrapped["line"], agent.harness)   # the grader's own rule, so a halt and a grade never disagree
+                if why and not self.usage_hit:
+                    self.halt(why)
                 if agent.tool_calls > self.args.tool_cap and agent.stop_reason is None:
                     self.stop_agent(agent, "tool_cap")
 
@@ -437,15 +474,20 @@ class Run:
         for other in self.live:
             self.stop_agent(other, reason.replace(" ", "_"))
 
+    def stderr_lines(self, role):
+        path = os.path.join(self.out, "stderr-%s.txt" % role)
+        return [line.rstrip("\n") for line in open(path, errors="replace")] if os.path.exists(path) else []
+
     def stderr_halt(self, agents):
-        """A sign-in failure that only reached stderr. Checked when the stage's agents have ended."""
+        """A usage limit or sign-in failure that only reached stderr, by the grader's rule. Checked when the stage's agents have ended."""
         if self.usage_hit:
             return
-        for role in agents:
-            path = os.path.join(self.out, "stderr-%s.txt" % role)
-            if os.path.exists(path) and any(grade.auth_failed(line.rstrip("\n")) for line in open(path, errors="replace")):
-                self.halt("authentication failed")
-                return
+        for role, a in agents.items():
+            for line in self.stderr_lines(role):
+                why = grade.provider_failure(line, a.harness)
+                if why:
+                    self.halt(why)
+                    return
 
     def stop_agent(self, agent, reason, hard=False):
         """Only ever signals the group this runner started, and the pid its own shim recorded."""
@@ -491,19 +533,10 @@ class Run:
         threading.Thread(target=finish, daemon=True).start()
 
     def watch_kill(self, agent):
-        """recovery: the session dies once enough files exist. abandoned: it dies the moment one of its items passes its check. Files on
-        disk, not tool counts, so both harnesses die at the same point."""
+        """recovery: the session dies once enough files exist. Files, not tool counts, so both harnesses die at the same point. (abandoned's
+        kill is watch_items'.)"""
         spec = self.task.kill
         while agent.proc.poll() is None and not self.stop_threads.is_set():
-            if spec.get("check"):
-                done = grade.items_done(self.proj, self.task_name, self.seed)
-                if done and agent.proc.poll() is None:
-                    self.kill = {"fired": True, "at": time.time(), "done": done}
-                    agent.killed_by_task = True
-                    self.stop_agent(agent, "task_kill", hard=True)
-                    return
-                time.sleep(0.5)
-                continue
             found = [p for p in glob.glob(os.path.join(self.proj, spec["glob"])) if os.path.getsize(p) > 0]
             if len(found) >= spec["at"]:
                 self.kill = {"fired": True, "at": time.time(), "files": sorted(os.path.relpath(p, self.proj) for p in found)}
@@ -511,6 +544,48 @@ class Run:
                 self.stop_agent(agent, "task_kill", hard=True)
                 return
             time.sleep(0.5)
+
+    def release_spec(self, item_id):
+        self.released.append(item_id)
+        path, text = tasks.abandoned_spec(self.seed, item_id)
+        os.makedirs(os.path.dirname(os.path.join(self.proj, path)), exist_ok=True)
+        with open(os.path.join(self.proj, path), "w") as f:
+            f.write(text)
+
+    def watch_items(self, agent):
+        """abandoned and finished: hands the role its specs one at a time and, in abandoned, ends its session. One check drives both, on a
+        fixed schedule: every WATCH_INTERVAL seconds from the start, the current item's file is read, and when it has changed the item's
+        own check runs on a copy. When it passes, abandoned kills the session before anything is released, so no next spec ever reaches
+        it; finished releases the next spec. A check that runs long skips ticks and never shifts the schedule."""
+        order = self.task.release["order"]
+        mine = tasks.abandoned_ids(self.seed)[0]
+        paths = tasks.abandoned_item_paths(self.seed)
+        current, last, t0, took = 0, None, time.time(), []
+        self.release_spec(mine[order[0]])
+        while agent.proc.poll() is None and not self.stop_threads.is_set() and current < len(order):
+            self.stop_threads.wait(max(0.0, next_tick(t0, time.time(), WATCH_INTERVAL) - time.time()))
+            role = order[current]
+            try:
+                with open(os.path.join(self.proj, paths[role]), errors="replace") as f:
+                    state = f.read()
+            except OSError:
+                state = None
+            if state is None or state == last:
+                continue
+            last, began = state, time.time()
+            passed = role in grade.items_done(self.proj, self.task_name, self.seed, only=[role])
+            took.append(round(time.time() - began, 3))
+            if not passed:
+                continue
+            if self.task.kill and agent.proc.poll() is None:
+                self.kill = {"fired": True, "at": time.time(), "done": list(order[:current + 1])}
+                agent.killed_by_task = True
+                self.stop_agent(agent, "task_kill", hard=True)
+                break
+            current, last = current + 1, None
+            if current < len(order):
+                self.release_spec(mine[order[current]])
+        self.watch = {"interval": WATCH_INTERVAL, "checks": len(took), "max_check_s": max(took or [0.0]), "released": list(self.released)}
 
     def snapshot_loop(self):
         while not self.stop_threads.is_set():
@@ -534,7 +609,9 @@ class Run:
 
     def launch(self, agent):
         self.start(agent)
-        if self.task.kill and self.task.kill["role"] == agent.role:
+        if self.task.release and self.task.release["role"] == agent.role:
+            threading.Thread(target=self.watch_items, args=(agent,), daemon=True).start()
+        elif self.task.kill and self.task.kill["role"] == agent.role:
             threading.Thread(target=self.watch_kill, args=(agent,), daemon=True).start()
 
     def late_start_due(self, current, later, begun):
@@ -575,6 +652,23 @@ class Run:
             if a.proc is not None:
                 a.timer.cancel()
                 a.reader.join(timeout=30)
+
+    def hand_over(self):
+        """What the next agent inherits, read once the session has ended: which items pass, a digest of each item's file (so a grader can
+        tell finished work that was changed later), and every item's spec, so the specs say nothing about which were alice's. An
+        abandoned session the kill never ended was not interrupted: the run is excluded and replaced, by the registered rule."""
+        done = grade.items_done(self.proj, self.task_name, self.seed)
+        digests = {rel: grade.file_digest(os.path.join(self.proj, rel)) for rel in tasks.abandoned_item_paths(self.seed).values()}
+        self.handover = {"done": done, "open": [r for r in tasks.ITEM_ROLES if r not in done], "at": time.time(), "digests": digests}
+        spec_dir = os.path.join(self.proj, tasks.SPEC_DIR)
+        if os.path.isdir(spec_dir) and not os.path.islink(spec_dir):
+            for name in os.listdir(spec_dir):
+                if os.path.isfile(os.path.join(spec_dir, name)):
+                    os.remove(os.path.join(spec_dir, name))
+        for item_id in tasks.abandoned_ids(self.seed)[1]:
+            self.release_spec(item_id)
+        if self.task.kill and not self.kill.get("fired"):
+            self.excluded = "not interrupted: the kill never fired"
 
     def watch_channel(self):
         """The ledger's growth, timed: each change of COORDINATION.md as it lands, so a grader can tell when a claim opened and
@@ -629,11 +723,7 @@ class Run:
             self.finish_stage(current, later, agents)
             self.stderr_halt(agents)
             if self.task.handover and self.task.handover in stage:
-                done = grade.items_done(self.proj, self.task_name, self.seed)   # what the next agent inherits, read once the session has ended
-                self.handover = {"done": done, "open": [r for r in tasks.ITEM_ROLES if r not in done], "at": time.time()}
-                for rel in self.task.session_files:   # her session's own state goes with her: it would name what she opened
-                    if os.path.lexists(os.path.join(self.proj, rel)):
-                        os.remove(os.path.join(self.proj, rel))
+                self.hand_over()
         self.stop_threads.set()
         snapper.join(timeout=30)
         if watcher:
@@ -652,7 +742,10 @@ class Run:
         bad = []
         for a in agents.values():
             if a.harness == "claude":
-                bad += ["%s: %s" % (a.role, x) for x in grade.check_claude_init(a.lines, self.condition, allowed_tools(self.condition))]
+                found = grade.check_claude_init(a.lines, self.condition, allowed_tools(self.condition))
+                if found == ["no init event"] and a.stop_reason in grade.HALTS:
+                    found = []   # the batch stopped this agent for a peer's provider failure before it printed anything
+                bad += ["%s: %s" % (a.role, x) for x in found]
         if self.condition != "agentbus" and os.path.exists(os.path.join(self.proj, ".agentbus")):
             bad.append("a bus exists in a %s run" % self.condition)
         if self.worktrees and any(os.path.exists(os.path.join(self.workdir(r), ".agentbus")) for r in self.harnesses):
@@ -715,7 +808,7 @@ class Run:
                                 "tool_calls": a.tool_calls, "t_start": a.started, "t_end": a.ended} for a in agents.values()},
             "seconds": round(max(a.ended for a in agents.values()) - min(a.started for a in agents.values()), 1),
             "load": {"max": max(self.loads or [0]), "mean": round(sum(self.loads or [0]) / max(1, len(self.loads)), 1)},
-            "kill": self.kill, "merge": self.merge, "late_start": self.late, "handover": self.handover})
+            "kill": self.kill, "merge": self.merge, "late_start": self.late, "handover": self.handover, "watch": self.watch})
         cost = {a.role: grade.cost_of(a.lines, a.harness, self.condition) for a in agents.values()}
         for a in agents.values():
             link = os.path.join(self.workdir(a.role), "COORDINATION.md")
@@ -727,7 +820,8 @@ class Run:
         grade.write_json(os.path.join(self.out, "cost.json"), cost)
         self.quota = grade.codex_quota(self.codex_home) if "codex" in self.harnesses.values() else None
         grade.write_json(os.path.join(self.out, "quota.json"), self.quota)
-        infra = {a.role: grade.infra_failure(a.lines, a.harness, a.proc.returncode, a.killed_by_task, a.stop_reason) for a in agents.values()}
+        infra = {a.role: grade.infra_failure(a.lines, a.harness, a.proc.returncode, a.killed_by_task, a.stop_reason, self.stderr_lines(a.role))
+                 for a in agents.values()}
         for a in agents.values():   # hooks that never loaded are infrastructure; a hook that ran and failed is an outcome, kept in cost.json
             unloaded = grade.hook_infra(a.lines, self.condition) if a.harness == "claude" else cost[a.role]["hooks_loaded"] is False
             if unloaded and not infra[a.role]:
@@ -744,6 +838,8 @@ class Run:
             bad = self.isolation(agents)
             row = {"id": self.id, "task": self.task_name, "seed": self.seed, "condition": self.condition, "pairing": self.pairing,
                    "infra": infra, "isolation": bad, "ts": time.time(), "tool": sha_file(tool_path(self.args)), "quota": self.quota}
+            if self.excluded and not infra:
+                row["excluded"] = self.excluded
             if self.replaces:
                 row["replaces"] = self.replaces
             with open(os.path.join(self.args.out, "manifest.jsonl"), "a") as f:
@@ -760,6 +856,21 @@ class Run:
                 log("kept %s" % self.root)
             else:
                 shutil.rmtree(self.root, ignore_errors=True)
+
+
+# The ledger's hooks per study: fix1's two events, and for follow-up abandoned the events tasks.HOOK_MAP pairs with the pinned build's.
+LEDGER_HOOKS = {
+    "fix1": {"claude": [("SessionStart", "startup|resume|clear|compact|fork"), ("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit")],
+             "codex": [("SessionStart", None), ("PreToolUse", "apply_patch|Edit|Write")]},
+    "todo": {"claude": [("SessionStart", "startup|resume|clear|compact|fork"), ("UserPromptSubmit", None), ("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit")],
+             "codex": [("SessionStart", None), ("UserPromptSubmit", None), ("PreToolUse", "apply_patch|Edit|Write")]},
+}
+
+
+def pinned_skill_sha(release):
+    """sha256 of the skill at the pinned commit: which ledger text the run installs. None when git cannot show it."""
+    p = subprocess.run(["git", "-C", ROOT, "show", "%s:skills/agentbus/SKILL.md" % release], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return hashlib.sha256(p.stdout).hexdigest() if p.returncode == 0 else None
 
 
 def tool_path(args):
@@ -785,7 +896,7 @@ def rerun_plan(out, shard):
     path = os.path.join(out, "manifest.jsonl")
     rows = [json.loads(l) for l in open(path)] if os.path.exists(path) else []
     replaced = {r["replaces"] for r in rows if r.get("replaces")}
-    todo = [(r["task"], r["seed"], r["condition"], r["pairing"], r["id"]) for r in rows if r["infra"] and r["id"] not in replaced]
+    todo = [(r["task"], r["seed"], r["condition"], r["pairing"], r["id"]) for r in rows if (r["infra"] or r.get("excluded")) and r["id"] not in replaced]
     i, n = shard
     return todo[i - 1::n]
 
@@ -795,6 +906,14 @@ def claude_usage(cmd):
     p = subprocess.run(["/bin/sh", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=60)
     found = re.search(r"\d+(?:\.\d+)?", p.stdout)
     return float(found.group(0)) if found else None
+
+
+STOPS = {6: "codex budget", 7: "usage limit", 8: "claude usage", 9: "authentication failed"}
+
+
+def record_stop(out, rc, done, total):
+    """A halted batch says why in OUT/stop.json, so a budget-stop analysis can only follow a stop that happened."""
+    grade.write_json(os.path.join(out, "stop.json"), {"rc": rc, "reason": STOPS[rc], "at": time.time(), "runs_done": done, "runs_planned": total})
 
 
 def main(argv):
@@ -819,7 +938,7 @@ def main(argv):
     ap.add_argument("--codex-route", choices=("none", "exec"), default="none", help="exec: direct codex exec in mktemp, under a scratch CODEX_HOME")
     ap.add_argument("--codex-auth", default=os.environ.get("VALUE_CODEX_AUTH"), help="auth.json to copy into the scratch CODEX_HOME")
     ap.add_argument("--codex-bin", default="codex")
-    ap.add_argument("--codex-budget", type=float, default=CODEX_BUDGET, help="usage points; halt when projected use passes this")
+    ap.add_argument("--codex-budget", type=float, help="usage points; halt when projected use passes this (default %s; a registered study fixes it)" % CODEX_BUDGET)
     ap.add_argument("--tool-release", help="the commit whose bin/agentbus is under test (default: the tasks' own pin)")
     ap.add_argument("--tool-sha256", help="and the sha256 that bin/agentbus must have (default: the tasks' own pin)")
     ap.add_argument("--tool-bin", help="the bin/agentbus to install, when it is not the checkout's own (a build of an unreleased commit)")
@@ -827,7 +946,7 @@ def main(argv):
     ap.add_argument("--skip-done", action="store_true", help="leave out every task, seed, condition and pairing the manifest in --out already has a row for (a failed one is --rerun-infra's)")
     ap.add_argument("--shard", default="1/1", help="I/N: with --rerun-infra, this runner's share")
     ap.add_argument("--claude-usage-cmd", help="a command printing the Claude plan's window use in percent; checked before every run")
-    ap.add_argument("--claude-usage-stop", type=float, default=90.0, help="halt when the plan's use reaches or is projected past this percent")
+    ap.add_argument("--claude-usage-stop", type=float, help="halt when the plan's use reaches or is projected past this percent (default 90)")
     args = ap.parse_args(argv)
     shard = tuple(int(x) for x in args.shard.split("/"))
     if args.rerun_infra:
@@ -863,7 +982,26 @@ def main(argv):
     except Refused as e:
         log("refused: %s" % e)
         return 2
+    study = next((k for k in STUDIES if all(tasks.build(r[0], 1).channel_text == k for r in runs)), None) if runs else None
+    if study and not stub:
+        cfg = STUDIES[study]
+        if args.tool_release or args.tool_sha256:
+            log("not running: the build is fixed by the study (%s); --tool-release and --tool-sha256 cannot change it." % cfg["pin"][0])
+            return 2
+        if args.codex_budget not in (None, cfg["codex_budget"]) or args.claude_usage_stop not in (None, cfg["claude_usage_stop"]):
+            log("not running: the study fixes the Codex budget at %s points and the Claude usage stop at %s%%." % (cfg["codex_budget"], cfg["claude_usage_stop"]))
+            return 2
+        if not args.claude_usage_cmd:
+            log("not running: the study needs the Claude usage stop on: give --claude-usage-cmd.")
+            return 2
+        args.codex_budget, args.claude_usage_stop = cfg["codex_budget"], cfg["claude_usage_stop"]
+    args.codex_budget = CODEX_BUDGET if args.codex_budget is None else args.codex_budget
+    args.claude_usage_stop = 90.0 if args.claude_usage_stop is None else args.claude_usage_stop
     release, sha256 = args.tool_release or release, args.tool_sha256 or sha256
+    args.skill_sha = pinned_skill_sha(release) if study else None
+    if study and args.skill_sha not in tasks.TODO_LEDGERS:
+        log("not running: no ledger text is paired with the skill of %s; map it in tasks.SKILL_MAPS first." % release)
+        return 2
     if not stub and os.environ.get("AGENTBUS_CMD"):
         log("not running: AGENTBUS_CMD is set, which would replace the pinned tool. Unset it.")
         return 2
@@ -873,30 +1011,41 @@ def main(argv):
     try:
         args.out = assert_outside(args.out if os.path.isabs(args.out) else os.path.abspath(args.out))
         os.makedirs(args.out, exist_ok=True)
-        done, codex_done, start, use_start = 0, 0, None, None
-        codex_total = sum(1 for r in runs if r[3] == "cx")
+        rec = check_study(args.out, study) if study else None
+        path = os.path.join(args.out, "manifest.jsonl")
+        before = [json.loads(line) for line in open(path)] if os.path.exists(path) else []
+        done, use_start = 0, (rec or {}).get("claude_start")
+        start = (rec or {}).get("codex_start")
+        codex_done = sum(1 for r in before if r["pairing"] == "cx" and r.get("quota")) if rec else 0   # a resumed study counts from its start
+        codex_total = codex_done + sum(1 for r in runs if r[3] == "cx")
         for t, seed, c, p, replaces in runs:
             if args.claude_usage_cmd:
                 use = claude_usage(args.claude_usage_cmd)
                 use_start = use if use_start is None else use_start
+                note_study(args.out, rec, "claude_start", use_start)
                 if use is None or analyze.over_budget(use_start, use, done, len(runs), args.claude_usage_stop - use_start, min_runs=20) or use >= args.claude_usage_stop:
                     log("Claude usage stop: the plan is at %s%% after %d of %d runs, against a stop at %s%%. Batch halted." % (use, done, len(runs), args.claude_usage_stop))
+                    record_stop(args.out, 8, done, len(runs))
                     return 8
             row = Run(t, seed, c, p, args, replaces).execute()
             done += 1
             log("run %d of %d: %s%s" % (done, len(runs), row["id"], " infra: %s" % row["infra"] if row["infra"] else ""))
             if "usage limit" in row["infra"].values():
                 log("usage limit: batch stopped after run %s. The plan's usage limit is reached; nothing more runs on it." % row["id"])
+                record_stop(args.out, 7, done, len(runs))
                 return 7
             if "authentication failed" in row["infra"].values():
                 log("authentication failed: batch stopped after run %s. The plan's sign-in is gone; nothing more runs on it." % row["id"])
+                record_stop(args.out, 9, done, len(runs))
                 return 9
             if p == "cx" and row["quota"]:
                 codex_done += 1
                 now = row["quota"]["used_percent"]
                 start = now if start is None or now < start else start   # first reading, or a window that reset
+                note_study(args.out, rec, "codex_start", start)
                 if analyze.over_budget(start, now, codex_done, codex_total, args.codex_budget):
                     log("Codex budget stop: %s points in %d of %d Codex runs passes %s projected. Batch halted." % (now - start, codex_done, codex_total, args.codex_budget))
+                    record_stop(args.out, 6, done, len(runs))
                     return 6
     except Refused as e:
         log("refused: %s" % e)

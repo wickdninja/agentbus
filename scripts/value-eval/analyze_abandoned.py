@@ -2,8 +2,13 @@
 """Follow-up abandoned analysis (docs/evals/value-protocol.md, addenda): does the todo build keep promised work from being lost as
 well as a ledger with the same instructions? A separate batch, read on its own; nothing here reads or changes another study.
 
-python3 scripts/value-eval/analyze_abandoned.py OUT --n 20    the registered contrasts, only once all eight cells have 20 runs
-python3 scripts/value-eval/analyze_abandoned.py OUT --cost    harness numbers only, safe on a pilot
+python3 scripts/value-eval/analyze_abandoned.py OUT                 the registered contrasts: only on a complete, valid batch
+python3 scripts/value-eval/analyze_abandoned.py OUT --budget-stop   after a recorded budget stop: the complete seed blocks only
+python3 scripts/value-eval/analyze_abandoned.py OUT --cost          harness numbers only, safe on a pilot
+
+A complete, valid batch: every one of the 160 registered combinations (2 tasks, 2 conditions, 2 pairings, seeds 41 to 60) has
+exactly one kept run; every dropped run (infrastructure, isolation, or excluded by a registered rule) is replaced exactly once by
+a run of its own combination, and nothing else is. There is no option to analyze a smaller n.
 
 Needs grade.py and channel_grade.py run on OUT first.
 
@@ -14,6 +19,7 @@ evaluated on a grid of step GRID). Twenty ties therefore give p of at least 0.9 
 non-inferiority, which the bootstrap of the earlier study did (its p was near 0 on twenty ties).
 """
 import argparse
+import json
 import math
 import os
 import statistics
@@ -26,6 +32,8 @@ import analyze  # noqa: E402
 MARGIN, N, ALPHA, GRID = 0.10, 20, 0.025, 0.00025
 GRID_CI = 0.002           # the interval is descriptive, so its bisection uses a coarser grid; every decision uses GRID
 SEEDS = (41, 60)          # counted seeds, inclusive; never used by another study
+COUNTED = tuple(range(SEEDS[0], SEEDS[1] + 1))
+BUDGET_STOPS = ("codex budget", "claude usage")   # the stops a budget-stop analysis may follow, as the runner records them
 TASKS, CONDITIONS, PAIRINGS = ("abandoned", "finished"), ("agentbus", "ledger"), ("cx", "cc")
 FAMILY = (("R-cx", "abandoned", "cx", "recovered", "recovery"), ("R-cc", "abandoned", "cc", "recovered", "recovery"),
           ("D-cx", "abandoned", "cx", "discovered", "discovery"), ("D-cc", "abandoned", "cc", "discovered", "discovery"),
@@ -160,15 +168,55 @@ def exact_interval(a10, a01, n, level=0.95):
 def load(out):
     rows, dropped = analyze.load(out)
     for r in rows:
-        g = r["grade"]
-        g["clean"] = bool(g.get("discovered")) and bool(g.get("recovered"))
-        path = os.path.join(out, r["id"], "channel.json")
-        r["channel"] = analyze_json(path)
+        r["channel"] = analyze_json(os.path.join(out, r["id"], "channel.json"))
     return rows, dropped
 
 
+def combo(r):
+    return (r["task"], r["seed"], r["condition"], r["pairing"])
+
+
+def is_dropped(r):
+    return bool(r["infra"] or r["isolation"] or r.get("excluded"))
+
+
+def validate(manifest, seeds=COUNTED):
+    """Every reason the manifest is not a complete, valid batch over seeds; empty when it is."""
+    want = {(t, s, c, p) for t in TASKS for s in seeds for c in CONDITIONS for p in PAIRINGS}
+    problems, by_id, replaced = [], {}, {}
+    for r in manifest:
+        if r["id"] in by_id:
+            problems.append("run id %s appears twice" % r["id"])
+        by_id[r["id"]] = r
+    for r in manifest:
+        if combo(r) not in want:
+            problems.append("%s: %s is not a registered cell and seed" % (r["id"], combo(r),))
+        if r.get("replaces"):
+            target = by_id.get(r["replaces"])
+            if target is None or not is_dropped(target) or combo(target) != combo(r):
+                problems.append("%s replaces %s, which is not a dropped run of the same combination" % (r["id"], r["replaces"]))
+            replaced[r["replaces"]] = replaced.get(r["replaces"], 0) + 1
+    problems += ["%s is replaced %d times" % (k, n) for k, n in sorted(replaced.items()) if n > 1]
+    for key in sorted(want):
+        rows = [r for r in manifest if combo(r) == key]
+        kept = [r for r in rows if not is_dropped(r)]
+        if len(kept) != 1:
+            problems.append("%s has %d kept runs, not 1" % (key, len(kept)))
+        problems += ["%s was dropped and not replaced" % r["id"] for r in rows if is_dropped(r) and r["id"] not in replaced]
+    return problems
+
+
+def complete_blocks(manifest):
+    """The counted seeds whose eight combinations are all complete and valid: what a budget-stop analysis may use."""
+    return [s for s in COUNTED if not validate([r for r in manifest if r["seed"] == s], seeds=(s,))]
+
+
+def read_manifest(out):
+    with open(os.path.join(out, "manifest.jsonl")) as f:
+        return [json.loads(line) for line in f]
+
+
 def analyze_json(path):
-    import json
     if not os.path.isfile(path):
         return {}
     with open(path) as f:
@@ -216,20 +264,22 @@ def effects(rows):
         n, a10, a01 = discordant(rows, task, pairing, measure)
         found[name] = (n, a10, a01, exact_ni_p(a10, a01, n) if n else 1.0)
     adjusted = analyze.holm({k: v[3] for k, v in found.items()})
+    twos = {k: (exact_two_sided_p(v[1], v[2], v[0]) if v[0] else 1.0) for k, v in found.items()}
+    twos_adj = analyze.holm(twos)   # the six two-sided tests are a family too: no winner is named without Holm
     shown = {}
     for name, _task, pairing, _measure, label in FAMILY:
         n, a10, a01, p = found[name]
         lo, hi = exact_interval(a10, a01, n) if n else (-1.0, 1.0)
-        two = exact_two_sided_p(a10, a01, n) if n else 1.0
+        two = twos[name]
         shown[name] = adjusted[name] < ALPHA
         verdict = ("non-inferior: agentbus within %d points of the ledger" % round(MARGIN * 100)) if shown[name] else "not shown within the margin"
-        if two < 0.05 and a01 > a10:
-            verdict += "; the ledger does better"
-        elif two < 0.05 and a10 > a01:
-            verdict += "; agentbus does better"
+        if twos_adj[name] < 0.05 and a01 > a10:
+            verdict += "; the ledger does better (Holm)"
+        elif twos_adj[name] < 0.05 and a10 > a01:
+            verdict += "; agentbus does better (Holm)"
         print("%s %s, %s: agentbus minus ledger %+.3f (agentbus only %d, ledger only %d, of %d seeds), exact 95%% interval %+.3f to %+.3f, "
-              "non-inferiority p %.4f, Holm p %.4f, two-sided p of no difference %.4f: %s" % (
-                  name, label, pairing, (a10 - a01) / n if n else 0.0, a10, a01, n, lo, hi, p, adjusted[name], two, verdict))
+              "non-inferiority p %.4f, Holm p %.4f, two-sided p of no difference %.4f, Holm p %.4f: %s" % (
+                  name, label, pairing, (a10 - a01) / n if n else 0.0, a10, a01, n, lo, hi, p, adjusted[name], two, twos_adj[name], verdict))
     for pairing in PAIRINGS:
         held = all(shown[x + "-" + pairing] for x in ("R", "D", "G"))
         print("Conclusion, %s: %s" % (pairing, "todo keeps promised work at least as well as the ledger, within the margin" if held else
@@ -250,13 +300,14 @@ def effects(rows):
                 share((x.get("alice") or {}).get("closed_done") for x in roles), share((x.get("bob") or {}).get("closed_all") for x in roles),
                 ", ".join("%s %d" % kv for kv in sorted(opened.items()))))
 
-    print("\nfinished, from the channel (not blind)\n| condition | pairing | alice closed all three | named a finished item as open | "
-          "broke or redid work |\n| --- | --- | --- | --- | --- |")
+    print("\nfinished (alice's closes from the channel, not blind; the rest blind)\n| condition | pairing | alice closed all three | "
+          "named a finished item as open | broke a finished item | changed a finished item |\n| --- | --- | --- | --- | --- | --- |")
     for c in CONDITIONS:
         for p in PAIRINGS:
             sub = [r for r in rows if (r["task"], r["condition"], r["pairing"]) == ("finished", c, p)]
-            print("| %s | %s | %s | %s | %s |" % (c, p, share((r["channel"].get("roles", {}).get("alice") or {}).get("closed_all") for r in sub),
-                  share(bool(r["grade"].get("named")) for r in sub), share(not r["grade"].get("recovered") for r in sub)))
+            print("| %s | %s | %s | %s | %s | %s |" % (c, p, share((r["channel"].get("roles", {}).get("alice") or {}).get("closed_all") for r in sub),
+                  share(bool(r["grade"].get("named")) for r in sub), share(not r["grade"].get("recovered") for r in sub),
+                  share(bool(r["grade"].get("redone")) for r in sub)))
 
     cols = ("tokens", "fresh tokens", "minutes", "tool calls", "channel calls", "channel writes")
     print("\n| task | condition | pairing | " + " | ".join(cols) + " |\n" + "| --- " * (len(cols) + 3) + "|")
@@ -290,8 +341,8 @@ def power_table(n=N, alpha=ALPHA, family=None):
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("out", nargs="?")
-    ap.add_argument("--n", type=int)
     ap.add_argument("--cost", action="store_true")
+    ap.add_argument("--budget-stop", action="store_true", help="after a recorded budget stop: analyze the complete seed blocks only")
     ap.add_argument("--power", action="store_true", help="print what the registered test can show at n = 20, and stop")
     args = ap.parse_args(argv)
     if args.power:
@@ -302,11 +353,24 @@ def main(argv):
     if args.cost:
         analyze.cost_report(rows)
         return 0
-    if not args.n:
-        ap.error("name the registered sample size with --n, or use --cost")
-    short = short_cells(rows, args.n)
-    if short:
-        print("no contrasts: %d cells have fewer than %d runs. Pilot numbers are not results." % (len(short), args.n))
+    manifest = read_manifest(args.out)
+    if args.budget_stop:
+        stop = analyze_json(os.path.join(args.out, "stop.json"))
+        if stop.get("reason") not in BUDGET_STOPS:
+            print("no contrasts: no recorded budget stop in %s (stop.json: %s)" % (args.out, stop or "none"))
+            return 3
+        seeds = complete_blocks(manifest)
+        print("BUDGET STOP (%s, recorded %s): %d complete seed blocks of %d; shortfall %d. Seeds used: %s" % (
+            stop["reason"], stop.get("at"), len(seeds), len(COUNTED), len(COUNTED) - len(seeds), ", ".join(map(str, seeds)) or "none"))
+        if not seeds:
+            return 3
+        effects([r for r in rows if r["condition"] in CONDITIONS and r["seed"] in seeds])
+        return 0
+    problems = validate(manifest)
+    if problems:
+        print("no contrasts: the batch is not complete and valid (%d problems). Pilot numbers are not results." % len(problems))
+        for x in problems[:20]:
+            print("  " + x)
         return 3
     effects([r for r in rows if r["condition"] in CONDITIONS])
     return 0

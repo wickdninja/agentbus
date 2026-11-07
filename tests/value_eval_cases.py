@@ -321,7 +321,7 @@ def test_p3_counts_every_token():
 
 
 def test_usage_limit_detection():
-    hit = json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "You've hit your weekly limit \u00b7 resets Nov 8 at 5am"}]}})
+    hit = json.dumps({"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You've hit your weekly limit \u00b7 resets Nov 8 at 5am"}]}})
     api = json.dumps({"type": "result", "is_error": True, "result": "api_error usage_limit_reached"})
     check(grade.usage_limited(hit) and grade.usage_limited(api), "a usage limit went unseen")
     for quiet in ('{"type": "assistant", "message": {"content": [{"type": "text", "text": "the claim limit is 2h"}]}}', "not json", ""):
@@ -468,8 +468,10 @@ def test_infra():
     cut = claude_lines({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}, expired)
     check(grade.infra_failure(cut, "claude", 1, False, None) == "authentication failed", "a sign-in failure after tool calls is infra")
     check(grade.infra_failure(cut, "claude", 0, False, None) == "authentication failed", "a sign-in failure is infra whatever the exit code")
-    check(grade.infra_failure(cut, "claude", 1, False, "time_cap") is None, "a real timeout stays in, even with a sign-in failure in the stream")
-    check(grade.infra_failure(cut, "claude", 1, False, "tool_cap") is None, "a tool cap stays in")
+    check(grade.infra_failure(cut, "claude", 1, False, "time_cap") == "authentication failed", "a sign-in failure wins over a later timeout")
+    check(grade.infra_failure(cut, "claude", 1, False, "tool_cap") == "authentication failed", "a sign-in failure wins over a tool cap")
+    check(grade.infra_failure(claude_lines({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}}), "claude", 1, False, "time_cap") is None,
+          "a real timeout with no provider failure stays in")
     check(grade.infra_failure(cut, "claude", 1, True, None) is None, "the task's own kill stays in")
     quoted = claude_lines({"type": "assistant", "message": {"content": [{"type": "tool_use"}]}},
                           {"type": "assistant", "message": {"model": "claude-x", "content": [{"type": "text", "text": "the log said: Please run /login"}]}},
@@ -511,11 +513,13 @@ def test_regrade_infra():
     tree(out, {"manifest.jsonl": "".join(json.dumps(r) + "\n" for r in rows)})
     before = open(os.path.join(out, "manifest.jsonl")).read()
     changed = grade.regrade_infra(out)
-    check(changed == {"rcut": {"bob": "authentication failed"}, "rerr": {"alice": "authentication failed"}}, "regrade found: %s" % changed)
+    want = {"rcut": {"bob": "authentication failed"}, "rerr": {"alice": "authentication failed"}, "rtime": {"alice": "authentication failed"}}
+    check(changed == want, "regrade found: %s" % changed)   # rtime: a provider failure wins over a later timeout (review item 1)
     check(open(os.path.join(out, "manifest.jsonl")).read() == before, "a dry regrade rewrote the manifest")
     check(grade.regrade_infra(out, write=True) == changed, "a written regrade found something else")
     got = {r["id"]: r["infra"] for r in (json.loads(l) for l in open(os.path.join(out, "manifest.jsonl")))}
-    check(got == {"rclean": {}, "rcut": {"bob": "authentication failed"}, "rerr": {"alice": "authentication failed"}, "rquote": {}, "rtime": {}, "rtask": {},
+    check(got == {"rclean": {}, "rcut": {"bob": "authentication failed"}, "rerr": {"alice": "authentication failed"}, "rquote": {},
+                  "rtime": {"alice": "authentication failed"}, "rtask": {},
                   "rold": {"alice": "no tool call and rc 1"}}, "regraded manifest: %s" % got)
     check(grade.regrade_infra(out, write=True) == {}, "a second regrade changed rows again")
     shutil.rmtree(out)
@@ -731,7 +735,8 @@ def test_fix1_ledger_text_is_unchanged():
     import hashlib
     check(hashlib.sha256(tasks.LEDGER_SKILL.encode()).hexdigest() == FIX1_LEDGER_SHA256, "the fix1 ledger text changed")
     check(tasks.ledger_skill(tasks.build("livehold", 1)) == tasks.LEDGER_SKILL, "fix1 tasks must keep the fix1 text")
-    check(tasks.ledger_skill(tasks.build("abandoned", 1)) == tasks.LEDGER_SKILL_TODO, "abandoned runs the todo text")
+    check(tasks.ledger_skill(tasks.build("abandoned", 1), "6bbc160b0d99578cc5aa359a4baa3871997971e4a19dd02258782f1348e18ff8") == tasks.LEDGER_SKILL_TODO,
+          "abandoned runs the todo text paired with its pinned skill")
 
 
 def test_abandoned_design():
@@ -762,43 +767,13 @@ def test_csv_reaches_the_tree():
     shutil.rmtree(d)
 
 
-def test_abandoned_specs_open_one_at_a_time():
-    """Pilot pass 1: with every spec in the backlog, alice wrote all three items in one command, so the kill could not land between them.
-    Specs now open one item at a time, the next only once the item opened before it passes; the backlog keeps titles only."""
-    for seed in (1, 41, 9301):
-        t = tasks.build("abandoned", seed)
-        p = tasks._abandoned_params(seed)
-        mine = tasks.abandoned_ids(seed)[0]
-        for item in p["items"]:
-            text = tasks._item_text(p, item)
-            check(text not in t.files["docs/BACKLOG.md"] and text not in t.files["tools/specs.json"], "seed %d: a spec sits in the clear" % seed)
-            check(item["id"] in t.files["docs/BACKLOG.md"], "seed %d: the backlog lists %s" % (seed, item["id"]))
-        d = tempfile.mkdtemp()
-        tree(d, t.files)
-        spec = lambda i, d=d: subprocess.run([sys.executable, "-B", "tools/spec.py", i], cwd=d, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,  # noqa: E731
-                                             universal_newlines=True)
-        text = {i["role"]: tasks._item_text(p, i) for i in p["items"] if i["role"] in tasks.ITEM_ROLES}
-        first = spec(mine["first"])
-        check(first.returncode == 0 and text["first"] in first.stdout, "seed %d: the first spec: %s" % (seed, first.stdout))
-        second = spec(mine["second"])
-        check(second.returncode != 0 and "opens once" in second.stdout and text["second"] not in second.stdout, "seed %d: a second item opened early: %s" % (seed, second.stdout))
-        tree(d, tasks.abandoned_item_reference(seed, "first"))
-        second = spec(mine["second"])
-        check(second.returncode == 0 and text["second"] in second.stdout, "seed %d: the second must open once the first passes: %s" % (seed, second.stdout))
-        check(text["first"] in spec(mine["first"]).stdout, "seed %d: an opened spec must print again" % seed)
-        tree(d, tasks.abandoned_item_reference(seed, "second"))
-        third = spec(mine["validation"])
-        check(third.returncode == 0 and text["validation"] in third.stdout, "seed %d: the validation after the second: %s" % (seed, third.stdout))
-        os.remove(os.path.join(d, "tools", ".opened"))
-        check(spec(mine["validation"]).returncode == 0, "seed %d: with no session state, any item opens first" % seed)
-        check(t.session_files == ("tools/.opened",), "the spec state is alice's session state, removed at the handover")
-        shutil.rmtree(d)
-
-
 def test_open_md_is_kept():
-    """Pilot pass 1: a bob emptied OPEN.md once he had finished the items, as if it were a live list."""
+    """Pilot pass 1: a bob emptied OPEN.md once he had finished the items, as if it were a live list. Review item 9: he may look and
+    check first; only project changes wait for it, and the released specs are not project changes."""
     bob = tasks.build("abandoned", 1).tickets["bob"]
-    check("Do not change OPEN.md after that" in bob and "before changing anything else" in bob, "bob's ticket must keep OPEN.md as written: %s" % bob)
+    check("Do not change OPEN.md after that" in bob, "bob's ticket must keep OPEN.md as written: %s" % bob)
+    check("before changing anything else" not in bob and "Read and check whatever you need first" in bob and "before you change any project file" in bob,
+          "bob must be free to inspect and check before he writes OPEN.md: %s" % bob)
 
 
 def test_items_done():
@@ -821,7 +796,14 @@ def test_discovery():
     check(not tasks.discovery("B-202\nB-303\nB-101 already done\n", ids, ["B-202", "B-303"])[0], "an extra id, even one called done")
     check(tasks.discovery("", ids, [])[0] and tasks.discovery("nothing open\n", ids, [])[0], "empty when nothing is open")
     check(not tasks.discovery(None, ids, [])[0], "no OPEN.md discovers nothing")
-    check(tasks.discovery("B-999 and B-2020\nB-202\n", ids, ["B-202"]) == (True, ["B-202"]), "words that are not backlog ids are ignored")
+    check(tasks.discovery("B-999 and B-2020\nB-202\n", ids, ["B-202"]) == (False, ["B-202"]), "an id the backlog lacks fails discovery (review item 7)")
+    check(tasks.discovery("B-202: late fees, from planning\n", ids, ["B-202"]) == (True, ["B-202"]), "other words are ignored")
+
+
+def handover_digests(seed, done):
+    """What the runner records at the handover: each item file's digest, the finished ones as the reference left them."""
+    ref = tasks.reference("abandoned", seed)
+    return {path: grade.text_digest(ref[path]) if role in done else None for role, path in tasks.abandoned_item_paths(seed).items()}
 
 
 def _abandoned_run(d, seed, open_roles, files, task="abandoned"):
@@ -833,7 +815,8 @@ def _abandoned_run(d, seed, open_roles, files, task="abandoned"):
     done = [r for r in tasks.ITEM_ROLES if r not in open_roles]
     grade.write_json(os.path.join(d, "run.json"), {"id": "r1", "task": task, "seed": seed, "agents": {"alice": {"stop": "task_kill"}, "bob": {"stop": None}},
                                                   "seconds": 1, "load": {"max": 1}, "kill": {"fired": True, "done": done},
-                                                  "handover": {"done": done, "open": list(open_roles), "open_ids": [mine[r] for r in open_roles]}})
+                                                  "handover": {"done": done, "open": list(open_roles), "open_ids": [mine[r] for r in open_roles],
+                                                               "digests": handover_digests(seed, done)}})
     grade.write_json(os.path.join(d, "edits.json"), [])
     open(os.path.join(d, "snaps.jsonl"), "w").close()
     return grade.blind_grade(d)
@@ -904,20 +887,6 @@ def test_ledger_wait_recipe_works():
     shutil.rmtree(d)
 
 
-def test_todo_parity_with_the_pinned_skill():
-    """Each line the pinned tool's skill gives about facts, todos and waiting has its ledger line, word for word on both sides."""
-    import run
-    root = os.path.dirname(os.path.dirname(sys.argv[1]))
-    release = run.TODO_TOOL[0]
-    skill = subprocess.run(["git", "-C", root, "show", "%s:skills/agentbus/SKILL.md" % release], stdout=subprocess.PIPE, universal_newlines=True).stdout
-    check(skill, "the pinned release has no skill")
-    for bus, ledger in tasks.TODO_PARITY:
-        check(bus in skill, "the pinned skill lacks %r: update TODO_PARITY and the ledger text together" % bus)
-        check(ledger in tasks.LEDGER_SKILL_TODO and ledger in tasks.LEDGER_AGENTS_BLOCK_TODO, "the ledger text lacks %r" % ledger)
-    for word in ("ctx set", "--kind todo", "--reply-to", "agentbus", "wait`"):
-        check(word not in tasks.LEDGER_SKILL_TODO, "the ledger text names the tool's command: %s" % word)
-
-
 def test_todo_tool_pin():
     import run
     release, sha = run.TODO_TOOL
@@ -966,7 +935,7 @@ def test_infra_usage_at_any_point():
     check(grade.infra_failure(claude_lines(*cx3), "codex", 0, False, None) is None, "Codex tool output quoting the words stays in")
     for stop in ("usage_limit", "authentication_failed"):
         check(grade.infra_failure(claude_lines(work), "claude", 1, False, stop) is not None, "an agent the batch stopped for %s is infra" % stop)
-    check(grade.infra_failure(claude_lines(work, limit), "claude", 1, False, "time_cap") is None, "a real timeout stays in")
+    check(grade.infra_failure(claude_lines(work, limit), "claude", 1, False, "time_cap") == "usage limit", "a usage limit wins over a later timeout")
     check(grade.infra_failure(claude_lines(work, limit), "claude", 1, True, None) is None, "the task's own kill stays in")
 
 
@@ -992,9 +961,9 @@ def _abandoned_rows(flip=None):
         for task in ("abandoned", "finished"):
             for cond in ("agentbus", "ledger"):
                 for pairing in ("cx", "cc"):
-                    g = {"discovered": True, "recovered": True, "pass": True, "named": [], "features": {}, "seconds": 60}
+                    g = {"discovered": True, "recovered": True, "clean": True, "redone": [], "pass": True, "named": [], "features": {}, "seconds": 60}
                     if flip and flip(seed, task, cond, pairing):
-                        g = dict(g, recovered=False)
+                        g = dict(g, recovered=False, clean=False)
                     rows.append({"id": "r%d%s%s%s" % (seed, task, cond, pairing), "task": task, "condition": cond, "pairing": pairing, "seed": seed,
                                  "grade": g, "cost": {}, "channel": {}})
     return rows
@@ -1015,7 +984,6 @@ def test_abandoned_analysis_all_ties():
         aa.effects(_abandoned_rows())
     text = out.getvalue()
     check(text.count("not shown within the margin") == 6 and "non-inferior:" not in text.replace("not shown", ""), "all ties: %s" % text)
-    check(aa.short_cells(_abandoned_rows(), 20) == [] and len(aa.short_cells(_abandoned_rows(), 21)) == 8, "every registered cell counts")
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         aa.effects(_abandoned_rows(lambda s, t, c, p: t == "abandoned" and c == "ledger" and s < aa.SEEDS[0] + 9))
@@ -1023,6 +991,236 @@ def test_abandoned_analysis_all_ties():
     wins = [line for line in text.splitlines() if line.startswith(("R-cx", "R-cc"))]
     check(len(wins) == 2 and all("+0.450" in line and "non-inferior: agentbus within" in line for line in wins),
           "nine agentbus-only wins in recovery must show in both pairings: %s" % text)
+
+
+# ---- follow-up abandoned, ledger-advocate review fixes (after pilot pass 2) ---------------------------------------------
+
+def test_review1_one_provider_classifier():
+    quoted = json.dumps({"type": "assistant", "message": {"model": "claude-x", "content": [{"type": "text", "text": "the log said usage_limit_reached"}]}})
+    check(not grade.usage_limited(quoted) and grade.provider_failure(quoted, "claude") is None, "agent text quoting a limit halted the batch")
+    cx = json.dumps({"type": "error", "message": "401 Unauthorized: token could not be refreshed"})
+    check(grade.auth_failed(cx) and grade.provider_failure(cx, "codex") == "authentication failed", "the live stop missed a Codex sign-in failure")
+    for line, harness in ((quoted, "claude"), (cx, "codex"), ("You've hit your weekly limit", "claude"), ("Please run /login", "codex")):
+        check(grade.usage_limited(line) == (grade.provider_failure(line, harness) == "usage limit") and
+              grade.auth_failed(line) == (grade.provider_failure(line, harness) == "authentication failed"), "the live stop and the grader disagree on %r" % line)
+
+
+def _abandoned_manifest(seeds=range(41, 61), extra=()):
+    rows = []
+    for seed in seeds:
+        for task in ("abandoned", "finished"):
+            for cond in ("agentbus", "ledger"):
+                for pairing in ("cx", "cc"):
+                    rows.append({"id": "r%d%s%s%s" % (seed, task[0], cond[0], pairing), "task": task, "seed": seed, "condition": cond, "pairing": pairing,
+                                 "infra": {}, "isolation": []})
+    return rows + list(extra)
+
+
+def test_review2_counted_gate():
+    import analyze_abandoned as aa
+    check(aa.validate(_abandoned_manifest()) == [], "a complete batch: %s" % aa.validate(_abandoned_manifest())[:3])
+    one = [dict(r, seed=9303, id=r["id"] + str(i)) for i, r in enumerate(_abandoned_manifest())]
+    check(aa.validate(one), "160 rows on one repeated pilot seed passed the gate")
+    rows = _abandoned_manifest()
+    check(aa.validate(rows + [dict(rows[0], id="rdup")]), "two kept rows for one combination passed")
+    check(aa.validate(rows[1:]), "a missing combination passed")
+    bad = dict(rows[0], infra={"alice": "usage limit"})
+    check(aa.validate([bad] + rows[1:]), "a dropped row with no replacement passed")
+    fix = dict(rows[0], id="rfix", replaces=rows[0]["id"])
+    check(aa.validate([bad] + rows[1:] + [fix]) == [], "a dropped row replaced once is valid")
+    check(aa.validate(rows + [dict(rows[1], id="rbad", replaces=rows[0]["id"])]), "a replacement of a kept row, for another combination, passed")
+    check(aa.validate([bad] + rows[1:] + [fix, dict(fix, id="rfix2")]), "a row replaced twice passed")
+    check(aa.complete_blocks([dict(r, infra={"x": "codex budget"}) if r["seed"] == 45 else r for r in rows]) == [s for s in range(41, 61) if s != 45],
+          "complete seed blocks")
+    try:
+        aa.main(["/nonexistent", "--n", "1"])
+        check(False, "--n must not exist for the counted analysis")
+    except SystemExit as e:
+        check(e.code == 2, "--n must be refused as a usage error")
+    d = tempfile.mkdtemp()
+    tree(d, {"manifest.jsonl": "".join(json.dumps(r) + "\n" for r in one)})
+    for r in one:
+        tree(d, {"%s/grade.json" % r["id"]: json.dumps({"discovered": True, "recovered": True, "clean": True, "pass": True, "features": {}, "seconds": 60}),
+                 "%s/cost.json" % r["id"]: "{}", "%s/channel.json" % r["id"]: "{}"})
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = aa.main([d])
+    check(rc == 3 and "R-cx" not in out.getvalue(), "the review's repeated-seed batch printed contrasts: %s" % out.getvalue()[-300:])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = aa.main([d, "--budget-stop"])
+    check(rc == 3 and "no recorded budget stop" in out.getvalue(), "a budget-stop analysis ran with no recorded stop: %s" % out.getvalue()[-300:])
+    shutil.rmtree(d)
+
+
+def test_review3_finished_rework():
+    seed = 4
+    ref = tasks.reference("finished", seed)
+    paths = tasks.abandoned_item_paths(seed)
+    d = tempfile.mkdtemp()
+    g = _abandoned_run(d, seed, [], dict(ref, **{"OPEN.md": ""}), task="finished")
+    check(g["redone"] == [] and g["clean"], "untouched finished work: %s" % g)
+    shutil.rmtree(d)
+    d = tempfile.mkdtemp()
+    redone = dict(ref, **{"OPEN.md": "", paths["first"]: ref[paths["first"]] + "\n\n# rewritten by bob\n"})
+    g = _abandoned_run(d, seed, [], redone, task="finished")
+    check(g["recovered"] and g["discovered"] and g["redone"] == ["first"] and not g["clean"], "bob changed finished work and stayed clean: %s" % g)
+    shutil.rmtree(d)
+    import analyze_abandoned as aa
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        aa.effects(_abandoned_rows())
+    text = out.getvalue()
+    check("broke or redid work" not in text and "broke a finished item" in text and "changed a finished item" in text, "the finished table's labels: %s" % text)
+
+
+def test_review4_specs_never_on_disk():
+    for seed in (1, 41, 9301):
+        t = tasks.build("abandoned", seed)
+        p = tasks._abandoned_params(seed)
+        blob = json.dumps(t.files)
+        for item in p["items"]:
+            path, text = tasks.abandoned_spec(seed, item["id"])
+            check(path == "docs/specs/%s.md" % item["id"] and tasks._item_text(p, item) in text, "seed %d: the spec for %s" % (seed, item["id"]))
+            check(tasks._item_text(p, item) not in blob, "seed %d: a spec is on disk at the start" % seed)
+        check(not any(k.startswith(("tools/", "docs/specs/")) for k in t.files), "seed %d: spec files or a spec tool in the repo: %s" % (seed, sorted(t.files)))
+        check(t.release == {"role": "alice", "order": list(tasks.ITEM_ROLES)}, "the runner releases alice's specs in her order")
+    import run
+    check(run.WATCH_INTERVAL == 0.5 and run.next_tick(10.0, 10.0, 0.5) == 10.5 and run.next_tick(10.0, 11.26, 0.5) == 11.5,
+          "the watch ticks on a fixed schedule, whatever a check took")
+
+
+def test_review5_full_parity():
+    """Every line of the pinned skill and every hook event the pinned build installs is mapped to the ledger's, or says why not."""
+    import hashlib
+    import run
+    root = os.path.dirname(os.path.dirname(sys.argv[1]))
+    skill = subprocess.run(["git", "-C", root, "show", "%s:skills/agentbus/SKILL.md" % run.TODO_TOOL[0]], stdout=subprocess.PIPE, universal_newlines=True).stdout
+    key = hashlib.sha256(skill.encode()).hexdigest()
+    check(key in tasks.SKILL_MAPS, "no full map for the pinned skill %s: map every line before moving the pin" % key[:12])
+    lines = tasks.skill_lines(skill)
+    mapped = [b for b, _l, _why in tasks.SKILL_MAPS[key]]
+    check(sorted(lines) == sorted(mapped), "the map and the pinned skill differ: unmapped %s, stale %s" % (
+        sorted(set(lines) - set(mapped))[:3], sorted(set(mapped) - set(lines))[:3]))
+    text = tasks.ledger_text_for(key)
+    check(run.pinned_skill_sha(run.TODO_TOOL[0]) == key, "the runner installs the text paired with another skill")
+    for bus, ledger_lines, why in tasks.SKILL_MAPS[key]:
+        check(why and all(x in text and x in tasks.agents_block(text) for x in ledger_lines), "%r: a ledger line is missing, or no reason is given" % bus[:60])
+    for word in ("ctx set", "--kind todo", "--reply-to", "agentbus", "wait`"):
+        check(word not in text, "the ledger text names the tool's command: %s" % word)
+    tool = os.path.join(tempfile.mkdtemp(), "agentbus")
+    open(tool, "wb").write(subprocess.run(["git", "-C", root, "show", "%s:bin/agentbus" % run.TODO_TOOL[0]], stdout=subprocess.PIPE).stdout)
+    env = {"HOME": os.path.dirname(tool), "TMPDIR": os.path.dirname(tool), "PATH": "/usr/bin:/bin", "AGENTBUS_NO_UPDATE_CHECK": "1"}
+    for harness in ("claude", "codex"):
+        got = subprocess.run([sys.executable, tool, "hooks", harness, "--json"], stdout=subprocess.PIPE, env=env, cwd=os.path.dirname(tool), universal_newlines=True)
+        events = sorted(json.loads(got.stdout)["hooks"])
+        check(events and sorted(tasks.HOOK_MAP[harness]) == events, "%s hooks the pinned build installs, %s, are not all mapped: %s" % (harness, events, sorted(tasks.HOOK_MAP[harness])))
+        ledger = [e for e, _m in run.LEDGER_HOOKS["todo"][harness]]
+        for event, (ledger_event, why) in tasks.HOOK_MAP[harness].items():
+            check(why and (ledger_event in ledger or ledger_event is None), "%s %s: the ledger hook it names is not installed" % (harness, event))
+
+
+def test_review5_ledger_unread_notes():
+    """The bus tells an agent about new messages for it at its prompt and before an edit; the ledger's hooks do the same, once each."""
+    d, tmp = tempfile.mkdtemp(), tempfile.mkdtemp()
+    tree(d, {"COORDINATION.md": "10:00 alice NOTE: hi\n", "pkg/a.py": ""})
+    check(_hook("UserPromptSubmit", {"cwd": d, "session_id": "u1"}, "bob", d, tmp) is None, "a prompt note with nothing addressed to bob")
+    tree(d, {"COORDINATION.md": "10:00 alice NOTE: hi\n\n10:01 alice QUESTION to bob: which?\n"})
+    got = _hook("UserPromptSubmit", {"cwd": d, "session_id": "u1"}, "bob", d, tmp)
+    check(got and "1 entry addressed to bob" in got, "the prompt note: %s" % got)
+    edit = {"cwd": d, "session_id": "u1", "tool_input": {"file_path": os.path.join(d, "pkg/a.py")}}
+    first = _hook("PreToolUse", edit, "bob", d, tmp) or ""
+    check("addressed to bob" not in first, "an entry already announced was announced again before an edit: %s" % first)
+    tree(d, {"COORDINATION.md": "10:00 alice NOTE: hi\n\n10:01 alice QUESTION to bob: which?\n\n10:02 alice HANDOFF to bob: take it\n"})
+    got = _hook("PreToolUse", edit, "bob", d, tmp) or ""
+    check("1 new entry addressed to bob" in got, "a new entry for bob was not announced before his edit: %s" % got)
+    check("addressed to bob" not in (_hook("PreToolUse", edit, "bob", d, tmp) or ""), "the edit note repeated")
+    for x in (d, tmp):
+        shutil.rmtree(x)
+
+
+def test_review5_ledger_takeover():
+    """The skill's `claim --from HOLDER` has its ledger counterpart: a CLAIM that says (from HOLDER) ends the holder's claim on the path."""
+    import ledger_hook as lh
+    entries = lh.parse("10:00 alice CLAIM: pkg/a.py (fees)\n\n10:05 bob CLAIM: pkg/a.py (from alice; her session ended)\n")
+    check(lh.open_claims(entries) == {("bob", "pkg/a.py"): "from alice; her session ended"}, "a takeover left the holder's claim open: %s" % lh.open_claims(entries))
+    d, tmp = tempfile.mkdtemp(), tempfile.mkdtemp()
+    tree(d, {"COORDINATION.md": "10:00 alice CLAIM: pkg/a.py (fees)\n\n10:05 bob CLAIM: pkg/a.py (from alice)\n", "pkg/a.py": ""})
+    warn = _hook("PreToolUse", {"cwd": d, "session_id": "k1", "tool_input": {"file_path": os.path.join(d, "pkg/a.py")}}, "bob", d, tmp) or ""
+    check("claimed by alice" not in warn, "bob was warned off a path he took over: %s" % warn)
+    check(lh.open_claims(lh.parse("10:00 alice CLAIM: pkg/a.py (fees)\n\n10:05 bob CLAIM: pkg/a.py (fees too)\n")) == {
+        ("alice", "pkg/a.py"): "fees", ("bob", "pkg/a.py"): "fees too"}, "a plain second claim must not end the first")
+    for x in (d, tmp):
+        shutil.rmtree(x)
+
+
+def test_review6_superiority_is_corrected():
+    import analyze_abandoned as aa
+    import contextlib
+    import io
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        aa.effects(_abandoned_rows(lambda s, t, c, p: t == "abandoned" and c == "agentbus" and p == "cc" and s < aa.SEEDS[0] + 5))
+    line = [x for x in out.getvalue().splitlines() if x.startswith("R-cc")][0]
+    check("does better" not in line, "5 ledger-only seeds in one of six comparisons declared a winner without correction: %s" % line)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        aa.effects(_abandoned_rows(lambda s, t, c, p: t == "abandoned" and c == "agentbus" and p == "cc" and s < aa.SEEDS[0] + 10))
+    line = [x for x in out.getvalue().splitlines() if x.startswith("R-cc")][0]
+    check("the ledger does better (Holm)" in line, "10 ledger-only seeds must survive Holm: %s" % line)
+
+
+def test_review7_grader_false_passes():
+    seed = 4
+    mine = tasks.abandoned_ids(seed)[0]
+    ref = tasks.reference("abandoned", seed)
+    d = tempfile.mkdtemp()
+    t = tasks.build("abandoned", seed)
+    tree(os.path.join(d, "final"), dict(t.files, **ref))
+    grade.write_json(os.path.join(d, "run.json"), {"id": "r1", "task": "abandoned", "seed": seed, "agents": {}, "seconds": 1, "load": {"max": 1},
+                                                  "kill": {"fired": True, "done": ["first"]}, "handover": None})
+    grade.write_json(os.path.join(d, "edits.json"), [])
+    open(os.path.join(d, "snaps.jsonl"), "w").close()
+    try:
+        grade.blind_grade(d)
+        check(False, "a run with no handover was graded")
+    except grade.Ungradable:
+        pass
+    shutil.rmtree(d)
+    p = tasks._abandoned_params(seed)
+    decoy = [i for i in p["items"] if i["role"] == "decoy" and i["kind"] == "feature"][0]
+    path, code = tasks._feature_code(p, decoy)
+    alias = code.replace("def %s(" % decoy["name"], "def implementation(") + "\n\n%s = implementation\n" % decoy["name"]
+    dyn = code.replace("def %s(" % decoy["name"], "def implementation(") + "\n\nglobals()[%r] = implementation\n" % decoy["name"]
+    for name, files in (("globals", {path: dyn}), ("alias", {path: alias}), ("import", {"%s/extra.py" % p["pkg"]: "from .%s import implementation as %s\n" % (path.split("/")[-1][:-3], decoy["name"]),
+                                                             path: alias.replace("\n\n%s = implementation\n" % decoy["name"], "\n")})):
+        d, got = solved("abandoned", seed, ref, files)
+        shutil.rmtree(d)
+        check(not got["scope"], "a decoy exported by %s passed scope" % name)
+    ids = tasks.abandoned_ids(seed)[1]
+    check(not tasks.discovery("B-9999\n", ids, [])[0], "an unknown id passed discovery")
+    check(not tasks.discovery("%s\nB-9999\n" % mine["second"], ids, [mine["second"]])[0], "an unknown id beside the right one passed discovery")
+
+
+def test_review8_study_config():
+    import run
+    check(run.STUDIES["todo"] == {"pin": run.TODO_TOOL, "codex_budget": 15, "claude_usage_stop": 90.0}, "the registered study config: %s" % run.STUDIES.get("todo"))
+    d = tempfile.mkdtemp()
+    run.check_study(d, "todo")   # first use records it
+    rec = json.load(open(os.path.join(d, "study.json")))
+    check(rec["pin"] == list(run.TODO_TOOL) and rec["codex_budget"] == 15, "study.json: %s" % rec)
+    run.check_study(d, "todo")
+    tree(d, {"study.json": json.dumps(dict(rec, pin=["0000000", "0" * 64]))})
+    try:
+        run.check_study(d, "todo")
+        check(False, "a resumed batch with another build passed")
+    except run.Refused:
+        pass
+    shutil.rmtree(d)
 
 
 for name, fn in sorted(globals().items()):

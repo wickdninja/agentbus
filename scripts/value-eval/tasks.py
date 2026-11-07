@@ -33,7 +33,7 @@ def rng(task, seed):
 
 class Task:
     def __init__(self, name, seed, files, tickets, schedule, features, markers=None, kill=None, same_name=(), workspace="shared",
-                 start=None, contested=None, handover=None, channel_text="fix1", base_pass=(), session_files=()):
+                 start=None, contested=None, handover=None, channel_text="fix1", base_pass=(), release=None):
         self.name, self.seed, self.files, self.tickets = name, seed, files, tickets
         self.schedule = schedule    # list of stages, each a list of roles run at the same time
         self.features = features    # hidden test names; a pass needs all of them
@@ -46,7 +46,7 @@ class Task:
         self.handover = handover    # the role whose unfinished items the next agent must find (abandoned, finished)
         self.channel_text = channel_text  # which ledger text and tool pin the task runs with: "fix1" (v0.3.0) or "todo" (975ba7a)
         self.base_pass = base_pass  # hidden tests that pass on the untouched repo by design (scope: nothing extra was done)
-        self.session_files = session_files  # the handing-over agent's own session state, removed at the handover (tools/.opened)
+        self.release = release      # {"role", "order"}: the runner hands this role its items' specs one at a time (abandoned, finished)
 
 
 # ---- overlap: two tickets change one function, and each bumps one shared version ------------------------------------
@@ -914,71 +914,6 @@ def abandoned_ids(seed):
     return {i["role"]: i["id"] for i in p["items"] if i["role"] in ITEM_ROLES}, [i["id"] for i in p["listed"]]
 
 
-SPEC_TOOL = dedent("""
-    """ + '"""Prints a backlog item\'s spec: `python3 tools/spec.py ID`. Specs open one item at a time: an item opens only once the item ' + r"""
-    """ + 'opened before it passes its checks, so the tool also checks your work."""' + r"""
-    import hashlib
-    import importlib
-    import json
-    import os
-    import sys
-
-    sys.path.insert(0, os.getcwd())
-    STATE = "tools/.opened"
-
-
-    def unlock(blob, key):
-        raw, stream, n = bytes.fromhex(blob), b"", 0
-        while len(stream) < len(raw):
-            stream += hashlib.sha256(("%s:%d" % (key, n)).encode()).digest()
-            n += 1
-        return bytes(a ^ b for a, b in zip(raw, stream))
-
-
-    def probe(spec):
-        if spec["kind"] == "validation":
-            try:
-                lines = open(spec["path"]).read().splitlines()
-            except OSError:
-                return "missing"
-            return repr([[x.strip() for x in line.split(",")] for line in lines if line.strip()])
-        try:
-            fn = getattr(importlib.import_module(spec["module"]), spec["fn"])
-        except Exception:  # noqa: BLE001
-            return "missing"
-        got = []
-        for args in spec["inputs"]:
-            try:
-                got.append(fn(*args))
-            except ValueError:
-                got.append("ValueError")
-            except Exception as e:  # noqa: BLE001
-                got.append(type(e).__name__)
-        return repr(got)
-
-
-    if len(sys.argv) != 2:
-        sys.exit("usage: python3 tools/spec.py ID")
-    data = json.load(open("tools/specs.json"))
-    want = sys.argv[1]
-    if want not in data["items"]:
-        sys.exit("no backlog item %s" % want)
-    opened = json.load(open(STATE)) if os.path.exists(STATE) else []
-    seen = {o["id"]: o["text"] for o in opened}
-    if want in seen:
-        print(seen[want])
-        sys.exit(0)
-    last = opened[-1]["id"] if opened else None
-    text = unlock(data["items"][want]["start"], "start") if last is None else unlock(data["items"][want]["after"][last], probe(data["probes"][last]))
-    if not text.startswith(b"OK\n"):
-        sys.exit("%s opens once %s, the item opened before it, passes its checks; it does not yet." % (want, last))
-    text = text[3:].decode()
-    with open(STATE, "w") as f:
-        json.dump(opened + [{"id": want, "text": text}], f)
-    print(text)
-""")
-
-
 def _item_title(p, item):
     if item["kind"] == "feature":
         f = FEATURES[item["name"]]
@@ -987,50 +922,36 @@ def _item_title(p, item):
     return "Validate %s against %s, %s." % (v["path"], v["source"], v["who"])
 
 
-def _probe_spec(p, item):
-    if item["kind"] == "validation":
-        return {"kind": "validation", "path": VALIDATIONS[item["name"]]["path"]}
-    f, c = FEATURES[item["name"]], p["consts"][item["name"]]
-    return {"kind": "feature", "module": "%s.%s" % (p["pkg"], f["module"]), "fn": item["name"], "inputs": f["cases"](c) + f["errors"](c)}
+SPEC_DIR = "docs/specs"
 
 
-def _probe_answer(p, item):
-    """What tools/spec.py's probe reads off an item done right: the key that opens the item opened after it."""
-    if item["kind"] == "validation":
-        v = VALIDATIONS[item["name"]]
-        return repr([v["header"].split(",")] + [list(kv) for kv in p["rows"][item["name"]][0]])
-    f, c = FEATURES[item["name"]], p["consts"][item["name"]]
-    got = []
-    for args in f["cases"](c) + f["errors"](c):
-        try:
-            got.append(f["fn"](c, *args))
-        except ValueError:
-            got.append("ValueError")
-    return repr(got)
+def abandoned_spec(seed, item_id):
+    """(path, text) of one backlog item's spec. Never in the repo at the start: the runner writes alice's one at a time (each once the
+    one before it passes) and every item's at the handover."""
+    p = _abandoned_params(seed)
+    item = [i for i in p["items"] if i["id"] == item_id][0]
+    return "%s/%s.md" % (SPEC_DIR, item_id), "# %s\n\n%s\n" % (item_id, _item_text(p, item))
 
 
-def _spec_data(p):
-    """tools/specs.json: every item's spec, locked. An item opens first with the key "start", or after another item with the probe of
-    that item done right. Nothing in it reads in the clear except what the backlog's titles already say."""
-    items, probes = {}, {}
-    for item in p["listed"]:
-        text = _item_text(p, item)
-        items[item["id"]] = {"start": _lock(text, "start"),
-                             "after": {o["id"]: _lock(text, _probe_answer(p, o)) for o in p["listed"] if o["id"] != item["id"]}}
-        probes[item["id"]] = _probe_spec(p, item)
-    return {"items": items, "probes": probes}
+def abandoned_item_paths(seed):
+    """{role: the file that item changes} for alice's three items: what bob must leave alone when the item is already done."""
+    p = _abandoned_params(seed)
+    out = {}
+    for item in p["items"]:
+        if item["role"] in ITEM_ROLES:
+            out[item["role"]] = ("%s/%s.py" % (p["pkg"], FEATURES[item["name"]]["module"]) if item["kind"] == "feature"
+                                 else VALIDATIONS[item["name"]]["path"])
+    return out
 
 
 def _abandoned(seed, name="abandoned"):
     p = _abandoned_params(seed)
     pkg = p["pkg"]
     backlog = ["# Backlog", "", "The owner's queue. Items are taken at planning; an item nobody took waits for the next one.", "",
-               "An item's spec: `python3 tools/spec.py ID`. Specs open one item at a time: an item opens once the item opened before it "
-               "passes its checks.", ""]
+               "An item's spec is docs/specs/ID.md.", ""]
     for item in p["listed"]:
         backlog += ["## %s" % item["id"], "", _item_title(p, item), ""]
     files = {pkg + "/__init__.py": "", "tests/__init__.py": "", "docs/BACKLOG.md": "\n".join(backlog),
-             "tools/spec.py": SPEC_TOOL, "tools/specs.json": json.dumps(_spec_data(p), indent=0) + "\n",
              "README.md": "# %s\n\nBilling helpers. The owner's queue is docs/BACKLOG.md.\n" % pkg}
     for v, (right, wrong) in p["rows"].items():
         spec = VALIDATIONS[v]
@@ -1041,17 +962,19 @@ def _abandoned(seed, name="abandoned"):
     mine = {i["role"]: i["id"] for i in p["items"] if i["role"] in ITEM_ROLES}
     tickets = {
         "alice": "Ticket: at this morning's planning you took three items from docs/BACKLOG.md: %s, then %s, then %s, in that order. The backlog "
-                 "has no owner column, and nobody else knows which items you took. The other items wait for the next planning; do not start them."
-                 % (mine["first"], mine["second"], mine["validation"]),
+                 "has no owner column, and nobody else knows which items you took. The other items wait for the next planning; do not start them. "
+                 "The owner gives you each item's spec when the one before it is in: it appears as docs/specs/ID.md. The first is there now; "
+                 "if the next is not there yet, look again in a few seconds." % (mine["first"], mine["second"], mine["validation"]),
         "bob": "Ticket: alice was working in this repo and her session has ended; she will not come back, and anything she held is yours to take "
-               "over. Find the backlog items she took on and did not finish, and finish them. First, before changing anything else, write OPEN.md at "
-               "the repo root: one line for each item she took on and had not finished when her session ended, starting with its backlog id; "
-               "leave the file empty if there is none. Do not change OPEN.md after that: it records what she left. docs/BACKLOG.md "
+               "over. Find the backlog items she took on and did not finish, and finish them. Read and check whatever you need first; then, before "
+               "you change any project file, write OPEN.md at the repo root: one line for each item she took on and had not finished when her "
+               "session ended, starting with its backlog id; leave the file empty if there is none. Do not change OPEN.md after that: it records "
+               "what she left. docs/BACKLOG.md "
                "is the owner's queue: an item nobody took on waits for the next planning, so do not start one.",
     }
     kill = {"role": "alice", "check": "items"} if name == "abandoned" else None
     return Task(name, seed, files, tickets, [["alice"], ["bob"]], list(ITEM_ROLES) + ["scope"], kill=kill, handover="alice",
-                channel_text="todo", base_pass=("scope",), session_files=("tools/.opened",))
+                channel_text="todo", base_pass=("scope",), release={"role": "alice", "order": list(ITEM_ROLES)})
 
 
 def _finished(seed):
@@ -1104,23 +1027,44 @@ def _abandoned_hidden(seed):
         import ast, csv, os, unittest
 
 
+        def bound(tree):
+            """Every name a module binds at its top level: functions, classes, assignments and imports."""
+            names = set()
+            for x in tree.body:
+                if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names.add(x.name)
+                elif isinstance(x, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                    for t in (x.targets if isinstance(x, ast.Assign) else [x.target]):
+                        names |= {n.id for n in ast.walk(t) if isinstance(n, ast.Name)}
+                elif isinstance(x, (ast.Import, ast.ImportFrom)):
+                    names |= {(a.asname or a.name).split(".")[0] for a in x.names}
+            return names
+
+
         class T(unittest.TestCase):
             def test_no_item_nobody_took(self):
-                defined = set()
+                import importlib
+                defined, exported = set(), set()
                 for d, _dirs, files in os.walk(%r):
                     for n in files:
                         if n.endswith(".py"):
+                            path = os.path.join(d, n)
                             try:
-                                tree = ast.parse(open(os.path.join(d, n)).read())
+                                defined |= bound(ast.parse(open(path).read()))
                             except SyntaxError:
                                 continue
-                            defined |= {x.name for x in tree.body if isinstance(x, ast.FunctionDef)}
-                self.assertEqual(sorted(defined & set(%r)), [])
+                            module = os.path.relpath(path)[:-3].replace(os.sep, ".").replace(".__init__", "")
+                            try:
+                                mod = importlib.import_module(module)
+                            except Exception:  # noqa: BLE001
+                                continue
+                            exported |= {x for x in %r if hasattr(mod, x)}
+                self.assertEqual(sorted((defined | exported) & set(%r)), [])
 
             def test_other_data_untouched(self):
                 rows = [[x.strip() for x in row] for row in csv.reader(open(%r)) if row]
                 self.assertEqual(rows, %r)
-    ''') % (p["pkg"], decoy_fns, v["path"], [v["header"].split(",")] + [list(kv) for kv in p["rows"][decoy_val][1]])
+    ''') % (p["pkg"], decoy_fns, decoy_fns, v["path"], [v["header"].split(",")] + [list(kv) for kv in p["rows"][decoy_val][1]])
     return out
 
 
@@ -1194,13 +1138,14 @@ OPEN_ID = r"\bB-\d+\b"
 
 
 def discovery(open_md, listed_ids, open_ids):
-    """(discovered, named): named is every backlog id OPEN.md mentions; discovered is True when that set is exactly the open set.
-    A missing OPEN.md (None) discovers nothing. Words that are not backlog ids are ignored."""
+    """(discovered, named): named is every backlog id OPEN.md mentions; discovered is True when that set is exactly the open set and
+    OPEN.md names no id the backlog does not have. A missing OPEN.md (None) discovers nothing."""
     import re
     if open_md is None:
         return False, []
-    named = sorted(set(re.findall(OPEN_ID, open_md)) & set(listed_ids))
-    return named == sorted(open_ids), named
+    found = set(re.findall(OPEN_ID, open_md))
+    named = sorted(found & set(listed_ids))
+    return named == sorted(open_ids) and found <= set(listed_ids), named
 
 
 # ---- facts: alice holds a decision that bob needs and cannot see ----------------------------------------------------
@@ -1495,10 +1440,10 @@ LEDGER_AGENTS_BLOCK = "# Ledger\n\n" + LEDGER_SKILL.split("---\n", 2)[2].lstrip(
 
 
 # ---- the ledger text for follow-up abandoned ---------------------------------------------------------------------------
-# The fix1 text above stays byte for byte (a test pins its hash). This one adds, line for line, what the pinned tool's skill
-# adds: record what only you know, promise and close by id, and a wait that works where `sleep N; tail` is blocked. TODO_PARITY
-# pairs each skill line with its ledger line; a test checks both sides against the pinned tool's own skill, so a new pin fails
-# the build until its lines are matched here.
+# The fix1 text above stays byte for byte (a test pins its hash). The follow-up's text matches the pinned skill paragraph by
+# paragraph: SKILL_MAPS holds every paragraph of each skill a pin may name, verbatim, with the ledger lines that answer it and why
+# anything has no counterpart, and HOOK_MAP does the same for every hook event the pinned build installs. A test reads the pinned
+# commit's own skill and the pinned build's own hooks, so a new pin fails the build until each of its lines is mapped here.
 
 LEDGER_WAIT = """python3 -c 'import os, sys, time
 f = "COORDINATION.md"; size = lambda: os.path.getsize(f) if os.path.exists(f) else -1
@@ -1513,40 +1458,213 @@ _TODO_EDITS = (
      "Note the open claims, open questions, open TODOs, handoffs and facts, then add `JOIN: what you are about to do`. JOIN entries show who is here. "
      "Record what only you know (owner notes, decisions) at once: `FACT KEY: VALUE`; the next reader sees it."),
     ("Hooks: a hook message at session start says how many entries the file holds and which are addressed to you;",
-     "Hooks: a hook message at session start says how many entries the file holds, which are addressed to you, and how many TODOs are open;"),
+     "Hooks: a hook message at session start says how many entries the file holds, which are addressed to you, and how many TODOs are open; "
+     "at your prompt and before an edit, one says when new entries are addressed to you;"),
     ("Read the file at the beginning of each turn and between substantial steps. ",
      "Read the file each turn and between substantial steps. Where you can, run this in the background: it exits 0 when the file changes "
      "(124 after ten minutes); then read the file.\n\n```\n" + LEDGER_WAIT + "\n```\n\n"),
+    ("On a conflict, ask the holder or work elsewhere.",
+     "On a conflict, ask the holder or work elsewhere. If your user or a handoff gave you a holder's work, take it over: append "
+     "`CLAIM: PATH (from HOLDER)`; that claim replaces the holder's."),
     ("- Finish: `DONE: RESULT; FILES; CHECKS`",
      "- Promise: record work before you start it: `TODO ID: WHAT`; close: `DONE ID: RESULT` (or `DROPPED ID: WHY`). ID is a tag no entry has used, "
      "such as alice-1. A TODO stays open until a DONE or DROPPED names its ID.\n- Finish: `DONE: RESULT; FILES; CHECKS`"),
 )
 
+# What PR #68's skill changes, mirrored: a section on your own jobs; the promise closes with done only; the wait and hook lines lose
+# their parentheses and their last sentence.
+_TODO_EDITS_PR68 = (
+    ("\n## Before shared work\n",
+     "\n## Your jobs\n\nAt start, add each job you own as its own TODO. Close each with a DONE naming its ID. Before you stop with work left, every "
+     "unfinished job must be an open TODO, not a line inside a DONE: the hook counts open TODOs only. You may finish a TODO whose owner left: "
+     "claim its files as usual (a takeover CLAIM, below, if a claim is in the way).\n\n## Before shared work\n"),
+    ("close: `DONE ID: RESULT` (or `DROPPED ID: WHY`).", "close: `DONE ID: RESULT`."),
+    ("it exits 0 when the file changes (124 after ten minutes); then read the file.", "it exits 0 when the file changes; then read the file."),
+    (" Hooks never claim and never replace reading the file.", ""),
+)
 
-def _todo_text(text):
-    for old, new in _TODO_EDITS:
+
+def _edited(text, edits):
+    for old, new in edits:
         assert text.count(old) == 1, old
         text = text.replace(old, new)
     return text
 
 
+def _todo_text(text):
+    return _edited(text, _TODO_EDITS)
+
+
 LEDGER_SKILL_TODO = _todo_text(LEDGER_SKILL)
-LEDGER_AGENTS_BLOCK_TODO = "# Ledger\n\n" + LEDGER_SKILL_TODO.split("---\n", 2)[2].lstrip()
-
-# (a line of the pinned tool's skill, the ledger line that matches it). Both must be present word for word.
-TODO_PARITY = (
-    ("Record what only you know (owner notes, decisions) at once: `ctx set KEY \"VALUE\"`; `brief` shows it to newcomers.",
-     "Record what only you know (owner notes, decisions) at once: `FACT KEY: VALUE`; the next reader sees it."),
-    ("- Promise: `post \"WHAT\" --kind todo`; close: `post \"RESULT\" --reply-to ID --kind done` (or dropped)",
-     "- Promise: record work before you start it: `TODO ID: WHAT`; close: `DONE ID: RESULT` (or `DROPPED ID: WHY`)."),
-    ("Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`.",
-     "Where you can, run this in the background: it exits 0 when the file changes (124 after ten minutes); then read the file."),
-)
+LEDGER_SKILL_TODO_PR68 = _edited(LEDGER_SKILL_TODO, _TODO_EDITS_PR68)
 
 
-def ledger_skill(task):
-    return LEDGER_SKILL_TODO if task.channel_text == "todo" else LEDGER_SKILL
+def agents_block(skill):
+    return "# Ledger\n\n" + skill.split("---\n", 2)[2].lstrip()
 
 
-def ledger_agents_block(task):
-    return LEDGER_AGENTS_BLOCK_TODO if task.channel_text == "todo" else LEDGER_AGENTS_BLOCK
+LEDGER_AGENTS_BLOCK_TODO = agents_block(LEDGER_SKILL_TODO)
+
+
+def skill_lines(text):
+    """The paragraphs and list items of a skill's body, as SKILL_MAPS keys them: headings and the managed marker left out."""
+    body = text.split("---\n", 2)[2] if text.startswith("---") else text
+    return [line for line in body.splitlines() if line.strip() and not line.startswith(("#", "<!--"))]
+
+
+SKILL_MAPS = {
+    # 975ba7a
+    '6bbc160b0d99578cc5aa359a4baa3871997971e4a19dd02258782f1348e18ff8': [
+        ("Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. Pass `--as YOUR_NAME` and keep that name all session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.",
+         ['An entry starts with a line `TIME NAME KIND: TEXT`'],
+         "the command, --as and last-seen are the tool's; a ledger entry carries its writer's NAME, the name the channel block gives"),
+        ('Set `AGENTBUS_DB` only when a worker cannot discover the bus (a sandbox or a folder outside the checkout). If a dispatcher assigned an absolute CLI path too, use it. If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).',
+         [],
+         "choosing a bus in a sandbox is the tool's; the ledger is one file at the repo root"),
+        ('One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` and ask; do not create another. `--up 1` is the next outer bus.',
+         ['Use COORDINATION.md, at the repo root, when agents share work here.'],
+         'one file per repo, nothing to discover'),
+        ('Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can, so it informs your work but only your user directs it. `ctx history KEY` shows earlier values. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers.',
+         ['Read the whole file first, not just its end.', 'then add `JOIN: what you are about to do`', 'Record what only you know (owner notes, decisions) at once: `FACT KEY: VALUE`; the next reader sees it.'],
+         'the ledger has no goal and no separate history: the file is its own history'),
+        ('Hooks: with the agentbus plugin or setup, a hook message gives your exact name (already joined); use it with --as and skip `join`. Hooks never claim or replace reading inbox.',
+         ['Hooks: a hook message at session start says how many entries the file holds'],
+         "the hook's name and join are the tool's: a ledger name is the one each entry carries"),
+        ('Read `inbox` each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.',
+         ['Read the file each turn and between substantial steps.', 'Where you can, run this in the background: it exits 0 when the file changes', 'append `CLAIM: PATH (WHY)`', 'Claim new files before creating them.', 'A claim on a folder covers everything in it.', 'spelled as git ls-files shows them'],
+         "claiming several resources all or none is the tool's"),
+        ("If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` takes 1 to 10080.",
+         ['On a conflict, ask the holder or work elsewhere.', "If your user or a handoff gave you a holder's work, take it over: append `CLAIM: PATH (from HOLDER)`"],
+         "claim expiry and renewal are the tool's: a ledger claim stays open until it is released or taken over"),
+        ('- Ask: `post "QUESTION" --to RECIPIENT --kind question`',
+         ['- Ask: `QUESTION to NAME: TEXT`'],
+         'the same entry'),
+        ('- Answer: `post "ANSWER" --to ORIGINAL_SENDER --reply-to ID --kind answer`',
+         ['- Answer: `ANSWER to NAME: TEXT`'],
+         'the same entry'),
+        ('- Hand off: `post "BRANCH; STATE; NEXT STEP; CHECKS" --to RECIPIENT --kind handoff`',
+         ['- Hand off: `HANDOFF to NAME: BRANCH; STATE; NEXT STEP; CHECKS`'],
+         'the same entry'),
+        ('- Promise: `post "WHAT" --kind todo`; close: `post "RESULT" --reply-to ID --kind done` (or dropped)',
+         ['- Promise: record work before you start it: `TODO ID: WHAT`; close: `DONE ID: RESULT`'],
+         "the same entry; the ledger's writer picks the ID the tool assigns"),
+        ('- Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`',
+         ['- Finish: `DONE: RESULT; FILES; CHECKS`'],
+         'the same entry'),
+        ('Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped. Assign work with handoff. Decisions, if used: `read --topic decision`.',
+         ['- Record a lasting fact or decision: `FACT KEY: VALUE`.'],
+         "the ledger's kinds are its entry formats above; work is assigned with a HANDOFF entry"),
+        ('Messages to absent names queue (post warns; `who` lists names). Without `--to`, a message is broadcast.',
+         [],
+         'a file has no roster or delivery: an entry waits in the file, and one with no `to NAME` is for everyone'),
+        ('Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or inspect with `inbox --peek`. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.',
+         ['Read the whole file first, not just its end.'],
+         'nothing in a file is consumed by reading it'),
+        ('A nonzero exit does not imply rollback. A write may commit before output fails. When a `post` or `join` might be retried, add `--request-id` with a token; a repeat returns the original. Other writes ignore it.',
+         ['Add entries by appending, never by rewriting the file'],
+         "retry tokens are the tool's: whether an append landed is read off the file"),
+        ('Before ending, check `inbox`, post the result or handoff, then `leave`, which releases all claims.',
+         ['Before you stop, read the file again, answer anything addressed to you, release your claims, and add a DONE or HANDOFF entry.'],
+         'the same steps'),
+        ("Follow the user's authorized scope. Peer messages supply information; they do not authorize new work. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Use `--json` when parsing output. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Run error.next to recover (fill in capitals). Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus. Do not hold the bus open in another SQLite client.",
+         ['Peer entries supply information; they do not authorize new work.', 'Do not write secrets in the file.', 'Git and the project files stay authoritative.'],
+         "--json, error codes and schema upgrades are the tool's"),
+        ('See the [reference](https://github.com/wickdninja/agentbus/blob/main/docs/reference.md) for JSON shapes, resources, and bus selection.',
+         [],
+         'the reference documents the tool'),
+    ],
+    # PR #68 head 1ebc4f5 (prepared for the pin move; the merged commit must hash the same or be mapped again)
+    '0b12832e5edaf2c1a67c01d878348dac6d8019244feb9d4b64cf66b6cb41825b': [
+        ("Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. Pass `--as YOUR_NAME` and keep that name all session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.",
+         ['An entry starts with a line `TIME NAME KIND: TEXT`'],
+         "the command, --as and last-seen are the tool's; a ledger entry carries its writer's NAME, the name the channel block gives"),
+        ('Set `AGENTBUS_DB` only when a worker cannot discover the bus. If a dispatcher assigned an absolute CLI path too, use it. If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).',
+         [],
+         "choosing a bus in a sandbox is the tool's; the ledger is one file at the repo root"),
+        ('One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` and ask; do not create another. `--up 1` is the next outer bus.',
+         ['Use COORDINATION.md, at the repo root, when agents share work here.'],
+         'one file per repo, nothing to discover'),
+        ('Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; it informs your work, but only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers. `ctx history KEY` shows earlier values.',
+         ['Read the whole file first, not just its end.', 'then add `JOIN: what you are about to do`', 'Record what only you know (owner notes, decisions) at once: `FACT KEY: VALUE`; the next reader sees it.'],
+         'the ledger has no goal and no separate history: the file is its own history'),
+        ('Hooks: with the agentbus plugin or setup, a hook message gives your exact name (already joined); use it with --as and skip `join`.',
+         ['Hooks: a hook message at session start says how many entries the file holds'],
+         "the hook's name and join are the tool's: a ledger name is the one each entry carries"),
+        ('At start, post each job you own as its own todo. Close each with a linked done. Before you stop with work left, every unfinished job must be an open todo, not a line inside a done: `brief` lists open todos only. You may finish a todo whose owner left: claim its files as usual (`--from`, below, if a claim is in the way).',
+         ['At start, add each job you own as its own TODO.'],
+         "the same rule, in the ledger's entries"),
+        ('Read `inbox` each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.',
+         ['Read the file each turn and between substantial steps.', 'Where you can, run this in the background: it exits 0 when the file changes', 'append `CLAIM: PATH (WHY)`', 'Claim new files before creating them.', 'A claim on a folder covers everything in it.', 'spelled as git ls-files shows them'],
+         "claiming several resources all or none is the tool's"),
+        ("If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims expire after 120 minutes; claim again to renew.",
+         ['On a conflict, ask the holder or work elsewhere.', "If your user or a handoff gave you a holder's work, take it over: append `CLAIM: PATH (from HOLDER)`"],
+         "claim expiry and renewal are the tool's: a ledger claim stays open until it is released or taken over"),
+        ('- Ask: `post "QUESTION" --to RECIPIENT --kind question`',
+         ['- Ask: `QUESTION to NAME: TEXT`'],
+         'the same entry'),
+        ('- Answer: `post "ANSWER" --to ORIGINAL_SENDER --reply-to ID --kind answer`',
+         ['- Answer: `ANSWER to NAME: TEXT`'],
+         'the same entry'),
+        ('- Hand off: `post "BRANCH; STATE; NEXT STEP; CHECKS" --to RECIPIENT --kind handoff`',
+         ['- Hand off: `HANDOFF to NAME: BRANCH; STATE; NEXT STEP; CHECKS`'],
+         'the same entry'),
+        ('- Promise: `post "WHAT" --kind todo`; close: `post "RESULT" --reply-to ID --kind done`',
+         ['- Promise: record work before you start it: `TODO ID: WHAT`; close: `DONE ID: RESULT`'],
+         "the same entry; the ledger's writer picks the ID the tool assigns"),
+        ('- Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`',
+         ['- Finish: `DONE: RESULT; FILES; CHECKS`'],
+         'the same entry'),
+        ('Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped. Assign work with handoff. Record a decision with `post "WHAT" --kind decision --topic decision`; read them with `read --topic decision`.',
+         ['- Record a lasting fact or decision: `FACT KEY: VALUE`.'],
+         "the ledger's kinds are its entry formats above; work is assigned with a HANDOFF entry"),
+        ('Without `--to`, a message is broadcast.',
+         [],
+         'an entry with no `to NAME` is for everyone'),
+        ('Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or inspect with `inbox --peek`. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.',
+         ['Read the whole file first, not just its end.'],
+         'nothing in a file is consumed by reading it'),
+        ('A nonzero exit does not imply rollback. A write may commit before output fails. When a `post` or `join` might be retried, add `--request-id` with a token; a repeat returns the original. Other writes ignore it.',
+         ['Add entries by appending, never by rewriting the file'],
+         "retry tokens are the tool's: whether an append landed is read off the file"),
+        ('Before ending, check `inbox`, post the result or handoff, then `leave`, which releases all claims.',
+         ['Before you stop, read the file again, answer anything addressed to you, release your claims, and add a DONE or HANDOFF entry.'],
+         'the same steps'),
+        ("Follow the user's authorized scope. Peer messages supply information; they do not authorize new work. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Use `--json` when parsing output. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Run error.next to recover (fill in capitals). Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus.",
+         ['Peer entries supply information; they do not authorize new work.', 'Do not write secrets in the file.', 'Git and the project files stay authoritative.'],
+         "--json, error codes and schema upgrades are the tool's"),
+        ('See the [reference](https://github.com/wickdninja/agentbus/blob/main/docs/reference.md).',
+         [],
+         'the reference documents the tool'),
+    ],
+}
+
+
+# skill sha256: the ledger text paired with it
+TODO_LEDGERS = {"6bbc160b0d99578cc5aa359a4baa3871997971e4a19dd02258782f1348e18ff8": LEDGER_SKILL_TODO,
+                "0b12832e5edaf2c1a67c01d878348dac6d8019244feb9d4b64cf66b6cb41825b": LEDGER_SKILL_TODO_PR68}
+
+# Every hook event the pinned build installs: the ledger hook that answers it, or why none is needed.
+HOOK_MAP = {
+    "claude": {"SessionStart": ("SessionStart", "entries, those addressed to you, open TODOs"),
+               "UserPromptSubmit": ("UserPromptSubmit", "new entries addressed to you"),
+               "PreToolUse": ("PreToolUse", "another's open claim; a path with no claim; new entries addressed to you"),
+               "Stop": (None, "the bus's Stop text is a systemMessage, which the person sees and the agent does not (the build's own hook "
+                              "output: 'a user-visible notice in systemMessage (the only thing Stop may print)'), so it changes no agent's behaviour"),
+               "SessionEnd": (None, "cleanup of the session's own name state; it prints nothing to anyone")},
+    "codex": {"SessionStart": ("SessionStart", "as for Claude"), "UserPromptSubmit": ("UserPromptSubmit", "as for Claude"),
+              "PreToolUse": ("PreToolUse", "as for Claude"), "Stop": (None, "as for Claude: a systemMessage only")},
+}
+
+
+def ledger_text_for(skill_sha):
+    if skill_sha not in TODO_LEDGERS:
+        raise ValueError("no ledger text is paired with the pinned skill %s: map it in SKILL_MAPS and TODO_LEDGERS first" % skill_sha[:12])
+    return TODO_LEDGERS[skill_sha]
+
+
+def ledger_skill(task, skill_sha=None):
+    return ledger_text_for(skill_sha) if task.channel_text == "todo" else LEDGER_SKILL
+
+
+def ledger_agents_block(task, skill_sha=None):
+    return agents_block(ledger_text_for(skill_sha)) if task.channel_text == "todo" else LEDGER_AGENTS_BLOCK

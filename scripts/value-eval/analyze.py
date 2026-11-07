@@ -27,7 +27,7 @@ def load(out):
     rows, dropped = [], []
     for line in open(os.path.join(out, "manifest.jsonl")):
         row = json.loads(line)
-        if row["infra"] or row["isolation"]:
+        if row["infra"] or row["isolation"] or row.get("excluded"):
             dropped.append(row)
             continue
         with open(os.path.join(out, row["id"], "grade.json")) as f:
@@ -42,7 +42,7 @@ def dropped_summary(dropped):
     """How many runs were dropped, by reason, without listing every id."""
     reasons = {}
     for d in dropped:
-        why = "; ".join(sorted(set(list(d["infra"].values()) + list(d["isolation"])))) or "unknown"
+        why = "; ".join(sorted(set(list(d["infra"].values()) + list(d["isolation"]) + ([d["excluded"]] if d.get("excluded") else [])))) or "unknown"
         reasons[why] = reasons.get(why, 0) + 1
     lines = ["dropped under the protocol's rule: %d" % len(dropped)]
     lines += ["  %d %s: %s" % (n, "run" if n == 1 else "runs", why) for why, n in sorted(reasons.items(), key=lambda x: -x[1])]

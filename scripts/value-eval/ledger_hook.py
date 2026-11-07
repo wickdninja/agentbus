@@ -4,8 +4,9 @@ Hooks are a harness feature, not the tool's, so the flat file gets them too, on 
 
   SessionStart  how many entries COORDINATION.md holds, the entries addressed to you, and how many TODOs are open (only when any
                 are, as the tool's own hook counts open todos)
-  PreToolUse    before an edit: a warning when someone else holds an open CLAIM on the path, and once per path a nudge when the
-                path has no claim at all
+  UserPromptSubmit  entries addressed to you that this session has not been told about (the bus's unread note at the prompt)
+  PreToolUse    before an edit: a warning when someone else holds an open CLAIM on the path, once per path a nudge when the path has
+                no claim at all, and new entries addressed to you, once each (the bus's unread note before an edit)
 
   python3 ledger_hook.py claude|codex EVENT     reads the hook payload on stdin; your name is $LEDGER_NAME
 
@@ -67,13 +68,20 @@ def _paths(text):
     return [part.split()[0].strip("`'\"") for part in head.split(",") if part.split()]
 
 
+TAKEOVER = re.compile(r"\(from ([A-Za-z0-9_.-]+)")
+
+
 def open_claims(entries):
-    """{(name, path): why} for every claim whose holder has not released it since."""
+    """{(name, path): why} for every claim whose holder has not released it since. A CLAIM that says `(from HOLDER)` takes the path
+    over: the holder's claim on it ends there."""
     held = {}
     for e in entries:
         if e["kind"] == "CLAIM":
             why = e["text"].split("(", 1)[1].rsplit(")", 1)[0] if "(" in e["text"] else ""
+            taken = TAKEOVER.search(e["text"].split("\n", 1)[0])
             for p in _paths(e["text"]):
+                if taken:
+                    held.pop((taken.group(1), p.rstrip("/") or p), None)
                 held[(e["name"], p.rstrip("/") or p)] = why
         elif e["kind"] == "RELEASE":
             for p in _paths(e["text"]):
@@ -126,6 +134,21 @@ def nudged(session, path):
     return True
 
 
+def _state(session, kind):
+    return os.path.join(tempfile.gettempdir(), "ledger-hook-%s.%s" % (re.sub(r"[^A-Za-z0-9_-]", "_", str(session))[:80], kind))
+
+
+def new_for(session, entries, name):
+    """How many entries addressed to name this session has not been told about; afterwards they count as told. The file only grows,
+    so a count is enough."""
+    mine = sum(1 for e in entries if name and e["to"] == name)
+    path = _state(session, "told")
+    told = int(open(path).read() or 0) if os.path.exists(path) else 0
+    with open(path, "w") as f:
+        f.write(str(mine))
+    return max(0, mine - told)
+
+
 def context(event, payload, name):
     """The text this event shows the agent, or None."""
     cwd = payload.get("cwd") or os.getcwd()
@@ -141,15 +164,22 @@ def context(event, payload, name):
         for e in mine[-MAX_SHOWN:]:
             lines.append("  %s %s %s to %s: %s" % (e["time"], e["name"], e["kind"], e["to"], e["text"].split("\n", 1)[0][:200]))
         lines.append("Read the whole file with: cat %s" % LEDGER)
+        new_for(payload.get("session_id"), entries, name)   # said here: the prompt and edit notes do not say these again
         return "\n".join(lines)
+    if event == "UserPromptSubmit" and root is not None:
+        n = new_for(payload.get("session_id"), parse(open(os.path.join(root, LEDGER), errors="replace").read()), name)
+        if n:
+            return "ledger: %d %s addressed to %s since you last read. Read them with: cat %s" % (n, "entry" if n == 1 else "entries", name, LEDGER)
+        return None
     if event == "PreToolUse" and root is not None:
         entries = parse(open(os.path.join(root, LEDGER), errors="replace").read())
         held = open_claims(entries)
-        notes = []
+        notes, project = [], False
         for raw in edit_paths(payload):
             rel = relative(raw, root, cwd)
             if rel is None or os.path.basename(rel) == LEDGER:
                 continue
+            project = True
             others = [(n, p, why) for (n, p), why in held.items() if n != name and covers(p, rel)]
             if others:
                 n, p, why = others[0]
@@ -157,6 +187,9 @@ def context(event, payload, name):
                              % (rel, n, LEDGER, " (%s)" % why if why else ""))
             elif not any(n == name and covers(p, rel) for (n, p) in held) and nudged(payload.get("session_id"), rel):
                 notes.append("ledger: %s has no CLAIM in %s. If you are editing it, append: CLAIM: %s (WHY)" % (rel, LEDGER, rel))
+        n = new_for(payload.get("session_id"), entries, name) if project else 0
+        if n:
+            notes.append("ledger: %d new %s addressed to %s. Read with: cat %s" % (n, "entry" if n == 1 else "entries", name, LEDGER))
         return "\n".join(notes) or None
     return None
 

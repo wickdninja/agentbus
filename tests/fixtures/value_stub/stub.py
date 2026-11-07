@@ -7,7 +7,7 @@ env-dump (writes its environment's names to VALUE_STUB_ENV_OUT and plays good), 
 conflict (each role writes its own VERSION), leak-token, auth-refresh, auth-report (Codex sign-in faults and a report on the copy), codex-hooks, codex-skill, codex-state
 (a planted hook or skill, and the state Codex makes for itself), usage-limit (a plan limit, after VALUE_STUB_LIMIT_AFTER tool calls), auth-expired (the sign-in expired: in the stream, or with VALUE_STUB_AUTH_STDERR=1 on stderr only), no-hooks, hook-fail (hook outcomes), settings-report (hook install), break-link (bob replaces his ledger link), settings-write (touches the file VALUE_STUB_REAL_SETTINGS names), bus-in-none (makes a .agentbus folder),
 live-steal and live-wait (livehold: alice claims src/rates.py and keeps working; bob takes her claim while she is alive, or waits for her release),
-say-only (abandoned, finished: bob writes OPEN.md and finishes nothing).
+say-only (abandoned, finished: bob writes OPEN.md and finishes nothing), give-up (alice stops before her first item is in).
 """
 import json
 import os
@@ -32,6 +32,8 @@ def emit(obj):
 
 
 def init():
+    if os.environ.get("VALUE_STUB_SLOW_INIT") == role:   # this agent says nothing for a while, so a halt can land first
+        time.sleep(3)
     if harness != "claude":
         emit({"type": "thread.started"})
         return
@@ -161,7 +163,11 @@ if mode == "break-link" and role == "bob":
 if mode == "usage-limit" and os.environ.get("VALUE_STUB_LIMIT_ROLE", role) == role:
     for _ in range(int(os.environ.get("VALUE_STUB_LIMIT_AFTER", "0"))):
         bash("true")
-    emit({"type": "assistant", "message": {"id": "lim", "content": [{"type": "text", "text": "You've hit your weekly limit \u00b7 resets Nov 8 at 5am"}]}})
+    if os.environ.get("VALUE_STUB_LIMIT_STDERR"):   # the limit only on stderr, after the tool calls
+        sys.stderr.write("You've hit your weekly limit \u00b7 resets Nov 8 at 5am\n")
+        finish()
+        sys.exit(0)
+    emit({"type": "assistant", "message": {"id": "lim", "model": "<synthetic>", "content": [{"type": "text", "text": "You've hit your weekly limit \u00b7 resets Nov 8 at 5am"}]}})
     emit({"type": "result", "subtype": "success", "is_error": True, "result": "You've hit your weekly limit"})
     sys.exit(1)
 if mode == "auth-expired" and os.environ.get("VALUE_STUB_LIMIT_ROLE", role) == role:
@@ -221,9 +227,14 @@ def handover():
                 bash("printf '\\n%%s alice TODO alice-%d: %s\\n' %s >> COORDINATION.md" % (i, mine[r], stamp))
             elif condition == "agentbus":
                 bash("agentbus --as alice join >/dev/null; agentbus --as alice post '%s' --kind todo" % mine[r])
+        if mode == "give-up":   # alice stops before her first item is in: the kill never fires
+            return
         for i, r in enumerate(tasks.ITEM_ROLES, 1):
-            if os.path.exists("tools/spec.py"):
-                bash("python3 tools/spec.py %s" % mine[r])
+            spec = "%s/%s.md" % (tasks.SPEC_DIR, mine[r])
+            waited = time.time()
+            while not os.path.exists(spec) and time.time() - waited < 30:   # the runner hands her each spec once the one before is in
+                time.sleep(0.2)
+            bash("cat %s" % spec)
             for rel, text in tasks.abandoned_item_reference(seed, r).items():
                 write(rel, text)
             if task_name == "abandoned":
