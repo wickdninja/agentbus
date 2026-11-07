@@ -4071,15 +4071,38 @@ def read_cursor(a, text, flag):
     return int(m.group(3))
 
 
+class Positional(str):
+    """A word of stored or typed text in a command's positional place (a fact key, a path): next_command puts a `--` before it
+    when it starts with a dash, since the parser would read it as a flag."""
+
+
+_VALUE_FLAGS = ("--as", "--up", "--to", "--from")
+
+
 def next_command(a, *words, as_=True):
     """The command line that continues a cut listing, to paste as it is: `agentbus [--as NAME] [--up N]` and
-    words (a word that needs it is shell-quoted). as_=False leaves --as out, for a command that needs no name."""
+    words (a word that needs it is shell-quoted). as_=False leaves --as out, for a command that needs no name. A name given
+    to --as, --to or --from that starts with a dash is written --as=NAME, and Positional words that start with a dash go after
+    a `--`, so the command parses as printed."""
     parts = ["agentbus"]
     if as_ and getattr(a, "as_", None):
         parts += ["--as", a.as_]
     if getattr(a, "up", 0):
         parts += ["--up", str(a.up)]
-    return " ".join(shlex.quote(str(p)) for p in parts + list(words))
+    words, joined, i = list(words), [], 0
+    for seq in (parts, words):
+        i = 0
+        while i < len(seq):
+            w = seq[i]
+            if str(w) in _VALUE_FLAGS and not isinstance(w, Positional) and i + 1 < len(seq) and str(seq[i + 1]).startswith("-"):
+                joined.append(f"{w}={seq[i + 1]}")
+                i += 2
+            else:
+                joined.append(w)
+                i += 1
+    if any(isinstance(w, Positional) and w.startswith("-") for w in joined):
+        joined = [w for w in joined if not isinstance(w, Positional)] + ["--"] + [w for w in joined if isinstance(w, Positional)]
+    return " ".join(shlex.quote(str(p)) for p in joined)
 
 
 def page_size(a, default=LISTING_LIMIT):
@@ -4633,7 +4656,7 @@ def cmd_ctx(con, a):
         rows = list(reversed(rows))
         nxt = make_cursor(a, rows[0]["id"] if rows else before) if more else None
         out(a, rows, lambda r: INDENT + col0(f"{human_time(r['updated_at'])} {r['updated_by']}: {r['value']}"), more, cursor=nxt,
-            next_cmd=next_command(a, "ctx", "history", a.key, "--before", nxt, "--limit", page_size(a)) if nxt else None)
+            next_cmd=next_command(a, "ctx", "history", Positional(a.key), "--before", nxt, "--limit", page_size(a)) if nxt else None)
 
 
 # The shared goal: one fact every agent sees first, kept under the context key "goal" so it has the
@@ -4774,7 +4797,7 @@ def take_target(con, name, res, t):
 
 def from_command(a, name, targets, holders):
     """The claim --from command that takes targets from holders, under the taker's own name."""
-    return next_command(a, "--as", name, "claim", *targets, *[w for h in holders for w in ("--from", h)], as_=False)
+    return next_command(a, "--as", name, "claim", *map(Positional, targets), *[w for h in holders for w in ("--from", h)], as_=False)
 
 
 def _named(froms):
@@ -5009,7 +5032,7 @@ def cmd_claim(con, a):
     if any(not h.strip() for h in froms):
         die("--from needs a name: the holder whose claims to take, for example --from alice", "bad_input", field="from")
     if name in froms:
-        renew = next_command(a, "--as", name, "claim", *wanted, as_=False)
+        renew = next_command(a, "--as", name, "claim", *map(Positional, wanted), as_=False)
         die(f"--from {name} is you: you cannot take from yourself. To renew your own claim: {renew}", "bad_input", next=renew, field="from")
     if len(froms) > MAX_CLAIM_BATCH:
         die(f"claim takes at most {MAX_CLAIM_BATCH} --from names at once (got {len(froms)})", "bad_input", field="from")
@@ -14290,29 +14313,31 @@ def _brief_expired_claims(con, limit):
     return [dict(r) for r in rows], more
 
 
-def _brief_next(a, me_name, joined, unread_total, questions, todos):
-    """The one command to run next, addressed to the bus this brief read (--up N is kept: an inbox run on the
-    inner bus would read and mark read messages the brief never showed). Unread first, then a question to answer, then the
-    oldest open todo (read it whole; _brief_close says how to close it), and only then the claim line."""
+def _brief_next(con, a, me_name, joined, unread_total):
+    """(the one command to run next, the id of the todo it reads or None), addressed to the bus this brief read (--up N is
+    kept: an inbox run on the inner bus would read and mark read messages the brief never showed). Unread first, then a
+    question to answer, then the oldest open todo (read it whole; _brief_close says how to close it), and only then the claim
+    line. The choice is made from all open work, not from the rows --limit lets brief show: --limit 0 changes what is listed,
+    never what to do next."""
     def cmd(*words):
         return next_command(a, "--as", me_name or "NAME", *words, as_=False)
     if not me_name or not joined:
-        return cmd("join")
+        return cmd("join"), None
     if unread_total:
-        return cmd("inbox")
-    for q in questions:
-        if q["sender"] != me_name:
-            return cmd("post", "ANSWER", "--to", q["sender"], "--reply-to", q["id"], "--kind", "answer")
-    if todos:
-        return cmd("read", "--id", todos[0]["id"])
-    return cmd("claim", "PATH", "--purpose", "WHY")
+        return cmd("inbox"), None
+    q = con.execute(f"SELECT q.id, q.sender FROM messages q WHERE {open_question_where('q.')} AND (q.recipient=? OR q.recipient='*') "
+                    "AND q.sender<>? ORDER BY q.id LIMIT 1", (me_name, me_name)).fetchone()
+    if q:
+        return cmd("post", "ANSWER", "--to", q["sender"], "--reply-to", q["id"], "--kind", "answer"), None
+    t = con.execute(f"SELECT m.id FROM messages m WHERE {open_todo_where('m.')} ORDER BY m.id LIMIT 1").fetchone()
+    if t:
+        return cmd("read", "--id", t["id"]), t["id"]
+    return cmd("claim", "PATH", "--purpose", "WHY"), None
 
 
-def _brief_close(a, me_name, todos):
-    """How to close the oldest open todo (the one next: points at), or None when none is open."""
-    if not todos:
-        return None
-    return next_command(a, "--as", me_name or "NAME", "post", "RESULT", "--reply-to", todos[0]["id"], "--kind", "done", as_=False)
+def _brief_close(a, me_name, todo_id):
+    """How to close the todo next: points at."""
+    return next_command(a, "--as", me_name or "NAME", "post", "RESULT", "--reply-to", todo_id, "--kind", "done", as_=False)
 
 
 def cmd_brief(con, a):
@@ -14371,20 +14396,25 @@ def cmd_brief(con, a):
         where += " AND updated_at>=?"
         params.append(since)
     fact_rows, facts_more = capped(
-        con, f"SELECT {cut('key', BRIEF_NAME_MAX)} AS key, substr(value, 1, {BRIEF_BODY_JSON}) AS value, "
+        con, f"SELECT {cut('key', BRIEF_NAME_MAX)} AS key, (CASE WHEN length(key) <= {RESOURCE_MAX} THEN key END) AS full_key, "
+             f"substr(value, 1, {BRIEF_BODY_JSON}) AS value, "
              f"substr(value, {BRIEF_BODY_JSON + 1}, 1) <> '' AS value_truncated, {cut('updated_by', BRIEF_NAME_MAX)} AS updated_by, updated_at "
              f"FROM context WHERE {where} ORDER BY updated_at DESC, key", params, limit)
 
+    # The row shows a key cut at BRIEF_NAME_MAX; the command that reads the fact needs the real one (kept out of the JSON, and
+    # absent for a key too long to put in a command, where the marker lists the facts instead).
+    fact_keys = [r["full_key"] for r in fact_rows]
+    next_cmd, next_todo = _brief_next(con, a, me_name, joined, unread_total)
     result = {"bus": a._db, "me": {"name": me_name, "joined": joined} if me_name else None, "goal": goal,
               "agents": {"items": agents}, "questions": {"items": questions},
               "todos": {"items": todos},
               "expired_claims": {"items": expired, "next": next_command(a, "--as", me_name or "NAME", "claim", "PATH", "--purpose", "WHY", as_=False) if expired or expired_more else None},
               "unread": {"total": unread_total, "items": unread},
               "pending_others": {"items": others, "next": next_command(a, "read", "--id", others[0]["id"], as_=False) if others else None},
-              "facts": {"since": since, "items": _brief_rows(fact_rows)},
+              "facts": {"since": since, "items": [{k: v for k, v in row.items() if k != "full_key"} for row in _brief_rows(fact_rows)]},
               "omitted": {"agents": agents_more, "questions": questions_more, "todos": todos_more, "expired_claims": expired_more,
                           "unread": unread_more, "pending_others": others_more, "facts": facts_more},
-              "next": _brief_next(a, me_name, joined, unread_total, questions, todos)}
+              "next": next_cmd}
     warnings = bus_env_warnings(a.up)
     if warnings:
         result["warnings"] = warnings
@@ -14393,7 +14423,7 @@ def cmd_brief(con, a):
     if a.json:
         print_json(result)
     else:
-        _brief_show(a, result, limit)
+        _brief_show(a, result, limit, next_todo, fact_keys)
 
 
 def _brief_line(text, n):
@@ -14420,7 +14450,7 @@ def _brief_ago(ts, now_dt):
     return "now" if age == "now" else "an unknown time ago" if age == "?" else age + " ago"
 
 
-def _brief_show(a, r, limit):
+def _brief_show(a, r, limit, next_todo=None, fact_keys=()):
     more_cmd = next_command(a, 'brief', '--limit', max(limit * 4, 20))
     more_hint = f"({more_cmd})"
     now_dt = clock()
@@ -14520,17 +14550,18 @@ def _brief_show(a, r, limit):
             show("facts changed since your last read ({}):", len(f["items"]) + omitted["facts"])
         else:
             show("facts ({}):", len(f["items"]) + omitted["facts"])
-        for x in f["items"]:
+        for x, full in zip(f["items"], fact_keys):
+            whole = ("ctx", "get", Positional(full)) if full is not None else ("ctx", "get")
             show("{} = {} ({})", _brief_line(x["key"], 40),
-                 _brief_cut(a, x["value"], BRIEF_BODY_TEXT, x["value_truncated"], "ctx", "get", x["key"]), _brief_line(x["updated_by"], 40), row=True)
+                 _brief_cut(a, x["value"], BRIEF_BODY_TEXT, x["value_truncated"], *whole), _brief_line(x["updated_by"], 40), row=True)
         more(omitted["facts"])
     elif f["since"]:
         show("facts: none changed")
     else:
         show("facts: none")
     show("next: {}", r["next"])
-    if td and r["next"].endswith(f" read --id {td[0]['id']}"):
-        show("when it is done: {}", _brief_close(a, (r["me"] or {}).get("name"), td))
+    if next_todo:
+        show("when it is done: {}", _brief_close(a, (r["me"] or {}).get("name"), next_todo))
 
 
 def register_brief(sub):

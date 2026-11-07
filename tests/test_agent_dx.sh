@@ -51,10 +51,10 @@ def join(db, *names):
 
 
 def post(db, who, body, to=None, kind="note", reply=None, topic=None):
-    args = ["--as", who, "--json", "post", body, "--kind", kind]
+    args = ["--as=" + who, "--json", "post", body, "--kind", kind]
     for flag, v in (("--to", to), ("--reply-to", reply), ("--topic", topic)):
         if v is not None:
-            args += [flag, str(v)]
+            args += ["%s=%s" % (flag, v)]
     return json.loads(ok(db, *args))["id"]
 
 
@@ -230,5 +230,103 @@ con.close()
 check(o == {"alerts": 0, "questions": 1, "todos": 0, "window": 3}, "watch_open over a window of 3 newest: %s" % o)
 check(jok(db, "watch")["open"] == {"alerts": 0, "questions": 2, "todos": 0, "window": None}, "a bus under the window counts everything")
 print("PASS: watch counts the newest SCAN messages on a huge bus and reports the window")
+# ---- every generated command runs, and gives back the whole content ----
+# Bugs they catch (adversarial review of PR 68): a cut fact's marker named the display key, cut to 200 characters with "...", so it
+# read no fact; a key starting with "-" made `ctx get --release-check`, a flag (exit 2); at --limit 0 next: still said claim while a
+# todo was open, since the todo list it chose from was empty. A name or a path starting with "-" had the same flag bug in other
+# generated commands. Each command is run on a bus and must exit 0 with the content it promised.
+import re, shlex
+
+
+def go(db, command, *more):
+    """Run a command brief or an error printed (its leading `agentbus` is the tool under test)."""
+    words = shlex.split(command)
+    check(words and words[0] == "agentbus", "not an agentbus command: %r" % command)
+    return run(db, *words[1:], *more)
+
+
+def marker(text, needle):
+    row = line_with(text, needle)
+    m = re.search(r"\[cut: ([^\]]+)\]", row)
+    check(m, "no cut marker on the row with %r: %r" % (needle, row))
+    return m.group(1)
+
+
+db = bus("exec")
+join(db, "alice", "bob")
+VALUE = "Release blocked. " * 15
+for key in ("plain", "k" * 201, "k" * 1500, "--release-check", "-x"):
+    args = ["--as", "alice", "ctx", "set", "--", key, VALUE] if key.startswith("-") else ["--as", "alice", "ctx", "set", key, VALUE]
+    ok(db, *args)
+text = ok(db, "--as", "bob", "brief", "--limit", "-1")
+for needle, full in (("plain = ", "plain"), ("--release-check = ", "--release-check"), ("-x = ", "-x")):
+    cmd = marker(text, needle)
+    p = go(db, cmd)
+    check(p.returncode == 0 and VALUE.strip() in " ".join(p.stdout.split()), "the cut marker for key %r (%s) did not read the whole fact: rc %s %r %r" % (full[:20], cmd[:80], p.returncode, p.stdout[:120], p.stderr[:200]))
+# a key cut in the row (over 200 characters) still reads the fact by its real key; one too long to print in a command lists the facts
+long_rows = [l for l in lines(text) if l.lstrip().startswith("k" * 20)]
+check(len(long_rows) == 2, "fixture: two long-key rows expected, got %d" % len(long_rows))
+named = 0
+for row in long_rows:
+    cmd = re.search(r"\[cut: ([^\]]+)\]", row).group(1)
+    p = go(db, cmd)
+    check(p.returncode == 0, "the marker on a long-key row does not run: rc %s %r" % (p.returncode, p.stderr[:200]))
+    if "k" * 201 in cmd:
+        named += 1
+        check(VALUE.strip() in " ".join(p.stdout.split()), "a 201-character key's marker did not read the whole fact: %r" % p.stdout[:120])
+check(named == 1, "the 201-character key's marker must carry the real key, and the 1500-character one must not")
+
+# read --id, the todo next line and the close line run and carry the whole text
+db = bus("exec2")
+join(db, "alice", "bob")
+t = post(db, "alice", "Validate src/auth/." + "\n    " * 40 + "Also validate billing.", to="bob", kind="todo")
+text = ok(db, "--as", "alice", "brief")
+p = go(db, marker(text, "Validate src/auth/."))
+check(p.returncode == 0 and "Also validate billing." in p.stdout, "the todo's read --id did not return the whole body: rc %s %r" % (p.returncode, p.stdout[:100]))
+nxt = line_with(text, "next: ")[len("next: "):]
+p = go(db, nxt)
+check(p.returncode == 0 and "Also validate billing." in p.stdout, "next: did not read the todo whole: %r" % p.stdout[:100])
+closer = line_with(text, "when it is done: ")[len("when it is done: "):]
+check(go(db, closer).returncode == 0, "the close line does not run: %r" % closer)
+check(jok(db, "--as", "alice", "brief")["todos"]["items"] == [], "running the close line did not close the todo")
+
+# --limit 0 still points at the oldest open work, shown or not
+db = bus("exec3")
+join(db, "alice", "bob")
+t1 = post(db, "alice", "first job", kind="todo")
+post(db, "alice", "second job", kind="todo")
+b = jok(db, "--as", "alice", "brief", "--limit", "0")
+check(b["next"] == "agentbus --as alice read --id %d" % t1, "--limit 0 JSON next with open todos: %s" % b["next"])
+text = ok(db, "--as", "alice", "brief", "--limit", "0")
+check("next: agentbus --as alice read --id %d" % t1 in lines(text), "--limit 0 text next: %r" % text)
+check("post RESULT --reply-to %d --kind done" % t1 in text, "--limit 0 has no close line: %r" % text)
+check(go(db, line_with(text, "next: ")[len("next: "):]).returncode == 0, "--limit 0 next does not run")
+q = post(db, "bob", "which one?", to="alice", kind="question")
+ok(db, "--as", "alice", "inbox")
+b = jok(db, "--as", "alice", "brief", "--limit", "0")
+check(b["next"].startswith("agentbus --as alice post ANSWER --to bob --reply-to %d" % q), "--limit 0 skipped the open question: %s" % b["next"])
+check(go(db, b["next"].replace("ANSWER", "because")).returncode == 0, "the answer command does not run")
+
+# a name that starts with "-" and a path that does: the commands brief and the claim refusal print still parse
+db = bus("dash")
+for n in ("-me", "-peer", "w"):
+    ok(db, "--as=%s" % n, "join")
+post(db, "-peer", "dash question", to="-me", kind="question")
+post(db, "-me", "a job", kind="todo")
+ok(db, "--as=-me", "inbox")
+b = jok(db, "--as=-me", "brief")
+check(b["next"] == "agentbus --as=-me post ANSWER --to=-peer --reply-to %d --kind answer" % 1, "dash names in next: %s" % b["next"])
+p = go(db, b["next"].replace("ANSWER", "ok"))
+check(p.returncode == 0, "the answer command for a dash name does not run: rc %s %s" % (p.returncode, p.stderr))
+b = jok(db, "--as=-me", "brief")
+check(b["next"] == "agentbus --as=-me read --id 2", "dash name, todo next: %s" % b["next"])
+check(go(db, b["next"]).returncode == 0, "next for a dash name does not run")
+ok(db, "--as=-peer", "claim", "--", "-notes.txt", "--purpose", "x")
+refused = run(db, "--as", "w", "--json", "claim", "--", "-notes.txt")
+err = json.loads(refused.stderr)["error"]
+check(refused.returncode == 1 and err["next"], "fixture: the claim was not refused: %s" % refused.stderr)
+took = go(db, err["next"])
+check(took.returncode == 0, "the claim refusal's own command does not run: %s -> rc %s %s" % (err["next"], took.returncode, took.stderr.strip()))
+print("PASS: every command brief and a claim refusal print runs, for cut facts, long and dash keys, dash names and paths, and at --limit 0")
 PY
 all_passed "All agent DX tests passed"

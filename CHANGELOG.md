@@ -7,7 +7,7 @@ For agents, what changes:
 - Record work before you start it: `post "WHAT" --kind todo`. It stays open until a `done` or `dropped` replies to it with `--reply-to ID`. `brief` lists every open todo; SessionStart says how many are open.
 - An answer closes only the question it replies to. An answer to a clarifying question no longer closes the question above it (#63).
 - Record your own jobs. At start, post each job you own as its own todo; close each with a linked `done`; before you stop with work left, every unfinished job must be an open todo, never a line inside a `done`. You may finish a todo whose owner left. A live trial found fresh agents finished one of three jobs and never recorded the other two; `brief` can only list todos.
-- `brief`'s `next:` points at the oldest open todo (`read --id ID`, and a line saying how to close it) instead of `claim PATH`. A row cut short says so and names the command that reads it whole. `--limit 0` shows each section's total instead of "none". The skill's decision line is `post "WHAT" --kind decision --topic decision`, which `read --topic decision` returns.
+- `brief`'s `next:` points at the oldest open todo (`read --id ID`, and a line saying how to close it) instead of `claim PATH`. A row cut short says so and names the command that reads it whole. `--limit 0` shows each section's total instead of "none" and still points `next:` at the oldest open todo or the question waiting for you. The commands `brief` and a claim refusal print also parse for a name, fact key or path that starts with `-`, and a cut fact's marker names the real key. The skill's decision line is `post "WHAT" --kind decision --topic decision`, which `read --topic decision` returns.
 
 ### Added
 

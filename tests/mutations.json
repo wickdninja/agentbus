@@ -5627,7 +5627,7 @@
   {
     "name": "brief next ignores open todos",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ if\\ todos:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ todos\\[0\\]\\[\"id\"\\]\\)\\\n",
+    "find": "\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ ORDER\\ BY\\ m\\.id\\ LIMIT\\ 1\"\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
     "replace": "",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
@@ -5636,8 +5636,8 @@
   {
     "name": "brief next points at the newest open todo",
     "file": "bin/agentbus",
-    "find": "if\\ todos:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ todos\\[0\\]\\[\"id\"\\]\\)",
-    "replace": "if todos:\n        return cmd(\"read\", \"--id\", todos[-1][\"id\"])",
+    "find": "\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ ORDER\\ BY\\ m\\.id\\ LIMIT\\ 1\"\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
+    "replace": "    t = con.execute(f\"SELECT m.id FROM messages m WHERE {open_todo_where('m.')} ORDER BY m.id DESC LIMIT 1\").fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "next with open todos"
@@ -5645,8 +5645,8 @@
   {
     "name": "brief next names the todo before an open question",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ for\\ q\\ in\\ questions:\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ q\\[\"sender\"\\]\\ !=\\ me_name:",
-    "replace": "    if todos:\n        return cmd(\"read\", \"--id\", todos[0][\"id\"])\n    for q in questions:\n        if q[\"sender\"] != me_name:",
+    "find": "\\ \\ \\ \\ q\\ =\\ con\\.execute\\(f\"SELECT\\ q\\.id,\\ q\\.sender\\ FROM\\ messages\\ q",
+    "replace": "    t = con.execute(f\"SELECT m.id FROM messages m WHERE {open_todo_where('m.')} ORDER BY m.id LIMIT 1\").fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n    q = con.execute(f\"SELECT q.id, q.sender FROM messages q",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "an open question to me must come before a todo"
@@ -5654,8 +5654,8 @@
   {
     "name": "brief never says how to close the oldest todo",
     "file": "bin/agentbus",
-    "find": "if\\ td\\ and\\ r\\[\"next\"\\]\\.endswith\\(",
-    "replace": "if False and td and r[\"next\"].endswith(",
+    "find": "\\ \\ \\ \\ if\\ next_todo:\\\n\\ \\ \\ \\ \\ \\ \\ \\ show\\(\"when\\ it\\ is\\ done:\\ \\{\\}\"",
+    "replace": "    if False:\n        show(\"when it is done: {}\"",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "no line says how to close the oldest todo"
@@ -5663,8 +5663,8 @@
   {
     "name": "brief shows a close line when next is not the todo",
     "file": "bin/agentbus",
-    "find": "if\\ td\\ and\\ r\\[\"next\"\\]\\.endswith\\(f\"\\ read\\ \\-\\-id\\ \\{td\\[0\\]\\['id'\\]\\}\"\\):",
-    "replace": "if td:",
+    "find": "\\ \\ \\ \\ if\\ next_todo:\\\n\\ \\ \\ \\ \\ \\ \\ \\ show\\(\"when\\ it\\ is\\ done:\\ \\{\\}\",\\ _brief_close\\(a,\\ \\(r\\[\"me\"\\]\\ or\\ \\{\\}\\)\\.get\\(\"name\"\\),\\ next_todo\\)\\)",
+    "replace": "    if td:\n        show(\"when it is done: {}\", _brief_close(a, (r[\"me\"] or {}).get(\"name\"), td[0][\"id\"]))",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "a close line shows although next: is not the todo"
@@ -5726,7 +5726,7 @@
   {
     "name": "brief fact row drops its cut marker",
     "file": "bin/agentbus",
-    "find": "_brief_cut\\(a,\\ x\\[\"value\"\\],\\ BRIEF_BODY_TEXT,\\ x\\[\"value_truncated\"\\],\\ \"ctx\",\\ \"get\",\\ x\\[\"key\"\\]\\)",
+    "find": "_brief_cut\\(a,\\ x\\[\"value\"\\],\\ BRIEF_BODY_TEXT,\\ x\\[\"value_truncated\"\\],\\ \\*whole\\)",
     "replace": "_brief_line(x[\"value\"], BRIEF_BODY_TEXT)",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
@@ -5839,5 +5839,68 @@
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "narrow watch header"
+  },
+  {
+    "name": "brief cut fact marker uses the cut display key",
+    "file": "bin/agentbus",
+    "find": "\\(\"ctx\",\\ \"get\",\\ Positional\\(full\\)\\)\\ if\\ full\\ is\\ not\\ None\\ else\\ \\(\"ctx\",\\ \"get\"\\)",
+    "replace": "(\"ctx\", \"get\", Positional(x[\"key\"]))",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a 201-character key's marker did not read the whole fact"
+  },
+  {
+    "name": "brief cut fact marker names a key too long for a command",
+    "file": "bin/agentbus",
+    "find": "\\(CASE\\ WHEN\\ length\\(key\\)\\ <=\\ \\{RESOURCE_MAX\\}\\ THEN\\ key\\ END\\)\\ AS\\ full_key",
+    "replace": "key AS full_key",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the 201-character key's marker must carry the real key"
+  },
+  {
+    "name": "generated commands put a dash key where the parser reads a flag",
+    "file": "bin/agentbus",
+    "find": "if\\ any\\(isinstance\\(w,\\ Positional\\)\\ and\\ w\\.startswith\\(\"\\-\"\\)\\ for\\ w\\ in\\ joined\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "did not read the whole fact"
+  },
+  {
+    "name": "generated commands write a dash name as a separate argument",
+    "file": "bin/agentbus",
+    "find": "if\\ str\\(w\\)\\ in\\ _VALUE_FLAGS\\ and\\ not\\ isinstance\\(w,\\ Positional\\)\\ and\\ i\\ \\+\\ 1\\ <\\ len\\(seq\\)\\ and\\ str\\(seq\\[i\\ \\+\\ 1\\]\\)\\.startswith\\(\"\\-\"\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "dash names in next"
+  },
+  {
+    "name": "claim refusal command leaves a dash path as a flag",
+    "file": "bin/agentbus",
+    "find": "\\*map\\(Positional,\\ targets\\)",
+    "replace": "*targets",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the claim refusal's own command does not run"
+  },
+  {
+    "name": "brief --limit 0 next ignores the oldest open todo",
+    "file": "bin/agentbus",
+    "find": "t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ ORDER\\ BY\\ m\\.id\\ LIMIT\\ 1\"\\)\\.fetchone\\(\\)",
+    "replace": "t = None",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "--limit 0 JSON next with open todos"
+  },
+  {
+    "name": "brief --limit 0 next ignores an open question",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ q:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"post\",\\ \"ANSWER\"",
+    "replace": "    if False:\n        return cmd(\"post\", \"ANSWER\"",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "--limit 0 skipped the open question"
   }
 ]
