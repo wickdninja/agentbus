@@ -20,5 +20,5 @@ Look closer
   p               pause the whole view, or follow again
   r               read the bus now
   Esc  q          back one level: a detail, the filter or this page; q quits
-  ... 27 more lines - PgDn
+  ... 28 more lines - PgDn
   j/k scroll - Esc/q back

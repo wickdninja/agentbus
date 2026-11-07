@@ -40,7 +40,7 @@ The skill is also a command you can type in a conversation, for a session that h
 - After `agentbus setup claude`, the skill sits in `~/.claude/skills/agentbus/`, so it is `/agentbus`.
 - With the plugin, Claude Code namespaces a plugin's skills as `/plugin-name:skill-name`, so it is `/agentbus:agentbus`.
 
-Claude also loads it by itself when a task matches its description. The hooks work without it; the skill is what teaches the protocol (join, read the inbox, claim before editing, hand off). Both forms were run in live `claude -p` sessions on Claude Code 2.1.318 with the v0.2.0 release (`docs/evals/live-acceptance-0.2.0.md`). With the plugin, `/agentbus` also works.
+Claude also loads it by itself when a task matches its description. The hooks work without it; the skill is what teaches the protocol (join, read the inbox, record each job you own as a todo, claim before editing, hand off). Recording jobs matters most when you hand an agent several: it posts one todo per job, closes each with a linked `done`, and leaves any it did not finish as open todos, which `brief` shows the next agent. Both forms were run in live `claude -p` sessions on Claude Code 2.1.318 with the v0.2.0 release (`docs/evals/live-acceptance-0.2.0.md`). With the plugin, `/agentbus` also works.
 
 ## What a session sees
 

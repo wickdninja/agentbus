@@ -27,3 +27,9 @@ s|60|Delivery can repeat; dedupe by message ID.
 s|120|If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`
 s|130|don't edit until the holder answers or releases
 s|140|Record what only you know (owner notes, decisions) at once
+s|60|At start, post each job you own as its own todo.
+s|110|Close each with a linked done.
+s|140|Before you stop with work left, every unfinished job must be an open todo, not a line inside a done
+s|130|You may finish a todo whose owner left: claim its files as usual (`--from`, below, if a claim is in the way).
+s|60|A write may commit before output fails.
+s|80|Git, project files, and the issue tracker remain authoritative.

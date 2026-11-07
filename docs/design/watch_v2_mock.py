@@ -124,18 +124,29 @@ CONTEXT = [  # newest first
     {"key": "baseline_sha", "value": "abc123", "updated_by": "codex", "updated_at": at("16:37")},
     {"key": "runtime", "value": "python 3.9+", "updated_by": "claude", "updated_at": at("16:30")},
 ]
+def open_counts(msgs, window=None):
+    """What watch_open reads from the bus, by brief's rules: an alert is open until any message replies to it, a question until
+    an answer replies to it, a todo until a done or dropped does."""
+    def closed(kinds):
+        return {m["reply_to"] for m in msgs if m["reply_to"] and (kinds is None or m["kind"] in kinds)}
+    count = lambda kind, kinds: sum(1 for m in msgs if m["kind"] == kind and m["id"] not in closed(kinds))
+    return {"alerts": count("alert", None), "questions": count("question", ("answer",)),
+            "todos": count("todo", ("done", "dropped")), "window": window}
+
+
 SAMPLE = {
     "agents": AGENTS, "claims": CLAIMS, "goal": GOAL, "context": CONTEXT, "messages": SAMPLE_MSGS,
     "unread": {"claude": 1, "codex": 2, "tests": 0},  # from cursors, read without writing (addendum R6)
-    "counts": {"agents": 3, "messages": 9, "claims": 2},
+    "counts": {"agents": 3, "messages": 9, "claims": 2}, "open": open_counts(SAMPLE_MSGS),
 }
 EMPTY = {"agents": [], "claims": [], "goal": None, "context": [], "messages": [], "unread": {},
-         "counts": {"agents": 0, "messages": 0, "claims": 0}}
+         "counts": {"agents": 0, "messages": 0, "claims": 0},
+         "open": {"alerts": 0, "questions": 0, "todos": 0, "window": None}}
 BIG = {
     "agents": [dict(a, last_seen=s) for a, s in zip(AGENTS, (at("16:58"), at("16:58"), at("16:55")))],
     "claims": CLAIMS, "goal": GOAL, "context": CONTEXT, "messages": BUS[-HELD:],
     "unread": {"claude": 0, "codex": 0, "tests": 12},
-    "counts": {"agents": 3, "messages": len(BUS), "claims": 2},
+    "counts": {"agents": 3, "messages": len(BUS), "claims": 2}, "open": open_counts(BUS),
 }
 SNAPSHOTS = {"sample": SAMPLE, "empty": EMPTY, "big": BIG}
 SNAP_T = {"sample": T_NOW, "empty": T_NOW, "big": T_BIG}
@@ -176,7 +187,7 @@ STATES = [
     S("overview", "Overview, following",
       "What opens. Everything at a glance: the pinned goal, who is here and what each one has waiting and holds, "
       "what is claimed, the shared facts and the newest messages. The header answers \"what needs me?\": open "
-      "alerts and open questions (an alert or question no message replies to yet). Messages follow the stream; "
+      "alerts, open questions and open todos (an alert no message replies to, a question no answer replies to, a todo no done or dropped replies to). Messages follow the stream; "
       "message 9 arrived in the last 3 seconds, so it carries the `▌` bar and a bold body. While following, "
       "j does nothing in Messages, so the footer says `k browse`.",
       {"fresh": [9]}),
@@ -513,18 +524,16 @@ class Frame:
         return row
 
     def summary(self):
-        """The header's right-hand text in the overview: what needs a person. Counted over the messages
-        watch holds, and saying so when the bus has more."""
-        msgs = self.snap["messages"]
-        replied = {m["reply_to"] for m in msgs if m["reply_to"]}
-        alerts = sum(1 for m in msgs if m["kind"] == "alert" and m["id"] not in replied)
-        asks = sum(1 for m in msgs if m["kind"] == "question" and m["id"] not in replied)
+        """The header's right-hand text in the overview: what needs a person. Counted by the rules brief lists by, over the
+        whole bus (the newest 5000 messages, and saying so, on a very large one); open todos only when there are some."""
+        o = self.snap["open"]
+        alerts, asks, todos = o["alerts"], o["questions"], o["todos"]
         if self.wide:
-            text = f"{plural(alerts, 'alert')} · {plural(asks, 'open question')}"
+            text = f"{plural(alerts, 'alert')} · {plural(asks, 'open question')}" + (f" · {plural(todos, 'open todo')}" if todos else "")
         else:
-            text = f"{alerts} ALRT · {asks} ask"
-        if self.snap["counts"]["messages"] > len(msgs):
-            text = f"newest {len(msgs)}: " + text
+            text = f"{alerts} ALRT · {asks} ask" + (f" · {todos} todo" if todos else "")
+        if o["window"]:
+            text = f"newest {o['window']}: " + text
         return text
 
     def wait(self):
@@ -1285,7 +1294,7 @@ class Frame:
                  ("N of M", "rows the filter kept, of all there are"),
                  ("of newest 200", "watch holds the newest 200; older ones are not searched (agentbus read)"),
                  ("n/a", "the filter does not apply to this section"),
-                 ("open", "an alert or question no message replies to yet"),
+                 ("open", "no reply yet (alert), no answer yet (question), not done yet (todo)"),
                  ("waiting · 27s old", "the bus is busy; you are looking at the last frame, 27s old"),
                  ("restart for X", "the bus was upgraded; restart watch to run the new code")]
         ww = max(tw(self.tx(k)) for k, _ in words) + 2
@@ -1698,7 +1707,7 @@ def case_filter_coverage():
     assert any(l.startswith("Messages  0 of newest 200") for l in t), t
     assert any("9 older not searched · agentbus read" in l for l in t), t
     assert any(l.startswith("Agents  n/a") for l in t) and any(l.startswith("Facts  n/a") for l in t), t
-    assert "newest 200: 0 alerts" in t[0], t[0]
+    assert t[0].endswith("1 alert · 0 open questions"), t[0]  # the whole bus: #3 is still open, #6 and #9 are answered
     t = text_of(100, 30, {"filter": "topic:ci"})
     assert ids_in(t) == [3] and any(l.startswith("Claims  n/a") for l in t), t
     t = text_of(100, 30, {"filter": "everyone"})
@@ -1799,6 +1808,12 @@ def case_summary_and_agents():
     t = text_of(100, 30, {})
     assert t[0].endswith("1 alert · 1 open question"), t[0]
     assert text_of(60, 20, {})[0].endswith("1 ALRT · 1 ask")
+    three = dict(SAMPLE, open=dict(SAMPLE["open"], todos=2))
+    assert text_of(100, 30, {}, snapshot=three)[0].endswith("1 alert · 1 open question · 2 open todos"), "open todos in the header"
+    assert text_of(60, 20, {}, snapshot=three)[0].endswith("1 ALRT · 1 ask · 2 todo")
+    assert "open todo" not in t[0], "a zero todo count is shown"
+    huge = dict(SAMPLE, open=dict(SAMPLE["open"], window=5000))
+    assert "newest 5000: 1 alert" in text_of(100, 30, {}, snapshot=huge)[0], "a window is labelled"
     assert any("2 unread · holds src/auth/" in l for l in t), t
     assert t[-1].startswith("  k browse") and any(l.startswith("Messages  9") and "following · k to browse" in l
                                                   for l in t)

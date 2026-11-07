@@ -101,7 +101,7 @@ One at a time, recommended answer first. Each has a fallback that only changes c
 <!-- BEGIN states -->
 ### Overview, following
 
-What opens. Everything at a glance: the pinned goal, who is here and what each one has waiting and holds, what is claimed, the shared facts and the newest messages. The header answers "what needs me?": open alerts and open questions (an alert or question no message replies to yet). Messages follow the stream; message 9 arrived in the last 3 seconds, so it carries the `▌` bar and a bold body. While following, j does nothing in Messages, so the footer says `k browse`.
+What opens. Everything at a glance: the pinned goal, who is here and what each one has waiting and holds, what is claimed, the shared facts and the newest messages. The header answers "what needs me?": open alerts, open questions and open todos (an alert no message replies to, a question no answer replies to, a todo no done or dropped replies to). Messages follow the stream; message 9 arrived in the last 3 seconds, so it carries the `▌` bar and a bold body. While following, j does nothing in Messages, so the footer says `k browse`.
 
 ```text
 [frame overview 100x30]
@@ -1905,7 +1905,7 @@ Messages  0 of 9                                   no match
 
 ```text
 [frame filter-coverage 100x30]
- 🚌 agentbus  ~/src/acme-api                               newest 200: 0 alerts · 0 open questions
+ 🚌 agentbus  ~/src/acme-api                                            1 alert · 0 open questions
   🎯 auth on the new token API                                                            nate · 2h
 
 👥 Agents  n/a                                                                kind: is for messages
@@ -1939,7 +1939,7 @@ Messages  0 of 9                                   no match
 
 ```text
 [frame filter-coverage-noemoji 100x30]
- agentbus  ~/src/acme-api                                  newest 200: 0 alerts · 0 open questions
+ agentbus  ~/src/acme-api                                               1 alert · 0 open questions
   ◆ auth on the new token API                                                             nate · 2h
 
 Agents  n/a                                                                   kind: is for messages
@@ -1973,7 +1973,7 @@ Messages  0 of newest 200                                                       
 
 ```text
 [frame filter-coverage 60x20]
- 🚌 agentbus  ~/src/acme-api    newest 200: 0 ALRT · 0 ask
+ 🚌 agentbus  ~/src/acme-api                1 ALRT · 0 ask
   🎯 auth on the new token API                    nate · 2h
 
 👥 Agents  n/a                        kind: is for messages
@@ -1997,7 +1997,7 @@ Messages  0 of newest 200                                                       
 
 ```text
 [frame filter-coverage-noemoji 60x20]
- agentbus  ~/src/acme-api       newest 200: 0 ALRT · 0 ask
+ agentbus  ~/src/acme-api                   1 ALRT · 0 ask
   ◆ auth on the new token API                     nate · 2h
 
 Agents  n/a                           kind: is for messages
