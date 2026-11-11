@@ -73,6 +73,9 @@ db = bus("next")
 join(db, "alice", "bob")
 t1 = post(db, "alice", "validate src/auth/", kind="todo")
 t2 = post(db, "alice", "validate billing", kind="todo")
+# --limit 0 first: a next: chosen from the listed rows, or broken for every limit, fails here before the default listing does
+b = jok(db, "--as", "alice", "brief", "--limit", "0")
+check(b["next"] == "agentbus --as alice read --id %d" % t1, "--limit 0 JSON next with open todos: %s" % b["next"])
 b = jok(db, "--as", "alice", "brief")
 check(b["next"] == "agentbus --as alice read --id %d" % t1, "next with open todos: %s" % b["next"])
 text = ok(db, "--as", "alice", "brief")
@@ -96,6 +99,8 @@ ok(db, "--as", "carol", "inbox")
 check(jok(db, "--as", "carol", "brief")["next"] == "agentbus --as carol read --id %d" % t3, "a todo whose owner left is not next")
 q = post(db, "alice", "which branch?", to="carol", kind="question")
 ok(db, "--as", "carol", "inbox")
+check(jok(db, "--as", "carol", "brief", "--limit", "0")["next"].startswith("agentbus --as carol post ANSWER --to alice --reply-to %d" % q),
+      "--limit 0 skipped the open question: an open question to me must come before a todo")
 check(jok(db, "--as", "carol", "brief")["next"].startswith("agentbus --as carol post ANSWER --to alice --reply-to %d" % q),
       "an open question to me must come before a todo")
 text = ok(db, "--as", "carol", "brief")
@@ -266,14 +271,16 @@ for needle, full in (("plain = ", "plain"), ("--release-check = ", "--release-ch
 # a key cut in the row (over 200 characters) still reads the fact by its real key; one too long to print in a command lists the facts
 long_rows = [l for l in lines(text) if l.lstrip().startswith("k" * 20)]
 check(len(long_rows) == 2, "fixture: two long-key rows expected, got %d" % len(long_rows))
-named = 0
+ran = []
 for row in long_rows:
     cmd = re.search(r"\[cut: ([^\]]+)\]", row).group(1)
-    p = go(db, cmd)
+    ran.append((cmd, go(db, cmd)))
+# first: some long-key marker reads the whole fact (a marker that names the cut display key reads no fact at all)
+check(any("k" * 100 in c and p.returncode == 0 and VALUE.strip() in " ".join(p.stdout.split()) for c, p in ran),
+      "a 201-character key's marker did not read the whole fact: %r" % [(c[:40], p.returncode, p.stderr.strip()[:80]) for c, p in ran])
+for cmd, p in ran:
     check(p.returncode == 0, "the marker on a long-key row does not run: rc %s %r" % (p.returncode, p.stderr[:200]))
-    if "k" * 201 in cmd:
-        named += 1
-        check(VALUE.strip() in " ".join(p.stdout.split()), "a 201-character key's marker did not read the whole fact: %r" % p.stdout[:120])
+named = sum(1 for cmd, p in ran if "k" * 201 in cmd)
 check(named == 1, "the 201-character key's marker must carry the real key, and the 1500-character one must not")
 
 # read --id, the todo next line and the close line run and carry the whole text
@@ -327,6 +334,10 @@ err = json.loads(refused.stderr)["error"]
 check(refused.returncode == 1 and err["next"], "fixture: the claim was not refused: %s" % refused.stderr)
 took = go(db, err["next"])
 check(took.returncode == 0, "the claim refusal's own command does not run: %s -> rc %s %s" % (err["next"], took.returncode, took.stderr.strip()))
+# the refusal also prints the takeover (claim --from): a dash path must follow the `--` there too, and the command must take it
+check(err.get("claim_from"), "fixture: the refusal printed no claim --from command: %s" % refused.stderr)
+took = go(db, err["claim_from"])
+check(took.returncode == 0 and "-notes.txt" in took.stdout, "the claim refusal's own command does not run (its claim --from): %s -> rc %s %s %s" % (err["claim_from"], took.returncode, took.stdout.strip(), took.stderr.strip()))
 print("PASS: every command brief and a claim refusal print runs, for cut facts, long and dash keys, dash names and paths, and at --limit 0")
 PY
 all_passed "All agent DX tests passed"
