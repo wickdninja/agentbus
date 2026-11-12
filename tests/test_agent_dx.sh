@@ -107,6 +107,47 @@ text = ok(db, "--as", "carol", "brief")
 check("--kind done" not in text, "a close line shows although next: is not the todo: %r" % text)
 print("PASS: next names the oldest open todo with how to read and close it, after unread and questions, before the claim line")
 
+# ---- next: offers only a todo the caller may take ----
+# Bug it catches (pre-merge review of PR 68): next: named the oldest open todo on the bus whatever its owner, and printed the
+# `--kind done` close line for it, so every agent was told to finish another present agent's job (the skill allows finishing a
+# todo only when its owner left). Offered: the caller's own (the recipient, or the sender of a broadcast todo), else the oldest
+# whose owner is off the roster; the caller's own comes first even when an older one is offered.
+db = bus("nextowner")
+join(db, "dave", "alice", "bob", "carol")
+ok(db, "--as", "alice", "claim", "src/a.py", "--purpose", "edit")
+t_gone = post(db, "dave", "finish the old migration", kind="todo")
+ok(db, "--as", "dave", "leave")
+t_alice = post(db, "alice", "validate billing", kind="todo")
+t_bob = post(db, "alice", "review the schema", to="bob", kind="todo")
+for who in ("alice", "bob", "carol"):
+    ok(db, "--as", who, "inbox")
+READ = "agentbus --as %s read --id %d"
+# carol owns nothing: she is offered the todo whose owner left, never alice's or bob's
+for extra in ((), ("--limit", "0")):
+    nxt = jok(db, "--as", "carol", "brief", *extra)["next"]
+    check(nxt == READ % ("carol", t_gone), "carol, an older todo whose owner left: %s" % nxt)
+# a todo assigned to bob comes before the older one whose owner left; bob is the recipient, alice (the sender) is not its owner
+for extra in ((), ("--limit", "0")):
+    nxt = jok(db, "--as", "bob", "brief", *extra)["next"]
+    check(nxt == READ % ("bob", t_bob), "bob's own todo must come before an older one he may take: %s" % nxt)
+    nxt = jok(db, "--as", "alice", "brief", *extra)["next"]
+    check(nxt == READ % ("alice", t_alice), "alice's own broadcast todo must come first, and the one she sent to bob is not hers: %s" % nxt)
+text = ok(db, "--as", "bob", "brief")
+check("post RESULT --reply-to %d --kind done" % t_bob in text and "post RESULT --reply-to %d --kind done" % t_alice not in text,
+      "bob's close line names a todo other than his own: %r" % text)
+# once the abandoned todo is closed, with every owner present nobody is sent to anyone else's todo
+ok(db, "--as", "carol", "post", "migrated", "--reply-to", str(t_gone), "--kind", "done")
+for extra in ((), ("--limit", "0")):
+    nxt = jok(db, "--as", "carol", "brief", *extra)["next"]
+    check(nxt == "agentbus --as carol claim PATH --purpose WHY", "carol was sent to a todo whose owner is present: %s" % nxt)
+text = ok(db, "--as", "carol", "brief")
+check("--kind done" not in text, "carol's brief prints a close line for another present agent's todo: %r" % text)
+ok(db, "--as", "alice", "post", "validated", "--reply-to", str(t_alice), "--kind", "done")
+ok(db, "--as", "alice", "inbox")
+nxt = jok(db, "--as", "alice", "brief")["next"]
+check(nxt == "agentbus --as alice claim PATH --purpose WHY", "alice (sender of bob's todo) was sent to it: %s" % nxt)
+print("PASS: next offers a todo only to its owner, or to anyone when its owner left, own first")
+
 # ---- a cut row says so and names read --id ----
 # Bug it catches: a todo body "Validate src/auth/." + 40 lines of indentation + "Also validate billing." shows only the first
 # sentence in brief; the second job is invisible and nothing says a body was cut.
@@ -235,6 +276,23 @@ con.close()
 check(o == {"alerts": 0, "questions": 1, "todos": 0, "window": 3}, "watch_open over a window of 3 newest: %s" % o)
 check(jok(db, "watch")["open"] == {"alerts": 0, "questions": 2, "todos": 0, "window": None}, "a bus under the window counts everything")
 print("PASS: watch counts the newest SCAN messages on a huge bus and reports the window")
+# The real CLI, SCAN at 5000: a bus past it prefixes the header `newest 5000: `, wide and narrow, and counts only the window.
+# Bug it catches: the prefix was only checked through watch_open with SCAN patched to 3, so a header that dropped or misspelled
+# `newest N:` for a real bus (or kept the old `newest 200:`) passed every test.
+db = bus("bigbus")
+join(db, "alice")
+post(db, "alice", "ancient question", to="*", kind="question")
+con = sqlite3.connect(db)
+con.executemany("INSERT INTO messages (ts, sender, recipient, kind, body) VALUES (?, 'alice', '*', 'note', ?)",
+                [("2026-01-01T00:00:00+00:00", "n%d" % i) for i in range(5200)])
+con.execute("INSERT INTO messages (ts, sender, recipient, kind, body) VALUES ('2026-01-01T00:00:00+00:00', 'alice', '*', 'question', 'recent question')")
+con.commit()
+con.close()
+check(jok(db, "watch")["open"] == {"alerts": 0, "questions": 1, "todos": 0, "window": 5000}, "fixture: watch open on a bus past the window: %s" % jok(db, "watch")["open"])
+check(header(db).endswith("newest 5000: 0 alerts \u00b7 1 open question"), "wide header on a bus past the window: %r" % header(db))
+narrow = lines(ok(db, "watch", "--once", env={"COLUMNS": "60", "LINES": "20"}))[0]
+check(narrow.endswith("newest 5000: 0 ALRT \u00b7 1 ask"), "narrow header on a bus past the window: %r" % narrow)
+print("PASS: the real watch header says newest 5000: on a bus past the window")
 # ---- every generated command runs, and gives back the whole content ----
 # Bugs they catch (adversarial review of PR 68): a cut fact's marker named the display key, cut to 200 characters with "...", so it
 # read no fact; a key starting with "-" made `ctx get --release-check`, a flag (exit 2); at --limit 0 next: still said claim while a
@@ -287,7 +345,8 @@ check(named == 1, "the 201-character key's marker must carry the real key, and t
 db = bus("exec2")
 join(db, "alice", "bob")
 t = post(db, "alice", "Validate src/auth/." + "\n    " * 40 + "Also validate billing.", to="bob", kind="todo")
-text = ok(db, "--as", "alice", "brief")
+ok(db, "--as", "bob", "inbox")
+text = ok(db, "--as", "bob", "brief")   # the todo is bob's: next: and the close line are his
 p = go(db, marker(text, "Validate src/auth/."))
 check(p.returncode == 0 and "Also validate billing." in p.stdout, "the todo's read --id did not return the whole body: rc %s %r" % (p.returncode, p.stdout[:100]))
 nxt = line_with(text, "next: ")[len("next: "):]

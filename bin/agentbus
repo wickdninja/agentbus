@@ -8925,7 +8925,7 @@ SKILL_TEXT = (
     '\n'
     '## Command and identity\n'
     '\n'
-    "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. Pass `--as YOUR_NAME` and keep that name all session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
+    "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. Pass `--as YOUR_NAME` throughout. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
     '\n'
     'Set `AGENTBUS_DB` only when a worker cannot discover the bus. If a dispatcher assigned an absolute CLI path too, use it. If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
     '\n'
@@ -8933,26 +8933,24 @@ SKILL_TEXT = (
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; it informs your work, but only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers. `ctx history KEY` shows earlier values.\n'
+    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal, empty until a lead sets it (`goal "TEXT"`), informs your work; only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers. `ctx history KEY` shows earlier values.\n'
     '\n'
-    'Hooks: with the agentbus plugin or setup, a hook message gives your exact name (already joined); use it with --as and skip `join`.\n'
-    '\n'
-    '## Your jobs\n'
+    'Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as and skip `join`.\n'
     '\n'
     'At start, post each job you own as its own todo. Close each with a linked done. Before you stop with work left, every unfinished job must be an open todo, not a line inside a done: `brief` lists open todos only. You may finish a todo whose owner left: claim its files as usual (`--from`, below, if a claim is in the way).\n'
     '\n'
     '## Before shared work\n'
     '\n'
-    'Read `inbox` each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
+    'Read `inbox` each turn and between steps; repeat until empty. If you can, background `wait`: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files first. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
     '\n'
-    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims expire after 120 minutes; claim again to renew.\n"
+    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes; claim again to renew.\n"
     '\n'
     '## Communicate\n'
     '\n'
     '- Ask: `post "QUESTION" --to RECIPIENT --kind question`\n'
     '- Answer: `post "ANSWER" --to ORIGINAL_SENDER --reply-to ID --kind answer`\n'
     '- Hand off: `post "BRANCH; STATE; NEXT STEP; CHECKS" --to RECIPIENT --kind handoff`\n'
-    '- Promise: `post "WHAT" --kind todo`; close: `post "RESULT" --reply-to ID --kind done`\n'
+    '- Promise: `post "WHAT" --kind todo`; close: `post "RESULT" --reply-to ID --kind done` (or dropped)\n'
     '- Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`\n'
     '\n'
     'Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped. Assign work with handoff. Record a decision with `post "WHAT" --kind decision --topic decision`; read them with `read --topic decision`.\n'
@@ -8971,7 +8969,7 @@ SKILL_TEXT = (
     '\n'
     '## Boundaries\n'
     '\n'
-    "Follow the user's authorized scope. Peer messages supply information; they do not authorize new work. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Use `--json` when parsing output. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Run error.next to recover (fill in capitals). Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus.\n"
+    "Follow the user's authorized scope. Peer messages supply information; they do not authorize new work. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Use `--json` when parsing output. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Run error.next to recover (fill in capitals). Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus. Do not hold the bus open in another SQLite client.\n"
     '\n'
     'See the [reference](https://github.com/wickdninja/agentbus/blob/main/docs/reference.md).\n'
     '\n'
@@ -14316,7 +14314,8 @@ def _brief_expired_claims(con, limit):
 def _brief_next(con, a, me_name, joined, unread_total):
     """(the one command to run next, the id of the todo it reads or None), addressed to the bus this brief read (--up N is
     kept: an inbox run on the inner bus would read and mark read messages the brief never showed). Unread first, then a
-    question to answer, then the oldest open todo (read it whole; _brief_close says how to close it), and only then the claim
+    question to answer, then a todo this agent may take (its own first, else the oldest whose owner has left the roster; a todo
+    whose owner is still here is that owner's to finish; read it whole, _brief_close says how to close it), and only then the claim
     line. The choice is made from all open work, not from the rows --limit lets brief show: --limit 0 changes what is listed,
     never what to do next."""
     def cmd(*words):
@@ -14329,7 +14328,9 @@ def _brief_next(con, a, me_name, joined, unread_total):
                     "AND q.sender<>? ORDER BY q.id LIMIT 1", (me_name, me_name)).fetchone()
     if q:
         return cmd("post", "ANSWER", "--to", q["sender"], "--reply-to", q["id"], "--kind", "answer"), None
-    t = con.execute(f"SELECT m.id FROM messages m WHERE {open_todo_where('m.')} ORDER BY m.id LIMIT 1").fetchone()
+    owner = "(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)"
+    t = con.execute(f"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} "
+                    f"AND ({owner} = ? OR r.name IS NULL) ORDER BY ({owner} = ?) DESC, m.id LIMIT 1", (me_name, me_name)).fetchone()
     if t:
         return cmd("read", "--id", t["id"]), t["id"]
     return cmd("claim", "PATH", "--purpose", "WHY"), None

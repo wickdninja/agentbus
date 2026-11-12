@@ -260,7 +260,8 @@ STATES = [
     S("filter-coverage", "A filter on a bus bigger than the view",
       "209 messages, of which watch holds the newest 200. `kind:alert` finds none in those 200, and says so: "
       "`0 of newest 200`, and the 9 older messages were not searched (`agentbus read` reads them). The header "
-      "says the same of its counts.",
+      "does not depend on those 200: it counts open items over the newest 5000 messages (prefixed `newest 5000:` past "
+      "that), so it still sees an alert among the 9 older ones.",
       {"filter": "kind:alert"}, snap="big"),
     S("busy", "Bus busy",
       f"Another process holds the bus. watch waits at most {LOCK_WAIT_MS} ms for it, then keeps the last frame "

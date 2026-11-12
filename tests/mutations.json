@@ -5627,7 +5627,7 @@
   {
     "name": "brief next ignores open todos",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ ORDER\\ BY\\ m\\.id\\ LIMIT\\ 1\"\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
+    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ r\\.name\\ IS\\ NULL\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
     "replace": "",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
@@ -5636,8 +5636,8 @@
   {
     "name": "brief next points at the newest open todo",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ ORDER\\ BY\\ m\\.id\\ LIMIT\\ 1\"\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
-    "replace": "    t = con.execute(f\"SELECT m.id FROM messages m WHERE {open_todo_where('m.')} ORDER BY m.id DESC LIMIT 1\").fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n",
+    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ r\\.name\\ IS\\ NULL\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
+    "replace": "    owner = \"(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} \"\n                    f\"AND ({owner} = ? OR r.name IS NULL) ORDER BY ({owner} = ?) DESC, m.id DESC LIMIT 1\", (me_name, me_name)).fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "next with open todos"
@@ -5646,10 +5646,46 @@
     "name": "brief next names the todo before an open question",
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ q\\ =\\ con\\.execute\\(f\"SELECT\\ q\\.id,\\ q\\.sender\\ FROM\\ messages\\ q",
-    "replace": "    t = con.execute(f\"SELECT m.id FROM messages m WHERE {open_todo_where('m.')} ORDER BY m.id LIMIT 1\").fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n    q = con.execute(f\"SELECT q.id, q.sender FROM messages q",
+    "replace": "    owner = \"(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} \"\n                    f\"AND ({owner} = ? OR r.name IS NULL) ORDER BY ({owner} = ?) DESC, m.id LIMIT 1\", (me_name, me_name)).fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n    q = con.execute(f\"SELECT q.id, q.sender FROM messages q",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "an open question to me must come before a todo"
+  },
+  {
+    "name": "brief next takes the sender of a directed todo as its owner",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r",
+    "replace": "    owner = \"m.sender\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "bob's own todo must come before an older one he may take"
+  },
+  {
+    "name": "brief next puts the oldest offered todo before my own",
+    "file": "bin/agentbus",
+    "find": "ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)",
+    "replace": "ORDER BY m.id LIMIT 1\", (me_name,)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "bob's own todo must come before an older one he may take"
+  },
+  {
+    "name": "brief next never offers a todo whose owner left",
+    "file": "bin/agentbus",
+    "find": "AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ r\\.name\\ IS\\ NULL\\)\\ ORDER\\ BY",
+    "replace": "AND ({owner} = ?) ORDER BY",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a todo whose owner left is not next"
+  },
+  {
+    "name": "brief next offers a todo whose owner is present",
+    "file": "bin/agentbus",
+    "find": "f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ r\\.name\\ IS\\ NULL\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)",
+    "replace": "f\"ORDER BY ({owner} = ?) DESC, m.id LIMIT 1\", (me_name,)).fetchone()",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "carol was sent to a todo whose owner is present"
   },
   {
     "name": "brief never says how to close the oldest todo",
@@ -5902,5 +5938,32 @@
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "--limit 0 skipped the open question"
+  },
+  {
+    "name": "watch header drops the newest N prefix",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ o\\[\"window\"\\]:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ f\"newest\\ \\{o\\['window'\\]\\}:\\ \"\\ \\+\\ text\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "wide header on a bus past the window"
+  },
+  {
+    "name": "watch header prefixes newest 200",
+    "file": "bin/agentbus",
+    "find": "text\\ =\\ f\"newest\\ \\{o\\['window'\\]\\}:\\ \"\\ \\+\\ text",
+    "replace": "text = \"newest 200: \" + text",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "wide header on a bus past the window"
+  },
+  {
+    "name": "watch header drops the newest N prefix when narrow",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ o\\[\"window\"\\]:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ f\"newest",
+    "replace": "        if o[\"window\"] and self.wide:\n            text = f\"newest",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "narrow header on a bus past the window"
   }
 ]
