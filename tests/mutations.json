@@ -5627,7 +5627,7 @@
   {
     "name": "brief next ignores open todos",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ r\\.name\\ IS\\ NULL\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
+    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
     "replace": "",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
@@ -5636,8 +5636,8 @@
   {
     "name": "brief next points at the newest open todo",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ r\\.name\\ IS\\ NULL\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
-    "replace": "    owner = \"(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} \"\n                    f\"AND ({owner} = ? OR r.name IS NULL) ORDER BY ({owner} = ?) DESC, m.id DESC LIMIT 1\", (me_name, me_name)).fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n",
+    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
+    "replace": "    owner = \"(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} \"\n                    f\"AND ({owner} = ? OR (r.name IS NULL AND EXISTS (SELECT 1 FROM log l WHERE l.agent = {owner} AND l.action = 'leave' \"\n                    f\"AND l.ts >= m.ts))) ORDER BY ({owner} = ?) DESC, m.id DESC LIMIT 1\", (me_name, me_name)).fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "next with open todos"
@@ -5646,7 +5646,7 @@
     "name": "brief next names the todo before an open question",
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ q\\ =\\ con\\.execute\\(f\"SELECT\\ q\\.id,\\ q\\.sender\\ FROM\\ messages\\ q",
-    "replace": "    owner = \"(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} \"\n                    f\"AND ({owner} = ? OR r.name IS NULL) ORDER BY ({owner} = ?) DESC, m.id LIMIT 1\", (me_name, me_name)).fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n    q = con.execute(f\"SELECT q.id, q.sender FROM messages q",
+    "replace": "    owner = \"(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} \"\n                    f\"AND ({owner} = ? OR (r.name IS NULL AND EXISTS (SELECT 1 FROM log l WHERE l.agent = {owner} AND l.action = 'leave' \"\n                    f\"AND l.ts >= m.ts))) ORDER BY ({owner} = ?) DESC, m.id LIMIT 1\", (me_name, me_name)).fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n    q = con.execute(f\"SELECT q.id, q.sender FROM messages q",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "an open question to me must come before a todo"
@@ -5672,8 +5672,8 @@
   {
     "name": "brief next never offers a todo whose owner left",
     "file": "bin/agentbus",
-    "find": "AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ r\\.name\\ IS\\ NULL\\)\\ ORDER\\ BY",
-    "replace": "AND ({owner} = ?) ORDER BY",
+    "find": "\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY",
+    "replace": ") ORDER BY",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "a todo whose owner left is not next"
@@ -5681,11 +5681,38 @@
   {
     "name": "brief next offers a todo whose owner is present",
     "file": "bin/agentbus",
-    "find": "f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ r\\.name\\ IS\\ NULL\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)",
+    "find": "f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)",
     "replace": "f\"ORDER BY ({owner} = ?) DESC, m.id LIMIT 1\", (me_name,)).fetchone()",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "carol was sent to a todo whose owner is present"
+  },
+  {
+    "name": "brief next offers a todo whose owner never joined",
+    "file": "bin/agentbus",
+    "find": "\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY",
+    "replace": " OR r.name IS NULL) ORDER BY",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "was offered a todo sent to a name that never joined"
+  },
+  {
+    "name": "brief next offers a todo whose owner left before it was posted",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY",
+    "replace": "                    f\"))) ORDER BY",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "posted to a name that had already left"
+  },
+  {
+    "name": "brief next treats any agent's leave as the owner's",
+    "file": "bin/agentbus",
+    "find": "WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action",
+    "replace": "WHERE l.action",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "was offered a todo sent to a name that never joined"
   },
   {
     "name": "brief never says how to close the oldest todo",

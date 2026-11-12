@@ -37,3 +37,4 @@ s|60|Do not hold the bus open in another SQLite client.
 s|120|- Promise: `post "WHAT" --kind todo`; close: `post "RESULT" --reply-to ID --kind done` (or dropped)
 s|50|Several resources claim all or none.
 s|90|Claims are advisory and expire after 120 minutes; claim again to renew.
+s|60|Pass `--as YOUR_NAME` and keep that name all session.

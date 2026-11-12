@@ -148,6 +148,45 @@ nxt = jok(db, "--as", "alice", "brief")["next"]
 check(nxt == "agentbus --as alice claim PATH --purpose WHY", "alice (sender of bob's todo) was sent to it: %s" % nxt)
 print("PASS: next offers a todo only to its owner, or to anyone when its owner left, own first")
 
+# ---- next: a todo is taken over only when its owner joined and then left ----
+# Bug it catches (re-check of PR 68): the owner counted as gone when it was merely off the roster, so a todo sent `--to erin`
+# before erin joined (the post says the message waits for that name), or to a miscased name (`--to Bob`), was offered to every
+# agent with a close line. Gone means the log shows the name leaving after the todo was posted.
+import sqlite3
+db = bus("neverjoined")
+join(db, "alice", "bob", "carol")
+t_erin = post(db, "alice", "erin will do the audit", to="erin", kind="todo")
+t_case = post(db, "alice", "Bob will do the review", to="Bob", kind="todo")
+join(db, "zed")
+ok(db, "--as", "zed", "leave")  # somebody else leaving must not release erin's or Bob's todo
+for who in ("alice", "bob", "carol"):
+    ok(db, "--as", who, "inbox")
+for extra in ((), ("--limit", "0")):
+    for who in ("alice", "bob", "carol"):
+        nxt = jok(db, "--as", who, "brief", *extra)["next"]
+        check(nxt == "agentbus --as %s claim PATH --purpose WHY" % who,
+              "%s was offered a todo sent to a name that never joined (erin, or the miscased Bob): %s" % (who, nxt))
+text = ok(db, "--as", "carol", "brief")
+check("--kind done" not in text, "carol's brief prints a close line for a todo to a name that never joined: %r" % text)
+# erin joins later: it is hers, and still nobody else's
+join(db, "erin")
+ok(db, "--as", "erin", "inbox")
+check(jok(db, "--as", "erin", "brief")["next"] == "agentbus --as erin read --id %d" % t_erin, "erin's todo, posted before she joined, is not hers")
+check(jok(db, "--as", "carol", "brief")["next"] == "agentbus --as carol claim PATH --purpose WHY", "carol was offered erin's todo once erin joined")
+# a todo posted to a name that left earlier is not taken over: the leave came before the todo
+db = bus("leftbefore")
+join(db, "alice", "carol", "dave")
+ok(db, "--as", "dave", "leave")
+con = sqlite3.connect(db)
+con.execute("UPDATE log SET ts='2000-01-01T00:00:00Z' WHERE action='leave' AND agent='dave'")
+con.commit()
+con.close()
+post(db, "alice", "dave, finish the audit", to="dave", kind="todo")
+ok(db, "--as", "carol", "inbox")
+nxt = jok(db, "--as", "carol", "brief")["next"]
+check(nxt == "agentbus --as carol claim PATH --purpose WHY", "carol was offered a todo posted to a name that had already left: %s" % nxt)
+print("PASS: next takes a todo over only from an owner who joined and then left; a name that never joined, or a miscased one, keeps it")
+
 # ---- a cut row says so and names read --id ----
 # Bug it catches: a todo body "Validate src/auth/." + 40 lines of indentation + "Also validate billing." shows only the first
 # sentence in brief; the second job is invisible and nothing says a body was cut.
