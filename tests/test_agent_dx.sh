@@ -151,7 +151,7 @@ print("PASS: next offers a todo only to its owner, or to anyone when its owner l
 # ---- next: a todo is taken over only when its owner joined and then left ----
 # Bug it catches (re-check of PR 68): the owner counted as gone when it was merely off the roster, so a todo sent `--to erin`
 # before erin joined (the post says the message waits for that name), or to a miscased name (`--to Bob`), was offered to every
-# agent with a close line. Gone means the log shows the name leaving after the todo was posted.
+# agent with a close line. Gone means the log shows the name leaving at or after the todo was posted.
 import sqlite3
 db = bus("neverjoined")
 join(db, "alice", "bob", "carol")
@@ -185,6 +185,33 @@ post(db, "alice", "dave, finish the audit", to="dave", kind="todo")
 ok(db, "--as", "carol", "inbox")
 nxt = jok(db, "--as", "carol", "brief")["next"]
 check(nxt == "agentbus --as carol claim PATH --purpose WHY", "carol was offered a todo posted to a name that had already left: %s" % nxt)
+# an owner who left and came back is on the roster again: its todo is its own to finish, whatever the log says
+# Bug it catches: the roster check dropped, so a leave in the log alone releases the todo of an agent that is here again.
+db = bus("rejoined")
+join(db, "alice", "bob", "carol")
+post(db, "bob", "bob, finish the audit", kind="todo")
+ok(db, "--as", "bob", "leave")
+join(db, "bob")
+ok(db, "--as", "carol", "inbox")
+nxt = jok(db, "--as", "carol", "brief")["next"]
+check(nxt == "agentbus --as carol claim PATH --purpose WHY", "carol was offered a todo whose owner left and rejoined (roster check dropped): %s" % nxt)
+# a todo sent --to an owner who then left is taken over: the leave is looked up under the owner (the recipient), not the sender
+db = bus("toleft")
+join(db, "alice", "bob", "carol")
+t_to = post(db, "alice", "bob, review the schema", to="bob", kind="todo")
+ok(db, "--as", "bob", "leave")
+for who in ("alice", "carol"):
+    ok(db, "--as", who, "inbox")
+    nxt = jok(db, "--as", who, "brief")["next"]
+    check(nxt == READ % (who, t_to), "%s was not offered a todo sent --to bob after bob left (leave looked up under the sender): %s" % (who, nxt))
+# the leave must be by exactly the owner's name: `bob` leaving does not release a todo sent to `Bob`
+db = bus("exactcase")
+join(db, "alice", "bob", "carol")
+post(db, "alice", "Bob will do the review", to="Bob", kind="todo")
+ok(db, "--as", "bob", "leave")
+ok(db, "--as", "carol", "inbox")
+nxt = jok(db, "--as", "carol", "brief")["next"]
+check(nxt == "agentbus --as carol claim PATH --purpose WHY", "carol was offered a todo sent to Bob after bob left (leave matched case-insensitively): %s" % nxt)
 print("PASS: next takes a todo over only from an owner who joined and then left; a name that never joined, or a miscased one, keeps it")
 
 # ---- a cut row says so and names read --id ----

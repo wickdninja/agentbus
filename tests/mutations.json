@@ -5992,5 +5992,32 @@
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "narrow header on a bus past the window"
+  },
+  {
+    "name": "brief next drops the roster check for a taken-over todo",
+    "file": "bin/agentbus",
+    "find": "OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS",
+    "replace": "OR (EXISTS",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "rejoined (roster check dropped)"
+  },
+  {
+    "name": "brief next looks the owner's leave up under the sender",
+    "file": "bin/agentbus",
+    "find": "l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ 'leave'",
+    "replace": "l.agent = m.sender AND l.action = 'leave'",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "leave looked up under the sender"
+  },
+  {
+    "name": "brief next matches the owner's leave case-insensitively",
+    "file": "bin/agentbus",
+    "find": "l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ 'leave'",
+    "replace": "l.agent = {owner} COLLATE NOCASE AND l.action = 'leave'",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "leave matched case-insensitively"
   }
 ]
