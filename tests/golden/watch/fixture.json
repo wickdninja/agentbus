@@ -185,6 +185,12 @@
     "agents": 3,
     "messages": 9,
     "claims": 2
+   },
+   "open": {
+    "alerts": 1,
+    "questions": 1,
+    "todos": 0,
+    "window": null
    }
   },
   "empty": {
@@ -198,6 +204,12 @@
     "agents": 0,
     "messages": 0,
     "claims": 0
+   },
+   "open": {
+    "alerts": 0,
+    "questions": 0,
+    "todos": 0,
+    "window": null
    }
   },
   "big": {
@@ -2265,6 +2277,12 @@
     "agents": 3,
     "messages": 209,
     "claims": 2
+   },
+   "open": {
+    "alerts": 1,
+    "questions": 0,
+    "todos": 0,
+    "window": null
    }
   }
  },

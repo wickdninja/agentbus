@@ -835,7 +835,9 @@ CONTRACT = {
                                                 "topic": _NSTR, "body": _STR, "reply_to": _NINT})),
                           "unread": {"type": "object", "description": "messages waiting in each listed agent's inbox, "
                                                                       "by name (integers; cursors are read, never moved)"},
-                          "counts": _o({"agents": _INT, "claims": _INT, "messages": _INT}), "omitted": _OMITTED})),
+                          "counts": _o({"agents": _INT, "claims": _INT, "messages": _INT}),
+                          "open": _o({"alerts": _INT, "questions": _INT, "todos": _INT, "window": _NINT}),
+                          "omitted": _OMITTED})),
         "buses": _cmd("List buses from nearest to outermost", _env(_ref("BusLevel")), base=_FIND_ERRORS),
         "init": _cmd("Install this tool into DIR/.agentbus/",
                      _o({"directory": _STR, "copy": _STR, "old": _STR, "new": _STR, "exclude_added": _BOOL,
@@ -4069,15 +4071,38 @@ def read_cursor(a, text, flag):
     return int(m.group(3))
 
 
+class Positional(str):
+    """A word of stored or typed text in a command's positional place (a fact key, a path): next_command puts a `--` before it
+    when it starts with a dash, since the parser would read it as a flag."""
+
+
+_VALUE_FLAGS = ("--as", "--up", "--to", "--from")
+
+
 def next_command(a, *words, as_=True):
     """The command line that continues a cut listing, to paste as it is: `agentbus [--as NAME] [--up N]` and
-    words (a word that needs it is shell-quoted). as_=False leaves --as out, for a command that needs no name."""
+    words (a word that needs it is shell-quoted). as_=False leaves --as out, for a command that needs no name. A name given
+    to --as, --to or --from that starts with a dash is written --as=NAME, and Positional words that start with a dash go after
+    a `--`, so the command parses as printed."""
     parts = ["agentbus"]
     if as_ and getattr(a, "as_", None):
         parts += ["--as", a.as_]
     if getattr(a, "up", 0):
         parts += ["--up", str(a.up)]
-    return " ".join(shlex.quote(str(p)) for p in parts + list(words))
+    words, joined, i = list(words), [], 0
+    for seq in (parts, words):
+        i = 0
+        while i < len(seq):
+            w = seq[i]
+            if str(w) in _VALUE_FLAGS and not isinstance(w, Positional) and i + 1 < len(seq) and str(seq[i + 1]).startswith("-"):
+                joined.append(f"{w}={seq[i + 1]}")
+                i += 2
+            else:
+                joined.append(w)
+                i += 1
+    if any(isinstance(w, Positional) and w.startswith("-") for w in joined):
+        joined = [w for w in joined if not isinstance(w, Positional)] + ["--"] + [w for w in joined if isinstance(w, Positional)]
+    return " ".join(shlex.quote(str(p)) for p in joined)
 
 
 def page_size(a, default=LISTING_LIMIT):
@@ -4631,7 +4656,7 @@ def cmd_ctx(con, a):
         rows = list(reversed(rows))
         nxt = make_cursor(a, rows[0]["id"] if rows else before) if more else None
         out(a, rows, lambda r: INDENT + col0(f"{human_time(r['updated_at'])} {r['updated_by']}: {r['value']}"), more, cursor=nxt,
-            next_cmd=next_command(a, "ctx", "history", a.key, "--before", nxt, "--limit", page_size(a)) if nxt else None)
+            next_cmd=next_command(a, "ctx", "history", Positional(a.key), "--before", nxt, "--limit", page_size(a)) if nxt else None)
 
 
 # The shared goal: one fact every agent sees first, kept under the context key "goal" so it has the
@@ -4772,7 +4797,7 @@ def take_target(con, name, res, t):
 
 def from_command(a, name, targets, holders):
     """The claim --from command that takes targets from holders, under the taker's own name."""
-    return next_command(a, "--as", name, "claim", *targets, *[w for h in holders for w in ("--from", h)], as_=False)
+    return next_command(a, "--as", name, "claim", *map(Positional, targets), *[w for h in holders for w in ("--from", h)], as_=False)
 
 
 def _named(froms):
@@ -5007,7 +5032,7 @@ def cmd_claim(con, a):
     if any(not h.strip() for h in froms):
         die("--from needs a name: the holder whose claims to take, for example --from alice", "bad_input", field="from")
     if name in froms:
-        renew = next_command(a, "--as", name, "claim", *wanted, as_=False)
+        renew = next_command(a, "--as", name, "claim", *map(Positional, wanted), as_=False)
         die(f"--from {name} is you: you cannot take from yourself. To renew your own claim: {renew}", "bad_input", next=renew, field="from")
     if len(froms) > MAX_CLAIM_BATCH:
         die(f"claim takes at most {MAX_CLAIM_BATCH} --from names at once (got {len(froms)})", "bad_input", field="from")
@@ -6428,6 +6453,7 @@ BODY_HEAD = 4096    # characters of each held body the live view reads per tick 
 def empty_snapshot():
     return {"agents": [], "claims": [], "goal": None, "context": [], "messages": [], "unread": {},
             "counts": {"agents": 0, "claims": 0, "messages": 0},
+            "open": {"alerts": 0, "questions": 0, "todos": 0, "window": None},
             "omitted": {"agents": 0, "context": 0, "claims": 0, "messages": 0}}
 
 
@@ -6463,6 +6489,7 @@ def watch_snapshot(path, strict, limit, read_only=True, busy_wait=BUSY_WAIT_S, o
             "counts": {t: con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("agents", "messages")},
         }
         snap["unread"] = watch_unread(con, [a["name"] for a in snap["agents"]])
+        snap["open"] = watch_open(con)
         snap["counts"]["claims"] = con.execute("SELECT COUNT(*) FROM claims WHERE expires_at > ?", (now(),)).fetchone()[0]
         facts = con.execute("SELECT COUNT(*) FROM context WHERE key<>?", (GOAL_KEY,)).fetchone()[0]
         snap["omitted"] = {"agents": snap["counts"]["agents"] - len(snap["agents"]), "context": facts - len(snap["context"]),
@@ -6501,6 +6528,18 @@ def _watch_messages(con, q, limit, head, bodies):
     for r in rows:
         r["body"], r["body_cut"] = bodies.get(r["id"], ("", False, None))[:2]
     return rows
+
+
+def watch_open(con):
+    """What is open on the whole bus, by the rules brief lists by (open_question_where, open_todo_where), over at most the newest
+    SCAN messages so a tick stays cheap on a large bus (window is SCAN then, else None). An alert is open until a message replies
+    to it, the rule watch always had: there is no other rule for alerts."""
+    newest = con.execute("SELECT COALESCE(MAX(id), 0) FROM messages").fetchone()[0]
+    floor = max(0, newest - SCAN)
+    count = lambda where: con.execute(f"SELECT COUNT(*) FROM messages WHERE {where}").fetchone()[0]
+    alerts = count(f"kind='alert' AND id>{floor} AND id NOT IN (SELECT reply_to FROM messages WHERE reply_to IS NOT NULL AND id>{floor})")
+    return {"alerts": alerts, "questions": count(open_question_where("", floor)), "todos": count(open_todo_where("", floor)),
+            "window": SCAN if floor else None}
 
 
 def watch_unread(con, names):
@@ -7185,18 +7224,16 @@ class _Frame:
         return row
 
     def summary(self):
-        """The header's right-hand text in the overview: what needs a person. Counted over the messages
-        watch holds, and saying so when the bus has more."""
-        msgs = self.snap["messages"]
-        replied = {m["reply_to"] for m in msgs if m["reply_to"]}
-        alerts = sum(1 for m in msgs if m["kind"] == "alert" and m["id"] not in replied)
-        asks = sum(1 for m in msgs if m["kind"] == "question" and m["id"] not in replied)
+        """The header's right-hand text in the overview: what needs a person. Counted by the rules brief lists by, over the
+        whole bus (the newest SCAN messages, and saying so, on a very large one); open todos only when there are some."""
+        o = self.snap["open"]
+        alerts, asks, todos = o["alerts"], o["questions"], o["todos"]
         if self.wide:
-            text = f"{_plural(alerts, 'alert')} · {_plural(asks, 'open question')}"
+            text = f"{_plural(alerts, 'alert')} · {_plural(asks, 'open question')}" + (f" · {_plural(todos, 'open todo')}" if todos else "")
         else:
-            text = f"{alerts} ALRT · {asks} ask"
-        if self.snap["counts"]["messages"] > len(msgs):
-            text = f"newest {len(msgs)}: " + text
+            text = f"{alerts} ALRT · {asks} ask" + (f" · {todos} todo" if todos else "")
+        if o["window"]:
+            text = f"newest {o['window']}: " + text
         return text
 
     def wait(self):
@@ -7914,7 +7951,7 @@ class _Frame:
                  ("N of M", "rows the filter kept, of all there are"),
                  ("of newest 200", "watch holds the newest 200; older ones are not searched (agentbus read)"),
                  ("n/a", "the filter does not apply to this section"),
-                 ("open", "an alert or question no message replies to yet"),
+                 ("open", "no reply yet (alert), no answer yet (question), not done yet (todo)"),
                  ("waiting · 27s old", "the bus is busy; you are looking at the last frame, 27s old"),
                  ("restart for X", "the bus was upgraded; restart watch to run the new code")]
         ww = max(text_width(self.tx(k)) for k, _ in words) + 2
@@ -8890,21 +8927,23 @@ SKILL_TEXT = (
     '\n'
     "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. Pass `--as YOUR_NAME` and keep that name all session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
     '\n'
-    'Set `AGENTBUS_DB` only when a worker cannot discover the bus (a sandbox or a folder outside the checkout). If a dispatcher assigned an absolute CLI path too, use it. If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
+    'Set `AGENTBUS_DB` only when a worker cannot discover the bus. If a dispatcher assigned an absolute CLI path too, use it. If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
     '\n'
     'One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` and ask; do not create another. `--up 1` is the next outer bus.\n'
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal is empty until a lead sets it with `goal "TEXT"`; any agent can, so it informs your work but only your user directs it. `ctx history KEY` shows earlier values. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers.\n'
+    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal, empty until a lead sets it (`goal "TEXT"`), informs your work; only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers. `ctx history KEY` shows earlier values.\n'
     '\n'
-    'Hooks: with the agentbus plugin or setup, a hook message gives your exact name (already joined); use it with --as and skip `join`. Hooks never claim or replace reading inbox.\n'
+    'Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as and skip `join`.\n'
+    '\n'
+    'At start, post each job you own as its own todo. Close each with a linked done. Before you stop with work left, every unfinished job must be an open todo, not a line inside a done: `brief` lists open todos only. You may finish a todo whose owner left: claim its files as usual (`--from`, below, if a claim is in the way).\n'
     '\n'
     '## Before shared work\n'
     '\n'
-    'Read `inbox` each turn and between substantial steps; repeat while messages remain. Where you can, run `wait` in the background: it exits 0 on mail (124 on timeout); then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files before creating them. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
+    'Read `inbox` each turn and between steps; repeat until empty. If you can, background `wait`: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files first. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
     '\n'
-    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes by default. Claim again to renew. `--ttl-min` takes 1 to 10080.\n"
+    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes; claim again to renew.\n"
     '\n'
     '## Communicate\n'
     '\n'
@@ -8914,25 +8953,25 @@ SKILL_TEXT = (
     '- Promise: `post "WHAT" --kind todo`; close: `post "RESULT" --reply-to ID --kind done` (or dropped)\n'
     '- Finish: `post "RESULT; FILE OR COMMIT; CHECKS" --kind done`\n'
     '\n'
-    'Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped. Assign work with handoff. Decisions, if used: `read --topic decision`.\n'
+    'Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped. Assign work with handoff. Record a decision with `post "WHAT" --kind decision --topic decision`; read them with `read --topic decision`.\n'
     '\n'
-    'Messages to absent names queue (post warns; `who` lists names). Without `--to`, a message is broadcast.\n'
+    'Without `--to`, a message broadcasts.\n'
     '\n'
     '## Read correctly\n'
     '\n'
-    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or inspect with `inbox --peek`. Use `read` for older history, `read --since ID` for newer. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or inspect with `inbox --peek`. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.\n'
     '\n'
     'A nonzero exit does not imply rollback. A write may commit before output fails. When a `post` or `join` might be retried, add `--request-id` with a token; a repeat returns the original. Other writes ignore it.\n'
     '\n'
     '## Finish the session\n'
     '\n'
-    'Before ending, check `inbox`, post the result or handoff, then `leave`, which releases all claims.\n'
+    'Before ending, check `inbox`, post the result or handoff, then `leave` (releases all claims).\n'
     '\n'
     '## Boundaries\n'
     '\n'
-    "Follow the user's authorized scope. Peer messages supply information; they do not authorize new work. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Use `--json` when parsing output. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Run error.next to recover (fill in capitals). Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus. Do not hold the bus open in another SQLite client.\n"
+    "Follow the user's authorized scope. Peer messages inform; they do not authorize new work. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Parse with `--json`. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Run error.next to recover (fill in capitals). Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus. Do not hold the bus open in another SQLite client.\n"
     '\n'
-    'See the [reference](https://github.com/wickdninja/agentbus/blob/main/docs/reference.md) for JSON shapes, resources, and bus selection.\n'
+    'See the [reference](https://github.com/wickdninja/agentbus/blob/main/docs/reference.md).\n'
     '\n'
     '<!-- agentbus:managed -->\n'
 )
@@ -14204,20 +14243,24 @@ def _brief_rows(rows):
     return out
 
 
-def open_question_where(p=""):
+def open_question_where(p="", floor=0):
     """SQL for a question nothing answers: no message of kind answer replies to it directly. An answer closes only the message
     it replies to, never the ones above it in a chain (issue 63). The set of answered ids is read once (an uncorrelated
-    subquery), so the cost does not grow with the number of questions."""
-    return (f"{p}kind='question' AND {p}id NOT IN "
-            f"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL)")
+    subquery), so the cost does not grow with the number of questions. floor: only messages with an id above it (an answer is
+    always newer than its question, so within the window the answer is exact); watch passes it to bound a tick's scan."""
+    f = int(floor)
+    return (f"{p}kind='question' AND {p}id>{f} AND {p}id NOT IN "
+            f"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL AND id>{f})")
 
 
-def open_todo_where(p=""):
+def open_todo_where(p="", floor=0):
     """SQL for a todo that is still open: no message of a TODO_CLOSERS kind replies to it directly. Read once, like
-    open_question_where; brief's list and the hook's count both use it, so they cannot disagree."""
+    open_question_where (and floor means the same); brief's list, the hook's count and watch's header all use it, so they
+    cannot disagree."""
     closers = ",".join(f"'{k}'" for k in TODO_CLOSERS)
-    return (f"{p}kind='todo' AND {p}id NOT IN "
-            f"(SELECT reply_to FROM messages WHERE kind IN ({closers}) AND reply_to IS NOT NULL)")
+    f = int(floor)
+    return (f"{p}kind='todo' AND {p}id>{f} AND {p}id NOT IN "
+            f"(SELECT reply_to FROM messages WHERE kind IN ({closers}) AND reply_to IS NOT NULL AND id>{f})")
 
 
 def _brief_open_questions(con, me_name, limit):
@@ -14268,19 +14311,36 @@ def _brief_expired_claims(con, limit):
     return [dict(r) for r in rows], more
 
 
-def _brief_next(a, me_name, joined, unread_total, questions):
-    """The one command to run next, addressed to the bus this brief read (--up N is kept: an inbox run on the
-    inner bus would read and mark read messages the brief never showed)."""
+def _brief_next(con, a, me_name, joined, unread_total):
+    """(the one command to run next, the id of the todo it reads or None), addressed to the bus this brief read (--up N is
+    kept: an inbox run on the inner bus would read and mark read messages the brief never showed). Unread first, then a
+    question to answer, then a todo this agent may take (its own first, else the oldest whose owner joined and then left, per the
+    log, after the todo was posted; a todo whose owner is still here, or never joined, is that owner's to finish; read it
+    whole, _brief_close says how to close it), and only then the claim
+    line. The choice is made from all open work, not from the rows --limit lets brief show: --limit 0 changes what is listed,
+    never what to do next."""
     def cmd(*words):
         return next_command(a, "--as", me_name or "NAME", *words, as_=False)
     if not me_name or not joined:
-        return cmd("join")
+        return cmd("join"), None
     if unread_total:
-        return cmd("inbox")
-    for q in questions:
-        if q["sender"] != me_name:
-            return cmd("post", "ANSWER", "--to", q["sender"], "--reply-to", q["id"], "--kind", "answer")
-    return cmd("claim", "PATH", "--purpose", "WHY")
+        return cmd("inbox"), None
+    q = con.execute(f"SELECT q.id, q.sender FROM messages q WHERE {open_question_where('q.')} AND (q.recipient=? OR q.recipient='*') "
+                    "AND q.sender<>? ORDER BY q.id LIMIT 1", (me_name, me_name)).fetchone()
+    if q:
+        return cmd("post", "ANSWER", "--to", q["sender"], "--reply-to", q["id"], "--kind", "answer"), None
+    owner = "(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)"
+    t = con.execute(f"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} "
+                    f"AND ({owner} = ? OR (r.name IS NULL AND EXISTS (SELECT 1 FROM log l WHERE l.agent = {owner} AND l.action = 'leave' "
+                    f"AND l.ts >= m.ts))) ORDER BY ({owner} = ?) DESC, m.id LIMIT 1", (me_name, me_name)).fetchone()
+    if t:
+        return cmd("read", "--id", t["id"]), t["id"]
+    return cmd("claim", "PATH", "--purpose", "WHY"), None
+
+
+def _brief_close(a, me_name, todo_id):
+    """How to close the todo next: points at."""
+    return next_command(a, "--as", me_name or "NAME", "post", "RESULT", "--reply-to", todo_id, "--kind", "done", as_=False)
 
 
 def cmd_brief(con, a):
@@ -14339,20 +14399,25 @@ def cmd_brief(con, a):
         where += " AND updated_at>=?"
         params.append(since)
     fact_rows, facts_more = capped(
-        con, f"SELECT {cut('key', BRIEF_NAME_MAX)} AS key, substr(value, 1, {BRIEF_BODY_JSON}) AS value, "
+        con, f"SELECT {cut('key', BRIEF_NAME_MAX)} AS key, (CASE WHEN length(key) <= {RESOURCE_MAX} THEN key END) AS full_key, "
+             f"substr(value, 1, {BRIEF_BODY_JSON}) AS value, "
              f"substr(value, {BRIEF_BODY_JSON + 1}, 1) <> '' AS value_truncated, {cut('updated_by', BRIEF_NAME_MAX)} AS updated_by, updated_at "
              f"FROM context WHERE {where} ORDER BY updated_at DESC, key", params, limit)
 
+    # The row shows a key cut at BRIEF_NAME_MAX; the command that reads the fact needs the real one (kept out of the JSON, and
+    # absent for a key too long to put in a command, where the marker lists the facts instead).
+    fact_keys = [r["full_key"] for r in fact_rows]
+    next_cmd, next_todo = _brief_next(con, a, me_name, joined, unread_total)
     result = {"bus": a._db, "me": {"name": me_name, "joined": joined} if me_name else None, "goal": goal,
               "agents": {"items": agents}, "questions": {"items": questions},
               "todos": {"items": todos},
               "expired_claims": {"items": expired, "next": next_command(a, "--as", me_name or "NAME", "claim", "PATH", "--purpose", "WHY", as_=False) if expired or expired_more else None},
               "unread": {"total": unread_total, "items": unread},
               "pending_others": {"items": others, "next": next_command(a, "read", "--id", others[0]["id"], as_=False) if others else None},
-              "facts": {"since": since, "items": _brief_rows(fact_rows)},
+              "facts": {"since": since, "items": [{k: v for k, v in row.items() if k != "full_key"} for row in _brief_rows(fact_rows)]},
               "omitted": {"agents": agents_more, "questions": questions_more, "todos": todos_more, "expired_claims": expired_more,
                           "unread": unread_more, "pending_others": others_more, "facts": facts_more},
-              "next": _brief_next(a, me_name, joined, unread_total, questions)}
+              "next": next_cmd}
     warnings = bus_env_warnings(a.up)
     if warnings:
         result["warnings"] = warnings
@@ -14361,7 +14426,7 @@ def cmd_brief(con, a):
     if a.json:
         print_json(result)
     else:
-        _brief_show(a, result, limit)
+        _brief_show(a, result, limit, next_todo, fact_keys)
 
 
 def _brief_line(text, n):
@@ -14370,13 +14435,25 @@ def _brief_line(text, n):
     return text if len(text) <= n else text[:n - 3].rstrip() + "..."
 
 
+def _brief_cut(a, text, n, truncated, *whole):
+    """Stored text for a row, on one line, at most n characters. When the stored value was cut on the way here (truncated) or the
+    line is cut at n, it ends "..." and a marker names the command that reads it whole (`whole`, as next_command words):
+    a row that looks complete must be complete."""
+    line = _brief_line(text, n)
+    if not (truncated or len(" ".join(str(text).split())) > n):
+        return line
+    if not line.endswith("..."):
+        line += "..."
+    return f"{line} [cut: {next_command(a, *whole)}]"
+
+
 def _brief_ago(ts, now_dt):
     """A time for a sentence: now, 12m ago, 2d ago, or an unknown time ago."""
     age = ago(ts, now_dt)
     return "now" if age == "now" else "an unknown time ago" if age == "?" else age + " ago"
 
 
-def _brief_show(a, r, limit):
+def _brief_show(a, r, limit, next_todo=None, fact_keys=()):
     more_cmd = next_command(a, 'brief', '--limit', max(limit * 4, 20))
     more_hint = f"({more_cmd})"
     now_dt = clock()
@@ -14394,7 +14471,7 @@ def _brief_show(a, r, limit):
         show("goal: none set")
 
     agents = r["agents"]["items"]
-    if agents:
+    if agents or omitted["agents"]:
         show("here ({}):", len(agents) + omitted["agents"])
         for ag in agents:
             seen = ago(ag["last_seen"], now_dt)
@@ -14418,11 +14495,12 @@ def _brief_show(a, r, limit):
              r["expired_claims"]["next"])
 
     qs = r["questions"]["items"]
-    if qs:
+    if qs or omitted["questions"]:
         show("open questions ({}):", len(qs) + omitted["questions"])
         for q in qs:
             to = "everyone" if q["recipient"] == "*" else _brief_line(q["recipient"], 40)
-            show("#{} {} -> {}: {}", q["id"], _brief_line(q["sender"], 40), to, _brief_line(q["body"], BRIEF_BODY_TEXT), row=True)
+            show("#{} {} -> {}: {}", q["id"], _brief_line(q["sender"], 40), to,
+                 _brief_cut(a, q["body"], BRIEF_BODY_TEXT, q["body_truncated"], "read", "--id", q["id"]), row=True)
         more(omitted["questions"])
     else:
         show("open questions: none")
@@ -14435,7 +14513,8 @@ def _brief_show(a, r, limit):
             age = ago(x["ts"], now_dt)
             age = "age unknown" if age == "?" else "just posted" if age == "now" else age + " old"
             seen = "seen " + _brief_ago(x["owner_last_seen"], now_dt) if x["owner_on_roster"] else "not on the roster"
-            show("#{} {}, {}, {}: {}", x["id"], who, age, seen, _brief_line(x["body"], BRIEF_BODY_TEXT), row=True)
+            show("#{} {}, {}, {}: {}", x["id"], who, age, seen,
+                 _brief_cut(a, x["body"], BRIEF_BODY_TEXT, x["body_truncated"], "read", "--id", x["id"]), row=True)
         more(omitted["todos"])
 
     u = r["unread"]
@@ -14446,7 +14525,8 @@ def _brief_show(a, r, limit):
         if listed:
             show("unread handoffs and alerts ({}):", listed)
             for m in u["items"]:
-                show("#{} {} [{}]: {}", m["id"], _brief_line(m["sender"], 40), m["kind"], _brief_line(m["body"], BRIEF_BODY_TEXT), row=True)
+                show("#{} {} [{}]: {}", m["id"], _brief_line(m["sender"], 40), m["kind"],
+                     _brief_cut(a, m["body"], BRIEF_BODY_TEXT, m["body_truncated"], "read", "--id", m["id"]), row=True)
             more(omitted["unread"])
         others = u["total"] - listed
         if others:
@@ -14455,31 +14535,36 @@ def _brief_show(a, r, limit):
         show("unread: none")
 
     po = r["pending_others"]
-    if po["items"]:
+    if po["items"] or omitted["pending_others"]:
         show("pending between others ({}):", len(po["items"]) + omitted["pending_others"])
         for m in po["items"]:
             tag = "" if m["kind"] == "question" else f" [{m['kind']}]"
             show("#{} {} -> {}{}: {}", m["id"], _brief_line(m["sender"], 40), _brief_line(m["recipient"], 40), tag,
-                 _brief_line(m["body"], BRIEF_BODY_TEXT), row=True)
+                 _brief_cut(a, m["body"], BRIEF_BODY_TEXT, m["body_truncated"], "read", "--id", m["id"]), row=True)
         more(omitted["pending_others"])
-        show("next: {}", po["next"], row=True)
+        if po["next"]:
+            show("next: {}", po["next"], row=True)
     else:
         show("pending between others: none")
 
     f = r["facts"]
-    if f["items"]:
+    if f["items"] or omitted["facts"]:
         if f["since"]:
             show("facts changed since your last read ({}):", len(f["items"]) + omitted["facts"])
         else:
             show("facts ({}):", len(f["items"]) + omitted["facts"])
-        for x in f["items"]:
-            show("{} = {} ({})", _brief_line(x["key"], 40), _brief_line(x["value"], BRIEF_BODY_TEXT), _brief_line(x["updated_by"], 40), row=True)
+        for x, full in zip(f["items"], fact_keys):
+            whole = ("ctx", "get", Positional(full)) if full is not None else ("ctx", "get")
+            show("{} = {} ({})", _brief_line(x["key"], 40),
+                 _brief_cut(a, x["value"], BRIEF_BODY_TEXT, x["value_truncated"], *whole), _brief_line(x["updated_by"], 40), row=True)
         more(omitted["facts"])
     elif f["since"]:
         show("facts: none changed")
     else:
         show("facts: none")
     show("next: {}", r["next"])
+    if next_todo:
+        show("when it is done: {}", _brief_close(a, (r["me"] or {}).get("name"), next_todo))
 
 
 def register_brief(sub):

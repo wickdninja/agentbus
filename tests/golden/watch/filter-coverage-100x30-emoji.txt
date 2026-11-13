@@ -1,4 +1,4 @@
- 🚌 agentbus  ~/src/acme-api                               newest 200: 0 alerts · 0 open questions
+ 🚌 agentbus  ~/src/acme-api                                            1 alert · 0 open questions
   🎯 auth on the new token API                                                            nate · 2h
 
 👥 Agents  n/a                                                                kind: is for messages

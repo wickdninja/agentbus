@@ -30,6 +30,18 @@ w=$(wc -w <"$SKILL" | tr -d ' ')
 [ "$w" -le 720 ] || fail "SKILL.md is $w words, the cap is 720"
 grep -q '^Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped\. Assign work with handoff\.' "$SKILL" || fail "the skill must list all nine kinds on one line and say to assign work with handoff"
 grep -qF 'Promise: `post "WHAT" --kind todo`; close: `post "RESULT" --reply-to ID --kind done`' "$SKILL" || fail "the skill must say how to record a todo and close it"
+# Bug it catches: a live trial (fresh agents given only this skill) finished one of three jobs and stopped, never posting the
+# other two; one wrote "b.py and validation remain" inside a done, which brief cannot list. Recording your own jobs must be an
+# explicit step, with the unfinished ones left as open todos and a dead owner's todo finishable.
+grep -qF 'At start, post each job you own as its own todo.' "$SKILL" || fail "the skill must tell an agent to post each job it owns as a todo at start"
+grep -qF 'Close each with a linked done' "$SKILL" || fail "the skill must say to close each todo with a linked done"
+grep -qF 'every unfinished job must be an open todo' "$SKILL" || fail "the skill must say every unfinished job is left as an open todo before stopping"
+grep -qF 'not a line inside a done' "$SKILL" || fail "the skill must say unfinished work is never written inside a done"
+grep -qF 'You may finish a todo whose owner left: claim its files as usual (`--from`, below, if a claim is in the way).' "$SKILL" || fail "the skill must say a todo whose owner left may be finished, claiming as usual"
+# Bug it catches: the skill said decisions are read with `read --topic decision`, but a decision posted with --kind alone has
+# no topic, so that read answered "no messages". The post line it teaches sets the topic the read line asks for.
+grep -qF 'post "WHAT" --kind decision --topic decision' "$SKILL" || fail "the skill must teach posting a decision with --topic decision, the topic it reads back"
+grep -qF 'read --topic decision' "$SKILL" || fail "the skill must say how decisions are read"
 if grep -q 'Run `release RESOURCE` when finished' "$SKILL"; then fail "the skill still has the release-before-leave step; leave releases everything"; fi
 ok "$w words (cap 720); the nine kinds and 'assign work with handoff' on one line; no release-before-leave step"
 
@@ -109,6 +121,8 @@ grep -qF 'Use `agentbus` from PATH; if it is not on PATH, stop and tell the user
 grep -qF 'If a dispatcher assigned an absolute CLI path too, use it.' "$T/skill.out" || fail "the skill lost the sandbox case: a dispatcher that assigns the CLI by absolute path"
 grep -qF 'this copy' "$T/skill.out" && fail "the skill says 'this copy', which assumes the project copy"
 grep -qF '.agentbus/bin/agentbus' "$T/skill.out" && fail "the skill names the project copy"
+grep -qF 'every unfinished job must be an open todo' "$T/skill.out" || fail "the printed skill lost the rule that unfinished jobs stay open todos"
+grep -qF 'post "WHAT" --kind decision --topic decision' "$T/skill.out" || fail "the printed skill lost the decision post line"
 ok "the printed skill says delivery can repeat"
 
 echo "TEST: docs/how-to/setup.md's dry-run example is what setup claude --dry-run prints, with the byte count read from the real skill"

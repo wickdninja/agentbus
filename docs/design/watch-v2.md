@@ -37,7 +37,7 @@ Each finding, with what was done: 30 APPLIED, 2 REJECTED. O is wd-opus, A is wd-
 | O3 | Help teaches kind codes the filter rejects | APPLIED | `kind:X` matches a kind that starts with X or whose code is X; the error lists `question (ask)` and the rest. Frame `filter` types `kind:ask`; case `kind-codes`. |
 | O4 | Busy blocks keys for 15 s, contradicts itself and throws away the view | APPLIED | 250 ms lock wait; the last frame stays with `waiting · 27s old` in the header; full screens only for refused, newer and no bus; the view state survives every error. Frame `busy`; cases `busy-keeps-frame`, `busy-q-under-250ms`, `view-survives-errors`. |
 | O5 | Claim detail shows an idle holder as active | APPLIED | `held by   ○ codex · implementer · seen 6m ago`, the overview's own calculation. Case `claim-holder-idle`. |
-| O6 | The overview does not say what needs me; Agents rows are empty | APPLIED | Header right: `1 alert · 1 open question` (narrow `1 ALRT · 1 ask`); open means no message replies to it, counted in what watch holds and labelled `newest 200:` when the bus has more. Agents rows: `2 unread · holds src/auth/` from the cursors table, read without writing. |
+| O6 | The overview does not say what needs me; Agents rows are empty | APPLIED | Header right: `1 alert · 1 open question` (narrow `1 ALRT · 1 ask`); open means no message replies to it, counted over the newest 5000 messages and prefixed `newest 5000:` when the bus has more. Agents rows: `2 unread · holds src/auth/` from the cursors table, read without writing. |
 | O7 | Details are dead ends; `>` means two things; agent `5 of 6` has no route | APPLIED | j/k select related rows, Enter opens, Esc goes back one level; `*` marks the open record and `>` only the selection; `… 1 older · /codex lists them`. Frames `detail-nav`, `detail-nested`; case `detail-marks`. |
 | O8 | `q` in detail or help quits the app | APPLIED | q goes back one level there, as in less and man; it quits from the overview (and the error screens). Footers say `Esc/q back`. |
 | O9 | Ambiguous-width glyphs and missing console glyphs | APPLIED | `AGENTBUS_ASCII=1`, automatic on `TERM=linux` and when a start-up probe finds `●` drawn two columns wide: `* o \| ... -> re:#6 +1`, `-` for `·`. Frames `ascii`, `ascii-detail`, `ascii-help`; case `ascii-only`. |
@@ -57,7 +57,7 @@ Each finding, with what was done: 30 APPLIED, 2 REJECTED. O is wd-opus, A is wd-
 | ON1 | Header counts are noise | APPLIED | Replaced by the "what needs me" summary (O6). |
 | ON2 | The bus-gone 🌱 is noise | APPLIED | Gone; ⏳ went with the busy screen. 🚧 stays for refused and newer. |
 | A1 | Pause loses what you were reading on rollover | APPLIED | Pause keeps the records, selection and viewport; resume replaces them; the whole display freezes. Frame `pause-rollover`; case `pause-rollover` (also filter and resize while paused). |
-| A2 | Filters imply a complete search; recent is not the same as blocked | APPLIED | O2's coverage rows, on every capped section and in the header summary. Nothing claims "blocked": `open` is defined only as "no reply among the messages held". |
+| A2 | Filters imply a complete search; recent is not the same as blocked | APPLIED | O2's coverage rows, on every capped section. The header summary is not limited to the rows held: it counts brief's open items over the newest 5000 messages and says so past that. Nothing claims "blocked": `open` is brief's rule (a question closes on a direct answer, a todo on a direct `done` or `dropped`, an alert on any reply). |
 | A3 | Long input breaks rows and drops the escape hints; the kind error vanishes after Enter | APPLIED | The input scrolls around its cursor; a kept filter is cut, never `Esc clear · ? help · q quit`; detail metadata wraps by field; the kind error stays while the filter is kept. Case `long-input`, `detail-wraps`. |
 | A4 | Inspection dead ends; truncated identifiers; unlabelled limits | APPLIED | O7's navigation; an ancestor older than the 200 opens like any row (`detail-nav`); resources, keys, values and history values wrap whole; `Thread  41 shown`, `… #6 replies to #5 · open #6 to go further up`, `… 5 more replies · agentbus read --since 26`. Rows that open something stay one-line summaries, because Enter shows them whole. Case `thread-limits`. |
 | A5 | Claim detail contradicts the activity legend | APPLIED | As O5. |
@@ -101,7 +101,7 @@ One at a time, recommended answer first. Each has a fallback that only changes c
 <!-- BEGIN states -->
 ### Overview, following
 
-What opens. Everything at a glance: the pinned goal, who is here and what each one has waiting and holds, what is claimed, the shared facts and the newest messages. The header answers "what needs me?": open alerts and open questions (an alert or question no message replies to yet). Messages follow the stream; message 9 arrived in the last 3 seconds, so it carries the `▌` bar and a bold body. While following, j does nothing in Messages, so the footer says `k browse`.
+What opens. Everything at a glance: the pinned goal, who is here and what each one has waiting and holds, what is claimed, the shared facts and the newest messages. The header answers "what needs me?": open alerts, open questions and open todos (an alert no message replies to, a question no answer replies to, a todo no done or dropped replies to). Messages follow the stream; message 9 arrived in the last 3 seconds, so it carries the `▌` bar and a bold body. While following, j does nothing in Messages, so the footer says `k browse`.
 
 ```text
 [frame overview 100x30]
@@ -1901,11 +1901,11 @@ Messages  0 of 9                                   no match
 
 ### A filter on a bus bigger than the view
 
-209 messages, of which watch holds the newest 200. `kind:alert` finds none in those 200, and says so: `0 of newest 200`, and the 9 older messages were not searched (`agentbus read` reads them). The header says the same of its counts.
+209 messages, of which watch holds the newest 200. `kind:alert` finds none in those 200, and says so: `0 of newest 200`, and the 9 older messages were not searched (`agentbus read` reads them). The header does not depend on those 200: it counts open items over the newest 5000 messages (prefixed `newest 5000:` past that), so it still sees an alert among the 9 older ones.
 
 ```text
 [frame filter-coverage 100x30]
- 🚌 agentbus  ~/src/acme-api                               newest 200: 0 alerts · 0 open questions
+ 🚌 agentbus  ~/src/acme-api                                            1 alert · 0 open questions
   🎯 auth on the new token API                                                            nate · 2h
 
 👥 Agents  n/a                                                                kind: is for messages
@@ -1939,7 +1939,7 @@ Messages  0 of 9                                   no match
 
 ```text
 [frame filter-coverage-noemoji 100x30]
- agentbus  ~/src/acme-api                                  newest 200: 0 alerts · 0 open questions
+ agentbus  ~/src/acme-api                                               1 alert · 0 open questions
   ◆ auth on the new token API                                                             nate · 2h
 
 Agents  n/a                                                                   kind: is for messages
@@ -1973,7 +1973,7 @@ Messages  0 of newest 200                                                       
 
 ```text
 [frame filter-coverage 60x20]
- 🚌 agentbus  ~/src/acme-api    newest 200: 0 ALRT · 0 ask
+ 🚌 agentbus  ~/src/acme-api                1 ALRT · 0 ask
   🎯 auth on the new token API                    nate · 2h
 
 👥 Agents  n/a                        kind: is for messages
@@ -1997,7 +1997,7 @@ Messages  0 of newest 200                                                       
 
 ```text
 [frame filter-coverage-noemoji 60x20]
- agentbus  ~/src/acme-api       newest 200: 0 ALRT · 0 ask
+ agentbus  ~/src/acme-api                   1 ALRT · 0 ask
   ◆ auth on the new token API                     nate · 2h
 
 Agents  n/a                           kind: is for messages
@@ -3113,7 +3113,7 @@ Frame, top to bottom: header bar, goal row, Agents, Claims, Facts, Messages, foo
 - **Blank rows** between sections only when the whole frame fits with them, or the screen has 30 rows or more (v0.1.0). That is why 100x30 has them and 60x20 does not.
 - **The selection is never hidden.** A section's window is moved only as far as its selected row needs (Agents, Claims and Facts anchor at the top, Messages at the bottom). A section with two or more rows that is cut ends in a dim `… N more` row, where N is every row not shown (above and below); it adds `· agentbus who` (or `claims`, `ctx get`) when some are beyond the 200 the view holds. A section cut to one row shows its selected row (else its first) and its title says `… N more` on the right, before any hint. N is never 0: a section that is not cut has no marker.
 - **Messages window**: `… N earlier` above it (with `· agentbus read` when some are older than the 200 held), `… N later` below it when the selection is above the newest rows.
-- **Coverage**: watch holds the newest 200 rows per section. A filter on a section that holds fewer than exist says `N of newest 200` and adds a dim `… M older not searched · agentbus read` (or `who`, `claims`, `ctx get`). The header summary is prefixed `newest 200:` in the same case. Detail lists that scan the bus say `in newest 5000` when the bus has more.
+- **Coverage**: watch holds the newest 200 rows per section. A filter on a section that holds fewer than exist says `N of newest 200` and adds a dim `… M older not searched · agentbus read` (or `who`, `claims`, `ctx get`). The header summary is not limited to those rows: it counts brief's open items over the newest 5000 messages and is prefixed `newest 5000:` when the bus has more. Detail lists that scan the bus say `in newest 5000` when the bus has more.
 - **Header**: ` agentbus  ` (` 🚌 agentbus  ` with emoji), the bus folder cut from the left, and the right-hand text: the summary `1 alert · 1 open question` in the overview (`1 ALRT · 1 ask` narrow), `message #7`, `agent codex`, `claim src/auth/`, `fact baseline_sha`, `keys`, or the error label. While the bus is busy, `waiting · 27s old` follows it (and replaces it when both do not fit). When the folder would get fewer than 8 columns it is dropped, then the 🚌.
 - **Goal row**: `  ◆ goal`, then `nate · 2h` right-aligned (🎯 with emoji, `goal:` in ASCII). Narrow and too long: the goal keeps the row and `nate · 2h` is dropped.
 - **Title rows**: `Agents  3` (with its icon when emoji are on). The right-hand side, by priority: a one-row section's `… N more`; Messages' follow state (`following · k to browse` when Messages has the focus, else `following`; or `paused at 16:44 · +N new · p or G to follow`, shortened to `paused · +N new · p or G to follow`, `paused · +N new`, then `paused`), preceded by `restart for X.Y.Z · ` when this process runs old code; any other focused section's `j/k move · Enter open` (or `j/k · Enter`, or nothing). A filtered section shows `N of M`; with no match its title row ends in `no match`; a section the filter does not apply to shows `n/a` and `kind: is for messages`; both take no other rows (except the coverage row).

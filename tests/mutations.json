@@ -2990,8 +2990,8 @@
   {
     "name": "a done replying to a reply closes the todo above it",
     "file": "bin/agentbus",
-    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\\\"",
-    "replace": "WHERE kind IN ({closers}) AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind IN ({closers}) AND p.reply_to IS NOT NULL)\"",
+    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"",
+    "replace": "WHERE kind IN ({closers}) AND reply_to IS NOT NULL AND id>{f} UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind IN ({closers}) AND p.reply_to IS NOT NULL)\"",
     "count": 1,
     "run": "tests/test_todo.sh",
     "expect": "a done replying to a reply (ancestry) closed the todo"
@@ -2999,8 +2999,8 @@
   {
     "name": "brief treats any reply as an answer",
     "file": "bin/agentbus",
-    "find": "WHERE kind='answer' AND reply_to IS NOT NULL\\)\\\"",
-    "replace": "WHERE reply_to IS NOT NULL)\"",
+    "find": "WHERE kind=\\'answer\\' AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"",
+    "replace": "WHERE reply_to IS NOT NULL AND id>{f})\"",
     "count": 1,
     "run": "tests/test_brief.sh",
     "expect": "worker's open questions"
@@ -5420,8 +5420,8 @@
   {
     "name": "a closing row with no reply_to hides every open todo",
     "file": "bin/agentbus",
-    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\"",
-    "replace": "WHERE kind IN ({closers}))\"",
+    "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"",
+    "replace": "WHERE kind IN ({closers}) AND id>{f})\"",
     "count": 1,
     "run": "tests/test_todo.sh",
     "expect": "a done with no reply_to closed the todo"
@@ -5438,8 +5438,8 @@
   {
     "name": "a todo's owner is always its sender",
     "file": "bin/agentbus",
-    "find": "\\(CASE WHEN m\\.recipient='\\*' THEN m\\.sender ELSE m\\.recipient END\\)",
-    "replace": "m.sender",
+    "find": "\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ sql\\ =\\ ",
+    "replace": "m.sender\"\n    sql = ",
     "count": 1,
     "run": "tests/test_todo.sh",
     "expect": "owners:"
@@ -5501,8 +5501,8 @@
   {
     "name": "an answer to a reply closes the question above it",
     "file": "bin/agentbus",
-    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL\\)\"\\)",
-    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
+    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind=\\'answer\\' AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"\\)",
+    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL AND id>{f} UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
     "count": 1,
     "run": "tests/test_brief.sh",
     "expect": "worker's open questions"
@@ -5519,8 +5519,8 @@
   {
     "name": "an answer to a reply closes the question above it (unit)",
     "file": "bin/agentbus",
-    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL\\)\"\\)",
-    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
+    "find": "f\"\\(SELECT reply_to FROM messages WHERE kind=\\'answer\\' AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"\\)",
+    "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL AND id>{f} UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
     "count": 1,
     "run": "tests/test_unit.sh",
     "expect": "test_a_question_is_closed_only_by_a_direct_answer"
@@ -5528,8 +5528,8 @@
   {
     "name": "the open todo query scans the table once per todo",
     "file": "bin/agentbus",
-    "find": "    return \\(f\"\\{p\\}kind='todo' AND \\{p\\}id NOT IN \"\\n            f\"\\(SELECT reply_to FROM messages WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL\\)\"\\)",
-    "replace": "    return (f\"{p}kind='todo' AND NOT EXISTS (SELECT 1 FROM messages c WHERE c.reply_to = {p}id AND c.kind IN ({closers}))\")",
+    "find": "    return \\(f\"\\{p\\}kind='todo' AND \\{p\\}id>\\{f\\} AND \\{p\\}id NOT IN \"\\n            f\"\\(SELECT reply_to FROM messages WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"\\)",
+    "replace": "    return (f\"{p}kind='todo' AND {p}id>{f} AND NOT EXISTS (SELECT 1 FROM messages c WHERE c.reply_to = {p}id AND c.kind IN ({closers}))\")",
     "count": 1,
     "run": "tests/test_unit.sh",
     "expect": "test_no_query_scans_the_table_once_per_row"
@@ -5623,5 +5623,401 @@
     "count": 1,
     "run": "tests/test_todo.sh",
     "expect": "--limit 0 hides the expired claims"
+  },
+  {
+    "name": "brief next ignores open todos",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "next with open todos"
+  },
+  {
+    "name": "brief next points at the newest open todo",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ if\\ t:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"read\",\\ \"\\-\\-id\",\\ t\\[\"id\"\\]\\),\\ t\\[\"id\"\\]\\\n",
+    "replace": "    owner = \"(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} \"\n                    f\"AND ({owner} = ? OR (r.name IS NULL AND EXISTS (SELECT 1 FROM log l WHERE l.agent = {owner} AND l.action = 'leave' \"\n                    f\"AND l.ts >= m.ts))) ORDER BY ({owner} = ?) DESC, m.id DESC LIMIT 1\", (me_name, me_name)).fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "next with open todos"
+  },
+  {
+    "name": "brief next names the todo before an open question",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ q\\ =\\ con\\.execute\\(f\"SELECT\\ q\\.id,\\ q\\.sender\\ FROM\\ messages\\ q",
+    "replace": "    owner = \"(CASE WHEN m.recipient='*' THEN m.sender ELSE m.recipient END)\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r ON r.name = {owner} WHERE {open_todo_where('m.')} \"\n                    f\"AND ({owner} = ? OR (r.name IS NULL AND EXISTS (SELECT 1 FROM log l WHERE l.agent = {owner} AND l.action = 'leave' \"\n                    f\"AND l.ts >= m.ts))) ORDER BY ({owner} = ?) DESC, m.id LIMIT 1\", (me_name, me_name)).fetchone()\n    if t:\n        return cmd(\"read\", \"--id\", t[\"id\"]), t[\"id\"]\n    q = con.execute(f\"SELECT q.id, q.sender FROM messages q",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "an open question to me must come before a todo"
+  },
+  {
+    "name": "brief next takes the sender of a directed todo as its owner",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ owner\\ =\\ \"\\(CASE\\ WHEN\\ m\\.recipient='\\*'\\ THEN\\ m\\.sender\\ ELSE\\ m\\.recipient\\ END\\)\"\\\n\\ \\ \\ \\ t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r",
+    "replace": "    owner = \"m.sender\"\n    t = con.execute(f\"SELECT m.id FROM messages m LEFT JOIN agents r",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "bob's own todo must come before an older one he may take"
+  },
+  {
+    "name": "brief next puts the oldest offered todo before my own",
+    "file": "bin/agentbus",
+    "find": "ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)",
+    "replace": "ORDER BY m.id LIMIT 1\", (me_name,)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "bob's own todo must come before an older one he may take"
+  },
+  {
+    "name": "brief next never offers a todo whose owner left",
+    "file": "bin/agentbus",
+    "find": "\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY",
+    "replace": ") ORDER BY",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a todo whose owner left is not next"
+  },
+  {
+    "name": "brief next offers a todo whose owner is present",
+    "file": "bin/agentbus",
+    "find": "f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)",
+    "replace": "f\"ORDER BY ({owner} = ?) DESC, m.id LIMIT 1\", (me_name,)).fetchone()",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "carol was sent to a todo whose owner is present"
+  },
+  {
+    "name": "brief next offers a todo whose owner never joined",
+    "file": "bin/agentbus",
+    "find": "\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY",
+    "replace": " OR r.name IS NULL) ORDER BY",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "was offered a todo sent to a name that never joined"
+  },
+  {
+    "name": "brief next offers a todo whose owner left before it was posted",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY",
+    "replace": "                    f\"))) ORDER BY",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "posted to a name that had already left"
+  },
+  {
+    "name": "brief next treats any agent's leave as the owner's",
+    "file": "bin/agentbus",
+    "find": "WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action",
+    "replace": "WHERE l.action",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "was offered a todo sent to a name that never joined"
+  },
+  {
+    "name": "brief never says how to close the oldest todo",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ next_todo:\\\n\\ \\ \\ \\ \\ \\ \\ \\ show\\(\"when\\ it\\ is\\ done:\\ \\{\\}\"",
+    "replace": "    if False:\n        show(\"when it is done: {}\"",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "no line says how to close the oldest todo"
+  },
+  {
+    "name": "brief shows a close line when next is not the todo",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ next_todo:\\\n\\ \\ \\ \\ \\ \\ \\ \\ show\\(\"when\\ it\\ is\\ done:\\ \\{\\}\",\\ _brief_close\\(a,\\ \\(r\\[\"me\"\\]\\ or\\ \\{\\}\\)\\.get\\(\"name\"\\),\\ next_todo\\)\\)",
+    "replace": "    if td:\n        show(\"when it is done: {}\", _brief_close(a, (r[\"me\"] or {}).get(\"name\"), td[0][\"id\"]))",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a close line shows although next: is not the todo"
+  },
+  {
+    "name": "brief cut marker ignores body_truncated",
+    "file": "bin/agentbus",
+    "find": "if\\ not\\ \\(truncated\\ or\\ len\\(\"\\ \"\\.join\\(str\\(text\\)\\.split\\(\\)\\)\\)\\ >\\ n\\):",
+    "replace": "if not (len(\" \".join(str(text).split())) > n):",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a todo cut by the 200-character read says nothing"
+  },
+  {
+    "name": "brief cut marker ignores the 90-character cut",
+    "file": "bin/agentbus",
+    "find": "if\\ not\\ \\(truncated\\ or\\ len\\(\"\\ \"\\.join\\(str\\(text\\)\\.split\\(\\)\\)\\)\\ >\\ n\\):",
+    "replace": "if not truncated:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a body cut at 90 characters has no read --id"
+  },
+  {
+    "name": "brief marks every row as cut",
+    "file": "bin/agentbus",
+    "find": "if\\ not\\ \\(truncated\\ or\\ len\\(\"\\ \"\\.join\\(str\\(text\\)\\.split\\(\\)\\)\\)\\ >\\ n\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a body that fits shows a marker anyway"
+  },
+  {
+    "name": "brief question row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "_brief_cut\\(a,\\ q\\[\"body\"\\],\\ BRIEF_BODY_TEXT,\\ q\\[\"body_truncated\"\\],\\ \"read\",\\ \"\\-\\-id\",\\ q\\[\"id\"\\]\\)",
+    "replace": "_brief_line(q[\"body\"], BRIEF_BODY_TEXT)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the row with QQQQQQQQ lacks"
+  },
+  {
+    "name": "brief unread row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "show\\(\"\\#\\{\\}\\ \\{\\}\\ \\[\\{\\}\\]:\\ \\{\\}\",\\ m\\[\"id\"\\],\\ _brief_line\\(m\\[\"sender\"\\],\\ 40\\),\\ m\\[\"kind\"\\],\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ _brief_cut\\(a,\\ m\\[\"body\"\\],\\ BRIEF_BODY_TEXT,\\ m\\[\"body_truncated\"\\],\\ \"read\",\\ \"\\-\\-id\",\\ m\\[\"id\"\\]\\),\\ row=True\\)",
+    "replace": "show(\"#{} {} [{}]: {}\", m[\"id\"], _brief_line(m[\"sender\"], 40), m[\"kind\"],\n                     _brief_line(m[\"body\"], BRIEF_BODY_TEXT), row=True)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the row with HHHHHHHH lacks"
+  },
+  {
+    "name": "brief pending-between-others row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "_brief_cut\\(a,\\ m\\[\"body\"\\],\\ BRIEF_BODY_TEXT,\\ m\\[\"body_truncated\"\\],\\ \"read\",\\ \"\\-\\-id\",\\ m\\[\"id\"\\]\\),\\ row=True\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ more\\(omitted\\[\"pending_others\"\\]\\)",
+    "replace": "_brief_line(m[\"body\"], BRIEF_BODY_TEXT), row=True)\n        more(omitted[\"pending_others\"])",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the row with PPPPPPPP lacks"
+  },
+  {
+    "name": "brief fact row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "_brief_cut\\(a,\\ x\\[\"value\"\\],\\ BRIEF_BODY_TEXT,\\ x\\[\"value_truncated\"\\],\\ \\*whole\\)",
+    "replace": "_brief_line(x[\"value\"], BRIEF_BODY_TEXT)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "lacks 'ctx get wide'"
+  },
+  {
+    "name": "brief todo row drops its cut marker",
+    "file": "bin/agentbus",
+    "find": "_brief_cut\\(a,\\ x\\[\"body\"\\],\\ BRIEF_BODY_TEXT,\\ x\\[\"body_truncated\"\\],\\ \"read\",\\ \"\\-\\-id\",\\ x\\[\"id\"\\]\\)",
+    "replace": "_brief_line(x[\"body\"], BRIEF_BODY_TEXT)",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a todo cut by the 200-character read says nothing"
+  },
+  {
+    "name": "brief --limit 0 says nobody has joined",
+    "file": "bin/agentbus",
+    "find": "if\\ agents\\ or\\ omitted\\[\"agents\"\\]:",
+    "replace": "if agents:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "nobody has joined"
+  },
+  {
+    "name": "brief --limit 0 says open questions none",
+    "file": "bin/agentbus",
+    "find": "if\\ qs\\ or\\ omitted\\[\"questions\"\\]:",
+    "replace": "if qs:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "open questions: none"
+  },
+  {
+    "name": "brief --limit 0 says pending between others none",
+    "file": "bin/agentbus",
+    "find": "if\\ po\\[\"items\"\\]\\ or\\ omitted\\[\"pending_others\"\\]:",
+    "replace": "if po[\"items\"]:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "pending between others: none"
+  },
+  {
+    "name": "brief --limit 0 says facts none",
+    "file": "bin/agentbus",
+    "find": "if\\ f\\[\"items\"\\]\\ or\\ omitted\\[\"facts\"\\]:",
+    "replace": "if f[\"items\"]:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "facts: none"
+  },
+  {
+    "name": "watch counts a question open by its own rule",
+    "file": "bin/agentbus",
+    "find": "count\\(open_question_where\\(\"\",\\ floor\\)\\)",
+    "replace": "count(f\"kind='question' AND id>{floor}\")",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "after closing"
+  },
+  {
+    "name": "watch counts a todo open by its own rule",
+    "file": "bin/agentbus",
+    "find": "count\\(open_todo_where\\(\"\",\\ floor\\)\\)",
+    "replace": "count(f\"kind='todo' AND id>{floor}\")",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "after closing"
+  },
+  {
+    "name": "watch header leaves out open todos",
+    "file": "bin/agentbus",
+    "find": "\\ \\+\\ \\(f\"\\ \u00b7\\ \\{_plural\\(todos,\\ 'open\\ todo'\\)\\}\"\\ if\\ todos\\ else\\ \"\"\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "watch header"
+  },
+  {
+    "name": "watch header shows a zero todo count",
+    "file": "bin/agentbus",
+    "find": "\\(f\"\\ \u00b7\\ \\{_plural\\(todos,\\ 'open\\ todo'\\)\\}\"\\ if\\ todos\\ else\\ \"\"\\)",
+    "replace": "(f\" \u00b7 {_plural(todos, 'open todo')}\")",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a header with no open todo mentions todos"
+  },
+  {
+    "name": "watch counts the whole bus every tick",
+    "file": "bin/agentbus",
+    "find": "floor\\ =\\ max\\(0,\\ newest\\ \\-\\ SCAN\\)",
+    "replace": "floor = 0",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "watch_open over a window"
+  },
+  {
+    "name": "watch hides its counting window",
+    "file": "bin/agentbus",
+    "find": "\"window\":\\ SCAN\\ if\\ floor\\ else\\ None\\}",
+    "replace": "\"window\": None}",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "watch_open over a window"
+  },
+  {
+    "name": "watch narrow header leaves out open todos",
+    "file": "bin/agentbus",
+    "find": "\\ \\+\\ \\(f\"\\ \u00b7\\ \\{todos\\}\\ todo\"\\ if\\ todos\\ else\\ \"\"\\)",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "narrow watch header"
+  },
+  {
+    "name": "brief cut fact marker uses the cut display key",
+    "file": "bin/agentbus",
+    "find": "\\(\"ctx\",\\ \"get\",\\ Positional\\(full\\)\\)\\ if\\ full\\ is\\ not\\ None\\ else\\ \\(\"ctx\",\\ \"get\"\\)",
+    "replace": "(\"ctx\", \"get\", Positional(x[\"key\"]))",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "a 201-character key's marker did not read the whole fact"
+  },
+  {
+    "name": "brief cut fact marker names a key too long for a command",
+    "file": "bin/agentbus",
+    "find": "\\(CASE\\ WHEN\\ length\\(key\\)\\ <=\\ \\{RESOURCE_MAX\\}\\ THEN\\ key\\ END\\)\\ AS\\ full_key",
+    "replace": "key AS full_key",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the 201-character key's marker must carry the real key"
+  },
+  {
+    "name": "generated commands put a dash key where the parser reads a flag",
+    "file": "bin/agentbus",
+    "find": "if\\ any\\(isinstance\\(w,\\ Positional\\)\\ and\\ w\\.startswith\\(\"\\-\"\\)\\ for\\ w\\ in\\ joined\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "did not read the whole fact"
+  },
+  {
+    "name": "generated commands write a dash name as a separate argument",
+    "file": "bin/agentbus",
+    "find": "if\\ str\\(w\\)\\ in\\ _VALUE_FLAGS\\ and\\ not\\ isinstance\\(w,\\ Positional\\)\\ and\\ i\\ \\+\\ 1\\ <\\ len\\(seq\\)\\ and\\ str\\(seq\\[i\\ \\+\\ 1\\]\\)\\.startswith\\(\"\\-\"\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "dash names in next"
+  },
+  {
+    "name": "claim refusal command leaves a dash path as a flag",
+    "file": "bin/agentbus",
+    "find": "\\*map\\(Positional,\\ targets\\)",
+    "replace": "*targets",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "the claim refusal's own command does not run"
+  },
+  {
+    "name": "brief --limit 0 next ignores the oldest open todo",
+    "file": "bin/agentbus",
+    "find": "t\\ =\\ con\\.execute\\(f\"SELECT\\ m\\.id\\ FROM\\ messages\\ m\\ LEFT\\ JOIN\\ agents\\ r\\ ON\\ r\\.name\\ =\\ \\{owner\\}\\ WHERE\\ \\{open_todo_where\\('m\\.'\\)\\}\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ \\(\\{owner\\}\\ =\\ \\?\\ OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS\\ \\(SELECT\\ 1\\ FROM\\ log\\ l\\ WHERE\\ l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ \\'leave\\'\\ \"\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"AND\\ l\\.ts\\ >=\\ m\\.ts\\)\\)\\)\\ ORDER\\ BY\\ \\(\\{owner\\}\\ =\\ \\?\\)\\ DESC,\\ m\\.id\\ LIMIT\\ 1\",\\ \\(me_name,\\ me_name\\)\\)\\.fetchone\\(\\)",
+    "replace": "t = None",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "--limit 0 JSON next with open todos"
+  },
+  {
+    "name": "brief --limit 0 next ignores an open question",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ q:\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ cmd\\(\"post\",\\ \"ANSWER\"",
+    "replace": "    if False:\n        return cmd(\"post\", \"ANSWER\"",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "--limit 0 skipped the open question"
+  },
+  {
+    "name": "watch header drops the newest N prefix",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ o\\[\"window\"\\]:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ f\"newest\\ \\{o\\['window'\\]\\}:\\ \"\\ \\+\\ text\\\n",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "wide header on a bus past the window"
+  },
+  {
+    "name": "watch header prefixes newest 200",
+    "file": "bin/agentbus",
+    "find": "text\\ =\\ f\"newest\\ \\{o\\['window'\\]\\}:\\ \"\\ \\+\\ text",
+    "replace": "text = \"newest 200: \" + text",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "wide header on a bus past the window"
+  },
+  {
+    "name": "watch header drops the newest N prefix when narrow",
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ o\\[\"window\"\\]:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ f\"newest",
+    "replace": "        if o[\"window\"] and self.wide:\n            text = f\"newest",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "narrow header on a bus past the window"
+  },
+  {
+    "name": "brief next drops the roster check for a taken-over todo",
+    "file": "bin/agentbus",
+    "find": "OR\\ \\(r\\.name\\ IS\\ NULL\\ AND\\ EXISTS",
+    "replace": "OR (EXISTS",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "rejoined (roster check dropped)"
+  },
+  {
+    "name": "brief next looks the owner's leave up under the sender",
+    "file": "bin/agentbus",
+    "find": "l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ 'leave'",
+    "replace": "l.agent = m.sender AND l.action = 'leave'",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "leave looked up under the sender"
+  },
+  {
+    "name": "brief next matches the owner's leave case-insensitively",
+    "file": "bin/agentbus",
+    "find": "l\\.agent\\ =\\ \\{owner\\}\\ AND\\ l\\.action\\ =\\ 'leave'",
+    "replace": "l.agent = {owner} COLLATE NOCASE AND l.action = 'leave'",
+    "count": 1,
+    "run": "tests/test_agent_dx.sh",
+    "expect": "leave matched case-insensitively"
   }
 ]
