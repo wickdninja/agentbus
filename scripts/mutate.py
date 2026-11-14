@@ -295,7 +295,7 @@ def run_all(picked, jobs, root=ROOT):
                 if verdict == "wrong" and jobs > 1:
                     pool.shutdown(wait=True)
                     verdict, again = classify(e, *shadow_run(e, mutated, root))
-                    print(f"NOTE {e['name']}: failed for another reason beside other runs; run alone: {again[:200]}",
+                    print(f"NOTE {e['name']}: failed for another reason beside other runs ({line[:200]}); run alone: {again[:200]}",
                           file=sys.stderr, flush=True)
                     line = again
             print(line, flush=True)

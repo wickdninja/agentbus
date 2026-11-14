@@ -570,7 +570,7 @@ NOSID() { AGENTBUS_AGENT=lane-e hook PreToolUse "$(payload pre_tool_use_write se
 NOSID foo; [ "$(text_of)" = "${held//$N/lane-e}" ] || fail "12g: an empty session id: no held note: rc $RC out $OUT"
 NOSID foo; [ "$(text_of)" = "${held//$N/lane-e}" ] || fail "12g: an empty session id remembered a held note: rc $RC out $OUT"
 NOSID free-e.txt; quiet || fail "12g: an empty session id was nudged: rc $RC out $OUT"
-! compgen -G "$STATE/.*seen" >/dev/null || fail "12g: an empty session id wrote a memory file every such hook shares"
+[ -z "$(find "$STATE" -maxdepth 1 -name '.*seen' -print -quit)" ] || fail "12g: an empty session id wrote a memory file every such hook shares"
 # A broadcast decision sent before this session joined is not counted (inbox's rule).
 newbus p12g2; ab --as a join --tool t >/dev/null; ab --as a post "before" --kind decision >/dev/null
 forget "$SID2"; N2=$(dname "$SID2"); SS "$SID2"; ab --as "$N2" claim m.txt >/dev/null
@@ -978,9 +978,9 @@ touch "$PA/hook-seen-read.go"
 wait "$PIDA" "$PIDB" || true
 [ -s "$T/seen-a.out" ] && [ -s "$T/seen-b.out" ] || fail "the forced-interleaving hooks did not both answer: a=$(cat "$T/seen-a.out") b=$(cat "$T/seen-b.out")"
 MEMH=$(memfile "$SIDH"); [ "$(grep -c 'seen-[ab].txt' "$MEMH")" = 2 ] || fail "parallel hooks lost memory updates: kept $(tr '\n' ' ' <"$MEMH")"
-# A glob, not `ls | grep -q`: under pipefail grep -q quits at the first match, ls dies of SIGPIPE writing the rest of
+# find -quit, not `ls | grep -q`: under pipefail grep -q quits at the first match, ls dies of SIGPIPE writing the rest of
 # this 600-file listing, and the negated pipeline then passes with the file still there (907 of 1000 runs on one Linux CPU).
-END other "$SIDH"; ! compgen -G "$STATE/$SIDH.*" >/dev/null || fail "the memory file outlived the session"
+END other "$SIDH"; [ -z "$(find "$STATE" -maxdepth 1 -name "$SIDH.*" -print -quit)" ] || fail "the memory file outlived the session"
 rm -f "$STATE"/bulk-*.seen "$STATE/proc-$$.name"
 # The memory folder replaced by a link: SessionEnd still leaves.
 SIDK=aaaaaaaa-0000-4000-8000-000000000024; NK=$(dname "$SIDK"); SS "$SIDK"

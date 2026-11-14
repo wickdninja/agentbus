@@ -137,7 +137,7 @@ json.dump([{"name": "wcontend-one", "file": "bin/agentbus", "find": find, "repla
 PY
 rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m7a2.json" -j 2 --all >"$T/wc.out" 2>"$T/wc.err" || rc=$?
 [ "$rc" = 0 ] && grep -q '^KILLED wcontend-one' "$T/wc.out" && grep -q '^KILLED wcontend-two' "$T/wc.out" || fail "a mutated run starved by one beside it stayed WRONG (rc $rc): $(cat "$T/wc.out" "$T/wc.err")"
-grep -q '^NOTE wcontend-.*: failed for another reason beside other runs; run alone: KILLED' "$T/wc.err" || fail "the re-run alone of a WRONG was not reported: $(cat "$T/wc.err")"
+grep -q '^NOTE wcontend-.*: failed for another reason beside other runs (.*); run alone: KILLED' "$T/wc.err" || fail "the re-run alone of a WRONG was not reported: $(cat "$T/wc.err")"
 entry "still-wrong" "$T/other.sh" "$F" 1 "a different reason"
 rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m.json" -j 2 --all >"$T/out" 2>"$T/err" || rc=$?
 [ "$rc" = 1 ] && grep -q '^WRONG still-wrong: .*failed for another reason' "$T/out" && grep -q '^NOTE still-wrong: .*run alone: WRONG' "$T/err" || fail "a mutation killed for another reason was not WRONG after its re-run alone (rc $rc): $(cat "$T/out" "$T/err")"
