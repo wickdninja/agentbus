@@ -121,6 +121,30 @@ rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m.json" -j 2 --all >"$T/out" 2>&1 || 
 [ "$rc" = 2 ] && grep -q '^BROKEN still-broken: .*fails before any mutation' "$T/out" || fail "a file that always fails was not BROKEN after its re-run (rc $rc): $(cat "$T/out")"
 ok "contention is retried alone; a real failure stays BROKEN"
 
+echo "TEST 7a2: a mutated run that fails for another reason only while another runs beside it is run again alone, and a real WRONG still is"
+# Bug it catches: issue #73, a hook stalled by the runs beside it ended at its time budget with no output and an earlier
+# assertion failed first, so the verdict depended on the runner's speed.
+LOCK="$T/lockdir7a2"
+for n in 1 2; do
+  printf '#!/bin/bash\ngrep -q MUTATION-MARKER "$AGENTBUS_BIN" || exit 0\nmkdir "%s" 2>/dev/null || { echo "FAIL: contended"; exit 1; }\nsleep 3; rmdir "%s"\necho "FAIL: marker seen"; exit 1\n' "$LOCK" "$LOCK" >"$T/wcontend$n.sh"
+done
+"$PY" - "$T/m7a2.json" "$T/wcontend1.sh" "$T/wcontend2.sh" "$F" "$VER" <<'PY'
+import json, sys
+path, c1, c2, find, ver = sys.argv[1:6]
+rep = '__version__ = "%s"  # MUTATION-MARKER' % ver
+json.dump([{"name": "wcontend-one", "file": "bin/agentbus", "find": find, "replace": rep, "count": 1, "run": c1, "expect": "marker seen"},
+           {"name": "wcontend-two", "file": "bin/agentbus", "find": find, "replace": rep, "count": 1, "run": c2, "expect": "marker seen"}], open(path, "w"))
+PY
+rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m7a2.json" -j 2 --all >"$T/wc.out" 2>"$T/wc.err" || rc=$?
+[ "$rc" = 0 ] && grep -q '^KILLED wcontend-one' "$T/wc.out" && grep -q '^KILLED wcontend-two' "$T/wc.out" || fail "a mutated run starved by one beside it stayed WRONG (rc $rc): $(cat "$T/wc.out" "$T/wc.err")"
+grep -q '^NOTE wcontend-.*: failed for another reason beside other runs; run alone: KILLED' "$T/wc.err" || fail "the re-run alone of a WRONG was not reported: $(cat "$T/wc.err")"
+entry "still-wrong" "$T/other.sh" "$F" 1 "a different reason"
+rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m.json" -j 2 --all >"$T/out" 2>"$T/err" || rc=$?
+[ "$rc" = 1 ] && grep -q '^WRONG still-wrong: .*failed for another reason' "$T/out" && grep -q '^NOTE still-wrong: .*run alone: WRONG' "$T/err" || fail "a mutation killed for another reason was not WRONG after its re-run alone (rc $rc): $(cat "$T/out" "$T/err")"
+rc=0; MUTATE_TIMEOUT=60 $M --mutations "$T/m.json" -j 1 --all >"$T/out" 2>"$T/err" || rc=$?
+[ "$rc" = 1 ] && grep -q '^WRONG still-wrong' "$T/out" && ! grep -q '^NOTE' "$T/err" || fail "-j 1 re-ran a WRONG it already ran alone (rc $rc): $(cat "$T/out" "$T/err")"
+ok "a WRONG beside other runs is retried alone; a real one stays WRONG; -j 1 runs each once"
+
 echo "TEST 7b: two mutations run at once with -j 2 and still print in file order, one killed and one survived"
 # The first entry's test sleeps before it fails, so it finishes after the second: the lines must stay in file order.
 printf '#!/bin/bash\nif grep -q MUTATION-MARKER "$AGENTBUS_BIN"; then sleep 3; echo "FAIL: marker seen"; exit 1; fi\n' > "$T/slowkill.sh"

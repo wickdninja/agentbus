@@ -27,7 +27,10 @@ traceback, a missing interpreter, a file that skipped itself), STALE (the patter
 
 Mutations are independent, so they run in a bounded pool of threads, each driving its own subprocess in its own
 temp dir with its own HOME and TMPDIR (nothing shared between two running tests). Results print in file order,
-whatever order they finish in, and the summary line is the same at any -j.
+whatever order they finish in, and the summary line is the same at any -j. Runs beside each other can starve one
+another, and the hooks and some tests keep fixed time budgets, so with -j above 1 a baseline that fails, or a mutated
+run that is WRONG, is run once more alone (a NOTE on stderr) and that run decides. Every run gets
+AGENTBUS_MUTATION_RUN=1, which tests/test_hooks_claude.sh reads to print its performance bounds instead of enforcing them.
 
 A shard holds whole test files: the entries are grouped by the test file that must kill them (each file is run
 unmutated once per shard that needs it, and that run costs as much as a mutated one), and the groups are dealt to
@@ -121,6 +124,7 @@ def _env(copy, work):
     env["HOME"] = home
     env["TMPDIR"] = tmpdir
     env["AGENTBUS_BIN"] = copy
+    env["AGENTBUS_MUTATION_RUN"] = "1"  # tests/test_hooks_claude.sh prints its timing bounds instead of failing on them
     return env
 
 
@@ -276,13 +280,24 @@ def run_all(picked, jobs, root=ROOT):
         for e, st in zip(picked, steps):
             if st[0] == "baseline":
                 st = after_baseline(e, root) or ("test", st[1])
-            pending.append(st if st[0] == "done" else pool.submit(lambda e=e, m=st[1]: classify(e, *shadow_run(e, m, root))))
+            pending.append(st if st[0] == "done" else ("run", st[1], pool.submit(lambda e=e, m=st[1]: classify(e, *shadow_run(e, m, root)))))
         results, missed = [], []
-        for st in pending:
-            if isinstance(st, tuple):
+        for e, st in zip(picked, pending):
+            if st[0] == "done":
                 verdict, line = st[1], st[2]
             else:
-                verdict, line = st.result()
+                _, mutated, future = st
+                verdict, line = future.result()
+                # The same for a mutated run that failed for another reason beside other runs: a hook stalled past its
+                # budget (bin/agentbus HOOK_HOLD_S, HOOK_LIMIT_S) exits 0 with no output, so an earlier assertion fails on
+                # the empty text first (issue #73). Run it once more with the pool drained, as the test jobs run the file,
+                # and take that verdict; a mutation that is really killed for another reason is WRONG again.
+                if verdict == "wrong" and jobs > 1:
+                    pool.shutdown(wait=True)
+                    verdict, again = classify(e, *shadow_run(e, mutated, root))
+                    print(f"NOTE {e['name']}: failed for another reason beside other runs; run alone: {again[:200]}",
+                          file=sys.stderr, flush=True)
+                    line = again
             print(line, flush=True)
             results.append(verdict)
             if verdict not in ("killed", "skipped"):
