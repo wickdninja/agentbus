@@ -570,7 +570,7 @@ NOSID() { AGENTBUS_AGENT=lane-e hook PreToolUse "$(payload pre_tool_use_write se
 NOSID foo; [ "$(text_of)" = "${held//$N/lane-e}" ] || fail "12g: an empty session id: no held note: rc $RC out $OUT"
 NOSID foo; [ "$(text_of)" = "${held//$N/lane-e}" ] || fail "12g: an empty session id remembered a held note: rc $RC out $OUT"
 NOSID free-e.txt; quiet || fail "12g: an empty session id was nudged: rc $RC out $OUT"
-! ls -a "$STATE" | grep -q '^\..*seen$' || fail "12g: an empty session id wrote a memory file every such hook shares"
+[ -z "$(find "$STATE" -maxdepth 1 -name '.*seen' -print -quit)" ] || fail "12g: an empty session id wrote a memory file every such hook shares"
 # A broadcast decision sent before this session joined is not counted (inbox's rule).
 newbus p12g2; ab --as a join --tool t >/dev/null; ab --as a post "before" --kind decision >/dev/null
 forget "$SID2"; N2=$(dname "$SID2"); SS "$SID2"; ab --as "$N2" claim m.txt >/dev/null
@@ -978,7 +978,9 @@ touch "$PA/hook-seen-read.go"
 wait "$PIDA" "$PIDB" || true
 [ -s "$T/seen-a.out" ] && [ -s "$T/seen-b.out" ] || fail "the forced-interleaving hooks did not both answer: a=$(cat "$T/seen-a.out") b=$(cat "$T/seen-b.out")"
 MEMH=$(memfile "$SIDH"); [ "$(grep -c 'seen-[ab].txt' "$MEMH")" = 2 ] || fail "parallel hooks lost memory updates: kept $(tr '\n' ' ' <"$MEMH")"
-END other "$SIDH"; ! ls "$STATE" | grep -q "^$SIDH\." || fail "the memory file outlived the session"
+# find -quit, not `ls | grep -q`: under pipefail grep -q quits at the first match, ls dies of SIGPIPE writing the rest of
+# this 600-file listing, and the negated pipeline then passes with the file still there (907 of 1000 runs on one Linux CPU).
+END other "$SIDH"; [ -z "$(find "$STATE" -maxdepth 1 -name "$SIDH.*" -print -quit)" ] || fail "the memory file outlived the session"
 rm -f "$STATE"/bulk-*.seen "$STATE/proc-$$.name"
 # The memory folder replaced by a link: SessionEnd still leaves.
 SIDK=aaaaaaaa-0000-4000-8000-000000000024; NK=$(dname "$SIDK"); SS "$SIDK"
@@ -1595,6 +1597,10 @@ for i in range(50):
 con.commit(); con.close()
 PY
 payload user_prompt_submit session_id="\"$SID1\"" >"$T/pl"
+# Under scripts/mutate.py (it sets AGENTBUS_MUTATION_RUN=1) both bounds are printed, not enforced: there up to four copies
+# of this file share the runner and the mutated copy is compiled on every run, so a miss measures the runner, and it
+# failed entries whose own assertion comes later in this file (issue #73). No entry is meant to be killed by a bound;
+# the test jobs run without the variable and enforce both. The handler's answer and the exit status are checked always.
 # The handler itself, in this process, 20 times: the plan's 250 ms (it excludes starting Python).
 "$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$P" "$T/pl" <<'PY' || fail "handler p95 over the 250 ms budget"
 import json, os, runpy, sys, time
@@ -1608,7 +1614,7 @@ for _ in range(20):
     assert result and result[0].startswith("agentbus: 50 unread messages for you"), result
 times.sort()
 print("handler p95 %.0f ms" % (times[18] * 1000))
-sys.exit(0 if times[18] <= 0.25 else 1)
+sys.exit(0 if times[18] <= 0.25 or os.environ.get("AGENTBUS_MUTATION_RUN") == "1" else 1)
 PY
 # The whole process, 20 runs: CPU (child user+system) at most 250 ms and wall at most 1 s at the 95th percentile.
 # It is the process the plugin starts, hooks/launch.py as hooks/hooks.json names it: run as a script, bin/agentbus is
@@ -1629,7 +1635,7 @@ for _ in range(20):
     assert p.returncode == 0 and p.stdout, (p.returncode, p.stdout, p.stderr)
 wall.sort(); cpu.sort()
 print("process p95 wall %.0f ms, cpu %.0f ms" % (wall[18] * 1000, cpu[18] * 1000))
-sys.exit(0 if cpu[18] <= 0.25 and wall[18] <= 1.0 else 1)
+sys.exit(0 if cpu[18] <= 0.25 and wall[18] <= 1.0 or os.environ.get("AGENTBUS_MUTATION_RUN") == "1" else 1)
 PY
 ok "UserPromptSubmit: handler and process inside their bounds"
 
