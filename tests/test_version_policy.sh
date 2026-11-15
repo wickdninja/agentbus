@@ -384,7 +384,7 @@ row_11() {
   doctor_row "$W/r11" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade $W/r11"
 }
 
-# The one exception to this row: the Claude hook's SessionStart text names the installed `agentbus` (tests/test_hooks_claude.sh pins it),
+# The one exception to this row: the Claude hook's SessionStart text names the installed `agentbus` (tests/test_hooks_claude_events.sh pins it),
 # because the plugin deliberately does not endorse a project's bus copy. This row reads the skill and the AGENTS.md block, not hook text.
 row_12() {
   reset

@@ -30,7 +30,7 @@ temp dir with its own HOME and TMPDIR (nothing shared between two running tests)
 whatever order they finish in, and the summary line is the same at any -j. Runs beside each other can starve one
 another, and the hooks and some tests keep fixed time budgets, so with -j above 1 a baseline that fails, or a mutated
 run that is WRONG, is run once more alone (a NOTE on stderr) and that run decides. Every run gets
-AGENTBUS_MUTATION_RUN=1, which tests/test_hooks_claude.sh reads to print its performance bounds instead of enforcing them.
+AGENTBUS_MUTATION_RUN=1, which tests/test_hooks_claude_lifecycle.sh (TEST 22) reads to print its performance bounds instead of enforcing them.
 
 A shard holds whole test files: the entries are grouped by the test file that must kill them (each file is run
 unmutated once per shard that needs it, and that run costs as much as a mutated one), and the groups are dealt to
@@ -124,7 +124,7 @@ def _env(copy, work):
     env["HOME"] = home
     env["TMPDIR"] = tmpdir
     env["AGENTBUS_BIN"] = copy
-    env["AGENTBUS_MUTATION_RUN"] = "1"  # tests/test_hooks_claude.sh prints its timing bounds instead of failing on them
+    env["AGENTBUS_MUTATION_RUN"] = "1"  # tests/test_hooks_claude_lifecycle.sh (TEST 22) prints its timing bounds instead of failing on them
     return env
 
 

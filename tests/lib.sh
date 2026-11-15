@@ -26,6 +26,8 @@ export AGENTBUS_CLAUDE_BIN=/nonexistent/claude
 # lines run unwrapped, whatever terminal started them; tests/test_wrap.sh sets COLUMNS per call.
 export COLUMNS=4096
 PY="${PYTHON:-python3}"
+# A PYTHON that is not a command fails here, naming it: further down it showed only as a bare exit 1 (issue #67).
+command -v "$PY" >/dev/null 2>&1 || { echo "tests/lib.sh: PYTHON=$PY is not a command on PATH; set PYTHON to an interpreter (for example python3.11)" >&2; exit 1; }
 # tests/term_oracle.py: the emulated terminal (libc wcwidth) the output tests render through.
 export TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONDONTWRITEBYTECODE=1
@@ -36,11 +38,17 @@ export PYTHONDONTWRITEBYTECODE=1
 # (macOS's own TMPDIR ends in "/": without the strip a test's paths hold "//" and never equal a resolved path)
 TESTS_TMPROOT=${TMPDIR:-/tmp}; TESTS_TMPROOT=$(command mktemp -d "${TESTS_TMPROOT%/}/t.XXXXXX") || exit 1
 export TMPDIR="$TESTS_TMPROOT"
+# A bus is found by walking up from the folder a command runs in, and from a linked worktree that walk ends at the main
+# checkout's live bus (issue #55). So tests/bus_guard refuses, in every Python a test starts, a database outside this
+# folder (tests/run_all.sh runs every file from a scratch folder, and fails a file when TESTS_BUS_GUARD_LOG holds a line).
+export TESTS_BUS_ROOT="$TESTS_TMPROOT"
+export PYTHONPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bus_guard${PYTHONPATH:+:$PYTHONPATH}"
 mktemp() {
   local a template=""
   for a in "$@"; do case "$a" in -*) ;; *) template=$a ;; esac; done
   if [ -z "$template" ]; then command mktemp "$@" "$TMPDIR/m.XXXXXXXX"; else command mktemp "$@"; fi
 }
+export -f mktemp   # a bash child (a script a test runs, such as examples/*.sh) gets the same: its bare `mktemp -d` stays in TMPDIR on macOS too
 trap() {
   if [ $# -ge 2 ] && [ "${!#}" = EXIT ]; then builtin trap "${1}; rm -rf \"$TESTS_TMPROOT\"" EXIT; else builtin trap "$@"; fi
 }
