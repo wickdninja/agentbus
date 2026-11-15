@@ -42,7 +42,11 @@ export TMPDIR="$TESTS_TMPROOT"
 # checkout's live bus (issue #55). So tests/bus_guard refuses, in every Python a test starts, a database outside this
 # folder (tests/run_all.sh runs every file from a scratch folder, and fails a file when TESTS_BUS_GUARD_LOG holds a line).
 export TESTS_BUS_ROOT="$TESTS_TMPROOT"
-export PYTHONPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bus_guard${PYTHONPATH:+:$PYTHONPATH}"
+# The guard module is copied under the temp folder and THAT copy goes on PYTHONPATH: a Python that runs without
+# PYTHONDONTWRITEBYTECODE (one a test starts with its own environment) would otherwise compile it into
+# tests/bus_guard/__pycache__ inside the checkout, and run_all.sh fails the file for changing the checkout.
+mkdir "$TESTS_TMPROOT/bus_guard" && cp "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bus_guard/sitecustomize.py" "$TESTS_TMPROOT/bus_guard/" || exit 1
+export PYTHONPATH="$TESTS_TMPROOT/bus_guard${PYTHONPATH:+:$PYTHONPATH}"
 mktemp() {
   local a template=""
   for a in "$@"; do case "$a" in -*) ;; *) template=$a ;; esac; done

@@ -95,7 +95,7 @@ m.reference_shapes.cache_clear(); m.reference_indexes.cache_clear()
 sys.argv = ["agentbus"] + sys.argv[1:]
 m.cli()
 PY
-export PYTHONPATH="$T"
+export PYTHONPATH="$T${PYTHONPATH:+:$PYTHONPATH}"   # keep the bus guard (tests/lib.sh) on the path
 V2=("$PY" "$T/v2.py")
 snap() { "$PY" -c 'import sys, h; print(h.tree(*sys.argv[1:]))' "$@"; }
 uv() { "$PY" -c 'import sys, h; print(h.user_version(sys.argv[1]))' "$1/.agentbus/bus.db"; }

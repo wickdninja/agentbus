@@ -129,6 +129,28 @@ run "$T/tests/test_guard.sh"
 [ "$rc" = 0 ] || fail "a database inside the temp folder (and one in memory) was refused (rc $rc): $(cat "$T/out")"
 ok "a database outside the temp folder is refused and fails the file; one inside it is not"
 
+echo "TEST 3g2: the bus guard never writes bytecode into the checkout, even from a Python that compiles it (CI failure, PR #77)"
+# A Python a test starts without PYTHONDONTWRITEBYTECODE compiles sitecustomize.py next to its source; lib.sh puts a copy under TMPDIR on PYTHONPATH, so nothing lands in tests/bus_guard.
+leak bytecode '. "'"$TESTS_DIR"'/lib.sh"
+case "${PYTHONPATH%%:*}" in "'"$ROOT"'"/*) echo "the guard is on PYTHONPATH from the checkout: $PYTHONPATH"; exit 1 ;; esac
+env -u PYTHONDONTWRITEBYTECODE python3 -c pass'
+run "$T/tests/test_bytecode.sh"
+[ "$rc" = 0 ] || fail "starting a bytecode-writing Python changed the checkout or put the guard on the path from it (rc $rc): $(cat "$T/out")"
+[ ! -e "$ROOT/tests/bus_guard/__pycache__" ] || fail "tests/bus_guard/__pycache__ exists in the checkout"
+ok "the guard is loaded from a copy under TMPDIR; the checkout stays clean"
+
+echo "TEST 3g3: the guard decodes file: URIs, so a database in a temp folder with a space in its name is allowed, and one outside it is not"
+mkdir "$T/with space" "$T/other"
+uri_open() { TESTS_BUS_ROOT="$T/with space" PYTHONPATH="$TESTS_DIR/bus_guard" PYTHONDONTWRITEBYTECODE=1 "$PY" -c '
+import sqlite3, sys
+from urllib.parse import quote
+sqlite3.connect("file:" + quote(sys.argv[1]) + "?mode=rwc", uri=True).close()' "$1" 2>/dev/null; }
+uri_open "$T/with space/x.db" || fail "the guard refused a quoted file: URI inside a root with a space in its name"
+[ -e "$T/with space/x.db" ] || fail "the quoted file: URI inside the root did not open"
+! uri_open "$T/other/y.db" || fail "the guard let a quoted file: URI outside the root through"
+[ ! -e "$T/other/y.db" ] || fail "the guard refused a file: URI but the database was created: $T/other/y.db"
+ok "file: URIs are decoded before the folder check"
+
 echo "TEST 3h: a file that leaves something in its working folder fails"
 leak cwd 'touch stray'
 run "$T/tests/test_cwd.sh"

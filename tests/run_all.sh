@@ -15,9 +15,10 @@
 # and every file of the checkout (tracked, untracked, ignored) must have the checksum it had before; otherwise that file
 # fails with `FAIL tests/test_x.sh (isolation: ...)`.
 # Each file starts in an empty scratch folder (not the checkout, whose bus discovery from a linked worktree reaches the
-# main checkout's live bus, issue #55), and tests/bus_guard (put on PYTHONPATH by tests/lib.sh) refuses every database a
-# test opens outside its own temp folder; the attempt is logged, so the file fails with `isolation: tests/bus_guard: a
-# test opened <path>, outside its temp folder` even when the test swallowed the error, and it must leave its folder empty.
+# main checkout's live bus, issue #55), and tests/bus_guard (a copy under the test's temp folder, put on PYTHONPATH by
+# tests/lib.sh) refuses every database a test opens outside its own temp folder; the attempt is logged, so the file fails
+# with `isolation: a test opened <path>, outside its temp folder <folder>` even when the test swallowed the error, and it
+# must leave its folder empty.
 # --skip-heavy leaves out the two files that run other tests again (mutations, the eval harness); CI runs them once
 # in their own job with --only-heavy.
 set -u

@@ -6,9 +6,15 @@ TESTS_BUS_ROOT is refused with an error, and a line goes to TESTS_BUS_GUARD_LOG 
 fails the file even if the test swallowed the error. Why: from a linked worktree, bus discovery walks to the main
 checkout's bus, and a test run with the checkout as its folder read or wrote that live bus.
 Off when TESTS_BUS_ROOT is unset. Nothing in bin/agentbus knows about it.
+
+Known limits (the guard is a tripwire, not a sandbox). It does not run under python -I, -E or -S (they ignore PYTHONPATH
+or skip sitecustomize), after `env -i`, or where a command clears PYTHONPATH, and it does not see the sqlite3 command-line
+tool. The second layer is the empty scratch working folder tests/run_all.sh gives every file: a bus is found by walking up
+from the current folder, so a command that skips the guard still starts in a folder with no bus above it to find.
 """
 import os
 import sys
+from urllib.parse import unquote
 
 _ROOT = os.environ.get("TESTS_BUS_ROOT")
 
@@ -22,7 +28,8 @@ def _database_path(database):
     if database in ("", ":memory:") or "mode=memory" in database:
         return None  # nothing on disk
     if database.startswith("file:"):
-        database = database[5:].split("?", 1)[0]
+        # bin/agentbus opens "file:" + quote(path): the path comes back after decoding the percent escapes
+        database = unquote(database[5:].split("?", 1)[0])
         if database.startswith("//"):
             database = database[2:]
     return database
