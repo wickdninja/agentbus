@@ -141,7 +141,7 @@ ok "the guard is loaded from a copy under TMPDIR; the checkout stays clean"
 
 echo "TEST 3g3: the guard decodes file: URIs, so a database in a temp folder with a space in its name is allowed, and one outside it is not"
 mkdir "$T/with space" "$T/other"
-uri_open() { TESTS_BUS_ROOT="$T/with space" PYTHONPATH="$TESTS_DIR/bus_guard" PYTHONDONTWRITEBYTECODE=1 "$PY" -c '
+uri_open() { env -u TESTS_BUS_GUARD_LOG TESTS_BUS_ROOT="$T/with space" PYTHONPATH="$TESTS_DIR/bus_guard" PYTHONDONTWRITEBYTECODE=1 "$PY" -c '
 import sqlite3, sys
 from urllib.parse import quote
 sqlite3.connect("file:" + quote(sys.argv[1]) + "?mode=rwc", uri=True).close()' "$1" 2>/dev/null; }
