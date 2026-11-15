@@ -140,35 +140,52 @@ newbus p34; N=$(dname "$SID1"); mkgenindex "$P/.git/index" 1000000
 ab --as peer join --tool t >/dev/null; ab --as peer post "x" --to "$N" --kind note >/dev/null 2>&1
 # These are budgets (Claude Code cuts a hook at its limit), and a wall clock under load measures the machine, not the hook: a
 # run that was descheduled for seconds "took" seconds. So each is held to the CPU time the hook used (its own and its
-# children's, from getrusage), which load barely moves. What the hooks must DO carries no clock: SessionStart must have
-# joined, UserPromptSubmit must have said something valid, and SessionEnd must have left (all checked below).
-timed1() {  # timed1 EVENT FIXTURE: "cpu_seconds exit stdout_bytes valid"
+# children's, from getrusage), which load barely moves. CPU time alone cannot see a hook that waits (a sleep, a lock, a
+# blocked read), so each also gets a WALL ceiling, far looser than the CPU budget and judged on the best of up to 3 runs:
+# one descheduled run cannot fail it, but a wait that is in every run does. The ceilings are 6 to 10 times the wall seen on
+# an idle machine (SessionStart 0.5 s, UserPromptSubmit 0.15 s, SessionEnd 0.15 s with a 1M-entry index) and stay under
+# the hook's own watchdog (HOOK_LIMIT_S 4 s, HOOK_END_LIMIT_S 1.2 s: a hook that waits is cut off there, so a ceiling
+# above them could never fail): SessionStart 3 s, UserPromptSubmit 1.5 s, SessionEnd 1.0 s. A time.sleep(3) in any of
+# them fails, a loaded runner does not. What the hooks must DO carries no clock: SessionStart
+# must have joined, UserPromptSubmit must have said something valid, and SessionEnd must have left (all checked below).
+timed1() {  # timed1 EVENT FIXTURE WALL_CEILING: "cpu_seconds exit stdout_bytes valid best_wall" (cpu and the rest from the first run)
   payload "$2" session_id="\"$SID1\"" >"$T/pl"
-  "$PY" -I - "$T/pl" "$P" "$1" "${AB[@]}" <<'PY'
-import json, resource, subprocess, sys
-pl, cwd, ev, argv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
-r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
-p = subprocess.run([*argv, "hook", "claude", ev], stdin=open(pl), capture_output=True, cwd=cwd, timeout=60)
-r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
-took = r1.ru_utime + r1.ru_stime - r0.ru_utime - r0.ru_stime
-if not p.stdout:
-    valid = 0                    # nothing said
-else:
-    try:
-        d = json.loads(p.stdout)
-        valid = 1 if isinstance(d, dict) and "hookSpecificOutput" in d and d["hookSpecificOutput"].get("additionalContext") else -1
-    except ValueError:
-        valid = -1
-print("%.2f %d %d %d" % (took, p.returncode, len(p.stdout), valid))
+  "$PY" -I - "$T/pl" "$P" "$1" "$3" "${AB[@]}" <<'PY'
+import json, resource, subprocess, sys, time
+pl, cwd, ev, ceiling, argv = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4]), sys.argv[5:]
+best = None
+for attempt in range(3):
+    r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
+    t0 = time.monotonic()
+    p = subprocess.run([*argv, "hook", "claude", ev], stdin=open(pl), capture_output=True, cwd=cwd, timeout=60)
+    wall = time.monotonic() - t0
+    r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
+    if attempt == 0:
+        took = r1.ru_utime + r1.ru_stime - r0.ru_utime - r0.ru_stime
+        code, size = p.returncode, len(p.stdout)
+        if not p.stdout:
+            valid = 0                    # nothing said
+        else:
+            try:
+                d = json.loads(p.stdout)
+                valid = 1 if isinstance(d, dict) and "hookSpecificOutput" in d and d["hookSpecificOutput"].get("additionalContext") else -1
+            except ValueError:
+                valid = -1
+    best = wall if best is None else min(best, wall)
+    if best < ceiling:
+        break
+print("%.2f %d %d %d %.2f" % (took, code, size, valid, best))
 PY
 }
-set -- $(timed1 SessionStart session_start_startup_print)
+set -- $(timed1 SessionStart session_start_startup_print 3)
 [ "$2" = 0 ] && [ "$4" = 1 ] || fail "SessionStart with a 1M-entry index: exit $2, $3 bytes, hook JSON valid=$4 (1 wanted) within $1 s"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 4.5 else 1)' "$1" || fail "SessionStart with a 1M-entry index used $1 s of CPU, past its 4.5 s budget"
+"$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 else 1)' "$5" || fail "SessionStart with a 1M-entry index took $5 s of wall time at best of 3 (CPU $1 s): it waits on something"
 [[ " $(roster) " == *" $N "* ]] || fail "SessionStart with a 1M-entry index did not put $N on the roster: $(roster)"
-set -- $(timed1 UserPromptSubmit user_prompt_submit)
+set -- $(timed1 UserPromptSubmit user_prompt_submit 1.5)
 [ "$2" = 0 ] && [ "$4" = 1 ] || fail "UserPromptSubmit with an unchanged 1M-entry index: exit $2, $3 bytes, hook JSON valid=$4 (1 wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)' "$1" || fail "UserPromptSubmit re-read an unchanged 1M-entry index (used $1 s of CPU, past its 1 s budget)"
+"$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$5" || fail "UserPromptSubmit with an unchanged 1M-entry index took $5 s of wall time at best of 3 (CPU $1 s): it waits on something"
 # The shortcut itself, on every system: a session leaving the very bus.db it joined never asks the full check, here made to
 # refuse. Changing the index cannot show this on Linux (no creation time: a changed index gets the full check on purpose,
 # TEST 41) and an unchanged one cannot either (the full check answers from the same remembered list, and leaves too).
@@ -183,8 +200,9 @@ g["hook_session_end"](json.load(open(sys.argv[2])))
 PY
 [[ " $(roster) " != *" $N34 "* ]] || fail "SessionEnd with a 1M-entry index did not leave without the full check: $(roster)"
 [ "$BIRTH" = 0 ] || printf garbage >"$P/.git/index"      # git rewrites the index all the time (here: into something unreadable); with a creation time SessionEnd must not depend on it
-set -- $(timed1 SessionEnd session_end_other); [ "$2" = 0 ] && [ "$4" = 0 ] || fail "SessionEnd with a 1M-entry index: exit $2, valid=$4 (0: no output wanted)"
+set -- $(timed1 SessionEnd session_end_other 1.0); [ "$2" = 0 ] && [ "$4" = 0 ] || fail "SessionEnd with a 1M-entry index: exit $2, valid=$4 (0: no output wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.5 else 1)' "$1" || fail "SessionEnd with a 1M-entry index used $1 s of CPU, past its 1.5 s budget"
+"$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)' "$5" || fail "SessionEnd with a 1M-entry index took $5 s of wall time at best of 3 (CPU $1 s): it waits on something"
 [ "$(roster)" = "peer" ] || fail "SessionEnd with a 1M-entry index did not leave: $(roster)"
 ok "1M entries: join within the limit, warm events under 1 s, SessionEnd under 1.5 s (all CPU time) and left"
 

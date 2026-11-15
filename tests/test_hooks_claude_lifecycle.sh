@@ -145,20 +145,31 @@ payload user_prompt_submit session_id="\"$SID1\"" >"$T/pl"
 # the handler is held to the CPU time it used (time.process_time), which load barely moves, and the process to its CPU and
 # wall bounds in the best of 3 rounds of 20 (a round that load spoiled proves nothing: a hook that is really too slow
 # spoils every round; on an idle machine it is one round).
-# The handler itself, in this process, 20 times: the plan's 250 ms of CPU (it excludes starting Python).
-"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$P" "$T/pl" <<'PY' || fail "handler p95 over the 250 ms budget"
+# The handler itself, in this process, 20 times: the plan's 250 ms of CPU (it excludes starting Python). CPU time alone
+# cannot see a handler that waits (a sleep, a lock), so the same 20 calls also get a wall bound of 250 ms at the 95th
+# percentile, in the best of 3 rounds (a round that load spoiled proves nothing; a wait in the handler spoils every round).
+# Idle, the handler's wall p95 is 1 to 2 ms (the line it prints shows it), so 250 ms leaves a loaded runner 100 times that
+# and a 0.5 s wait fails.
+"$PY" -I - "${AGENTBUS_BIN:-$BIN}" "$P" "$T/pl" <<'PY' || fail "handler p95 over the 250 ms CPU budget or the 250 ms wall bound"
 import json, os, runpy, sys, time
 m = runpy.run_path(sys.argv[1], run_name="agentbus_hook")
 os.chdir(sys.argv[2]); payload = json.load(open(sys.argv[3]))
-times = []
-for _ in range(20):
-    t0 = time.process_time()
-    result = m["hook_user_prompt"](payload)
-    times.append(time.process_time() - t0)
-    assert result and result[0].startswith("agentbus: 50 unread messages for you"), result
-times.sort()
-print("handler p95 %.0f ms of CPU" % (times[18] * 1000))
-sys.exit(0 if times[18] <= 0.25 or os.environ.get("AGENTBUS_MUTATION_RUN") == "1" else 1)
+exempt = os.environ.get("AGENTBUS_MUTATION_RUN") == "1"
+cpu_ok = wall_ok = False
+for attempt in range(3):
+    cpu, wall = [], []
+    for _ in range(20):
+        c0, w0 = time.process_time(), time.perf_counter()
+        result = m["hook_user_prompt"](payload)
+        cpu.append(time.process_time() - c0); wall.append(time.perf_counter() - w0)
+        assert result and result[0].startswith("agentbus: 50 unread messages for you"), result
+    cpu.sort(); wall.sort()
+    print("handler p95 %.0f ms of CPU, %.0f ms of wall (round %d)" % (cpu[18] * 1000, wall[18] * 1000, attempt + 1))
+    cpu_ok = cpu_ok or attempt == 0 and cpu[18] <= 0.25
+    wall_ok = wall[18] <= 0.25
+    if cpu_ok and wall_ok:
+        break
+sys.exit(0 if (cpu_ok and wall_ok) or exempt else 1)
 PY
 # The whole process, 20 runs: CPU (child user+system) at most 250 ms and wall at most 1 s at the 95th percentile, wall in the best of 3 rounds.
 # It is the process the plugin starts, hooks/launch.py as hooks/hooks.json names it: run as a script, bin/agentbus is
