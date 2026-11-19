@@ -146,15 +146,32 @@ ab --as peer join --tool t >/dev/null; ab --as peer post "x" --to "$N" --kind no
 # an idle machine (SessionStart 0.5 s, UserPromptSubmit 0.15 s, SessionEnd 0.15 s with a 1M-entry index) and stay under
 # the hook's own watchdog (HOOK_LIMIT_S 4 s, HOOK_END_LIMIT_S 1.2 s: a hook that waits is cut off there, so a ceiling
 # above them could never fail): SessionStart 3 s, UserPromptSubmit 1.5 s, SessionEnd 1.0 s. A time.sleep(3) in any of
-# them fails, a loaded runner does not. What the hooks must DO carries no clock: SessionStart
+# them fails, a loaded runner does not. A retry must measure the run it repeats, not a warmer one: SessionStart caches
+# the index answer and SessionEnd leaves, so each retry starts from the state the first run started from (the bus folder
+# and the hooks' memory folder are copied before it and put back), and the first run's resulting state is restored after
+# the last retry, so every check below judges the first run alone. What the hooks must DO carries no clock: SessionStart
 # must have joined, UserPromptSubmit must have said something valid, and SessionEnd must have left (all checked below).
 timed1() {  # timed1 EVENT FIXTURE WALL_CEILING: "cpu_seconds exit stdout_bytes valid best_wall" (cpu and the rest from the first run)
   payload "$2" session_id="\"$SID1\"" >"$T/pl"
   "$PY" -I - "$T/pl" "$P" "$1" "$3" "${AB[@]}" <<'PY'
-import json, resource, subprocess, sys, time
+import json, os, resource, shutil, subprocess, sys, tempfile, time
 pl, cwd, ev, ceiling, argv = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4]), sys.argv[5:]
+state = [os.path.join(cwd, ".agentbus"), os.path.join(tempfile.gettempdir(), "agentbus-hooks-%d" % os.getuid())]
+snaps = tempfile.mkdtemp()
+def save(tag):
+    for i, d in enumerate(state):
+        if os.path.isdir(d):
+            shutil.copytree(d, os.path.join(snaps, "%s%d" % (tag, i)), symlinks=True)
+def load(tag):
+    for i, d in enumerate(state):
+        shutil.rmtree(d, ignore_errors=True)
+        if os.path.isdir(os.path.join(snaps, "%s%d" % (tag, i))):
+            shutil.copytree(os.path.join(snaps, "%s%d" % (tag, i)), d, symlinks=True)
+save("before")
 best = None
 for attempt in range(3):
+    if attempt:
+        load("before")               # the same cold state the first run had: no cached index answer, still on the roster
     r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
     t0 = time.monotonic()
     p = subprocess.run([*argv, "hook", "claude", ev], stdin=open(pl), capture_output=True, cwd=cwd, timeout=60)
@@ -171,9 +188,13 @@ for attempt in range(3):
                 valid = 1 if isinstance(d, dict) and "hookSpecificOutput" in d and d["hookSpecificOutput"].get("additionalContext") else -1
             except ValueError:
                 valid = -1
+        save("after")
     best = wall if best is None else min(best, wall)
     if best < ceiling:
         break
+if attempt:
+    load("after")                    # the checks after this judge what the first run did
+shutil.rmtree(snaps)
 print("%.2f %d %d %d %.2f" % (took, code, size, valid, best))
 PY
 }
