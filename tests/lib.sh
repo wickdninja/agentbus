@@ -46,7 +46,8 @@ export TESTS_BUS_ROOT="$TESTS_TMPROOT"
 # PYTHONDONTWRITEBYTECODE (one a test starts with its own environment) would otherwise compile it into
 # tests/bus_guard/__pycache__ inside the checkout, and run_all.sh fails the file for changing the checkout.
 # (mktemp and cat only: tests/test_package.sh runs this file under a PATH that holds just a few tools)
-TESTS_GUARD_DIR=$(command mktemp -d "$TESTS_TMPROOT/g.XXXXXX") && command cat "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bus_guard/sitecustomize.py" >"$TESTS_GUARD_DIR/sitecustomize.py" || exit 1
+TESTS_GUARD_DIR=$(command mktemp -d "$TESTS_TMPROOT/g.XXXXXX") && command cat "$TESTS_DIR/bus_guard/sitecustomize.py" >"$TESTS_GUARD_DIR/sitecustomize.py" ||
+  { echo "tests/lib.sh: could not copy tests/bus_guard/sitecustomize.py into $TESTS_TMPROOT" >&2; rm -rf "$TESTS_TMPROOT"; exit 1; }
 export PYTHONPATH="$TESTS_GUARD_DIR${PYTHONPATH:+:$PYTHONPATH}"
 mktemp() {
   local a template=""
