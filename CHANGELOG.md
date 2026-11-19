@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-11-19
+
+Which of the [five versioned things](docs/explanation/versions.md) change: the tool is 0.4.0; the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill changes (the todo and dropped kinds, and shorter); the hooks keep their commands but say new things (SessionStart counts open todos, the Stop hook ignores a `done` that is a reply), and `agentbus update` refreshes what setup installed; plugin users update the plugin.
 
 For agents, what changes:
 
