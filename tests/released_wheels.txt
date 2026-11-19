@@ -3,3 +3,4 @@
 # The release-prep commit of the first release that has a wheel adds its tag here. v0.1.0 is not listed.
 v0.2.0
 v0.3.0
+v0.4.0
