@@ -116,6 +116,73 @@ run "$T/tests/test_len.sh"
 [ "$rc" = 0 ] || fail "paths under the runner are too long (rc $rc): $(cat "$T/out")"
 ok "TMPDIR and HOME stay under 27 characters, a lib.sh temp dir under 45, and a socket binds there"
 
+echo "TEST 3g: a test that opens a database outside its temp folder fails, even when it swallows the error (issue #55)"
+mkdir "$T/outside"
+leak guard '. "'"$TESTS_DIR"'/lib.sh"
+python3 -c "import sqlite3, sys; sqlite3.connect(sys.argv[1])" "'"$T"'/outside/x.db" 2>/dev/null || true'
+run "$T/tests/test_guard.sh"
+[ "$rc" = 1 ] && grep -q "^FAIL $T/tests/test_guard.sh (isolation: .*/outside/x.db, outside its temp folder" "$T/out" || fail "a database opened outside the temp folder passed (rc $rc): $(cat "$T/out")"
+[ ! -e "$T/outside/x.db" ] || fail "tests/bus_guard logged the open but let it happen: $T/outside/x.db exists"
+leak guard '. "'"$TESTS_DIR"'/lib.sh"
+python3 -c "import sqlite3; sqlite3.connect(\":memory:\").close(); sqlite3.connect(\"$TMPDIR/inside.db\").close()"'
+run "$T/tests/test_guard.sh"
+[ "$rc" = 0 ] || fail "a database inside the temp folder (and one in memory) was refused (rc $rc): $(cat "$T/out")"
+ok "a database outside the temp folder is refused and fails the file; one inside it is not"
+
+echo "TEST 3g2: the bus guard never writes bytecode into the checkout, even from a Python that compiles it (CI failure, PR #77)"
+# A Python a test starts without PYTHONDONTWRITEBYTECODE compiles sitecustomize.py next to its source; lib.sh puts a copy under TMPDIR on PYTHONPATH, so nothing lands in tests/bus_guard.
+leak bytecode '. "'"$TESTS_DIR"'/lib.sh"
+case "${PYTHONPATH%%:*}" in "'"$ROOT"'"/*) echo "the guard is on PYTHONPATH from the checkout: $PYTHONPATH"; exit 1 ;; esac
+env -u PYTHONDONTWRITEBYTECODE python3 -c pass'
+run "$T/tests/test_bytecode.sh"
+[ "$rc" = 0 ] || fail "starting a bytecode-writing Python changed the checkout or put the guard on the path from it (rc $rc): $(cat "$T/out")"
+[ ! -e "$ROOT/tests/bus_guard/__pycache__" ] || fail "tests/bus_guard/__pycache__ exists in the checkout"
+ok "the guard is loaded from a copy under TMPDIR; the checkout stays clean"
+
+echo "TEST 3g3: the guard decodes file: URIs, so a database in a temp folder with a space in its name is allowed, and one outside it is not"
+mkdir "$T/with space" "$T/other"
+uri_open() { env -u TESTS_BUS_GUARD_LOG TESTS_BUS_ROOT="$T/with space" PYTHONPATH="$TESTS_DIR/bus_guard" PYTHONDONTWRITEBYTECODE=1 "$PY" -c '
+import sqlite3, sys
+from urllib.parse import quote
+sqlite3.connect("file:" + quote(sys.argv[1]) + "?mode=rwc", uri=True).close()' "$1" 2>/dev/null; }
+uri_open "$T/with space/x.db" || fail "the guard refused a quoted file: URI inside a root with a space in its name"
+[ -e "$T/with space/x.db" ] || fail "the quoted file: URI inside the root did not open"
+! uri_open "$T/other/y.db" || fail "the guard let a quoted file: URI outside the root through"
+[ ! -e "$T/other/y.db" ] || fail "the guard refused a file: URI but the database was created: $T/other/y.db"
+ok "file: URIs are decoded before the folder check"
+
+echo "TEST 3h: a file that leaves something in its working folder fails"
+leak cwd 'touch stray'
+run "$T/tests/test_cwd.sh"
+[ "$rc" = 1 ] && grep -q "^FAIL $T/tests/test_cwd.sh (isolation: it left files in its working folder: stray" "$T/out" || fail "a stray file in the working folder passed (rc $rc): $(cat "$T/out")"
+ok "working folder leftover caught"
+
+echo "TEST 3i: from a linked worktree whose main checkout holds a bus, a test that runs the CLI there fails, and that bus is untouched (issue #55)"
+mkrepo "$T/main"; mkdir "$T/h3"   # its own HOME: init and join record the bus folder under HOME, and this file runs under the runner's HOME
+(cd "$T/main" && export HOME="$T/h3" && "${AB[@]}" init . >/dev/null && "${AB[@]}" --as seed join --tool t >/dev/null && "${AB[@]}" --as seed post "seed" >/dev/null) || fail "setup: could not make a bus in the main checkout"
+git -C "$T/main" worktree add -q "$T/wt" -b wt || fail "setup: git worktree add failed"
+MAINDB="$T/main/.agentbus/bus.db"
+# bus_state DB: the row count (over a copy of the bus files, so the write-ahead log counts), and the size, mtime and checksum of
+# bus.db, bus.db-wal and bus.db-shm, and the files in the folder.
+bus_state() { "$PY" -c 'import os, shutil, sqlite3, sys, tempfile, zlib
+db = sys.argv[1]
+d = tempfile.mkdtemp(dir=os.environ["TMPDIR"])
+for suffix in ("", "-wal", "-shm"):
+    if os.path.exists(db + suffix): shutil.copy(db + suffix, os.path.join(d, "bus.db" + suffix))
+n = sqlite3.connect(os.path.join(d, "bus.db")).execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+shutil.rmtree(d)
+files = [(s, os.stat(db + s).st_size, os.stat(db + s).st_mtime_ns, zlib.crc32(open(db + s, "rb").read())) for s in ("", "-wal", "-shm") if os.path.exists(db + s)]
+print(n, files, sorted(os.listdir(os.path.dirname(db))))' "$1"; }
+[ "$(cd "$T/wt" && HOME="$T/h3" "${AB[@]}" --json who | grep -c seed)" -ge 1 ] || fail "premise: the worktree does not reach the main checkout's bus"
+before=$(bus_state "$MAINDB")
+leak wt '. "'"$TESTS_DIR"'/lib.sh"
+cd "'"$T"'/wt"
+"${AB[@]}" --as seed post "written from a test" >/dev/null 2>&1 || true'
+run "$T/tests/test_wt.sh"
+[ "$rc" = 1 ] && grep -q "^FAIL $T/tests/test_wt.sh (isolation: .*/main/.agentbus/bus.db, outside its temp folder" "$T/out" || fail "a test that ran the CLI from a linked worktree passed (rc $rc): $(cat "$T/out")"
+[ "$(bus_state "$MAINDB")" = "$before" ] || fail "the main checkout's bus changed (messages, mtime, bytes or files): $before -> $(bus_state "$MAINDB")"
+ok "a test that finds the main checkout's bus fails, and the bus keeps its rows, mtime and bytes"
+
 echo "TEST 4: a clean test passes and really does run with the poisoned caller environment"
 leak clean '[ "$AGENTBUS_AGENT" = caller ] && [ -n "$AGENTBUS_DB" ] && [ "$HOME" != "'"$HOME"'" ] || { echo "env not poisoned: $AGENTBUS_AGENT $AGENTBUS_DB $HOME"; exit 1; }'
 run "$T/tests/test_clean.sh"

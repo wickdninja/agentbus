@@ -25,8 +25,9 @@ cli() {
   local err="$T/err" rc=0
   (cd "$T/cwd" && env -u COLUMNS -u LINES HOME="$T/h" PYTHONIOENCODING=utf-8 AGENTBUS_NO_UPDATE_CHECK=1 \
     AGENTBUS_NO_UPDATE_NOTICE=1 "${AB[@]}" "$@") 2>"$err" || rc=$?
-  [ "$rc" = 0 ] || fail "agentbus $* exited $rc: $(head -c 400 "$err")"
-  [ ! -s "$err" ] || fail "agentbus $* wrote to stderr: $(head -c 400 "$err")"
+  # The reason goes to stderr: cli runs inside $(...) and redirects, where fail's stdout line would be swallowed and the file would exit 1 with no word (issue #67).
+  [ "$rc" = 0 ] || { echo "FAIL: agentbus $* exited $rc: $(head -c 400 "$err")" >&2; exit 1; }
+  [ ! -s "$err" ] || { echo "FAIL: agentbus $* wrote to stderr: $(head -c 400 "$err")" >&2; exit 1; }
 }
 
 echo "TEST 1: capture the surface"
@@ -112,5 +113,13 @@ if diff -rq "$T/want" "$T/bad" >/dev/null 2>&1; then fail "a one-byte change to 
 rm "$T/bad/schema.json"
 if diff -rq "$T/want" "$T/bad" >/dev/null 2>&1; then fail "a missing golden went unnoticed"; fi
 ok "a changed byte and a missing file both fail"
+
+echo "TEST 4: PYTHON set to a command that does not exist fails and names it, for --update and for a plain run (issue #67)"
+for mode in --update ""; do
+  rc=0; out=$(PYTHON=agentbus-no-such-python bash "$TESTS_DIR/test_cli_surface.sh" $mode 2>&1) || rc=$?
+  [ "$rc" != 0 ] || fail "test_cli_surface.sh ${mode:-(no argument)} passed with PYTHON=agentbus-no-such-python"
+  grep -qF "agentbus-no-such-python" <<<"$out" || fail "test_cli_surface.sh ${mode:-(no argument)} with a missing PYTHON did not name it: rc $rc, output: $out"
+done
+ok "a missing PYTHON exits non-zero and is named"
 
 all_passed "All CLI surface tests passed"

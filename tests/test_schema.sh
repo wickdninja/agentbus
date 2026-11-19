@@ -77,7 +77,7 @@ def refused(fn):
         return e.code.code, e.code.msg
     return None
 PY
-export PYTHONPATH="$T"
+export PYTHONPATH="$T${PYTHONPATH:+:$PYTHONPATH}"   # keep the bus guard (tests/lib.sh) on the path
 uv() { "$PY" -c 'import sys,h; print(h.dump(sys.argv[1])["user_version"])' "$1"; }
 
 # A v0.1.0 bus with rows in every table: two agents, a direct message, a broadcast, a read cursor,

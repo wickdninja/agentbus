@@ -95,7 +95,7 @@ m.reference_shapes.cache_clear(); m.reference_indexes.cache_clear()
 sys.argv = ["agentbus"] + sys.argv[1:]
 m.cli()
 PY
-export PYTHONPATH="$T"
+export PYTHONPATH="$T${PYTHONPATH:+:$PYTHONPATH}"   # keep the bus guard (tests/lib.sh) on the path
 V2=("$PY" "$T/v2.py")
 snap() { "$PY" -c 'import sys, h; print(h.tree(*sys.argv[1:]))' "$@"; }
 uv() { "$PY" -c 'import sys, h; print(h.user_version(sys.argv[1]))' "$1/.agentbus/bus.db"; }
@@ -384,7 +384,7 @@ row_11() {
   doctor_row "$W/r11" copy warn "0.1.0 here, 0.2.0 installed" "agentbus upgrade $W/r11"
 }
 
-# The one exception to this row: the Claude hook's SessionStart text names the installed `agentbus` (tests/test_hooks_claude.sh pins it),
+# The one exception to this row: the Claude hook's SessionStart text names the installed `agentbus` (tests/test_hooks_claude_events.sh pins it),
 # because the plugin deliberately does not endorse a project's bus copy. This row reads the skill and the AGENTS.md block, not hook text.
 row_12() {
   reset

@@ -9,6 +9,7 @@ set -euo pipefail
 # A short private root, whatever TMPDIR is: a unix socket's path must fit in 104 bytes, and macOS's own TMPDIR
 # (/var/folders/.../T/, nested further by the runner) made every bind here fail with "AF_UNIX path too long".
 T=$(command mktemp -d /tmp/abs.XXXXXX); T=$(cd "$T" && pwd -P); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
+export TESTS_BUS_ROOT="$T"   # this file's own private root is outside TMPDIR on purpose (above); tests/bus_guard allows databases under it, and nowhere else
 # sockop bind|connect PATH [TEXT]: exit 0 when it worked, 1 when the sandbox refused it (EPERM or EACCES),
 # 2 for any other error. A probe counts as denied only on 1, so a path that is too long fails the test
 # instead of passing it as a denial.

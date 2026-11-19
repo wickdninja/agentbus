@@ -32,7 +32,7 @@ def bus():
         ok(db, "--as", name, "join")
     return db
 PY
-export T PYTHONPATH="$T"
+export T PYTHONPATH="$T${PYTHONPATH:+:$PYTHONPATH}"   # keep the bus guard (tests/lib.sh) on the path
 
 echo "TEST 1: a ctx set or goal retried with its token sets the value again, over a change made since"
 "$PY" - <<'PY' || fail "a retried ctx set or goal did not behave as the docs now say (it sets the value again)"

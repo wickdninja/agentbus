@@ -14,6 +14,11 @@
 # no ~/.agentbus, no Codex or Claude Code config, no update cache or bus list and nothing in TMPDIR,
 # and every file of the checkout (tracked, untracked, ignored) must have the checksum it had before; otherwise that file
 # fails with `FAIL tests/test_x.sh (isolation: ...)`.
+# Each file starts in an empty scratch folder (not the checkout, whose bus discovery from a linked worktree reaches the
+# main checkout's live bus, issue #55), and tests/bus_guard (a copy under the test's temp folder, put on PYTHONPATH by
+# tests/lib.sh) refuses every database a test opens outside its own temp folder; the attempt is logged, so the file fails
+# with `isolation: a test opened <path>, outside its temp folder <folder>` even when the test swallowed the error, and it
+# must leave its folder empty.
 # --skip-heavy leaves out the two files that run other tests again (mutations, the eval harness); CI runs them once
 # in their own job with --only-heavy.
 set -u
@@ -48,7 +53,7 @@ out=$(mktemp) || exit 1
 # A short path (/tmp/ab.XXXXXX/t): sockets (AF_UNIX) and the wrap tests need short temp paths, and a long TMPDIR such as
 # macOS's /var/folders/... would eat the budget. test_isolation.sh pins the length.
 iso=$(mktemp -d /tmp/ab.XXXXXX 2>/dev/null || mktemp -d) || exit 1
-mkdir "$iso/h" "$iso/t"
+mkdir "$iso/h" "$iso/t" "$iso/w"
 trap 'rm -rf "$out" "$iso"' EXIT
 # PLATFORM_SKIPS: the only skips AGENTBUS_NO_SKIP=1 lets through. A file says `skip_platform KEY "detail"` and its SKIP
 # line reads `platform: KEY (detail)`; KEY must be one of these, because only these cannot be fixed by merging a change.
@@ -75,7 +80,7 @@ tree() {
 # Syntax first: a sourced lib or a test file bash cannot parse fails the run before anything runs. Sourcing a broken
 # lib.sh does not stop a test (bash runs the lines before the error and carries on), so the run could pass on nothing.
 syntax_bad=()
-for f in tests/lib.sh tests/workflow_lib.sh ${files[@]+"${files[@]}"}; do
+for f in tests/lib.sh tests/workflow_lib.sh tests/hooks_claude_lib.sh ${files[@]+"${files[@]}"}; do
   [ -f "$f" ] || continue
   if ! err=$(bash -n "$f" 2>&1); then
     echo "FAIL $f (syntax: $(printf '%s' "$err" | head -n 1))"
@@ -92,9 +97,13 @@ for f in ${files[@]+"${files[@]}"}; do
   # The heavy files run other tests (a baseline and a mutated run per mutation): three times the cap.
   t=("${capped[@]}" "$cap")
   if is_heavy "$f"; then t=("${capped[@]}" "$((cap*3))"); fi
-  env AGENTBUS_DB="$iso/caller.db" AGENTBUS_AGENT=caller HOME="$iso/h" TMPDIR="$iso/t" PYTHONDONTWRITEBYTECODE=1 \
+  # Each file starts in a scratch folder, not in the checkout: a bus is found by walking up from where a command runs, and
+  # from a linked worktree that ends at the main checkout's live bus (issue #55). The file is named by its full path.
+  case "$f" in /*) abs=$f ;; *) abs="$ROOT/$f" ;; esac
+  (cd "$iso/w" && env AGENTBUS_DB="$iso/caller.db" AGENTBUS_AGENT=caller HOME="$iso/h" TMPDIR="$iso/t" PYTHONDONTWRITEBYTECODE=1 \
     CODEX_HOME="$iso/cx" CLAUDE_CONFIG_DIR="$iso/cc" XDG_CACHE_HOME="$iso/h/.cache" XDG_STATE_HOME="$iso/h/.local/state" \
-    "${t[@]}" bash "$f" >"$out" 2>&1 </dev/null || rc=$?
+    TESTS_BUS_GUARD_LOG="$iso/bus_guard.log" \
+    "${t[@]}" bash "$abs" >"$out" 2>&1 </dev/null) || rc=$?
   secs=$((SECONDS-start))
   # Isolation, per file, so the file that leaked is the one named: the poisoned caller environment must come back
   # untouched, TMPDIR empty and the checkout as it was.
@@ -109,11 +118,16 @@ for f in ${files[@]+"${files[@]}"}; do
   done
   left=$(ls -A "$iso/t" | head -n 5 | tr '\n' ' ')
   [ -z "$left" ] || leaks+=("it left files in TMPDIR: ${left% }")
+  left=$(ls -A "$iso/w" | head -n 5 | tr '\n' ' ')
+  [ -z "$left" ] || leaks+=("it left files in its working folder: ${left% }")
+  # tests/bus_guard logs every database a test opened outside its own temp folder (a bus found by walking up from the
+  # checkout, the main checkout's included), even when the test swallowed the error.
+  [ ! -s "$iso/bus_guard.log" ] || leaks+=("$(sed 's#^tests/bus_guard: ##' "$iso/bus_guard.log" | sort -u | head -n 2 | paste -sd';' - | sed 's/;/; /g')")
   post=$(tree)
   [ "$post" = "$pre" ] || leaks+=("it changed the checkout: $(diff <(echo "$pre") <(echo "$post") | grep '^[<>]' | awk '{print $NF}' | sort -u | head -n 5 | tr '\n' ' ')")
   pre=$post
-  rm -rf "$iso"/caller.db* "$iso/h/.agentbus" "$iso/h/.cache" "$iso/h/.local" "$iso/h/Library" "$iso/cx" "$iso/cc" "$iso/t"
-  mkdir "$iso/t"
+  rm -rf "$iso"/caller.db* "$iso/h/.agentbus" "$iso/h/.cache" "$iso/h/.local" "$iso/h/Library" "$iso/cx" "$iso/cc" "$iso/t" "$iso/w" "$iso/bus_guard.log"
+  mkdir "$iso/t" "$iso/w"
   result=pass
   if [ ${#leaks[@]} -gt 0 ]; then
     echo "FAIL $f (isolation: $(printf '%s; ' "${leaks[@]}" | sed 's/; $//'))"

@@ -91,7 +91,7 @@ def logical(db):
     finally:
         c.close(); shutil.rmtree(tmp)
 PY
-export PYTHONPATH="$T"
+export PYTHONPATH="$T${PYTHONPATH:+:$PYTHONPATH}"   # keep the bus guard (tests/lib.sh) on the path
 snap() { "$PY" -c 'import sys, h; print(h.tree(*sys.argv[1:]))' "$@"; }
 
 # world: a fresh HOME and workspace with one bus (copy 0.2.0, schema 1), the user-scope skill and AGENTS.md block.
