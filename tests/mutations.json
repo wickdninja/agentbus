@@ -19,6 +19,10 @@
   },
   {
     "name": "inbox marks read before writing output",
+    "must": [
+      "P-DLV-2",
+      "P-DLV-9"
+    ],
     "file": "bin/agentbus",
     "find": "a\\._after = lambda c: mark_read\\(c, name, bcast, upto\\)",
     "replace": "mark_read(con, name, bcast, upto)",
@@ -28,6 +32,10 @@
   },
   {
     "name": "mark_read can move a cursor backwards",
+    "must": [
+      "P-DLV-2",
+      "P-DLV-3"
+    ],
     "file": "bin/agentbus",
     "find": "last_read_id=MAX\\(last_read_id, \\?\\)",
     "replace": "last_read_id=?",
@@ -88,7 +96,8 @@
     "name": "claim takes the free resources of a batch when another is held",
     "must": [
       "P-CLAIM-4",
-      "P-CLAIM-5"
+      "P-CLAIM-5",
+      "P-ATOM-2"
     ],
     "file": "bin/agentbus",
     "find": "    if blocked:  # nothing was changed; the log row is its own short write\\n        log_refusal\\(",
@@ -2657,7 +2666,8 @@
   {
     "name": "claim --from writes no claim_taken row",
     "must": [
-      "P-CLAIM-15"
+      "P-CLAIM-15",
+      "P-LOG-1"
     ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"claim_taken\",\\ json\\.dumps\\(",
@@ -2963,7 +2973,8 @@
   {
     "name": "identity: claim with a new purpose is not logged",
     "must": [
-      "P-CLAIM-21"
+      "P-CLAIM-21",
+      "P-LOG-1"
     ],
     "file": "bin/agentbus",
     "find": "if not own or own\\[\\\"purpose\\\"\\] != purpose:",
@@ -6129,7 +6140,8 @@
   {
     "name": "post accepts a kind outside the closed set",
     "must": [
-      "P-MSG-1"
+      "P-MSG-1",
+      "P-VER-2"
     ],
     "file": "bin/agentbus",
     "find": "if\\ a\\.kind\\ not\\ in\\ KINDS:",
@@ -6141,7 +6153,8 @@
   {
     "name": "post refuses a kind of the closed set",
     "must": [
-      "P-MSG-1"
+      "P-MSG-1",
+      "P-VER-2"
     ],
     "file": "bin/agentbus",
     "find": "KINDS\\ =\\ \\(\"note\",\\ \"question\",\\ \"answer\",\\ \"handoff\",\\ \"decision\",\\ \"alert\",\\ \"done\",\\ \"todo\",\\ \"dropped\"\\)",
@@ -6345,7 +6358,8 @@
   {
     "name": "inbox shows a sender its own messages",
     "must": [
-      "P-MSG-9"
+      "P-MSG-9",
+      "P-DLV-1"
     ],
     "file": "bin/agentbus",
     "find": "sender<>\\?\\ AND\\ \\(recipient=\\?\\ OR\\ \\(recipient='\\*'\\ AND\\ id>\\?\\)\\)\\ ORDER\\ BY\\ id\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\(last,\\ name,\\ name,\\ bcast\\),\\ a\\.limit\\)",
@@ -6357,7 +6371,8 @@
   {
     "name": "inbox shows a sender its message to itself",
     "must": [
-      "P-MSG-9"
+      "P-MSG-9",
+      "P-DLV-1"
     ],
     "file": "bin/agentbus",
     "find": "sender<>\\?\\ AND\\ \\(recipient=\\?\\ OR\\ \\(recipient='\\*'\\ AND\\ id>\\?\\)\\)\\ ORDER\\ BY\\ id\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\(last,\\ name,\\ name,\\ bcast\\),\\ a\\.limit\\)",
@@ -6501,7 +6516,8 @@
   {
     "name": "an auto-release is not logged",
     "must": [
-      "P-CLAIM-6"
+      "P-CLAIM-6",
+      "P-LOG-1"
     ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"claim\",\\ f\"\\{r\\['resource'\\]\\}\\ auto\\-released\\ from\\ \\{r\\['agent'\\]\\}\\ \\(not\\ on\\ roster\\)\"\\)\\\n",
@@ -6813,7 +6829,8 @@
   {
     "name": "reclaiming an expired claim logs a row",
     "must": [
-      "P-CLAIM-21"
+      "P-CLAIM-21",
+      "P-LOG-1"
     ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ if\\ not\\ own\\ or\\ own\\[\"purpose\"\\]\\ !=\\ purpose:\\ \\ \\#\\ a\\ renewal\\ that\\ changes\\ nothing\\ is\\ not\\ news",
@@ -6893,5 +6910,1701 @@
     "count": 1,
     "run": "tests/test_claim_rules.sh",
     "expect": "the taken claim kept the holder's"
+  },
+  {
+    "name": "join accepts a 41-character name",
+    "must": [
+      "P-ID-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "HOOK_NAME_RE\\ =\\ re\\.compile\\(r\"\\[A\\-Za\\-z0\\-9\\._\\-\\]\\{1,40\\}\"\\)",
+    "replace": "HOOK_NAME_RE = re.compile(r\"[A-Za-z0-9._-]{1,41}\")",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "expected bad_input but succeeded: python3"
+  },
+  {
+    "name": "join refuses a 40-character name",
+    "must": [
+      "P-ID-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "HOOK_NAME_RE\\ =\\ re\\.compile\\(r\"\\[A\\-Za\\-z0\\-9\\._\\-\\]\\{1,40\\}\"\\)",
+    "replace": "HOOK_NAME_RE = re.compile(r\"[A-Za-z0-9._-]{1,39}\")",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a valid name was refused by join"
+  },
+  {
+    "name": "a name may hold a colon",
+    "must": [
+      "P-ID-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "HOOK_NAME_RE\\ =\\ re\\.compile\\(r\"\\[A\\-Za\\-z0\\-9\\._\\-\\]\\{1,40\\}\"\\)",
+    "replace": "HOOK_NAME_RE = re.compile(r\"[A-Za-z0-9._:-]{1,40}\")",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "--as a:b join"
+  },
+  {
+    "name": "join does not check the name",
+    "must": [
+      "P-ID-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ a\\.cmd\\ ==\\ \"join\"\\ and\\ not\\ HOOK_NAME_RE\\.fullmatch\\(me\\(a\\)\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "--as has space join"
+  },
+  {
+    "name": "a roster name that breaks the rule is refused as the caller",
+    "must": [
+      "P-ID-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ return\\ \\ \\ \\#\\ a\\ name\\ already\\ on\\ the\\ bus\\ works,\\ even\\ one\\ that\\ predates\\ the\\ name\\ rule",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a name on the roster that does not match the rule could not post"
+  },
+  {
+    "name": "a bidi isolate is not a control character",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\\\u2068\\\\u2069\"\\)",
+    "replace": "\\\\u2068\")",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "post x --topic t"
+  },
+  {
+    "name": "DEL and C1 characters are accepted in identifiers",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "unicodedata\\.category\\(c\\)\\ ==\\ \"Cc\"\\ or\\ c\\ in\\ _BIDI",
+    "replace": "unicodedata.category(c) == \"Cc\" and c < \"\\\\x7f\" or c in _BIDI",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "post x --topic t"
+  },
+  {
+    "name": "a bidi override is not a control character",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "unicodedata\\.category\\(c\\)\\ ==\\ \"Cc\"\\ or\\ c\\ in\\ _BIDI",
+    "replace": "unicodedata.category(c) == \"Cc\"",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "post x --topic t"
+  },
+  {
+    "name": "a recipient may hold a control character",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(\\(\"to\",\\ \"\\-\\-to\"\\),\\ ",
+    "replace": "(",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "post x --to r"
+  },
+  {
+    "name": "a topic may hold a control character",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(\"topic\",\\ \"\\-\\-topic\"\\),\\ ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "post x --topic t"
+  },
+  {
+    "name": "a fact key may hold a control character",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(\"key\",\\ \"KEY\"\\),\\ ",
+    "replace": "",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "ctx set k"
+  },
+  {
+    "name": "a claim resource may hold a control character",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(\"resource\",\\ \"RESOURCE\"\\)\\):",
+    "replace": "):",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "claim r"
+  },
+  {
+    "name": "the caller's name may hold a control character",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ refuse_control\\(\"\\-\\-as\",\\ getattr\\(a,\\ \"as_\",\\ None\\)\\)",
+    "replace": "    pass",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "--json --as old\ttab post x"
+  },
+  {
+    "name": "the environment's name may hold a control character",
+    "must": [
+      "P-ID-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ for\\ k\\ in\\ \\(\"AGENTBUS_AGENT\",\\):",
+    "replace": "    for k in ():",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "--json post x"
+  },
+  {
+    "name": "post skips the roster check",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ require_joined\\(con,\\ name,\\ a\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ a\\.request_id\\ is\\ not\\ None:",
+    "replace": "        if a.request_id is not None:",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "expected not_on_roster but succeeded: python3 /"
+  },
+  {
+    "name": "claim skips the roster check",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ require_joined\\(con,\\ name,\\ a\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ t\\ =\\ now\\(\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\#\\ All\\ or\\ nothing",
+    "replace": "        t = now()\n        # All or nothing",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "claim some/file.py"
+  },
+  {
+    "name": "ctx set skips the roster check",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ require_joined\\(con,\\ name,\\ a\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ cur\\ =\\ con\\.execute\\(\"SELECT\\ value,\\ updated_by,\\ updated_at\\ FROM\\ context\\ WHERE\\ key=\\?\",\\ \\(a\\.key,\\)\\)\\.fetchone\\(\\)",
+    "replace": "            cur = con.execute(\"SELECT value, updated_by, updated_at FROM context WHERE key=?\", (a.key,)).fetchone()",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "ctx set k v"
+  },
+  {
+    "name": "goal skips the roster check",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ require_joined\\(con,\\ name,\\ a\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ cur\\ =\\ current_goal\\(con\\)",
+    "replace": "            cur = current_goal(con)",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "goal a goal"
+  },
+  {
+    "name": "log add skips the roster check",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ require_joined\\(con,\\ name,\\ a\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ row_id\\ =\\ log\\(",
+    "replace": "            row_id = log(",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "log add act detail"
+  },
+  {
+    "name": "every write skips the roster check",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ con\\.execute\\(\"SELECT\\ 1\\ FROM\\ agents\\ WHERE\\ name=\\?\",\\ \\(name,\\)\\)\\.fetchone\\(\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ \\ \\ \\#\\ a\\ name\\ already",
+    "replace": "    if True:\n        return   # a name already",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "expected not_on_roster but succeeded: python3 /"
+  },
+  {
+    "name": "a name that could never join is told to join",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ not\\ HOOK_NAME_RE\\.fullmatch\\(name\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ refuse_invalid_name\\(name,\\ a\\)\\ \\ \\ \\#\\ it\\ could\\ never\\ join",
+    "replace": "    if False:\n        refuse_invalid_name(name, a)   # it could never join",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "wrong error from"
+  },
+  {
+    "name": "release needs a roster entry",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ with\\ immediate\\(con\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ held,\\ missing\\ =\\ \\[\\],\\ \\[\\]",
+    "replace": "    with immediate(con):\n        require_joined(con, name, a)\n        held, missing = [], []",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "release by a name off the roster was refused"
+  },
+  {
+    "name": "leave needs a roster entry",
+    "must": [
+      "P-ID-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "def\\ cmd_leave\\(con,\\ a\\):\\\n\\ \\ \\ \\ name\\ =\\ me\\(a\\)\\\n\\ \\ \\ \\ with\\ immediate\\(con\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ paths,\\ total\\ =\\ release_all\\(con,\\ name\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ gone\\ =",
+    "replace": "def cmd_leave(con, a):\n    name = me(a)\n    with immediate(con):\n        require_joined(con, name, a)\n        paths, total = release_all(con, name)\n        gone =",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "leave by a name off the roster was refused"
+  },
+  {
+    "name": "the live window is an hour",
+    "must": [
+      "P-ID-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "LIVE_WINDOW_MIN\\ =\\ 30",
+    "replace": "LIVE_WINDOW_MIN = 60",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a name idle for 31 minutes was refused"
+  },
+  {
+    "name": "the live window is ten minutes",
+    "must": [
+      "P-ID-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "LIVE_WINDOW_MIN\\ =\\ 30",
+    "replace": "LIVE_WINDOW_MIN = 10",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "expected name_active but succeeded"
+  },
+  {
+    "name": "a last_seen in the future locks the name",
+    "must": [
+      "P-ID-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ 0\\ <=\\ mins\\ <\\ LIVE_WINDOW_MIN:",
+    "replace": "if mins < LIVE_WINDOW_MIN:",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a name with a last_seen in the future locked the name"
+  },
+  {
+    "name": "the environment's name is refused as another session",
+    "must": [
+      "P-ID-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ row\\ and\\ own:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ a\\.takeover\\ =\\ True",
+    "replace": "        if False:\n            a.takeover = True",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a session whose environment names the name was refused"
+  },
+  {
+    "name": "--takeover does not lift name_active",
+    "must": [
+      "P-ID-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ row\\ and\\ not\\ a\\.takeover:",
+    "replace": "        if row:",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "--takeover did not lift name_active"
+  },
+  {
+    "name": "a rejoin keeps what it is not given",
+    "must": [
+      "P-ID-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "keep\\ =\\ \\(lambda\\ c:\\ f\"COALESCE\\(excluded\\.\\{c\\},\\ agents\\.\\{c\\}\\)\"\\)\\ if\\ a\\.takeover\\ else\\ \\(lambda\\ c:\\ f\"excluded\\.\\{c\\}\"\\)",
+    "replace": "keep = lambda c: f\"COALESCE(excluded.{c}, agents.{c})\"",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a rejoin without --takeover stored"
+  },
+  {
+    "name": "--takeover replaces what it is not given",
+    "must": [
+      "P-ID-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "keep\\ =\\ \\(lambda\\ c:\\ f\"COALESCE\\(excluded\\.\\{c\\},\\ agents\\.\\{c\\}\\)\"\\)\\ if\\ a\\.takeover\\ else\\ \\(lambda\\ c:\\ f\"excluded\\.\\{c\\}\"\\)",
+    "replace": "keep = lambda c: f\"excluded.{c}\"",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "--takeover stored"
+  },
+  {
+    "name": "a rejoin keeps the old branch",
+    "must": [
+      "P-ID-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "branch=excluded\\.branch,",
+    "replace": "branch=COALESCE(excluded.branch, agents.branch),",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "--takeover stored"
+  },
+  {
+    "name": "a rejoin keeps the old cwd",
+    "must": [
+      "P-ID-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "model=\\{keep\\('model'\\)\\},\\ cwd=excluded\\.cwd,",
+    "replace": "model={keep('model')}, cwd=agents.cwd,",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a rejoin without --takeover stored"
+  },
+  {
+    "name": "a rejoin resets joined_at",
+    "must": [
+      "P-ID-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "role=\\{keep\\('role'\\)\\},\\ last_seen=excluded\\.last_seen",
+    "replace": "role={keep('role')}, joined_at=excluded.joined_at, last_seen=excluded.last_seen",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a rejoin without --takeover stored"
+  },
+  {
+    "name": "a rejoin leaves last_seen",
+    "must": [
+      "P-ID-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "role=\\{keep\\('role'\\)\\},\\ last_seen=excluded\\.last_seen",
+    "replace": "role={keep('role')}, last_seen=agents.last_seen",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a rejoin did not refresh last_seen"
+  },
+  {
+    "name": "a rejoin drops the name's claims",
+    "must": [
+      "P-ID-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ ensure_cursor\\(con,\\ name\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"join\",\\ json\\.dumps\\(detail\\)\\)",
+    "replace": "        ensure_cursor(con, name)\n        con.execute(\"DELETE FROM claims WHERE agent=?\", (name,))\n        log(con, name, \"join\", json.dumps(detail))",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a rejoin dropped the name's claims"
+  },
+  {
+    "name": "a new cursor broadcasts from the start",
+    "must": [
+      "P-ID-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"VALUES\\(\\?,0,\\(SELECT\\ COALESCE\\(MAX\\(id\\),0\\)\\ FROM\\ messages\\)\\)\"",
+    "replace": "\"VALUES(?,0,0)\"",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a new name's cursor is"
+  },
+  {
+    "name": "a new cursor skips the mail already sent",
+    "must": [
+      "P-ID-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"VALUES\\(\\?,0,\\(SELECT\\ COALESCE\\(MAX\\(id\\),0\\)\\ FROM\\ messages\\)\\)\"",
+    "replace": "\"VALUES(?,(SELECT COALESCE(MAX(id),0) FROM messages),(SELECT COALESCE(MAX(id),0) FROM messages))\"",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a new name's cursor is"
+  },
+  {
+    "name": "a rejoin resets the cursor",
+    "must": [
+      "P-ID-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "con\\.execute\\(\"INSERT\\ OR\\ IGNORE\\ INTO\\ cursors\\(agent,last_read_id,bcast_from\\)\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"VALUES\\(\\?,0,\\(SELECT",
+    "replace": "con.execute(\"INSERT OR REPLACE INTO cursors(agent,last_read_id,bcast_from) \"\n                \"VALUES(?,0,(SELECT",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a rejoin reset the cursor"
+  },
+  {
+    "name": "a repeated join compares only the tool",
+    "must": [
+      "P-ID-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ old\\ !=\\ detail:\\\n",
+    "replace": "                if old.get(\"tool\") != detail[\"tool\"]:\n",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "expected request_id_reused but succeeded"
+  },
+  {
+    "name": "a repeated join is not flagged duplicate",
+    "must": [
+      "P-ID-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "join_result\\(con,\\ a,\\ name,\\ duplicate=True,\\ \\*\\*flag\\)",
+    "replace": "join_result(con, a, name, duplicate=False, **flag)",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "was not flagged duplicate"
+  },
+  {
+    "name": "any token makes a join a repeat",
+    "must": [
+      "P-ID-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "old\\.get\\(\"request_id\"\\)\\ ==\\ a\\.request_id:",
+    "replace": "old.get(\"request_id\") is not None:",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "wrong error from"
+  },
+  {
+    "name": "a repeated join writes a log row",
+    "must": [
+      "P-ID-8",
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ result\\ =\\ join_result\\(con,\\ a,\\ name,\\ duplicate=True,\\ \\*\\*flag\\)",
+    "replace": "                log(con, name, \"join\", json.dumps(detail))\n                result = join_result(con, a, name, duplicate=True, **flag)",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a repeated join wrote a log row"
+  },
+  {
+    "name": "a repeated join refreshes last_seen",
+    "must": [
+      "P-ID-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ result\\ =\\ join_result\\(con,\\ a,\\ name,\\ duplicate=True,\\ \\*\\*flag\\)",
+    "replace": "                con.execute(\"UPDATE agents SET last_seen=? WHERE name=?\", (t, name))\n                result = join_result(con, a, name, duplicate=True, **flag)",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a repeated join refreshed last_seen"
+  },
+  {
+    "name": "leave keeps the claims",
+    "must": [
+      "P-ID-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "def\\ cmd_leave\\(con,\\ a\\):\\\n\\ \\ \\ \\ name\\ =\\ me\\(a\\)\\\n\\ \\ \\ \\ with\\ immediate\\(con\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ paths,\\ total\\ =\\ release_all\\(con,\\ name\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ gone\\ =\\ con\\.execute",
+    "replace": "def cmd_leave(con, a):\n    name = me(a)\n    with immediate(con):\n        paths, total = [], 0\n        gone = con.execute",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "leave kept claims"
+  },
+  {
+    "name": "leave keeps the roster entry",
+    "must": [
+      "P-ID-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "gone\\ =\\ con\\.execute\\(\"DELETE\\ FROM\\ agents\\ WHERE\\ name=\\?\",\\ \\(name,\\)\\)\\.rowcount\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ total\\ or\\ gone:\\ \\ \\#\\ a\\ second\\ leave",
+    "replace": "gone = 0\n        if total or gone:  # a second leave",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "leave kept the roster entry"
+  },
+  {
+    "name": "leave deletes the claims and not the entry in one step",
+    "must": [
+      "P-ID-9",
+      "P-ATOM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "def\\ cmd_leave\\(con,\\ a\\):\\\n\\ \\ \\ \\ name\\ =\\ me\\(a\\)\\\n\\ \\ \\ \\ with\\ immediate\\(con\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ paths,\\ total\\ =\\ release_all\\(con,\\ name\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ gone\\ =\\ con\\.execute",
+    "replace": "def cmd_leave(con, a):\n    name = me(a)\n    with immediate(con):\n        paths, total = release_all(con, name)\n        con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n        gone = con.execute",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "leave changed something and then failed"
+  },
+  {
+    "name": "leave deletes the cursor",
+    "must": [
+      "P-ID-10"
+    ],
+    "file": "bin/agentbus",
+    "find": "gone\\ =\\ con\\.execute\\(\"DELETE\\ FROM\\ agents\\ WHERE\\ name=\\?\",\\ \\(name,\\)\\)\\.rowcount\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ total\\ or\\ gone:\\ \\ \\#\\ a\\ second\\ leave",
+    "replace": "gone = con.execute(\"DELETE FROM agents WHERE name=?\", (name,)).rowcount\n        con.execute(\"DELETE FROM cursors WHERE agent=?\", (name,))\n        if total or gone:  # a second leave",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "leave deleted the cursor"
+  },
+  {
+    "name": "leave deletes the name's messages",
+    "must": [
+      "P-ID-10"
+    ],
+    "file": "bin/agentbus",
+    "find": "gone\\ =\\ con\\.execute\\(\"DELETE\\ FROM\\ agents\\ WHERE\\ name=\\?\",\\ \\(name,\\)\\)\\.rowcount\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ total\\ or\\ gone:\\ \\ \\#\\ a\\ second\\ leave",
+    "replace": "gone = con.execute(\"DELETE FROM agents WHERE name=?\", (name,)).rowcount\n        con.execute(\"DELETE FROM messages WHERE sender=?\", (name,))\n        if total or gone:  # a second leave",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "leave deleted messages"
+  },
+  {
+    "name": "leave closes the name's todos",
+    "must": [
+      "P-ID-10"
+    ],
+    "file": "bin/agentbus",
+    "find": "gone\\ =\\ con\\.execute\\(\"DELETE\\ FROM\\ agents\\ WHERE\\ name=\\?\",\\ \\(name,\\)\\)\\.rowcount\\\n\\ \\ \\ \\ \\ \\ \\ \\ if\\ total\\ or\\ gone:\\ \\ \\#\\ a\\ second\\ leave",
+    "replace": "gone = con.execute(\"DELETE FROM agents WHERE name=?\", (name,)).rowcount\n        con.execute(\"INSERT INTO messages(ts,sender,recipient,kind,body,reply_to) SELECT ?, sender, '*', 'dropped', 'left', id FROM messages WHERE sender=? AND kind='todo'\", (now(), name))\n        if total or gone:  # a second leave",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "leave closed the name's todo"
+  },
+  {
+    "name": "a leave that changes only a claim writes no row",
+    "must": [
+      "P-ID-9",
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ total\\ or\\ gone:\\ \\ \\#\\ a\\ second\\ leave",
+    "replace": "        if gone:  # a second leave",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a leave that only released a claim wrote no leave row"
+  },
+  {
+    "name": "every leave writes a row",
+    "must": [
+      "P-ID-10",
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ total\\ or\\ gone:\\ \\ \\#\\ a\\ second\\ leave",
+    "replace": "        if True:  # a second leave",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a second leave wrote a log row"
+  },
+  {
+    "name": "leave writes no row",
+    "must": [
+      "P-ID-9",
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ total\\ or\\ gone:\\ \\ \\#\\ a\\ second\\ leave\\ changes\\ nothing\\ and\\ writes\\ nothing\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"leave\",\\ f\"released\\ \\{plural\\(total,\\ 'claim'\\)\\}:\\ \\{claims_text\\(paths,\\ total\\)\\}\"\\)",
+    "replace": "        if total or gone:  # a second leave changes nothing and writes nothing\n            pass",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "leave wrote 0 leave rows"
+  },
+  {
+    "name": "who leaves out agents idle for years",
+    "must": [
+      "P-ID-11"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"SELECT\\ \\*\\ FROM\\ agents\\ ORDER\\ BY\\ last_seen\\ DESC\"",
+    "replace": "\"SELECT * FROM agents WHERE last_seen > '2021' ORDER BY last_seen DESC\"",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "who lists:"
+  },
+  {
+    "name": "who leaves out agents with no tool",
+    "must": [
+      "P-ID-11"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"SELECT\\ \\*\\ FROM\\ agents\\ ORDER\\ BY\\ last_seen\\ DESC\"",
+    "replace": "\"SELECT * FROM agents WHERE tool IS NOT NULL ORDER BY last_seen DESC\"",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "who lists:"
+  },
+  {
+    "name": "join writes no log row",
+    "must": [
+      "P-LOG-1",
+      "P-ID-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"join\",\\ json\\.dumps\\(detail\\)\\)",
+    "replace": "        pass",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a repeat of a join with the same token was not flagged duplicate"
+  },
+  {
+    "name": "release --all writes no log row",
+    "must": [
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "log\\(con,\\ name,\\ \"release\",\\ f\"all\\ \\{plural\\(total,\\ 'claim'\\)\\}:\\ \\{claims_text\\(paths,\\ total\\)\\}\"\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "release --all wrote"
+  },
+  {
+    "name": "release writes no log row",
+    "must": [
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "log\\(con,\\ name,\\ \"release\",\\ \",\\ \"\\.join\\(map\\(str,\\ paths\\)\\)\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a release wrote no release row"
+  },
+  {
+    "name": "goal writes no log row",
+    "must": [
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "log\\(con,\\ name,\\ \"goal\",\\ a\\._body\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a goal change wrote no goal row"
+  },
+  {
+    "name": "post writes a log row",
+    "must": [
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "closed,\\ said\\ =\\ closing_target\\(con,\\ a\\)",
+    "replace": "closed, said = closing_target(con, a); log(con, name, \"post\", \"x\")",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a post or a ctx set wrote a log row"
+  },
+  {
+    "name": "ctx set writes a log row",
+    "must": [
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "con\\.execute\\(\"INSERT\\ INTO\\ context_history\\(key,value,updated_by,updated_at\\)\\ VALUES\\(\\?,\\?,\\?,\\?\\)\",\\ \\(a\\.key,\\ value,\\ name,\\ t\\)\\)",
+    "replace": "con.execute(\"INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)\", (a.key, value, name, t))\n                log(con, name, \"ctx\", a.key)",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "a post or a ctx set wrote a log row"
+  },
+  {
+    "name": "log add stores another action",
+    "must": [
+      "P-LOG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "row_id\\ =\\ log\\(con,\\ name,\\ a\\.what,\\ detail\\)",
+    "replace": "row_id = log(con, name, \"note\", detail)",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "the log row is"
+  },
+  {
+    "name": "log add stores no detail",
+    "must": [
+      "P-LOG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "row_id\\ =\\ log\\(con,\\ name,\\ a\\.what,\\ detail\\)",
+    "replace": "row_id = log(con, name, a.what, \"\")",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "the log row is"
+  },
+  {
+    "name": "log add stores another caller",
+    "must": [
+      "P-LOG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "row_id\\ =\\ log\\(con,\\ name,\\ a\\.what,\\ detail\\)",
+    "replace": "row_id = log(con, \"log\", a.what, detail)",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "the log row is"
+  },
+  {
+    "name": "log add drops a repeated row",
+    "must": [
+      "P-LOG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "row_id\\ =\\ log\\(con,\\ name,\\ a\\.what,\\ detail\\)",
+    "replace": "row_id = (con.execute(\"SELECT id FROM log WHERE agent=? AND action=? AND detail=?\", (name, a.what, detail)).fetchone() or [None])[0] or log(con, name, a.what, detail)",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "two log adds wrote"
+  },
+  {
+    "name": "claim commits each resource of a batch as it goes",
+    "must": [
+      "P-CLAIM-4",
+      "P-ATOM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ done\\.append\\(result\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ taken:",
+    "replace": "                done.append(result)\n                con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n            if taken:",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "a batch that failed on its second resource renewed the first"
+  },
+  {
+    "name": "a refused claim keeps the free resources of its batch",
+    "must": [
+      "P-CLAIM-4",
+      "P-CLAIM-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ not\\ blocked:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ for\\ res,\\ odd,\\ raw_moves\\ in\\ plan:",
+    "replace": "        if True:\n            for res, odd, raw_moves in plan:\n                if any(res == bl[0] for bl in blocked):\n                    continue",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "a refused batch kept the free resources"
+  },
+  {
+    "name": "a claim refusal has another code for a batch",
+    "must": [
+      "P-CLAIM-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"claim_conflict\",\\ next=ask,\\ \\*\\*fields,\\\n\\ \\ \\ \\ \\ \\ \\ \\ conflicts=",
+    "replace": "\"bad_input\", next=ask, **fields,\n        conflicts=",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "lacks a field of the spec's list"
+  },
+  {
+    "name": "a claim refusal has another code for one resource",
+    "must": [
+      "P-CLAIM-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"claim_conflict\",\\ next=ask,\\ \\*\\*fields\\)",
+    "replace": "\"bad_input\", next=ask, **fields)",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "lacks a field of the spec's list"
+  },
+  {
+    "name": "a claim refusal names no holder",
+    "must": [
+      "P-CLAIM-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "return\\ dict\\(resource=res,\\ holder=b\\[\"holder\"\\],\\ claimed_at",
+    "replace": "return dict(resource=res, holder=None, claimed_at",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "lacks a field of the spec's list"
+  },
+  {
+    "name": "a claim refusal leaves out when the claim ends",
+    "must": [
+      "P-CLAIM-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "expires_at=b\\[\"expires_at\"\\],\\ purpose=b\\[\"purpose\"\\],\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ holder_last_seen",
+    "replace": "expires_at=None, purpose=b[\"purpose\"],\n                holder_last_seen",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "lacks a field of the spec's list"
+  },
+  {
+    "name": "a claim refusal leaves out the purpose",
+    "must": [
+      "P-CLAIM-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "purpose=b\\[\"purpose\"\\],\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ holder_last_seen",
+    "replace": "purpose=None,\n                holder_last_seen",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "lacks a field of the spec's list"
+  },
+  {
+    "name": "a claim refusal leaves out when the holder was seen",
+    "must": [
+      "P-CLAIM-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "holder_last_seen=b\\[\"last_seen\"\\],\\ holder_idle_min=b\\[\"idle_min\"\\]",
+    "replace": "holder_last_seen=None, holder_idle_min=b[\"idle_min\"]",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "lacks a field of the spec's list"
+  },
+  {
+    "name": "a claim refusal leaves out the command to take it",
+    "must": [
+      "P-CLAIM-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "takeover=takeover_command\\(b\\),\\ claim_from=b\\[\"claim_from\"\\]\\)",
+    "replace": "takeover=takeover_command(b), claim_from=None)",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "lacks a field of the spec's list"
+  },
+  {
+    "name": "inbox ignores where broadcasts begin",
+    "must": [
+      "P-DLV-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "rows,\\ more\\ =\\ capped\\(\\\n\\ \\ \\ \\ \\ \\ \\ \\ con,\\ f\"SELECT\\ \\{MESSAGE_COLUMNS\\}\\ FROM\\ messages\\ WHERE\\ id>\\?\\ AND\\ sender<>\\?\\ AND\\ \\(recipient=\\?\\ OR\\ \\(recipient='\\*'\\ AND\\ id>\\?\\)\\)\\ ORDER\\ BY\\ id\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\(last,\\ name,\\ name,\\ bcast\\),\\ a\\.limit\\)",
+    "replace": "rows, more = capped(\n        con, f\"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>=0*?)) ORDER BY id\",\n        (last, name, name, bcast), a.limit)",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "late's inbox is"
+  },
+  {
+    "name": "inbox lists newest first",
+    "must": [
+      "P-DLV-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "rows,\\ more\\ =\\ capped\\(\\\n\\ \\ \\ \\ \\ \\ \\ \\ con,\\ f\"SELECT\\ \\{MESSAGE_COLUMNS\\}\\ FROM\\ messages\\ WHERE\\ id>\\?\\ AND\\ sender<>\\?\\ AND\\ \\(recipient=\\?\\ OR\\ \\(recipient='\\*'\\ AND\\ id>\\?\\)\\)\\ ORDER\\ BY\\ id\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\(last,\\ name,\\ name,\\ bcast\\),\\ a\\.limit\\)",
+    "replace": "rows, more = capped(\n        con, f\"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?)) ORDER BY id DESC\",\n        (last, name, name, bcast), a.limit)",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "late's inbox is"
+  },
+  {
+    "name": "a name with no cursor reads every broadcast",
+    "must": [
+      "P-DLV-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "last,\\ bcast\\ =\\ 0,\\ con\\.execute\\(\"SELECT\\ COALESCE\\(MAX\\(id\\),0\\)\\ FROM\\ messages\"\\)\\.fetchone\\(\\)\\[0\\]",
+    "replace": "last, bcast = 0, 0",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "a name with no cursor saw"
+  },
+  {
+    "name": "inbox shows the last message read again",
+    "must": [
+      "P-DLV-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "rows,\\ more\\ =\\ capped\\(\\\n\\ \\ \\ \\ \\ \\ \\ \\ con,\\ f\"SELECT\\ \\{MESSAGE_COLUMNS\\}\\ FROM\\ messages\\ WHERE\\ id>\\?\\ AND\\ sender<>\\?\\ AND\\ \\(recipient=\\?\\ OR\\ \\(recipient='\\*'\\ AND\\ id>\\?\\)\\)\\ ORDER\\ BY\\ id\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\(last,\\ name,\\ name,\\ bcast\\),\\ a\\.limit\\)",
+    "replace": "rows, more = capped(\n        con, f\"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>=? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?)) ORDER BY id\",\n        (last, name, name, bcast), a.limit)",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "an inbox after the first delivered something already read"
+  },
+  {
+    "name": "inbox acknowledges one message short",
+    "must": [
+      "P-DLV-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "upto\\ =\\ rows\\[\\-1\\]\\[\"id\"\\]\\ if\\ rows\\ else\\ None",
+    "replace": "upto = rows[-1][\"id\"] - 1 if rows else None",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "an inbox after the first delivered something already read"
+  },
+  {
+    "name": "inbox acknowledges before writing its output",
+    "must": [
+      "P-DLV-2",
+      "P-DLV-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ a\\._after\\ =\\ lambda\\ c:\\ mark_read\\(c,\\ name,\\ bcast,\\ upto\\)",
+    "replace": "        mark_read(con, name, bcast, upto)",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "an inbox whose output failed marked messages read"
+  },
+  {
+    "name": "a late acknowledgement moves the cursor back",
+    "must": [
+      "P-DLV-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "UPDATE\\ cursors\\ SET\\ last_read_id=MAX\\(last_read_id,\\ \\?\\)\\ WHERE\\ agent=\\?",
+    "replace": "UPDATE cursors SET last_read_id=? WHERE agent=?",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "the cursor went from"
+  },
+  {
+    "name": "inbox --limit acknowledges the whole unread view",
+    "must": [
+      "P-DLV-4"
+    ],
+    "file": "bin/agentbus",
+    "find": "upto\\ =\\ rows\\[\\-1\\]\\[\"id\"\\]\\ if\\ rows\\ else\\ None",
+    "replace": "upto = (MAX_ID if more else rows[-1][\"id\"]) if rows else None",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "the unread are"
+  },
+  {
+    "name": "inbox --peek creates a cursor",
+    "must": [
+      "P-DLV-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ not\\ a\\.peek\\ and\\ \\(rows\\ or\\ not\\ row\\):",
+    "replace": "    if (rows or not row):",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "inbox --limit 3 showed"
+  },
+  {
+    "name": "an empty inbox creates no cursor",
+    "must": [
+      "P-DLV-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(rows\\ or\\ not\\ row\\):",
+    "replace": "rows:",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "an empty inbox left the cursor"
+  },
+  {
+    "name": "read --since includes the id",
+    "must": [
+      "P-DLV-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "q,\\ p\\ =\\ f\"SELECT\\ \\{MESSAGE_COLUMNS\\}\\ FROM\\ messages\\ WHERE\\ id>\\?\",\\ \\[since\\ or\\ 0\\]",
+    "replace": "q, p = f\"SELECT {MESSAGE_COLUMNS} FROM messages WHERE id>=?\", [since or 0]",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "read --since"
+  },
+  {
+    "name": "read ignores --topic",
+    "must": [
+      "P-DLV-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ topic:\\\n\\ \\ \\ \\ \\ \\ \\ \\ q\\ \\+=\\ \"\\ AND\\ topic=\\?\"\\\n\\ \\ \\ \\ \\ \\ \\ \\ p\\.append\\(topic\\)",
+    "replace": "    if False:\n        q += \" AND topic=?\"\n        p.append(topic)",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "read --topic"
+  },
+  {
+    "name": "read --before includes its own id",
+    "must": [
+      "P-DLV-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "q\\ \\+=\\ \"\\ AND\\ id<\\?\"",
+    "replace": "q += \" AND id<=?\"",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "read --before listed"
+  },
+  {
+    "name": "read moves the reader's cursor",
+    "must": [
+      "P-DLV-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ rows,\\ more\\ =\\ q_read_page\\(con,\\ a\\.since,\\ a\\.topic,\\ a\\.limit,\\ a\\._before_id\\)\\\n",
+    "replace": "    rows, more = q_read_page(con, a.since, a.topic, a.limit, a._before_id)\n    if ident(a):\n        with immediate(con):\n            con.execute(\"UPDATE cursors SET last_read_id=(SELECT MAX(id) FROM messages) WHERE agent=?\", (ident(a),))\n",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "read moved a cursor"
+  },
+  {
+    "name": "read --id of a missing message succeeds with another code",
+    "must": [
+      "P-DLV-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"no_message\",\\ next=next_command\\(a,\\ \"read\",\\ as_=False\\),\\ id=a\\.id\\)",
+    "replace": "\"bad_input\", next=next_command(a, \"read\", as_=False), id=a.id)",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "read --id of a missing message did not refuse with no_message"
+  },
+  {
+    "name": "a second writer does not wait for the first",
+    "must": [
+      "P-DLV-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "BUSY_WAIT_S\\ =\\ 15\\.0",
+    "replace": "BUSY_WAIT_S = 0.0",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "a post made while another held the write lock failed"
+  },
+  {
+    "name": "a second writer does not wait for the first (claims)",
+    "must": [
+      "P-ATOM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "BUSY_WAIT_S\\ =\\ 15\\.0",
+    "replace": "BUSY_WAIT_S = 0.0",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a claim made while another was committing did not see it"
+  },
+  {
+    "name": "inbox hides a kind it does not know",
+    "must": [
+      "P-VER-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "rows,\\ more\\ =\\ capped\\(\\\n\\ \\ \\ \\ \\ \\ \\ \\ con,\\ f\"SELECT\\ \\{MESSAGE_COLUMNS\\}\\ FROM\\ messages\\ WHERE\\ id>\\?\\ AND\\ sender<>\\?\\ AND\\ \\(recipient=\\?\\ OR\\ \\(recipient='\\*'\\ AND\\ id>\\?\\)\\)\\ ORDER\\ BY\\ id\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\(last,\\ name,\\ name,\\ bcast\\),\\ a\\.limit\\)",
+    "replace": "rows, more = capped(\n        con, f\"SELECT {MESSAGE_COLUMNS} FROM messages WHERE kind IN ('note','question','answer','handoff','decision','alert','done','todo','dropped') AND id>? AND sender<>? AND (recipient=? OR (recipient='*' AND id>?)) ORDER BY id\",\n        (last, name, name, bcast), a.limit)",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "inbox did not deliver the unknown kind unchanged"
+  },
+  {
+    "name": "read hides a kind it does not know",
+    "must": [
+      "P-VER-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "q,\\ p\\ =\\ f\"SELECT\\ \\{MESSAGE_COLUMNS\\}\\ FROM\\ messages\\ WHERE\\ id>\\?\",\\ \\[since\\ or\\ 0\\]",
+    "replace": "q, p = f\"SELECT {MESSAGE_COLUMNS} FROM messages WHERE kind IN ('note','question','answer','handoff','decision','alert','done','todo','dropped') AND id>?\", [since or 0]",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "read did not show the unknown kind as it is stored"
+  },
+  {
+    "name": "read shows an unknown kind as a note",
+    "must": [
+      "P-VER-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\{'everyone'\\ if\\ r\\['recipient'\\]\\ ==\\ '\\*'\\ else\\ r\\['recipient'\\]\\}\\ \\[\\{r\\['kind'\\]\\}\\]",
+    "replace": "{'everyone' if r['recipient'] == '*' else r['recipient']} [{r['kind'] if r['kind'] in KINDS else 'note'}]",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "read did not show the unknown kind as it is stored"
+  },
+  {
+    "name": "inbox leaves an unknown kind unacknowledged",
+    "must": [
+      "P-VER-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "upto\\ =\\ rows\\[\\-1\\]\\[\"id\"\\]\\ if\\ rows\\ else\\ None",
+    "replace": "upto = max([r[\"id\"] for r in rows if r[\"kind\"] in KINDS], default=None)",
+    "count": 1,
+    "run": "tests/test_delivery_rules.sh",
+    "expect": "the unknown kind was left unacknowledged"
+  },
+  {
+    "name": "ctx set keeps the first value",
+    "must": [
+      "P-FACT-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "ON\\ CONFLICT\\(key\\)\\ DO\\ UPDATE\\ SET\\ value=excluded\\.value,\\ updated_by=excluded\\.updated_by,\\ updated_at=excluded\\.updated_at\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\(a\\.key,\\ value,\\ name,\\ t\\)\\)",
+    "replace": "ON CONFLICT(key) DO NOTHING\",\n                    (a.key, value, name, t))",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "the second writer did not win"
+  },
+  {
+    "name": "ctx set keeps the first setter",
+    "must": [
+      "P-FACT-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "ON\\ CONFLICT\\(key\\)\\ DO\\ UPDATE\\ SET\\ value=excluded\\.value,\\ updated_by=excluded\\.updated_by,\\ updated_at=excluded\\.updated_at\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\(a\\.key,\\ value,\\ name,\\ t\\)\\)",
+    "replace": "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_by=context.updated_by, updated_at=excluded.updated_at\",\n                    (a.key, value, name, t))",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "the fact was not credited to the last writer"
+  },
+  {
+    "name": "ctx set never reports unchanged",
+    "must": [
+      "P-FACT-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "unchanged\\ =\\ bool\\(cur\\)\\ and\\ cur\\[\"value\"\\]\\ ==\\ value",
+    "replace": "unchanged = False",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a repeat of the same value was not reported unchanged"
+  },
+  {
+    "name": "an unchanged ctx set takes over the setter",
+    "must": [
+      "P-FACT-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "name,\\ t\\ =\\ cur\\[\"updated_by\"\\],\\ cur\\[\"updated_at\"\\]",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "did not keep the previous setter and time"
+  },
+  {
+    "name": "an unchanged ctx set writes a history row",
+    "must": [
+      "P-FACT-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ name,\\ t\\ =\\ cur\\[\"updated_by\"\\],\\ cur\\[\"updated_at\"\\]\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ else:",
+    "replace": "                name, t = cur[\"updated_by\"], cur[\"updated_at\"]\n                con.execute(\"INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)\", (a.key, value, name, t))\n            else:",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a repeat of the same value wrote a history row"
+  },
+  {
+    "name": "ctx set writes two history rows",
+    "must": [
+      "P-FACT-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "con\\.execute\\(\"INSERT\\ INTO\\ context_history\\(key,value,updated_by,updated_at\\)\\ VALUES\\(\\?,\\?,\\?,\\?\\)\",\\ \\(a\\.key,\\ value,\\ name,\\ t\\)\\)",
+    "replace": "con.execute(\"INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)\", (a.key, value, name, t))\n                con.execute(\"INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)\", (a.key, value, name, t))",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "one change wrote 2 history rows"
+  },
+  {
+    "name": "ctx set writes no history row",
+    "must": [
+      "P-FACT-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "con\\.execute\\(\"INSERT\\ INTO\\ context_history\\(key,value,updated_by,updated_at\\)\\ VALUES\\(\\?,\\?,\\?,\\?\\)\",\\ \\(a\\.key,\\ value,\\ name,\\ t\\)\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "one change wrote 0 history rows"
+  },
+  {
+    "name": "ctx set commits the fact before its history row",
+    "must": [
+      "P-FACT-3",
+      "P-ATOM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(a\\.key,\\ value,\\ name,\\ t\\)\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ con\\.execute\\(\"INSERT\\ INTO\\ context_history\\(key,value,updated_by,updated_at\\)\\ VALUES\\(\\?,\\?,\\?,\\?\\)\",\\ \\(a\\.key,\\ value,\\ name,\\ t\\)\\)",
+    "replace": "(a.key, value, name, t))\n                con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n                con.execute(\"INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)\", (a.key, value, name, t))",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "ctx set changed something and then failed"
+  },
+  {
+    "name": "ctx set writes the key goal",
+    "must": [
+      "P-FACT-4"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ a\\.cmd\\ ==\\ \"ctx\"\\ and\\ a\\.action\\ ==\\ \"set\"\\ and\\ a\\.key\\ ==\\ GOAL_KEY:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "ctx set goal sneaky"
+  },
+  {
+    "name": "ctx get of a missing key has another code",
+    "must": [
+      "P-FACT-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"no_context_key\",\\ next=",
+    "replace": "\"bad_input\", next=",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "wrong error from"
+  },
+  {
+    "name": "ctx history lists newest first",
+    "must": [
+      "P-FACT-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "rows,\\ more\\ =\\ capped\\(con,\\ \"SELECT\\ \\*\\ FROM\\ context_history\\ WHERE\\ key=\\?\\ AND\\ id<\\?\\ ORDER\\ BY\\ id\\ DESC\",\\ \\(a\\.key,\\ before\\),\\ a\\.limit\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ rows\\ =\\ list\\(reversed\\(rows\\)\\)",
+    "replace": "rows, more = capped(con, \"SELECT * FROM context_history WHERE key=? AND id<? ORDER BY id DESC\", (a.key, before), a.limit)",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "ctx history listed"
+  },
+  {
+    "name": "ctx history lists by value",
+    "must": [
+      "P-FACT-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "rows,\\ more\\ =\\ capped\\(con,\\ \"SELECT\\ \\*\\ FROM\\ context_history\\ WHERE\\ key=\\?\\ AND\\ id<\\?\\ ORDER\\ BY\\ id\\ DESC\",\\ \\(a\\.key,\\ before\\),\\ a\\.limit\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ rows\\ =\\ list\\(reversed\\(rows\\)\\)",
+    "replace": "rows, more = capped(con, \"SELECT * FROM context_history WHERE key=? AND id<? ORDER BY value DESC\", (a.key, before), a.limit)\n        rows = list(reversed(rows))",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "ctx history listed"
+  },
+  {
+    "name": "ctx get lists the goal",
+    "must": [
+      "P-FACT-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"SELECT\\ \\*\\ FROM\\ context\\ WHERE\\ key<>\\?\\ ORDER\\ BY\\ key\",\\ \\(GOAL_KEY,\\),\\ limit\\)",
+    "replace": "\"SELECT * FROM context WHERE key<>? ORDER BY key\", (\"nothing\",), limit)",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "ctx get listed"
+  },
+  {
+    "name": "ctx get goal reads no fact",
+    "must": [
+      "P-FACT-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "r\\ =\\ con\\.execute\\(\"SELECT\\ \\*\\ FROM\\ context\\ WHERE\\ key=\\?\",\\ \\(a\\.key,\\)\\)\\.fetchone\\(\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ not\\ r:",
+    "replace": "r = con.execute(\"SELECT * FROM context WHERE key=? AND key<>'goal'\", (a.key,)).fetchone()\n            if not r:",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "ctx get goal did not read the goal"
+  },
+  {
+    "name": "goal keeps the first writer",
+    "must": [
+      "P-FACT-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "updated_at=excluded\\.updated_at\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\(GOAL_KEY,\\ a\\._body,\\ name,\\ t\\)\\)",
+    "replace": "updated_at=excluded.updated_at WHERE 0\",\n                    (GOAL_KEY, a._body, name, t))",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "the goal is"
+  },
+  {
+    "name": "goal writes no history row",
+    "must": [
+      "P-FACT-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "con\\.execute\\(\"INSERT\\ INTO\\ context_history\\(key,value,updated_by,updated_at\\)\\ VALUES\\(\\?,\\?,\\?,\\?\\)\",\\ \\(GOAL_KEY,\\ a\\._body,\\ name,\\ t\\)\\)",
+    "replace": "pass",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "ctx history goal did not list the goal"
+  },
+  {
+    "name": "goal never reports unchanged",
+    "must": [
+      "P-FACT-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "unchanged\\ =\\ bool\\(cur\\)\\ and\\ cur\\[\"goal\"\\]\\ ==\\ a\\._body",
+    "replace": "unchanged = False",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "an unchanged goal was not reported unchanged"
+  },
+  {
+    "name": "goal commits before its log row",
+    "must": [
+      "P-FACT-7",
+      "P-ATOM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(GOAL_KEY,\\ a\\._body,\\ name,\\ t\\)\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"goal\",\\ a\\._body\\)",
+    "replace": "(GOAL_KEY, a._body, name, t))\n                con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n                log(con, name, \"goal\", a._body)",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "goal changed something and then failed"
+  },
+  {
+    "name": "goal shows nothing",
+    "must": [
+      "P-FACT-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ g\\ =\\ current_goal\\(con\\)\\\n\\ \\ \\ \\ if\\ a\\.json:\\\n\\ \\ \\ \\ \\ \\ \\ \\ print_json\\(g\\ or",
+    "replace": "    g = None\n    if a.json:\n        print_json(g or",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "goal did not show the current goal"
+  },
+  {
+    "name": "join commits before its log row",
+    "must": [
+      "P-ATOM-1",
+      "P-ATOM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ ensure_cursor\\(con,\\ name\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"join\",\\ json\\.dumps\\(detail\\)\\)",
+    "replace": "        ensure_cursor(con, name)\n        con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n        log(con, name, \"join\", json.dumps(detail))",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "join changed something and then failed"
+  },
+  {
+    "name": "release commits before its log row",
+    "must": [
+      "P-ATOM-1",
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\[name\\]\\ \\+\\ forms\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"release\",\\ \",\\ \"\\.join\\(map\\(str,\\ paths\\)\\)\\)",
+    "replace": "[name] + forms)\n            con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n            log(con, name, \"release\", \", \".join(map(str, paths)))",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "release changed something and then failed"
+  },
+  {
+    "name": "release --all commits before its log row",
+    "must": [
+      "P-ATOM-1",
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ paths,\\ total\\ =\\ release_all\\(con,\\ name\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ total:\\ \\ \\#\\ releasing\\ nothing",
+    "replace": "            paths, total = release_all(con, name)\n            con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n            if total:  # releasing nothing",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "release --all changed something and then failed"
+  },
+  {
+    "name": "claim --from commits after taking a holder's claim",
+    "must": [
+      "P-ATOM-2",
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ shown\\ =\\ move_named\\(con,\\ res,\\ t,\\ froms,\\ taken\\)\\ if\\ froms\\ else\\ \\[\\]",
+    "replace": "                shown = move_named(con, res, t, froms, taken) if froms else []\n                con.commit(); con.execute(\"BEGIN IMMEDIATE\")",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "claim --from changed something and then failed"
+  },
+  {
+    "name": "the clock ignores the test clock",
+    "must": [
+      "P-ATOM-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ clock\\(\\)\\.strftime\\(\"%Y\\-%m\\-%dT%H:%M:%SZ\"\\)",
+    "replace": "    return datetime.now(timezone.utc).strftime(\"%Y-%m-%dT%H:%M:%SZ\")",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a time written by an operation is not"
+  },
+  {
+    "name": "times carry fractions of a second",
+    "must": [
+      "P-ATOM-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ clock\\(\\)\\.strftime\\(\"%Y\\-%m\\-%dT%H:%M:%SZ\"\\)",
+    "replace": "    return clock().strftime(\"%Y-%m-%dT%H:%M:%S.%fZ\")",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a time written by an operation is not"
+  },
+  {
+    "name": "a claim expiry comes from another clock",
+    "must": [
+      "P-ATOM-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "exp\\ =\\ datetime\\.fromtimestamp\\(clock\\(\\)\\.timestamp\\(\\)\\ \\+\\ a\\.ttl_min\\ \\*\\ 60,\\ timezone\\.utc\\)",
+    "replace": "exp = datetime.fromtimestamp(time.time() + a.ttl_min * 60, timezone.utc)",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "claims.expires_at"
+  },
+  {
+    "name": "a refused release lets go of what it did hold",
+    "must": [
+      "P-ERR-1",
+      "P-CLAIM-17"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ missing\\ and\\ not\\ a\\.if_held:\\ \\ \\#\\ all\\ or\\ nothing:\\ one\\ you\\ do\\ not\\ hold\\ lets\\ go\\ of\\ none\\\n",
+    "replace": "        if missing and not a.if_held:  # all or nothing: one you do not hold lets go of none\n            con.execute(\"DELETE FROM claims WHERE agent=?\", (name,))\n            con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a refused operation changed the bus"
+  },
+  {
+    "name": "a refused join refreshes the roster entry",
+    "must": [
+      "P-ERR-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ free\\ =\\ free_name\\(con,\\ name\\)\\\n",
+    "replace": "                con.execute(\"UPDATE agents SET last_seen=? WHERE name=?\", (t, name))\n                con.commit(); con.execute(\"BEGIN IMMEDIATE\")\n                free = free_name(con, name)\n",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a refused operation changed the bus"
+  },
+  {
+    "name": "a body may hold one byte more",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "MAX_BODY\\ =\\ 64\\ \\*\\ 1024",
+    "replace": "MAX_BODY = 64 * 1024 + 1",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "--as li post bbbbbbbbbb"
+  },
+  {
+    "name": "a body may hold one byte less",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "MAX_BODY\\ =\\ 64\\ \\*\\ 1024",
+    "replace": "MAX_BODY = 64 * 1024 - 1",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a body of 65536 bytes was refused"
+  },
+  {
+    "name": "a body is counted in characters",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "size\\ =\\ len\\(body\\.encode\\(\"utf\\-8\",\\ \"replace\"\\)\\)",
+    "replace": "size = len(body)",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "--as li post \u00e9\u00e9\u00e9\u00e9"
+  },
+  {
+    "name": "a body over the limit is taken",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ size\\ >\\ MAX_BODY:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "--as li post bbbbbbbbbb"
+  },
+  {
+    "name": "a body is not trimmed",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "body\\ =\\ \"\\ \"\\.join\\(parts\\)\\.strip\\(\\)",
+    "replace": "body = \" \".join(parts)",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "the body was not trimmed"
+  },
+  {
+    "name": "a resource may hold one character more",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ strict\\ and\\ len\\(resource\\)\\ >\\ RESOURCE_MAX:",
+    "replace": "if strict and len(resource) > RESOURCE_MAX + 1:",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "--as li claim rrrrrrrr"
+  },
+  {
+    "name": "a resource may hold one character less",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ strict\\ and\\ len\\(resource\\)\\ >\\ RESOURCE_MAX:",
+    "replace": "if strict and len(resource) >= RESOURCE_MAX:",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "a resource of 1024 characters was refused"
+  },
+  {
+    "name": "a resource is counted in bytes",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ strict\\ and\\ len\\(resource\\)\\ >\\ RESOURCE_MAX:",
+    "replace": "if strict and len(resource.encode()) > RESOURCE_MAX:",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "two-byte characters was refused"
+  },
+  {
+    "name": "release takes more than 100 resources",
+    "must": [
+      "P-LIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ len\\(a\\.resource\\)\\ >\\ MAX_CLAIM_BATCH:\\\n\\ \\ \\ \\ \\ \\ \\ \\ die\\(f\"release\\ takes",
+    "replace": "    if len(a.resource) > MAX_CLAIM_BATCH + 1:\n        die(f\"release takes",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "--as li release m1 m2"
+  },
+  {
+    "name": "the protocol version is not 1.0",
+    "must": [
+      "P-VER-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "PROTOCOL\\ =\\ \"1\\.0\"",
+    "replace": "PROTOCOL = \"2.0\"",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "says protocol 2.0, want 1.0"
+  },
+  {
+    "name": "schema --index omits the protocol version",
+    "must": [
+      "P-VER-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "return\\ \\{\"contract\":\\ CONTRACT\\[\"contract\"\\],\\ \"protocol\":\\ PROTOCOL,\\ \"agentbus\":\\ __version__,\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \"commands\":\\ \\{k:",
+    "replace": "return {\"contract\": CONTRACT[\"contract\"], \"agentbus\": __version__,\n            \"commands\": {k:",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "schema --index --json says protocol None"
+  },
+  {
+    "name": "schema --json omits the protocol version",
+    "must": [
+      "P-VER-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "doc\\ =\\ \\{\"contract\":\\ CONTRACT\\[\"contract\"\\],\\ \"protocol\":\\ PROTOCOL,\\ \"agentbus\":\\ __version__,\\ \"commands\":\\ commands\\}",
+    "replace": "doc = {\"contract\": CONTRACT[\"contract\"], \"agentbus\": __version__, \"commands\": commands}",
+    "count": 1,
+    "run": "tests/test_fact_rules.sh",
+    "expect": "protocol None, want 1.0"
+  },
+  {
+    "name": "the conformance gate ignores an uncovered MUST",
+    "file": "tests/test_conformance.sh",
+    "find": "\\ \\ \\ \\ if\\ rid\\ not\\ in\\ covered\\ and\\ rid\\ not\\ in\\ manual:",
+    "replace": "    if False:",
+    "count": 1,
+    "run": "tests/test_conformance.sh",
+    "expect": "the gate passed with an uncovered requirement"
+  },
+  {
+    "name": "the conformance gate accepts a mutation naming an undefined id",
+    "file": "tests/test_conformance.sh",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ rid\\ not\\ in\\ defined:\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ problems\\.append\\(\"mutation",
+    "replace": "        if False:\n            problems.append(\"mutation",
+    "count": 1,
+    "run": "tests/test_conformance.sh",
+    "expect": "the gate passed with a mutation naming an undefined id"
+  },
+  {
+    "name": "the conformance gate accepts a manual line naming an undefined id",
+    "file": "tests/test_conformance.sh",
+    "find": "\\ \\ \\ \\ if\\ rid\\ not\\ in\\ defined:\\\n\\ \\ \\ \\ \\ \\ \\ \\ problems\\.append\\(\"%s\\ line\\ %d\\ names",
+    "replace": "    if False:\n        problems.append(\"%s line %d names",
+    "count": 1,
+    "run": "tests/test_conformance.sh",
+    "expect": "the gate passed with a manual line naming an undefined id"
+  },
+  {
+    "name": "the conformance gate accepts a missing run file",
+    "file": "tests/test_conformance.sh",
+    "find": "if\\ e\\.get\\(\"must\"\\)\\ and\\ not\\ os\\.path\\.isfile",
+    "replace": "if False and not os.path.isfile",
+    "count": 1,
+    "run": "tests/test_conformance.sh",
+    "expect": "the gate passed with a mutation running a file that is not there"
+  },
+  {
+    "name": "the conformance gate accepts an id in both lists",
+    "file": "tests/test_conformance.sh",
+    "find": "for\\ rid\\ in\\ sorted\\(set\\(manual\\)\\ \\&\\ set\\(covered\\)\\):",
+    "replace": "for rid in []:",
+    "count": 1,
+    "run": "tests/test_conformance.sh",
+    "expect": "the gate passed with an id in both lists"
+  },
+  {
+    "name": "the conformance gate does not read SHALL",
+    "file": "tests/test_conformance.sh",
+    "find": "KEYWORD\\ =\\ re\\.compile\\(r\"\\\\b\\(MUST\\|SHALL\\|REQUIRED\\)\\\\b\"\\)",
+    "replace": "KEYWORD = re.compile(r\"\\\\b(MUST|REQUIRED)\\\\b\")",
+    "count": 1,
+    "run": "tests/test_conformance.sh",
+    "expect": "the gate passed with an uncovered requirement with SHALL"
+  },
+  {
+    "name": "the conformance gate reads one line of a requirement",
+    "file": "tests/test_conformance.sh",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ not\\ nxt\\.strip\\(\\)\\ or\\ nxt\\.startswith\\(\"\\-\\ \"\\)\\ or\\ nxt\\.startswith\\(\"\\#\"\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ break",
+    "replace": "        if True:\n            break",
+    "count": 1,
+    "run": "tests/test_conformance.sh",
+    "expect": "the gate passed with an uncovered requirement whose MUST is on a continuation line"
+  },
+  {
+    "name": "the conformance gate prints no count",
+    "file": "tests/test_conformance.sh",
+    "find": "print\\(\"conformance:\\ %d\\ MUST\\ ids,\\ %d\\ automated\\ by\\ mutations,\\ %d\\ manual\"\\ %\\ \\(len\\(musts\\),\\ automated,\\ manual_n\\)\\)",
+    "replace": "print(\"conformance: ok\")",
+    "count": 1,
+    "run": "tests/test_conformance.sh",
+    "expect": "the gate printed no count of automated and manual ids"
   }
 ]

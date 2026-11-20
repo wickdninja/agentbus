@@ -232,4 +232,45 @@ agentbus --as sc release --all >/dev/null
 [ "$(rows "SELECT COUNT(*) FROM log WHERE action='release'")" = "$n" ] || fail "release --all with nothing to release wrote a log row"
 ok "everything released, nothing logged for nothing"
 
+echo "TEST P-CLAIM-4: one claim call takes every resource it names or none, in one atomic step"
+# Bug it catches (mutation): a batch that keeps the resources taken before a later one failed (a refusal, or a fault between two writes).
+agentbus --as sb claim batch/held.py >/dev/null
+expect_fail "nothing claimed" agentbus --as sa claim batch/free1.py batch/held.py batch/free2.py
+[ -z "$(rows "SELECT resource FROM claims WHERE agent='sa' AND resource LIKE 'batch/%'")" ] || fail "a refused batch kept the free resources: sa holds $(rows "SELECT resource FROM claims WHERE agent='sa' AND resource LIKE 'batch/%'" | tr '\n' ' ')"
+# a fault after the first resource is written: the log table has run out of ids, so the second resource's log row fails
+real_db=$AGENTBUS_DB
+export AGENTBUS_DB="$T/fault.db"
+agentbus --as fa join >/dev/null
+agentbus --as fa claim keep/one.py --ttl-min 5 >/dev/null
+before=$(rows "SELECT expires_at FROM claims WHERE resource='keep/one.py'")
+sql "INSERT INTO log(id,ts,agent,action,detail) VALUES(9223372036854775807,'2020-01-01T00:00:00Z','x','y','z')"
+rc=0; agentbus --json --as fa claim keep/one.py keep/two.py keep/three.py --ttl-min 100 >/dev/null 2>"$T/fault.err" || rc=$?
+[ "$rc" != 0 ] || fail "the injected fault did not fail the claim"
+[ "$(rows "SELECT expires_at FROM claims WHERE resource='keep/one.py'")" = "$before" ] || fail "a batch that failed on its second resource renewed the first"
+[ "$(rows "SELECT COUNT(*) FROM claims")" = 1 ] || fail "a batch that failed on a later resource kept $(rows "SELECT resource FROM claims" | tr '\n' ' ')"
+export AGENTBUS_DB=$real_db
+ok "refused or failed, the batch leaves nothing behind"
+
+echo "TEST P-CLAIM-5: a resource that overlaps a live claim of another name on the roster is refused with claim_conflict and nothing in the batch is claimed"
+# Bug it catches (mutation): a different code, a refusal that names no holder, or one that leaves out when the holder's claim ends or the command to take it.
+agentbus --as sb claim why/held.py --purpose "holding it" >/dev/null
+for ask in "why/held.py" "why/free.py why/held.py"; do
+  # shellcheck disable=SC2086
+  r=$(agentbus --json --as sa claim $ask 2>&1 >/dev/null) && fail "a claim over another name's live claim succeeded: claim $ask"
+  python3 - "$r" "$ask" <<'PY' || fail "the claim_conflict refusal of claim $ask lacks a field of the spec's list: $r"
+import json, sys
+e = json.loads(sys.argv[1])["error"]
+assert e["code"] == "claim_conflict", e["code"]
+assert e["holder"] == "sb" and e["resource"] == "why/held.py" and e["purpose"] == "holding it", e
+for k in ("claimed_at", "expires_at", "holder_last_seen", "holder_idle_min", "claim_from"):
+    assert k in e and e[k] is not None, k
+assert e["claim_from"].endswith("--from sb"), e["claim_from"]
+assert e["committed"] is False, e
+assert "sb" in e["message"], e["message"]
+assert (" " in sys.argv[2]) == ("nothing claimed" in e["message"]), e["message"]
+PY
+done
+[ "$(rows "SELECT COUNT(*) FROM claims WHERE resource='why/free.py'")" = 0 ] || fail "the free resource of a refused batch was claimed"
+ok "claim_conflict, with the holder, its claim and the command to take it"
+
 echo "All claim rule tests passed"
