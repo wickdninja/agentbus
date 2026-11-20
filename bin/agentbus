@@ -43,6 +43,8 @@ from datetime import datetime, timezone  # noqa: E402
 from urllib.parse import quote  # noqa: E402
 
 __version__ = "0.4.0"
+# The protocol this build implements (docs/protocol.md), MAJOR.MINOR; `schema --json` publishes it beside "contract".
+PROTOCOL = "1.0"
 MIN_GIT = (2, 31)
 MAX_TTL_MIN = 10080  # a week
 
@@ -881,19 +883,19 @@ CONTRACT = {
                             '{"running": string, "latest": string or null, "update_available": boolean, "install": {"method": string, '
                             '"url": string or null}, "argv": null, "commands": [string] or null, "download": {"wheel": string, "sha256sums": string, "install_with": [string]} or null, "notes": string or null}'),
         "schema": _cmd("Result shapes, errors, exit codes and retry rules",
-                       {"anyOf": [_o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"},
+                       {"anyOf": [_o({"contract": _INT, "protocol": _STR, "agentbus": _STR, "commands": {"type": "object"},
                                       "global_args": _list({"type": "object"}), "objects": {"type": "object"},
                                       "error_fields": {"type": "object"}, "errors": {"type": "object"}, "warnings": {"type": "object"},
                                       "exit_codes": {"type": "object"}, "env": {"type": "object"},
                                       "common_errors": _list(_STR), "more": _STR},
                                      optional=("global_args", "exit_codes", "env", "common_errors", "more")),
                                   # --index: every command's argument names and its own error codes, small enough to read whole
-                                  _o({"contract": _INT, "agentbus": _STR, "commands": {"type": "object"},
+                                  _o({"contract": _INT, "protocol": _STR, "agentbus": _STR, "commands": {"type": "object"},
                                       "global_args": _list(_STR), "common_errors": _list(_STR)})]},
-                       text='the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, '
+                       text='the full schema {"contract": integer, "protocol": string, "agentbus": string, "commands": object, "global_args": [object], "objects": object, '
                             '"errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command\'s '
                             'commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env '
-                            'and every error it can raise); with --index {"contract": integer, "agentbus": string, '
+                            'and every error it can raise); with --index {"contract": integer, "protocol": string, "agentbus": string, '
                             '"commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}',
                        base=_PLAIN_ERRORS),
         "skill": _cmd("Print the bundled skill, or with --agents-md the AGENTS.md block", _o({"text": _STR}), base=_PLAIN_ERRORS),
@@ -5180,14 +5182,15 @@ def cmd_release(con, a):
 
 
 def q_claims(con, stale=False, limit=LISTING_LIMIT):
+    # A claim is live while expires_at > now and expired from expires_at <= now: the rule claim and brief use too.
     if stale:
         # Unexpired claims held by agents not on the roster
-        q = """SELECT c.*, CASE WHEN c.expires_at < ? THEN 'expired' ELSE 'held' END AS state
+        q = """SELECT c.*, CASE WHEN c.expires_at <= ? THEN 'expired' ELSE 'held' END AS state
                FROM claims c LEFT JOIN agents ag ON c.agent = ag.name
                WHERE ag.name IS NULL AND c.expires_at > ?
                ORDER BY c.resource"""
         return capped(con, q, (now(), now()), limit)
-    q = """SELECT *, CASE WHEN expires_at < ? THEN 'expired' ELSE 'held' END AS state
+    q = """SELECT *, CASE WHEN expires_at <= ? THEN 'expired' ELSE 'held' END AS state
            FROM claims ORDER BY resource"""
     return capped(con, q, (now(),), limit)
 
@@ -5318,7 +5321,7 @@ def _refs(schema, found):
 def schema_index(commands, parser):
     """schema --index: for each command its argument names and the error codes of its own (the bus errors
     every command that opens a bus can raise are listed once, as common_errors)."""
-    return {"contract": CONTRACT["contract"], "agentbus": __version__,
+    return {"contract": CONTRACT["contract"], "protocol": PROTOCOL, "agentbus": __version__,
             "commands": {k: {"args": [x["name"] for x in v["args"]], "errors": [e for e in v["errors"] if e not in _BUS_ERRORS]}
                          for k, v in commands.items()},
             "global_args": [x["name"] for x in global_args(parser)], "common_errors": list(_BUS_ERRORS)}
@@ -5355,7 +5358,7 @@ def cmd_schema(a):
         show("details: agentbus schema COMMAND --json")
         return
     if a.json:
-        doc = {"contract": CONTRACT["contract"], "agentbus": __version__, "commands": commands}
+        doc = {"contract": CONTRACT["contract"], "protocol": PROTOCOL, "agentbus": __version__, "commands": commands}
         objects, errors, warnings = CONTRACT["objects"], CONTRACT["errors"], CONTRACT["warnings"]
         full = a.full or not want
         if want:  # only what this command uses: its result objects, the error codes of its own and the warnings it can give

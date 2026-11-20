@@ -3089,6 +3089,7 @@
       "type": "object",
       "required": [
        "contract",
+       "protocol",
        "agentbus",
        "commands",
        "objects",
@@ -3099,6 +3100,9 @@
       "properties": {
        "contract": {
         "type": "integer"
+       },
+       "protocol": {
+        "type": "string"
        },
        "agentbus": {
         "type": "string"
@@ -3145,6 +3149,7 @@
       "type": "object",
       "required": [
        "contract",
+       "protocol",
        "agentbus",
        "commands",
        "global_args",
@@ -3153,6 +3158,9 @@
       "properties": {
        "contract": {
         "type": "integer"
+       },
+       "protocol": {
+        "type": "string"
        },
        "agentbus": {
         "type": "string"
@@ -3181,7 +3189,7 @@
     "how": "repeat freely",
     "short": "safe to repeat"
    },
-   "text": "the full schema {\"contract\": integer, \"agentbus\": string, \"commands\": object, \"global_args\": [object], \"objects\": object, \"errors\": object, \"warnings\": object, \"exit_codes\": object, \"error_fields\": object, \"env\": object}; with COMMAND only that command's commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env and every error it can raise); with --index {\"contract\": integer, \"agentbus\": string, \"commands\": {NAME: {\"args\": [string], \"errors\": [string]}}, \"global_args\": [string], \"common_errors\": [string]}",
+   "text": "the full schema {\"contract\": integer, \"protocol\": string, \"agentbus\": string, \"commands\": object, \"global_args\": [object], \"objects\": object, \"errors\": object, \"warnings\": object, \"exit_codes\": object, \"error_fields\": object, \"env\": object}; with COMMAND only that command's commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env and every error it can raise); with --index {\"contract\": integer, \"protocol\": string, \"agentbus\": string, \"commands\": {NAME: {\"args\": [string], \"errors\": [string]}}, \"global_args\": [string], \"common_errors\": [string]}",
    "errors": [
     "bad_input",
     "output_failed",
