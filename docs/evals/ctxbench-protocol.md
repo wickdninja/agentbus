@@ -562,6 +562,8 @@ written after Stage 1's results, must contain at least the following, each made 
 
 ## Change log
 
+- 2026-11-20. The counted Stage 1 run is deferred until the rebuilt agentbus release (owner: build the best version, then prove it). Before any counted call, a dated entry here re-registers the bus arms' command table for that release and adds a v0.4.0 bus arm (the tag stays runnable), so one counted run compares the ledger, v0.4.0 and the rebuilt version. Nothing else registered here changes.
+
 Every change after this document merges is a new dated entry here, appended below: a registration repair with the
 failing fixture that proves it, or a value this document says is recorded later (the spec's `P-` ids). Nothing above
 is ever edited.
