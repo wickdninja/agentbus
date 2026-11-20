@@ -37,6 +37,10 @@
   },
   {
     "name": "claim ignores a held folder above the path",
+    "must": [
+      "P-CLAIM-3",
+      "P-CLAIM-5"
+    ],
     "file": "bin/agentbus",
     "find": "forms \\+= \\[folder, folder \\+ \"/\"\\]",
     "replace": "forms += [folder, folder + \"/\"] if i == len(parts) else []",
@@ -82,6 +86,10 @@
   },
   {
     "name": "claim takes the free resources of a batch when another is held",
+    "must": [
+      "P-CLAIM-4",
+      "P-CLAIM-5"
+    ],
     "file": "bin/agentbus",
     "find": "    if blocked:  # nothing was changed; the log row is its own short write\\n        log_refusal\\(",
     "replace": "    if blocked and len(a.resource) == 1:\n        log_refusal(",
@@ -217,6 +225,9 @@
   },
   {
     "name": "claim of one resource returns the list shape",
+    "must": [
+      "P-CLAIM-10"
+    ],
     "file": "bin/agentbus",
     "find": "    if len\\(a\\.resource\\) == 1:\\n        result = done\\[0\\]",
     "replace": "    if False:\n        result = done[0]",
@@ -235,6 +246,9 @@
   },
   {
     "name": "claim has no limit on a batch",
+    "must": [
+      "P-CLAIM-11"
+    ],
     "file": "bin/agentbus",
     "find": "    if len\\(a\\.resource\\) > MAX_CLAIM_BATCH:\\n        die\\(f\\\"claim takes",
     "replace": "    if False:\n        die(f\"claim takes",
@@ -244,6 +258,9 @@
   },
   {
     "name": "release lets go of the held ones when another is not held",
+    "must": [
+      "P-CLAIM-17"
+    ],
     "file": "bin/agentbus",
     "find": "        if missing and not a\\.if_held:",
     "replace": "        if False:",
@@ -316,6 +333,10 @@
   },
   {
     "name": "claim ignores claims held inside the folder",
+    "must": [
+      "P-CLAIM-3",
+      "P-CLAIM-5"
+    ],
     "file": "bin/agentbus",
     "find": "    out\\.append\\(\\(\"resource >= \\? AND resource < \\?\", \\[s \\+ \"/\", s \\+ \"0\"\\]\\)\\)",
     "replace": "    pass",
@@ -334,6 +355,9 @@
   },
   {
     "name": "post stores no reply_to",
+    "must": [
+      "P-MSG-2"
+    ],
     "file": "bin/agentbus",
     "find": "\\(now\\(\\), name, a\\.to, a\\.kind, a\\.topic, body, a\\.reply_to, a\\.request_id\\)\\)",
     "replace": "(now(), name, a.to, a.kind, a.topic, body, None, a.request_id))",
@@ -343,6 +367,9 @@
   },
   {
     "name": "claim keeps claims held by names off the roster",
+    "must": [
+      "P-CLAIM-6"
+    ],
     "file": "bin/agentbus",
     "find": "        n_released \\+= con\\.execute\\(f\"DELETE FROM claims WHERE \\{stale\\}\", params \\+ \\[name, t\\]\\)\\.rowcount",
     "replace": "        pass",
@@ -487,6 +514,9 @@
   },
   {
     "name": "normalising on open reads every planted claim name",
+    "must": [
+      "P-CLAIM-19"
+    ],
     "file": "bin/agentbus",
     "find": "\\{BYTE_LENGTH\\}\\(resource\\) <= \\{4 \\* RESOURCE_MAX\\} AND ",
     "replace": "",
@@ -2377,6 +2407,9 @@
   },
   {
     "name": "identity: unknown recipient gets no warning",
+    "must": [
+      "P-MSG-5"
+    ],
     "file": "bin/agentbus",
     "find": "    close, shown, total = roster_view\\(con, to\\)\\n    return \\[\\{\"code\": \"recipient_not_on_roster\"",
     "replace": "    return []\n    close, shown, total = roster_view(con, to)\n    return [{\"code\": \"recipient_not_on_roster\"",
@@ -2575,6 +2608,9 @@
   },
   {
     "name": "claim --from lets a holder nobody named be taken",
+    "must": [
+      "P-CLAIM-12"
+    ],
     "file": "bin/agentbus",
     "find": "others\\ =\\ f\"\\ AND\\ agent\\ NOT\\ IN\\ \\(\\{','\\.join\\('\\?'\\ \\*\\ len\\(skip\\)\\)\\}\\)\"\\ if\\ skip\\ else\\ \"\"",
     "replace": "others = f\" AND agent NOT IN ({','.join('?' * len(skip))}) AND 0\" if skip else \"\"",
@@ -2584,6 +2620,9 @@
   },
   {
     "name": "claim --from takes part of a folder the holder claimed",
+    "must": [
+      "P-CLAIM-13"
+    ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ if\\ not\\ is_path\\(res\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ return\\ None\\\n\\ \\ \\ \\ s,\\ best\\ =\\ res\\.rstrip\\(\"/\"\\),\\ None",
     "replace": "    if True:\n        return None\n    s, best = res.rstrip(\"/\"), None",
@@ -2593,6 +2632,9 @@
   },
   {
     "name": "a stale claim --from claims anyway",
+    "must": [
+      "P-CLAIM-14"
+    ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ stale\\ and\\ not\\ blocked\\ and\\ not\\ all\\(own_claim\\(con,\\ name,\\ res,\\ t\\)\\ for\\ res\\ in\\ wanted\\):",
     "replace": "        if False:",
@@ -2602,6 +2644,9 @@
   },
   {
     "name": "a repeat of your own claim --from is refused as stale",
+    "must": [
+      "P-CLAIM-14"
+    ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ stale\\ and\\ not\\ blocked\\ and\\ not\\ all\\(own_claim\\(con,\\ name,\\ res,\\ t\\)\\ for\\ res\\ in\\ wanted\\):",
     "replace": "        if stale and not blocked:",
@@ -2611,6 +2656,9 @@
   },
   {
     "name": "claim --from writes no claim_taken row",
+    "must": [
+      "P-CLAIM-15"
+    ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"claim_taken\",\\ json\\.dumps\\(",
     "replace": "        (lambda *x: None)(con, name, \"claim_taken\", json.dumps(",
@@ -2620,6 +2668,9 @@
   },
   {
     "name": "claim --from does not tell the holder",
+    "must": [
+      "P-CLAIM-15"
+    ],
     "file": "bin/agentbus",
     "find": "\\(t,\\ name,\\ h,\\ \"alert\",\\ \"claim\",",
     "replace": "(t, name, name, \"alert\", \"claim\",",
@@ -2665,6 +2716,9 @@
   },
   {
     "name": "claim --from accepts your own name",
+    "must": [
+      "P-CLAIM-14"
+    ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ if\\ name\\ in\\ froms:\\\n",
     "replace": "    if False:\n",
@@ -2674,6 +2728,9 @@
   },
   {
     "name": "claim --from deletes every claim the named holder has",
+    "must": [
+      "P-CLAIM-12"
+    ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ con\\.execute\\(f\"DELETE\\ FROM\\ claims\\ WHERE\\ \\{live\\}\",\\ args\\)",
     "replace": "        con.execute(f\"DELETE FROM claims WHERE {_named(froms)}\", [t] + list(froms))",
@@ -2683,6 +2740,9 @@
   },
   {
     "name": "claim --from takes an undecoded folder above the resource",
+    "must": [
+      "P-CLAIM-13"
+    ],
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ res\\.rstrip\\(\"/\"\\)\\.startswith\\(r\\[\"resource\"\\]\\.rstrip\\(\"/\"\\)\\ \\+\\ \"/\"\\):",
     "replace": "                    if False:",
@@ -2890,6 +2950,9 @@
   },
   {
     "name": "identity: claim renewal logs every time",
+    "must": [
+      "P-CLAIM-21"
+    ],
     "file": "bin/agentbus",
     "find": "if not own or own\\[\\\"purpose\\\"\\] != purpose:",
     "replace": "if True:",
@@ -2899,6 +2962,9 @@
   },
   {
     "name": "identity: claim with a new purpose is not logged",
+    "must": [
+      "P-CLAIM-21"
+    ],
     "file": "bin/agentbus",
     "find": "if not own or own\\[\\\"purpose\\\"\\] != purpose:",
     "replace": "if not own:",
@@ -2989,6 +3055,9 @@
   },
   {
     "name": "a done replying to a reply closes the todo above it",
+    "must": [
+      "P-MSG-7"
+    ],
     "file": "bin/agentbus",
     "find": "WHERE kind IN \\(\\{closers\\}\\) AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"",
     "replace": "WHERE kind IN ({closers}) AND reply_to IS NOT NULL AND id>{f} UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind IN ({closers}) AND p.reply_to IS NOT NULL)\"",
@@ -4330,6 +4399,9 @@
   },
   {
     "name": "dx2: claim never says it renewed",
+    "must": [
+      "P-CLAIM-9"
+    ],
     "file": "bin/agentbus",
     "find": "    renewed = bool\\(own\\) and isinstance\\(own\\[\"expires_at\"\\], str\\) and own\\[\"expires_at\"\\] > t",
     "replace": "    renewed = False",
@@ -4339,6 +4411,9 @@
   },
   {
     "name": "dx2: claim hides a purpose change",
+    "must": [
+      "P-CLAIM-9"
+    ],
     "file": "bin/agentbus",
     "find": "    purpose_changed = renewed and a\\.purpose is not None and own\\[\"purpose\"\\] != a\\.purpose",
     "replace": "    purpose_changed = False",
@@ -4348,6 +4423,9 @@
   },
   {
     "name": "dx2: an expired claim counts as renewed",
+    "must": [
+      "P-CLAIM-9"
+    ],
     "file": "bin/agentbus",
     "find": "    renewed = bool\\(own\\) and isinstance\\(own\\[\"expires_at\"\\], str\\) and own\\[\"expires_at\"\\] > t",
     "replace": "    renewed = bool(own)",
@@ -5401,6 +5479,9 @@
   },
   {
     "name": "a note replying to a todo closes it",
+    "must": [
+      "P-MSG-7"
+    ],
     "file": "bin/agentbus",
     "find": "TODO_CLOSERS = \\(\"done\", \"dropped\"\\)",
     "replace": "TODO_CLOSERS = (\"done\", \"dropped\", \"note\")",
@@ -5410,6 +5491,9 @@
   },
   {
     "name": "dropped does not close a todo",
+    "must": [
+      "P-MSG-6"
+    ],
     "file": "bin/agentbus",
     "find": "TODO_CLOSERS = \\(\"done\", \"dropped\"\\)",
     "replace": "TODO_CLOSERS = (\"done\",)",
@@ -5446,6 +5530,9 @@
   },
   {
     "name": "dropped without a reply_to is accepted",
+    "must": [
+      "P-MSG-4"
+    ],
     "file": "bin/agentbus",
     "find": "if a\\.kind == \"dropped\" and a\\.reply_to is None:",
     "replace": "if False:",
@@ -5455,6 +5542,9 @@
   },
   {
     "name": "a second closer is not told the todo was already closed",
+    "must": [
+      "P-MSG-6"
+    ],
     "file": "bin/agentbus",
     "find": "    if prior is None:\\n        return a\\.reply_to, None",
     "replace": "    if True:\n        return a.reply_to, None",
@@ -5464,6 +5554,9 @@
   },
   {
     "name": "dropped replying to a non-todo says nothing",
+    "must": [
+      "P-MSG-6"
+    ],
     "file": "bin/agentbus",
     "find": "if a\\.kind == \"dropped\" else None\\)",
     "replace": "if False else None)",
@@ -5473,6 +5566,9 @@
   },
   {
     "name": "post reports no closed todo",
+    "must": [
+      "P-MSG-6"
+    ],
     "file": "bin/agentbus",
     "find": "result\\[\"closed\"\\] = closed",
     "replace": "result[\"closed\"] = None",
@@ -5491,6 +5587,9 @@
   },
   {
     "name": "brief lists live claims as expired",
+    "must": [
+      "P-CLAIM-8"
+    ],
     "file": "bin/agentbus",
     "find": "WHERE c\\.expires_at <= \\?",
     "replace": "WHERE c.expires_at > ?",
@@ -5518,6 +5617,9 @@
   },
   {
     "name": "an answer to a reply closes the question above it (unit)",
+    "must": [
+      "P-MSG-7"
+    ],
     "file": "bin/agentbus",
     "find": "f\"\\(SELECT reply_to FROM messages WHERE kind=\\'answer\\' AND reply_to IS NOT NULL AND id>\\{f\\}\\)\"\\)",
     "replace": "f\"(SELECT reply_to FROM messages WHERE kind='answer' AND reply_to IS NOT NULL AND id>{f} UNION SELECT p.reply_to FROM messages p JOIN messages a ON a.reply_to = p.id WHERE a.kind='answer' AND p.reply_to IS NOT NULL)\")",
@@ -5599,6 +5701,10 @@
   },
   {
     "name": "a repeated closing post loses closed",
+    "must": [
+      "P-MSG-6",
+      "P-MSG-8"
+    ],
     "file": "bin/agentbus",
     "find": "dup\\[\"closed\"\\] = closed_by\\(con, old\\[\\'id\\'\\], a\\.reply_to\\)",
     "replace": "pass",
@@ -6019,5 +6125,773 @@
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "leave matched case-insensitively"
+  },
+  {
+    "name": "post accepts a kind outside the closed set",
+    "must": [
+      "P-MSG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ a\\.kind\\ not\\ in\\ KINDS:",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "--kind fyi"
+  },
+  {
+    "name": "post refuses a kind of the closed set",
+    "must": [
+      "P-MSG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "KINDS\\ =\\ \\(\"note\",\\ \"question\",\\ \"answer\",\\ \"handoff\",\\ \"decision\",\\ \"alert\",\\ \"done\",\\ \"todo\",\\ \"dropped\"\\)",
+    "replace": "KINDS = (\"note\", \"question\", \"answer\", \"handoff\", \"alert\", \"done\", \"todo\", \"dropped\")",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "kind decision was refused"
+  },
+  {
+    "name": "post stores no topic",
+    "must": [
+      "P-MSG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\),\\ name,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ body,\\ a\\.reply_to,\\ a\\.request_id\\)",
+    "replace": "(now(), name, a.to, a.kind, None, body, a.reply_to, a.request_id)",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "the stored message differs from what was posted"
+  },
+  {
+    "name": "post stores every kind as note",
+    "must": [
+      "P-MSG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\),\\ name,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ body,\\ a\\.reply_to,\\ a\\.request_id\\)",
+    "replace": "(now(), name, a.to, \"note\", a.topic, body, a.reply_to, a.request_id)",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "was stored as note"
+  },
+  {
+    "name": "post stores the body upper-cased",
+    "must": [
+      "P-MSG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\),\\ name,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ body,\\ a\\.reply_to,\\ a\\.request_id\\)",
+    "replace": "(now(), name, a.to, a.kind, a.topic, body.upper(), a.reply_to, a.request_id)",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "the stored message differs from what was posted"
+  },
+  {
+    "name": "post stores a broadcast whatever the recipient",
+    "must": [
+      "P-MSG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\),\\ name,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ body,\\ a\\.reply_to,\\ a\\.request_id\\)",
+    "replace": "(now(), name, \"*\", a.kind, a.topic, body, a.reply_to, a.request_id)",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "the stored message differs from what was posted"
+  },
+  {
+    "name": "post stores the recipient as the sender",
+    "must": [
+      "P-MSG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\),\\ name,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ body,\\ a\\.reply_to,\\ a\\.request_id\\)",
+    "replace": "(now(), a.to, a.to, a.kind, a.topic, body, a.reply_to, a.request_id)",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "did not store a note to everyone from the sender"
+  },
+  {
+    "name": "post stores a message twice",
+    "must": [
+      "P-MSG-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\),\\ name,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ body,\\ a\\.reply_to,\\ a\\.request_id\\)\\)\\\n",
+    "replace": "(now(), name, a.to, a.kind, a.topic, body, a.reply_to, a.request_id))\n        con.execute(\"INSERT INTO messages(ts,sender,recipient,kind,topic,body,reply_to,request_id) VALUES(?,?,?,?,?,?,?,NULL)\", (now(), name, a.to, a.kind, a.topic, body, a.reply_to))\n",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "did not insert exactly one message"
+  },
+  {
+    "name": "post accepts a reply to a message that does not exist",
+    "must": [
+      "P-MSG-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ a\\.reply_to\\ is\\ not\\ None\\ and\\ not\\ con\\.execute\\(\"SELECT\\ 1\\ FROM\\ messages\\ WHERE\\ id=\\?\",\\ \\(a\\.reply_to,\\)\\)\\.fetchone\\(\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "post x --reply-to 99999"
+  },
+  {
+    "name": "a reply is delivered to the sender of its target",
+    "must": [
+      "P-MSG-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\),\\ name,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ body,\\ a\\.reply_to,\\ a\\.request_id\\)",
+    "replace": "(now(), name, (con.execute(\"SELECT sender FROM messages WHERE id=?\", (a.reply_to,)).fetchone() or [a.to])[0], a.kind, a.topic, body, a.reply_to, a.request_id)",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "the stored message differs from what was posted"
+  },
+  {
+    "name": "an answer must reply to a question",
+    "must": [
+      "P-MSG-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ closed,\\ said\\ =\\ closing_target\\(con,\\ a\\)\\\n",
+    "replace": "        closed, said = closing_target(con, a)\n        if a.kind == \"answer\" and a.reply_to is not None and con.execute(\"SELECT kind FROM messages WHERE id=?\", (a.reply_to,)).fetchone()[0] != \"question\":\n            die(\"an answer replies to a question\", \"bad_input\")\n",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "kind answer was refused"
+  },
+  {
+    "name": "a recipient off the roster gets a broadcast instead",
+    "must": [
+      "P-MSG-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\(now\\(\\),\\ name,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ body,\\ a\\.reply_to,\\ a\\.request_id\\)",
+    "replace": "(now(), name, (a.to if con.execute(\"SELECT 1 FROM agents WHERE name=?\", (a.to,)).fetchone() else \"*\"), a.kind, a.topic, body, a.reply_to, a.request_id)",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "not stored for that name"
+  },
+  {
+    "name": "post refuses a recipient off the roster",
+    "must": [
+      "P-MSG-5"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ closed,\\ said\\ =\\ closing_target\\(con,\\ a\\)\\\n",
+    "replace": "        closed, said = closing_target(con, a)\n        if roster_warnings(con, a.to):\n            die(\"no such recipient\", \"bad_input\")\n",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "post to a name off the roster was refused"
+  },
+  {
+    "name": "a reused request id with another payload is accepted",
+    "must": [
+      "P-MSG-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ tuple\\(old\\)\\[1:\\]\\ !=\\ \\(body,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ a\\.reply_to\\):",
+    "replace": "if False:",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "post tok --request-id TK"
+  },
+  {
+    "name": "a reused request id compares only the body",
+    "must": [
+      "P-MSG-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "if\\ tuple\\(old\\)\\[1:\\]\\ !=\\ \\(body,\\ a\\.to,\\ a\\.kind,\\ a\\.topic,\\ a\\.reply_to\\):",
+    "replace": "if tuple(old)[1:2] != (body,):",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "post tok --request-id TK"
+  },
+  {
+    "name": "a request id is shared between senders",
+    "must": [
+      "P-MSG-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "\"WHERE\\ sender=\\?\\ AND\\ request_id=\\?\",\\ \\(name,\\ a\\.request_id\\)\\)\\.fetchone\\(\\)",
+    "replace": "\"WHERE ?<>'' AND request_id=?\", (name, a.request_id)).fetchone()",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "two senders with one token got one message"
+  },
+  {
+    "name": "a repeated post with a request id posts again",
+    "must": [
+      "P-MSG-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ old:\\\n",
+    "replace": "            if False:\n",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "a repeat of a post with the same token failed"
+  },
+  {
+    "name": "a repeated post does not say duplicate",
+    "must": [
+      "P-MSG-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "dup\\ =\\ \\{\"id\":\\ old\\['id'\\],\\ \"duplicate\":\\ True,\\ \"warnings\":\\ warnings\\}",
+    "replace": "dup = {\"id\": old['id'], \"duplicate\": False, \"warnings\": warnings}",
+    "count": 1,
+    "run": "tests/test_post_rules.sh",
+    "expect": "a repeat did not return the first id with duplicate true"
+  },
+  {
+    "name": "inbox shows a sender its own messages",
+    "must": [
+      "P-MSG-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "sender<>\\?\\ AND\\ \\(recipient=\\?\\ OR\\ \\(recipient='\\*'\\ AND\\ id>\\?\\)\\)\\ ORDER\\ BY\\ id\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\(last,\\ name,\\ name,\\ bcast\\),\\ a\\.limit\\)",
+    "replace": "?<>'' AND (recipient=? OR (recipient='*' AND id>?)) ORDER BY id\",\n        (last, name, name, bcast), a.limit)",
+    "count": 1,
+    "run": "tests/test_inbox.sh",
+    "expect": "inbox showed g its own messages"
+  },
+  {
+    "name": "inbox shows a sender its message to itself",
+    "must": [
+      "P-MSG-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "sender<>\\?\\ AND\\ \\(recipient=\\?\\ OR\\ \\(recipient='\\*'\\ AND\\ id>\\?\\)\\)\\ ORDER\\ BY\\ id\",\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\(last,\\ name,\\ name,\\ bcast\\),\\ a\\.limit\\)",
+    "replace": "(sender<>? OR recipient<>'*') AND (recipient=? OR (recipient='*' AND id>?)) ORDER BY id\",\n        (last, name, name, bcast), a.limit)",
+    "count": 1,
+    "run": "tests/test_inbox.sh",
+    "expect": "inbox showed g its own messages"
+  },
+  {
+    "name": "scheme names overlap by prefix",
+    "must": [
+      "P-CLAIM-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ return\\ \\[\\(\"resource=\\?\",\\ \\[res\\]\\)\\]",
+    "replace": "        return [(\"resource=? OR resource LIKE ?\", [res, res + \":%\"])]",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "scheme names overlap by hierarchy"
+  },
+  {
+    "name": "a path is stored as given",
+    "must": [
+      "P-CLAIM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ n\\ =\\ posixpath\\.normpath\\(resource\\)\\\n",
+    "replace": "    n = resource\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "the stored form of ./norm//a/../b.py"
+  },
+  {
+    "name": "only a leading ./ is removed from a path",
+    "must": [
+      "P-CLAIM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ n\\ =\\ posixpath\\.normpath\\(resource\\)\\\n",
+    "replace": "    n = re.sub(r'^\\\\./', '', resource)\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "the stored form of ./norm//a/../b.py"
+  },
+  {
+    "name": "an absolute path is claimed",
+    "must": [
+      "P-CLAIM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ resource\\.startswith\\(\"/\"\\):\\\n",
+    "replace": "    if False:\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "claim /abs/path"
+  },
+  {
+    "name": "a path may climb out of the bus directory",
+    "must": [
+      "P-CLAIM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ n\\ ==\\ \"\\.\\.\"\\ or\\ n\\.startswith\\(\"\\.\\./\"\\):\\\n",
+    "replace": "    if False:\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "claim ../out"
+  },
+  {
+    "name": "an empty or dot path is claimed",
+    "must": [
+      "P-CLAIM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ n\\ in\\ \\(\"\",\\ \"\\.\"\\):\\\n",
+    "replace": "    if False:\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "sa claim ."
+  },
+  {
+    "name": "a path loses its folder marker",
+    "must": [
+      "P-CLAIM-2"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ return\\ n\\ \\+\\ \"/\"\\ if\\ resource\\.endswith\\(\"/\"\\)\\ else\\ n\\\n",
+    "replace": "    return n\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "the folder marker or the normal form was lost"
+  },
+  {
+    "name": "paths compare without case",
+    "must": [
+      "P-CLAIM-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ forms\\ \\+=\\ \\[folder,\\ folder\\ \\+\\ \"/\"\\]",
+    "replace": "        forms += [folder.lower(), folder.lower() + \"/\"]",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "the compare ignored case"
+  },
+  {
+    "name": "a claim without the folder marker misses a folder claim",
+    "must": [
+      "P-CLAIM-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ forms\\ \\+=\\ \\[folder,\\ folder\\ \\+\\ \"/\"\\]",
+    "replace": "        forms += [folder]",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "claim mark/dir"
+  },
+  {
+    "name": "a path claim overlaps a sibling that starts with its name",
+    "must": [
+      "P-CLAIM-3"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\[s\\ \\+\\ \"/\",\\ s\\ \\+\\ \"0\"\\]",
+    "replace": "[s, s + \"0\"]",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "starts with a held name overlaps it"
+  },
+  {
+    "name": "a claim held by a name off the roster blocks",
+    "must": [
+      "P-CLAIM-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "_CLAIM_ON_ROSTER\\ =\\ \"EXISTS\\ \\(SELECT\\ 1\\ FROM\\ agents\\ WHERE\\ agents\\.name=claims\\.agent\\)\"",
+    "replace": "_CLAIM_ON_ROSTER = \"1\"",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "blocked ghost/f.py"
+  },
+  {
+    "name": "an auto-release is not logged",
+    "must": [
+      "P-CLAIM-6"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"claim\",\\ f\"\\{r\\['resource'\\]\\}\\ auto\\-released\\ from\\ \\{r\\['agent'\\]\\}\\ \\(not\\ on\\ roster\\)\"\\)\\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "auto-release of a ghost's claims was not logged"
+  },
+  {
+    "name": "an expired claim blocks",
+    "must": [
+      "P-CLAIM-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "_CLAIM_LIVE\\ =\\ \"typeof\\(resource\\)='text'\\ AND\\ agent<>\\?\\ AND\\ expires_at>\\?\"",
+    "replace": "_CLAIM_LIVE = \"typeof(resource)='text' AND agent<>? AND ?<>''\"",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "an expired claim of an agent on the roster blocked"
+  },
+  {
+    "name": "a claim is live at its expiry second",
+    "must": [
+      "P-CLAIM-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "_CLAIM_LIVE\\ =\\ \"typeof\\(resource\\)='text'\\ AND\\ agent<>\\?\\ AND\\ expires_at>\\?\"",
+    "replace": "_CLAIM_LIVE = \"typeof(resource)='text' AND agent<>? AND expires_at>=?\"",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "another agent could not claim at expires_at == now"
+  },
+  {
+    "name": "claims lists a claim held at its expiry second",
+    "must": [
+      "P-CLAIM-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "SELECT\\ \\*,\\ CASE\\ WHEN\\ expires_at\\ <=\\ \\?\\ THEN\\ 'expired'",
+    "replace": "SELECT *, CASE WHEN expires_at < ? THEN 'expired'",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "claims shows a claim at expires_at == now as held"
+  },
+  {
+    "name": "release only lets go of a live claim",
+    "must": [
+      "P-CLAIM-8"
+    ],
+    "file": "bin/agentbus",
+    "find": "f\"SELECT\\ resource\\ FROM\\ claims\\ WHERE\\ agent=\\?\\ AND\\ resource\\ IN\\ \\(\\{','\\.join\\('\\?'\\ \\*\\ len\\(forms\\)\\)\\}\\)\",\\ \\[name\\]\\ \\+\\ forms\\)\\]",
+    "replace": "f\"SELECT resource FROM claims WHERE agent=? AND expires_at>? AND resource IN ({','.join('?' * len(forms))})\", [name, now()] + forms)]",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "release refused an expired claim of the caller"
+  },
+  {
+    "name": "a renewal restarts claimed_at",
+    "must": [
+      "P-CLAIM-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ claimed_at\\ =\\ own\\[\"claimed_at\"\\]\\ if\\ own\\ else\\ t\\\n",
+    "replace": "    claimed_at = t\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "a renewal restarted claimed_at"
+  },
+  {
+    "name": "a renewal drops the purpose",
+    "must": [
+      "P-CLAIM-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ purpose\\ =\\ own\\[\"purpose\"\\]\\ if\\ own\\ and\\ a\\.purpose\\ is\\ None\\ else\\ a\\.purpose\\\n",
+    "replace": "    purpose = a.purpose\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "a renewal dropped the purpose"
+  },
+  {
+    "name": "a renewal never shortens the claim",
+    "must": [
+      "P-CLAIM-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\(res,\\ name,\\ purpose,\\ claimed_at,\\ exp\\)\\)",
+    "replace": "        (res, name, purpose, claimed_at, max(exp, own[\"expires_at\"]) if own and isinstance(own[\"expires_at\"], str) else exp))",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "did not replace expires_at"
+  },
+  {
+    "name": "a renewal under another spelling adds a second row",
+    "must": [
+      "P-CLAIM-9"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ forms\\ =\\ same_path_forms\\(res\\)\\\n\\ \\ \\ \\ own\\ =\\ con\\.execute\\(",
+    "replace": "    forms = [res]\n    own = con.execute(",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "left two rows"
+  },
+  {
+    "name": "the default TTL is 60 minutes",
+    "must": [
+      "P-CLAIM-10"
+    ],
+    "file": "bin/agentbus",
+    "find": "cl\\.add_argument\\(\"\\-\\-ttl\\-min\",\\ type=integer,\\ default=120",
+    "replace": "cl.add_argument(\"--ttl-min\", type=integer, default=60",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "the default TTL is not 120 minutes"
+  },
+  {
+    "name": "a TTL of 0 is accepted",
+    "must": [
+      "P-CLAIM-10"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ a\\.ttl_min\\ <\\ 1\\ or\\ a\\.ttl_min\\ >\\ MAX_TTL_MIN:",
+    "replace": "    if a.ttl_min < 0 or a.ttl_min > MAX_TTL_MIN:",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "--ttl-min=0"
+  },
+  {
+    "name": "a TTL one minute over a week is accepted",
+    "must": [
+      "P-CLAIM-10"
+    ],
+    "file": "bin/agentbus",
+    "find": "MAX_TTL_MIN\\ =\\ 10080",
+    "replace": "MAX_TTL_MIN = 10081",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "at most 10080"
+  },
+  {
+    "name": "a post renews the sender's claims",
+    "must": [
+      "P-CLAIM-10"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ warnings\\ =\\ roster_warnings\\(con,\\ a\\.to\\)\\\n\\ \\ \\ \\ for\\ w\\ in\\ warnings:\\\n\\ \\ \\ \\ \\ \\ \\ \\ note\\(warn_text\\(w,\\ a\\)\\)\\\n\\ \\ \\ \\ if\\ said:",
+    "replace": "        con.execute(\"UPDATE claims SET expires_at='2099-01-01T00:00:00Z' WHERE agent=?\", (name,))\n        warnings = roster_warnings(con, a.to)\n    for w in warnings:\n        note(warn_text(w, a))\n    if said:",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "changed a claim's expires_at"
+  },
+  {
+    "name": "the claim cap counts distinct resources",
+    "must": [
+      "P-CLAIM-11"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ len\\(a\\.resource\\)\\ >\\ MAX_CLAIM_BATCH:\\\n\\ \\ \\ \\ \\ \\ \\ \\ die\\(f\"claim\\ takes",
+    "replace": "    if len(set(a.resource)) > MAX_CLAIM_BATCH:\n        die(f\"claim takes",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "claim cap/same.py"
+  },
+  {
+    "name": "the --from cap is one too many",
+    "must": [
+      "P-CLAIM-11"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ len\\(froms\\)\\ >\\ MAX_CLAIM_BATCH:\\\n\\ \\ \\ \\ \\ \\ \\ \\ die\\(f\"claim\\ takes\\ at\\ most",
+    "replace": "    if len(froms) > MAX_CLAIM_BATCH + 1:\n        die(f\"claim takes at most",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "at most 100 --from names"
+  },
+  {
+    "name": "the --from cap counts duplicates",
+    "must": [
+      "P-CLAIM-11"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ froms\\ =\\ list\\(dict\\.fromkeys\\(a\\.from_\\ or\\ \\[\\]\\)\\)",
+    "replace": "    froms = list(a.from_ or [])",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "101 copies of one --from holder hit the cap"
+  },
+  {
+    "name": "post is refused while another agent holds a claim",
+    "must": [
+      "P-CLAIM-16"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ closed,\\ said\\ =\\ closing_target\\(con,\\ a\\)\\\n",
+    "replace": "        closed, said = closing_target(con, a)\n        if con.execute(\"SELECT 1 FROM claims WHERE agent<>? AND expires_at>?\", (name, now())).fetchone():\n            die(\"a claim is held\", \"claim_conflict\")\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "refused while another agent holds a claim"
+  },
+  {
+    "name": "release lets go of another agent's claim",
+    "must": [
+      "P-CLAIM-17"
+    ],
+    "file": "bin/agentbus",
+    "find": "f\"SELECT\\ resource\\ FROM\\ claims\\ WHERE\\ agent=\\?\\ AND\\ resource\\ IN",
+    "replace": "f\"SELECT resource FROM claims WHERE ?<>'' AND resource IN",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "release rl/other.py"
+  },
+  {
+    "name": "release without --if-held skips what is not held",
+    "must": [
+      "P-CLAIM-17"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ missing\\ and\\ not\\ a\\.if_held:",
+    "replace": "        if False:",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "release rl/other.py"
+  },
+  {
+    "name": "release takes an absolute path",
+    "must": [
+      "P-CLAIM-17"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ res\\ =\\ norm_resource\\(raw,\\ a=a\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ forms\\ =\\ sorted",
+    "replace": "            res = norm_resource(raw, strict=False, a=a)\n            forms = sorted",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "release /abs/path"
+  },
+  {
+    "name": "release does not match the other spelling of a path",
+    "must": [
+      "P-CLAIM-17"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ forms\\ =\\ sorted\\(set\\(same_path_forms\\(res\\)\\ \\+\\ \\[raw\\]\\)\\)",
+    "replace": "            forms = [res]",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "did not match the stored rl/dir/"
+  },
+  {
+    "name": "release of a path inside a held folder lets go of the folder",
+    "must": [
+      "P-CLAIM-18"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ forms\\ =\\ sorted\\(set\\(same_path_forms\\(res\\)\\ \\+\\ \\[raw\\]\\)\\)",
+    "replace": "            forms = sorted(set(same_path_forms(res) + [raw] + ['/'.join(res.rstrip('/').split('/')[:i]) + sfx for i in range(1, len(res.rstrip('/').split('/'))) for sfx in ('', '/')]))",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "release rl2/dir/inner.py"
+  },
+  {
+    "name": "opening a bus does not normalise stored claims",
+    "must": [
+      "P-CLAIM-19"
+    ],
+    "file": "bin/agentbus",
+    "find": "def\\ normalize_stored_claims\\(con\\):\\\n",
+    "replace": "def normalize_stored_claims(con):\n    return\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "did not leave the planted spelling normalised"
+  },
+  {
+    "name": "merged claims keep the earlier expiry",
+    "must": [
+      "P-CLAIM-19"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ if\\ other\\ and\\ \\(other\\[2\\]\\ !=\\ \"text\"\\ or\\ other\\[1\\]\\ >=\\ r\\[\"expires_at\"\\]\\):",
+    "replace": "        if other and (other[2] != \"text\" or other[1] <= r[\"expires_at\"]):",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "aliases not merged to the normalised form"
+  },
+  {
+    "name": "a normalised claim is not logged",
+    "must": [
+      "P-CLAIM-19"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ r\\[\"agent\"\\],\\ \"claim\",\\ f\"\\{r\\['resource'\\]\\}\\ renamed\\ to\\ \\{n\\}\\ \\(normalised\\)\"\\)\\\n",
+    "replace": "        pass\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "the rename to the normalised form was not logged"
+  },
+  {
+    "name": "normalising stops at 5 rows",
+    "must": [
+      "P-CLAIM-19"
+    ],
+    "file": "bin/agentbus",
+    "find": "NORMALIZE_BATCH\\ =\\ 500",
+    "replace": "NORMALIZE_BATCH = 5",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "one opening normalised"
+  },
+  {
+    "name": "reclaiming an expired claim logs a row",
+    "must": [
+      "P-CLAIM-21"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ if\\ not\\ own\\ or\\ own\\[\"purpose\"\\]\\ !=\\ purpose:\\ \\ \\#\\ a\\ renewal\\ that\\ changes\\ nothing\\ is\\ not\\ news",
+    "replace": "    if not own or own[\"purpose\"] != purpose or not renewed:  # a renewal that changes nothing is not news",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "reclaiming with the same purpose wrote a log row"
+  },
+  {
+    "name": "release --all lets go of live claims only",
+    "must": [
+      "P-CLAIM-22"
+    ],
+    "file": "bin/agentbus",
+    "find": "con\\.execute\\(\"DELETE\\ FROM\\ claims\\ WHERE\\ agent=\\?\",\\ \\(name,\\)\\)\\\n\\ \\ \\ \\ return\\ paths,\\ len\\(paths\\)\\ \\+\\ more",
+    "replace": "con.execute(\"DELETE FROM claims WHERE agent=? AND expires_at>?\", (name, now()))\n    return paths, len(paths) + more",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "release --all left claims behind"
+  },
+  {
+    "name": "release --all logs when there was nothing to release",
+    "must": [
+      "P-CLAIM-22"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ if\\ total:\\ \\ \\#\\ releasing\\ nothing\\ writes\\ nothing",
+    "replace": "            if True:  # releasing nothing writes nothing",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "release --all with nothing to release wrote a log row"
+  },
+  {
+    "name": "a note closes a question",
+    "must": [
+      "P-MSG-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "WHERE\\ kind='answer'\\ AND\\ reply_to\\ IS\\ NOT\\ NULL\\ AND\\ id>\\{f\\}\\)",
+    "replace": "WHERE kind IN ('answer','note') AND reply_to IS NOT NULL AND id>{f})",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "open questions"
+  },
+  {
+    "name": "a todo is closed once its recipient has read it",
+    "must": [
+      "P-MSG-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "f\"\\{p\\}kind='todo'\\ AND\\ \\{p\\}id>\\{f\\}\\ AND\\ \\{p\\}id\\ NOT\\ IN\\ \"",
+    "replace": "f\"{p}kind='todo' AND {p}id>{f} AND ({p}recipient='*' OR {p}id>COALESCE((SELECT last_read_id FROM cursors WHERE agent={p}recipient),0)) AND {p}id NOT IN \"",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "reading or an expired claim closed the todo"
+  },
+  {
+    "name": "leaving closes the leaver's todos",
+    "must": [
+      "P-MSG-7"
+    ],
+    "file": "bin/agentbus",
+    "find": "def\\ cmd_leave\\(con,\\ a\\):\\\n\\ \\ \\ \\ name\\ =\\ me\\(a\\)\\\n\\ \\ \\ \\ with\\ immediate\\(con\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ paths,\\ total\\ =\\ release_all\\(con,\\ name\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ gone\\ =\\ con\\.execute\\(\"DELETE\\ FROM\\ agents\\ WHERE\\ name=\\?\",\\ \\(name,\\)\\)\\.rowcount\\\n",
+    "replace": "def cmd_leave(con, a):\n    name = me(a)\n    with immediate(con):\n        paths, total = release_all(con, name)\n        gone = con.execute(\"DELETE FROM agents WHERE name=?\", (name,)).rowcount\n        con.execute(\"INSERT INTO messages(ts,sender,recipient,kind,topic,body,reply_to) SELECT ?,?,'*','done',NULL,'left',id FROM messages WHERE kind='todo' AND (sender=? OR recipient=?)\", (now(), name, name, name))\n",
+    "count": 1,
+    "run": "tests/test_todo.sh",
+    "expect": "after the owner left"
+  },
+  {
+    "name": "a claim taken with --from keeps the holder's purpose and claimed_at",
+    "must": [
+      "P-CLAIM-12"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ shown\\ =\\ move_named\\(con,\\ res,\\ t,\\ froms,\\ taken\\)\\ if\\ froms\\ else\\ \\[\\]\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ shown\\ \\+=\\ move_named_raw\\(con,\\ res,\\ raw_moves,\\ taken,\\ gone\\)\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ result\\ =\\ take_claim\\(con,\\ a,\\ name,\\ res,\\ t,\\ exp,\\ odd\\)\\\n",
+    "replace": "                _c = con.execute(\"SELECT purpose, claimed_at FROM claims WHERE resource=? AND agent IN (%s)\" % \",\".join(\"?\" * len(froms)), [res] + froms).fetchone() if froms else None\n                shown = move_named(con, res, t, froms, taken) if froms else []\n                shown += move_named_raw(con, res, raw_moves, taken, gone)\n                result = take_claim(con, a, name, res, t, exp, odd)\n                if _c:\n                    con.execute(\"UPDATE claims SET purpose=?, claimed_at=? WHERE resource=?\", (_c[0], _c[1], res))\n",
+    "count": 1,
+    "run": "tests/test_claim_rules.sh",
+    "expect": "the taken claim kept the holder's"
   }
 ]

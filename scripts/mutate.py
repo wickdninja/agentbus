@@ -11,7 +11,8 @@
                                             entries on N machines; the shards are disjoint and together hold every entry
 
 tests/mutations.json is an array of {"name", "file", "find", "replace", "count", "run", "expect"}, plus an
-optional "after" (the stream that adds the test, shown when the entry is skipped):
+optional "after" (the stream that adds the test, shown when the entry is skipped) and optional "must" (a list of
+docs/protocol.md requirement ids, P-AREA-n, that the mutation breaks; only tests/test_conformance.sh reads it):
   file     the file to mutate, relative to the repo root (bin/agentbus)
   find     a regex (re.MULTILINE); replace is its re.sub template
   count    how many times find must match; any other number is a stale mutation and fails loudly

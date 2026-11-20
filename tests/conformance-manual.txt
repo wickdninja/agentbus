@@ -1,0 +1,4 @@
+# MUST ids of docs/protocol.md that no mutation in tests/mutations.json can break meaningfully. One per line:
+#   P-AREA-n | the reason it cannot be mutated
+# A manual id is a listed exception, never a pass: the spec does not claim full automated conformance while any remain.
+P-CLAIM-20 | the write-lock wait that precedes the expiry is taken inside the open (P-CLAIM-19's step) and the code computes expires_at after it, so no mutation changes what a test can see; see the finding on the PR
