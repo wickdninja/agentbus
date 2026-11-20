@@ -311,8 +311,16 @@ class HookExit(unittest.TestCase):
 
     def test_a_running_hook_swaps_in_the_silent_exit(self):
         """Bug: a hook keeps exit_now, and the hold watchdog ends it with status 3 inside the user's session."""
-        out, seen = self.run_hook(["claude", "Stop"], {"Stop": lambda payload: None})
+        out, seen = self.run_hook(["claude", "PreToolUse"], {"PreToolUse": lambda payload: None})
         self.assertEqual(seen, [ab.hook_exit_now])
+
+    def test_a_retired_event_runs_nothing_and_prints_nothing(self):
+        """Bug: an old settings entry for the removed Stop hook (issue #86 T4) runs a handler, or prints, in a session."""
+        called = []
+        for dialect in ("claude", "codex"):
+            out, seen = self.run_hook([dialect, "Stop"], {"Stop": lambda p: called.append(1) or ("x", "y")})
+            self.assertEqual((out, seen), ("", []))
+        self.assertEqual(called, [])
 
     def test_the_swap_is_not_made_for_a_hook_that_never_runs(self):
         """Bug: an unknown dialect or event swaps exit_now before it returns, so the next normal command in the
@@ -326,7 +334,7 @@ class HookExit(unittest.TestCase):
     def test_a_missing_payload_prints_nothing_and_runs_no_handler(self):
         """Bug: a hook run with no JSON on stdin calls its handler on None and prints a traceback."""
         empty = mock.patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"not json")))
-        out, seen = self.run_hook(["claude", "Stop"], {"Stop": lambda payload: ("late", None)}, stdin=empty)
+        out, seen = self.run_hook(["claude", "PreToolUse"], {"PreToolUse": lambda payload: ("late", None)}, stdin=empty)
         self.assertEqual((out, seen), ("", []))
 
     def test_context_and_notice_become_one_json_line(self):

@@ -78,7 +78,7 @@ echo "STEP 6: setup claude puts the skill in HOME (runs once the command exists)
 if agentbus setup --help >/dev/null 2>&1; then
   say "agentbus setup claude (user)
   + ~/.claude/skills/agentbus/SKILL.md   installed, $(agentbus skill | wc -c | sed 's/^ *//' | python3 -c 'import sys; print(format(int(sys.stdin.read()), ","))') bytes
-  + ~/.claude/settings.json   added 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd)
+  + ~/.claude/settings.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, SessionEnd)
 done. Start a new Claude Code session to load them.
 next: cd your-repo && agentbus init ." agentbus setup claude
   [ -f "$HOME/.claude/skills/agentbus/SKILL.md" ] || fail "setup claude wrote no skill into HOME"

@@ -9,10 +9,10 @@ set -euo pipefail
 . "$TESTS_DIR/hooks_claude_lib.sh"
 
 echo "TEST 36: a test pause point is honoured only for an existing absolute folder"
-newbus p36; N=$(dname "$SID1"); SS; ab --as peer join --tool t >/dev/null; mkdir -p "$P/rel"; n=0
+newbus p36; N=$(dname "$SID1"); SS; ab --as peer join --tool t >/dev/null; mkdir -p "$P/rel"; n=0; lane t36 ln36   # a named lane: only it is nudged
 for spec in "hook-seen-lock=" "hook-seen-lock=rel" "hook-seen-read=" "hook-seen-read=rel" "hook-seen-lock=$T/does-not-exist"; do
   n=$((n+1)); rm -f "$P"/*.reached "$P"/rel/*.reached
-  payload pre_tool_use_write session_id="\"$SID1\"" tool_input.file_path="\"$P/pause-probe-$n.txt\"" >"$T/pl36"   # a new path each time, so each hook nudges
+  payload pre_tool_use_write_subagent session_id="\"$SID1\"" transcript_path="\"$(tpath)\"" agent_id='"t36"' tool_input.file_path="\"$P/pause-probe-$n.txt\"" >"$T/pl36"   # a new path each time, so each hook nudges
   "$PY" -I - "$T/pl36" "$P" "$spec" "${AB[@]}" <<'PY' || fail "a pause spec '$spec' stopped or broke the hook"
 import os, subprocess, sys
 pl, cwd, spec, argv = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]

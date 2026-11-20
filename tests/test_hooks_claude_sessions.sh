@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-# `agentbus hook claude EVENT`: the Claude Code hooks, part of the old tests/test_hooks_claude.sh (issue #31): Stop, AGENTBUS_AGENT, derived names across resume and overlap, SessionEnd, subagents, AGENTBUS_DB, no bus, the installed command in the text.
+# `agentbus hook claude EVENT`: the Claude Code hooks, part of the old tests/test_hooks_claude.sh (issue #31): no Stop, AGENTBUS_AGENT, derived names across resume and overlap, SessionEnd, subagents, AGENTBUS_DB, no bus, the installed command in the text.
 # Payloads are the captured ones in tests/fixtures/claude_hooks (docs/design/claude-hook-contract.md), with the project path swapped in.
 # Every run is in a throwaway project and HOME. Bugs this file catches: a hook that exits non-zero (Claude Code
 # blocks the tool call on 2), runs a bus copy found in the project, waits on a busy bus, writes to a bus it only
@@ -8,39 +8,12 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 . "$TESTS_DIR/hooks_claude_lib.sh"
 
-echo "TEST 14: Stop gives a systemMessage once per set of claims held without a handoff or done, and never blocks"
+echo "TEST 14: there is no Stop hook (issue #86 T4): an old entry for it prints nothing, whatever is held"
 newbus p14; N=$(dname "$SID1"); SS
-STOP; quiet || fail "Stop with no claims: rc $RC out $OUT"
 ab --as "$N" claim a.txt >/dev/null; ab --as "$N" claim b.txt >/dev/null
-STOP
-[ "$(text_of)" = "agentbus: $N still holds 2 claims and has not posted a handoff or a done that is not a reply." ] || fail "Stop text: rc $RC out $OUT"
-"$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert list(d)==["systemMessage"], d' "$OUT" || fail "Stop JSON shape (a decision or other key): $OUT"
-hook Stop "$(payload stop_hook_active session_id="\"$SID1\"")"; quiet || fail "Stop with stop_hook_active: rc $RC out $OUT"
-STOP; quiet || fail "Stop for the same claims a second time: rc $RC out $OUT"
-ab --as "$N" claim c.txt >/dev/null; STOP; grep -qF "still holds 3 claims" <<<"$(text_of)" || fail "Stop after a new claim: rc $RC out $OUT"
-ab --as "$N" post "partial" --kind note >/dev/null; ab --as "$N" claim d.txt >/dev/null; STOP; [ -n "$OUT" ] || fail "a note counted as a handoff: Stop went quiet"
-ab --as "$N" claim e.txt >/dev/null; ab --as "$N" post "all done" --kind done >/dev/null; STOP; quiet || fail "Stop after a done post: rc $RC out $OUT"
-ok "Stop: once per set of claims and session; quiet after done; no decision key"
-
-echo
-echo "TEST 14b: a done that replies (closing a todo) does not silence the Stop nudge; a reply handoff and a plain done do"
-# Bug it catches: Stop counted any done from the name as the handoff, so an agent that closed a todo and still held
-# its claims was never reminded. A done that is a reply does not count; a handoff always does, and so does a plain done.
-# Each quiet check follows a NEW claim, so the once-per-set nudge cannot have been spent already.
-newbus p14b; N=$(dname "$SID1"); SS
-ab --as "$N" claim a.txt >/dev/null
-tid=$(ab --as "$N" --json post "validate X" --kind todo | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-ab --as "$N" post "X validated" --kind done --reply-to "$tid" >/dev/null
-STOP; grep -qF "still holds 1 claim and has not posted a handoff or a done that is not a reply." <<<"$(text_of)" || fail "closing a todo silenced the Stop nudge: rc $RC out $OUT"
-ab --as "$N" claim b.txt >/dev/null
-STOP; [ -n "$OUT" ] || fail "premise: a new claim did not bring the nudge back: rc $RC"
-ab --as "$N" claim c.txt >/dev/null; ab --as "$N" post "handing c.txt to the next agent" --kind handoff --reply-to "$tid" >/dev/null
-STOP; quiet || fail "a handoff that replies to a message no longer silences Stop: rc $RC out $OUT"
-# The bus stamps whole seconds: without a gap the reply handoff above can share the new claim's second and silence Stop alone.
-"$PY" -c 'import time; time.sleep(1.1)'
-ab --as "$N" claim d.txt >/dev/null; ab --as "$N" post "all finished" --kind done >/dev/null
-STOP; quiet || fail "a plain done no longer silences Stop: rc $RC out $OUT"
-ok "Stop: a done that closes a todo is not a handoff; a reply handoff and a plain done still are"
+STOP; quiet || fail "an old Stop entry with claims held: rc $RC out $OUT"
+hook Stop "$(payload stop_hook_active session_id="\"$SID1\"")"; quiet || fail "an old Stop entry with stop_hook_active: rc $RC out $OUT"
+ok "Stop: silent"
 
 echo
 echo "TEST 15: AGENTBUS_AGENT set: joins without takeover, skips a live name, no environment file, no leave"
@@ -63,7 +36,7 @@ echo "TEST 16: a derived name resumed with the same session id rejoins and keeps
 newbus p16; N=$(dname "$SID1"); SS
 ab --as "$N" claim keep.txt >/dev/null
 hook SessionStart "$(payload session_start_resume session_id="\"$SID1\"")"
-[ "$RC" = 0 ] && grep -qF "as $N. " <<<"$(text_of)" || fail "resume: rc $RC out $OUT err $ERR"
+[ "$RC" = 0 ] && [ "$(text_of)" = "agentbus: you are $N on this folder's bus (--as $N), no unread direct messages." ] || fail "resume: rc $RC out $OUT err $ERR"
 ab --json claims | grep -qF keep.txt || fail "resume lost the claim"
 [ "$(roster)" = "$N" ] || fail "resume changed the roster: $(roster)"
 ok "same session id: same name, claims kept"
@@ -172,14 +145,15 @@ PY
 ok "a long path shortens the text and keeps it"
 
 echo
-echo "TEST 26: a session alone on the bus is not nudged to claim, and the path is not used up"
-newbus p26; N=$(dname "$SID1"); SS
-PRE a.txt; quiet || fail "alone on the bus: rc $RC out $OUT"
-PRE b.txt; PRE c.txt; quiet || fail "alone on the bus, more files: out $OUT"
+echo "TEST 26: a lane alone on the bus (with its parent) is not nudged to claim, and the path is not used up"
+# The no-claim nudge goes only to a subagent lane with a bus name of its own (issue #86 T6), so a named lane is the probe.
+newbus p26; N=$(dname "$SID1"); SS; lane a26 ln26
+SUBPRE a.txt a26; quiet || fail "alone on the bus: rc $RC out $OUT"
+SUBPRE b.txt a26; SUBPRE c.txt a26; quiet || fail "alone on the bus, more files: out $OUT"
 ab --as peer join --tool t >/dev/null
-PRE a.txt; grep -qF "a.txt has no claim" <<<"$OUT" || fail "a peer joined, but the path nudged earlier alone was used up: rc $RC out $OUT"
+SUBPRE a.txt a26; grep -qF "a.txt has no claim" <<<"$OUT" || fail "a peer joined, but the path nudged earlier alone was used up: rc $RC out $OUT"
 sql "$P/.agentbus/bus.db" "UPDATE agents SET last_seen='2020-01-01T00:00:00Z' WHERE name='peer'"
-PRE d.txt; quiet || fail "a peer last seen in 2020 counts as someone to claim against: out $OUT"
+SUBPRE d.txt a26; quiet || fail "a peer last seen in 2020 counts as someone to claim against: out $OUT"
 ok "nudges only while another agent is live"
 
 

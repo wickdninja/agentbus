@@ -37,7 +37,7 @@ d = json.load(open(sys.argv[1]))
 hooks = d.pop("hooks", None)
 assert d == {"theme": "dark", "permissions": {"allow": ["Bash(ls)"]}}, d
 if sys.argv[2] == "hooks":
-    assert sorted(hooks) == ["PreToolUse", "SessionEnd", "SessionStart", "Stop", "UserPromptSubmit"], hooks
+    assert sorted(hooks) == ["PreToolUse", "SessionEnd", "SessionStart", "UserPromptSubmit"], hooks
     assert all(g["hooks"][0]["command"].endswith("# agentbus:managed") for gs in hooks.values() for g in gs), hooks
 else:
     assert hooks is None, hooks
@@ -59,7 +59,7 @@ ok "fixture written"
 echo "STEP 2: a dry run says what it would do and writes nothing"
 say "agentbus setup claude (user)
   + would install ~/.claude/skills/agentbus/SKILL.md ($bytes bytes)
-  + would add 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd) to ~/.claude/settings.json; the file as it was is saved as settings.json.agentbus-<date and time>.bak
+  + would add 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, SessionEnd) to ~/.claude/settings.json; the file as it was is saved as settings.json.agentbus-<date and time>.bak
 dry run: nothing was written." agentbus setup claude --dry-run
 is_equal "no file appeared" "$BEFORE" "$(files_under)"
 ok "dry run wrote nothing"
@@ -67,7 +67,7 @@ ok "dry run wrote nothing"
 echo "STEP 3: install leaves the user's own files alone"
 say "agentbus setup claude (user)
   + ~/.claude/skills/agentbus/SKILL.md   installed, $bytes bytes
-  + ~/.claude/settings.json   added 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd); the file as it was is saved as settings.json.agentbus-<stamp>.bak
+  + ~/.claude/settings.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, SessionEnd); the file as it was is saved as settings.json.agentbus-<stamp>.bak
 done. Start a new Claude Code session to load them.
 next: cd your-repo && agentbus init ." agentbus setup claude
 cmp -s "$SKILL" <(agentbus skill) || fail "the installed skill is not what \`agentbus skill\` prints"
@@ -87,9 +87,9 @@ ok "rerun wrote nothing"
 echo "STEP 5: the Codex block is added after the user's text, and the user's later edit outside it survives a rerun"
 say "agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
-  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
+  + ~/.codex/hooks.json   added 3 hooks (SessionStart, UserPromptSubmit, PreToolUse)
   = /bin/sh   prints nothing at startup (started once as \$SHELL -lc)
-done. Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 4 entries whose command starts TOOL hook codex and ends # agentbus:managed.
+done. Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 3 entries whose command starts TOOL hook codex and ends # agentbus:managed.
 next: cd your-repo && agentbus init ." agentbus setup codex
 head -c "$(wc -c <"$T/agents.orig")" "$X/AGENTS.md" | cmp -s - "$T/agents.orig" || fail "the user's AGENTS.md text was changed"
 [ "$(grep -c '^<!-- agentbus:begin -->$' "$X/AGENTS.md")" = 1 ] && [ "$(grep -c '^<!-- agentbus:end -->$' "$X/AGENTS.md")" = 1 ] || fail "markers: $(cat "$X/AGENTS.md")"

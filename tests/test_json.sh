@@ -127,7 +127,7 @@ done = shape(j('completion', 'bash'), shell=str, text=str)
 assert done['shell'] == 'bash' and '_agentbus()' in done['text'], done
 setup = shape(j('setup', 'claude', '--dry-run'), target=str, scope=str, dry_run=bool, changes=list)
 array(setup['changes'], path=str, action=str, detail=str)
-assert set(shape(j('hooks', 'codex'), hooks=dict)['hooks']) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'}
+assert set(shape(j('hooks', 'codex'), hooks=dict)['hooks']) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse'}
 doctor = shape(j('doctor', keep=True), agentbus=str, path=str, contract=int, checks=list, fail=int, warn=int)
 assert doctor['checks'], doctor
 for check in doctor['checks']:   # scope is there for the checks of a user or project file

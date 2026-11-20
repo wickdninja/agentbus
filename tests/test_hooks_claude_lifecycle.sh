@@ -19,12 +19,13 @@ END clear "$SIDA"; [ "$RC" = 0 ] && [ -z "$OUT" ] || fail "SessionEnd clear: rc 
 hook SessionStart "$(payload session_start_clear session_id="\"$SIDB\"")"
 grep -qF "as $N. " <<<"$(text_of)" && grep -qF "1 unread message for you (1 question)" <<<"$(text_of)" || fail "SessionStart after /clear did not keep the name and its mail: $OUT"
 [ "$(tail -n 1 "$T/env27")" = "export AGENTBUS_AGENT=$N" ] || fail "the new session's environment file does not name $N"
-UPS "$SIDB"; grep -qF "1 unread message" <<<"$(text_of)" || fail "UserPromptSubmit in the cleared session did not use the process's name: out $OUT"
+ab --as peer post "a second question" --to "$N" --kind question >/dev/null   # SessionStart said the first; the prompt note says only what is new
+UPS "$SIDB"; grep -qF "2 unread direct messages" <<<"$(text_of)" || fail "UserPromptSubmit in the cleared session did not use the process's name: out $OUT"
 PRE keep.txt "$SIDB"; quiet || fail "the cleared session's own claim is held by another name: out $OUT"
 hook SessionStart "$(payload session_start_startup_print session_id="\"$SIDC\"" source=fork)"
 grep -qF "as $N. " <<<"$(text_of)" || fail "a forked session got another name: $OUT"
 hook SessionStart "$(payload session_start_startup_print session_id="\"$SIDC\"" source=compact)"
-grep -qF "as $N. " <<<"$(text_of)" || fail "a compacted session got another name: $OUT"
+grep -qF "you are $N on " <<<"$(text_of)" || fail "a compacted session got another name: $OUT"
 [ "$(roster)" = "$N peer" ] || fail "the roster after clear, fork and compact: $(roster)"
 END other "$SIDC"
 [ "$(roster)" = "peer" ] && ! ab --json claims | grep -qF keep.txt || fail "the process ending did not leave: $(roster)"
@@ -38,7 +39,7 @@ echo "TEST 28: the real claude -p sequence: SessionEnd other releases a derived 
 newbus p28; N=$(dname "$SID1"); SS
 ab --as "$N" claim step1.txt >/dev/null
 END other; hook SessionStart "$(payload session_start_resume session_id="\"$SID1\"")"
-grep -qF "as $N. " <<<"$(text_of)" || fail "a resumed -p session got another name: $OUT"
+grep -qF "you are $N on " <<<"$(text_of)" || fail "a resumed -p session got another name: $OUT"
 ! ab --json claims | grep -qF step1.txt || fail "a derived name kept its claim across SessionEnd other"
 AGENTBUS_AGENT=lane-p SS; ab --as lane-p claim step1.txt >/dev/null
 AGENTBUS_AGENT=lane-p END other; AGENTBUS_AGENT=lane-p hook SessionStart "$(payload session_start_resume session_id="\"$SID1\"")"
@@ -87,13 +88,15 @@ SS "$SIDF"
 [ ! -e "$STATE/zz-old.seen" ] && [ -e "$STATE/bulk-600.seen" ] || fail "pruning did not reach the 600th entry, or removed fresh ones"
 ab --as peer join --tool t >/dev/null; ab --as peer post "for g" --to "$(dname "$SIDG")" --kind note >/dev/null 2>&1
 printf 'claude-deadbeef\n' >"$T/evil.name"; ln -s "$T/evil.name" "$STATE/$SIDG.name"
-UPS "$SIDG"; grep -qF "1 unread message" <<<"$(text_of)" || fail "a linked name file was followed: out $OUT"
+UPS "$SIDG"; grep -qF "1 unread direct message" <<<"$(text_of)" || fail "a linked name file was followed: out $OUT"
 SS "$SIDH"
 # Two hooks, one session, the interleaving forced (no luck): A holds the memory file between its read and its write; B comes
 # to the lock while A holds it. With the lock, B waits and then adds its path to A's; without it, B finishes alone and A's
 # write, made from its stale read, erases B's path.
-payload pre_tool_use_write session_id="\"$SIDH\"" tool_input.file_path="\"$P/seen-a.txt\"" >"$T/seen-a.json"
-payload pre_tool_use_write session_id="\"$SIDH\"" tool_input.file_path="\"$P/seen-b.txt\"" >"$T/seen-b.json"
+# A named lane edits (only a lane is nudged, issue #86 T6), so each hook writes a path key.
+lane ah lnh "$SIDH"
+payload pre_tool_use_write_subagent session_id="\"$SIDH\"" transcript_path="\"$(tpath "$SIDH")\"" agent_id='"ah"' tool_input.file_path="\"$P/seen-a.txt\"" >"$T/seen-a.json"
+payload pre_tool_use_write_subagent session_id="\"$SIDH\"" transcript_path="\"$(tpath "$SIDH")\"" agent_id='"ah"' tool_input.file_path="\"$P/seen-b.txt\"" >"$T/seen-b.json"
 PA="$T/pause-a"; PB="$T/pause-b"; mkdir -p "$PA" "$PB"
 ( cd "$P" && AGENTBUS_TEST_PAUSE="hook-seen-read=$PA" "${AB[@]}" hook claude PreToolUse <"$T/seen-a.json" >"$T/seen-a.out" 2>/dev/null ) & PIDA=$!
 wait_for "$PA/hook-seen-read.reached"
@@ -136,7 +139,9 @@ for i in range(50):
     con.execute("INSERT INTO messages(ts,sender,recipient,kind,body) VALUES(?,?,?,?,?)", (fresh, f"peer{i}", sys.argv[2], "note", "b"))
 con.commit(); con.close()
 PY
-payload user_prompt_submit session_id="\"$SID1\"" >"$T/pl"
+# No session id, the name from AGENTBUS_AGENT: nothing is remembered, so every run says the note (with a session, the
+# prompt note speaks only when a direct message is new, and 19 of the 20 runs would measure the silent path).
+payload user_prompt_submit session_id='""' >"$T/pl"; export AGENTBUS_AGENT="$N"
 # Under scripts/mutate.py (it sets AGENTBUS_MUTATION_RUN=1) both bounds are printed, not enforced: there up to four copies
 # of this file share the runner and the mutated copy is compiled on every run, so a miss measures the runner, and it
 # failed entries whose own assertion comes later in this file (issue #73). No entry is meant to be killed by a bound;
@@ -162,7 +167,7 @@ for attempt in range(3):
         c0, w0 = time.process_time(), time.perf_counter()
         result = m["hook_user_prompt"](payload)
         cpu.append(time.process_time() - c0); wall.append(time.perf_counter() - w0)
-        assert result and result[0].startswith("agentbus: 50 unread messages for you"), result
+        assert result and result[0].startswith("agentbus: 50 unread direct messages for you"), result
     cpu.sort(); wall.sort()
     print("handler p95 %.0f ms of CPU, %.0f ms of wall (round %d)" % (cpu[18] * 1000, wall[18] * 1000, attempt + 1))
     cpu_ok = cpu_ok or attempt == 0 and cpu[18] <= 0.25
@@ -195,6 +200,7 @@ for attempt in range(3):
         sys.exit(0)
 sys.exit(1)
 PY
+unset AGENTBUS_AGENT
 ok "UserPromptSubmit: handler and process inside their bounds"
 
 echo
