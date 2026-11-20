@@ -176,8 +176,13 @@ class Cell:
         append-only ledger."""
         h = self.hist
         if arm.startswith("bus-"):
+            db = os.path.join(copy, "bus.db")
             for ev in h.events[h.step_end[frm]:h.step_end[to]]:
-                R.apply_event(self.run, os.path.join(copy, "bus.db"), ev)
+                R.apply_event(self.run, db, ev)
+            self.ctx.update(point="advanced", copy=copy)
+            inject("advanced", self.ctx)
+            # a timing slip in the replayed window is a replay defect (reruns the seed-cell), never a scored miss
+            R.check_stored_times(db, [e for e in h.events[:h.step_end[to]] if e[2] != "inbox"])
         else:
             self.write_ledger(copy, to)
 
@@ -411,6 +416,15 @@ def parse_args(argv):
     bad = [p for p in args.probes if p not in sim.PROBES]
     if bad:
         raise SystemExit(f"stage1: unknown probe {bad}")
+    if args.counted:
+        full = [(n, e, m) for n in sim.GRID_N for e in sim.GRID_E for m in sim.GRID_MIX]
+        why = [w for w, bad in (
+            ("--dev", args.dev), ("a seed list other than the 30 registered seeds", args.seed_list != sim.SEEDS),
+            ("a cell subset", sorted(args.cell_list) != sorted(full)),
+            ("a probe subset", args.probes != list(sim.PROBES)),
+            ("--instances other than 10", args.instances != sim.M_INSTANCES)) if bad]
+        if why:
+            raise SystemExit("stage1: --counted is exactly the registered design; refused with " + ", ".join(why))
     for what, items in (("seeds", args.seed_list), ("cells", args.cell_list)):
         dup = sorted({str(x) for x in items if items.count(x) > 1})
         if dup:

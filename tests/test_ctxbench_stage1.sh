@@ -18,6 +18,14 @@ done
 [ ! -e "$T/x.jsonl" ] || fail "a refused run wrote a results file"
 ok "duplicate seeds and duplicate cells are refused"
 
+echo "TEST 1b: --counted is exactly the registered design"
+for a in "--dev" "--seeds 4127,9341" "--cells 5:50:busy" "--probes P1" "--instances 3"; do
+  if o=$(envx "$PY" "$STAGE" --counted $a --out "$T/x.jsonl" 2>&1); then fail "--counted ran with $a"; fi
+  grep -q "exactly the registered design" <<<"$o" || fail "no counted-design refusal for $a: $o"
+done
+[ ! -e "$T/x.jsonl" ] || fail "a refused run wrote a results file"
+ok "--counted refuses --dev, a seed subset, a cell subset, a probe subset and other instance counts"
+
 echo "TEST 2: capped calls, scratch folders, the report, and a development run's outputs"
 envx "$PY" - "$ROOT" "$T" "${AB[*]}" <<'PY' || fail "stage1 check failed"
 import json, os, sys, types
