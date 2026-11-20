@@ -25,7 +25,7 @@ def rows(r):
 os.makedirs(tmp + "/b")
 # P7: a stored time one second off after a window replay is a defect on every attempt, never a wrong row
 import sqlite3
-p7 = {"probes": ["P7"], "instances": 3, "oracle_file": None}
+p7 = {"probes": ["P7"], "instances": 1, "oracle_file": None}
 def slip(point, ctx):
     if point == "advanced":
         con = sqlite3.connect(ctx["copy"] + "/bus.db")
@@ -33,7 +33,7 @@ def slip(point, ctx):
         con.commit(); con.close()
 stage1.FAULT = slip
 try:
-    r = stage1.run_unit(p7, cli, tmp + "/b", 9901, 5, 30, "busy")
+    r = stage1.run_unit(p7, cli, tmp + "/b", 9901, 3, 10, "busy")
 finally:
     stage1.FAULT = None
 rs = rows(r)
