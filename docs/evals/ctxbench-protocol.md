@@ -409,6 +409,11 @@ Per instance and arm, uncapped and capped:
 
 ## Report
 
+The report is built only for the counted run (`--counted`). Every run, development runs included, writes a defects
+summary: defect rows, seed-cells excluded after three attempts, oracle-parser disagreements and defects a rerun
+cleared, with no per-arm aggregate. A seed-cell whose replay still fails on its third attempt is left out of the report
+whole and listed.
+
 Per (N, E, mix, probe) cell and arm, uncapped and capped (`cell_report`):
 
 - **Bytes.** Per seed, the mean delivered bytes over its 10 instances. Across the 30 seeds: median, first and third
