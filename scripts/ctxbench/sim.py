@@ -52,13 +52,7 @@ SEEDS = [4127, 9341, 1586, 7203, 2648, 5519, 8872, 3065, 6794, 1930, 2417, 8156,
          7534, 4860, 9617, 5203, 3388, 7915, 1046, 6452, 2771, 8309, 4594, 9022, 5867, 3150, 7688]
 DEV_SEEDS = [9901, 9902]
 
-# The protocol's parameter table (a test compares this dict with the table in the document).
-PARAMS = {
-    "sparse": {"mean": 120, "items": 30, "broadcast": 0.40, "claim": (0.20, 0.05, 0.75), "long": 0.03, "crash": 0.002},
-    "busy": {"mean": 20, "items": 15, "broadcast": 0.30, "claim": (0.20, 0.10, 0.70), "long": 0.05, "crash": 0.004},
-    "handoff-heavy": {"mean": 45, "items": 20, "broadcast": 0.20, "claim": (0.20, 0.20, 0.60), "long": 0.08,
-                      "crash": 0.008},
-}
+PARAMS = R.PARAMS  # registered.py holds the table; the test compares it with the document
 DECISION_TOPIC_SHARE = 0.95
 TOPIC_SHARE = 0.6
 NO_REPLY_DONE = 0.20

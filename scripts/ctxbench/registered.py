@@ -110,9 +110,29 @@ def apply_event(run, db, ev):
         raise SystemExit(f"FAIL: unknown action {action}")
 
 
+def expected_claim_times(events):
+    """(claimed_at, expires_at) of every claim row the bus holds after the events, from the simulated times alone: a new
+    claim or a takeover starts at its own time; a renewal (the holder claims again a claim it holds live) keeps the first
+    claim's start and moves the expiry to its own time plus TTL; a release drops the row; a leave drops every row the
+    agent holds, live or expired."""
+    rows = {}  # resource -> (holder, claimed_at, expires_at)
+    for ts, actor, action, f in events:
+        if action == "claim":
+            old = rows.get(f["res"])
+            renewal = not f.get("frm") and old is not None and old[0] == actor and old[2] > ts
+            rows[f["res"]] = (actor, old[1] if renewal else ts, iso(parse_ts(ts) + TTL))
+        elif action == "release":
+            if rows.get(f["res"], ("",))[0] == actor:
+                del rows[f["res"]]
+        elif action == "leave":
+            rows = {r: v for r, v in rows.items() if v[0] != actor}
+    return sorted((c, x) for _, c, x in rows.values())
+
+
 def check_stored_times(db, events):
-    """Every stored time is a simulated event time: messages in order, every log row, claims (expiry = start + TTL),
-    last_seen and facts. A mismatch is a replay defect."""
+    """Every stored time is a simulated event time: messages in order, every log row, claims (claimed_at the first
+    claim's time, expires_at 120 minutes after the latest renewal's time: exactly expected_claim_times), last_seen and
+    facts. A mismatch is a replay defect."""
     times = {e[0] for e in events}
     con = sqlite3.connect(db)
     try:
@@ -123,9 +143,9 @@ def check_stored_times(db, events):
         for (ts,) in con.execute("SELECT ts FROM log"):
             if ts not in times:
                 raise ReplayDefect(f"log row stamped {ts}, not a simulated time")
-        for start, until in con.execute("SELECT claimed_at, expires_at FROM claims"):
-            if start not in times or until != iso(parse_ts(start) + TTL):
-                raise ReplayDefect(f"claim stamped {start} until {until}")
+        stored = sorted(con.execute("SELECT claimed_at, expires_at FROM claims"))
+        if stored != expected_claim_times(events):
+            raise ReplayDefect(f"claims stamped {stored}, simulated {expected_claim_times(events)}")
         for (ts,) in con.execute("SELECT last_seen FROM agents"):
             if ts not in times:
                 raise ReplayDefect(f"last_seen {ts} is not a simulated time")
@@ -586,6 +606,12 @@ MIXES = {  # share of E, per cent, in this order
              "dropped": 2, "claim": 14, "release": 10, "fact": 2, "join": 1, "leave": 1},
     "handoff-heavy": {"note": 12, "question": 8, "answer": 7, "decision": 3, "alert": 1, "handoff": 14, "todo": 16,
                       "done": 10, "dropped": 3, "claim": 12, "release": 8, "fact": 2, "join": 2, "leave": 2},
+}
+PARAMS = {  # the protocol's parameter table; tests/test_ctxbench_sim.sh compares it with the document
+    "sparse": {"mean": 120, "items": 30, "broadcast": 0.40, "claim": (0.20, 0.05, 0.75), "long": 0.03, "crash": 0.002},
+    "busy": {"mean": 20, "items": 15, "broadcast": 0.30, "claim": (0.20, 0.10, 0.70), "long": 0.05, "crash": 0.004},
+    "handoff-heavy": {"mean": 45, "items": 20, "broadcast": 0.20, "claim": (0.20, 0.20, 0.60), "long": 0.08,
+                      "crash": 0.008},
 }
 FOLDER_SHARE = 0.3
 REDRAWS = 10

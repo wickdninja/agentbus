@@ -16,14 +16,15 @@ Stdlib only, Python 3.9+.
 """
 import argparse
 import hashlib
+import io
 import json
 import os
 import platform
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ProcessPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import registered as R  # noqa: E402
@@ -95,41 +96,6 @@ def environment_row():
             "sha256": {f: sha256_of(os.path.join(R.ROOT, f)) for f in files}}
 
 
-def check_stored_times(db, events):
-    """REGISTRATION GAP (reported with B-M1): registered.check_stored_times demands expires_at == claimed_at + 120 min,
-    but the bus keeps claimed_at on a renewal and moves only expires_at (bin/agentbus cmd_claim, "renews the claim and
-    keeps its purpose and claimed_at"), so any history with a renewal is called a replay defect. This copy differs in
-    one rule: a claim's start must be a simulated time and its expiry exactly 120 minutes after SOME simulated time that
-    is at or after the start. Everything else is registered.py's check, unchanged. Replace by the repaired registered
-    function once the registration repair lands."""
-    times = {e[0] for e in events}
-    want = [e[0] for e in events if e[2] == "post" or (e[2] == "claim" and e[3].get("frm"))]
-    con = sqlite3.connect(db)
-    try:
-        got = [r[0] for r in con.execute("SELECT ts FROM messages ORDER BY id")]
-        if got != want:
-            raise R.ReplayDefect(f"messages stamped {got}, simulated {want}")
-        for (ts,) in con.execute("SELECT ts FROM log"):
-            if ts not in times:
-                raise R.ReplayDefect(f"log row stamped {ts}, not a simulated time")
-        starts = {iso_plus(t) for t in times}
-        for start, until in con.execute("SELECT claimed_at, expires_at FROM claims"):
-            if start not in times or until not in starts or until < iso_plus(start):
-                raise R.ReplayDefect(f"claim stamped {start} until {until}")
-        for (ts,) in con.execute("SELECT last_seen FROM agents"):
-            if ts not in times:
-                raise R.ReplayDefect(f"last_seen {ts} is not a simulated time")
-        for (ts,) in con.execute("SELECT updated_at FROM context UNION ALL SELECT updated_at FROM context_history"):
-            if ts not in times:
-                raise R.ReplayDefect(f"fact stamped {ts}")
-    finally:
-        con.close()
-
-
-def iso_plus(ts):
-    return R.iso(R.parse_ts(ts) + R.TTL)
-
-
 # ---- one instance --------------------------------------------------------------------------------------------------
 
 def classify(got, want):
@@ -176,7 +142,7 @@ class Cell:
                 shutil.copytree(bus, dst)
                 self.snaps[k] = dst
                 pos += 1
-        check_stored_times(db, [e for e in h.events if e[2] != "inbox"])
+        R.check_stored_times(db, [e for e in h.events if e[2] != "inbox"])
 
     def copy(self, arm, step):
         """A fresh copy of the history as of `step`: the bus folder, or a folder holding COORDINATION.md."""
@@ -360,6 +326,38 @@ def build_report(acc):
 
 # ---- command line ----------------------------------------------------------------------------------------------
 
+def run_unit(settings, cli, base, seed, n, e, mix):
+    """One (seed, cell) on its own folder, runner and oracle; returns (results text, accumulator, replay defects). Units
+    share nothing, so they can run in separate processes and be merged in a fixed order."""
+    args = argparse.Namespace(probes=settings["probes"], instances=settings["instances"],
+                              oracle=load_oracle(settings["oracle_file"]))
+    tmp = os.path.join(base, f"{seed}-{n}-{e}-{mix}")
+    os.makedirs(tmp)
+    out, acc = io.StringIO(), {}
+    try:
+        defects = run_cell(args, R.Runner(cli, tmp), tmp, seed, n, e, mix, args.oracle, out, acc,
+                           lambda m: print(m, file=sys.stderr, flush=True))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return out.getvalue(), acc, defects
+
+
+def merge_results(results, out, acc):
+    """Write each unit's rows and fold its accumulator into acc, in the order given; returns the replay defect count."""
+    defects = 0
+    for text, part, n in results:
+        out.write(text)
+        defects += n
+        for key, data in part.items():
+            into = acc.setdefault(key, {})
+            if "no_candidate" in data:
+                into["no_candidate"] = into.get("no_candidate", 0) + data["no_candidate"]
+            for arm, seeds in data.get("arms", {}).items():
+                for seed, rows in seeds.items():
+                    into.setdefault("arms", {}).setdefault(arm, {}).setdefault(seed, []).extend(rows)
+    return defects
+
+
 def parse_cells(text):
     cells = []
     for part in text.split(","):
@@ -381,6 +379,8 @@ def parse_args(argv):
     ap.add_argument("--out", default="ctxbench-stage1.jsonl", help="results file (JSON Lines); the report goes beside it")
     ap.add_argument("--cli", help="the command that runs agentbus, split on whitespace (default: this Python and bin/agentbus)")
     ap.add_argument("--oracle-file", help="load the oracle from this file instead of scripts/ctxbench/oracle.py (tests)")
+    ap.add_argument("--jobs", type=int, default=1, help="run (seed, cell) units in this many processes; the results file "
+                    "is identical to a serial run (units are merged in a fixed order)")
     ap.add_argument("--tmp", help="working folder for buses and copies (default: a new temp folder, removed after)")
     args = ap.parse_args(argv)
     if args.dev and args.seeds:
@@ -391,6 +391,8 @@ def parse_args(argv):
     bad = [p for p in args.probes if p not in sim.PROBES]
     if bad:
         raise SystemExit(f"stage1: unknown probe {bad}")
+    if args.jobs < 1:
+        raise SystemExit("stage1: --jobs must be at least 1")
     if args.instances < 1:
         raise SystemExit("stage1: --instances must be at least 1")
     return args
@@ -407,19 +409,18 @@ def main(argv=None):
     cli = args.cli.split() if args.cli else [sys.executable, os.path.join(R.ROOT, "bin", "agentbus")]
     base = args.tmp or tempfile.mkdtemp(prefix="ctxbench-stage1.")
     acc, defects = {}, 0
-    log = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+    units = [(seed, n, e, mix) for seed in args.seed_list for n, e, mix in args.cell_list]
+    settings = {"probes": args.probes, "instances": args.instances, "oracle_file": args.oracle_file}
     try:
         with open(args.out, "w") as out:
             out.write(json.dumps(environment_row()) + "\n")
-            run = R.Runner(cli, base)
-            for seed in args.seed_list:
-                for n, e, mix in args.cell_list:
-                    tmp = os.path.join(base, f"{seed}-{n}-{e}-{mix}")
-                    os.makedirs(tmp)
-                    try:
-                        defects += run_cell(args, run, tmp, seed, n, e, mix, args.oracle, out, acc, log)
-                    finally:
-                        shutil.rmtree(tmp, ignore_errors=True)
+            if args.jobs > 1:
+                with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+                    futures = [pool.submit(run_unit, settings, cli, base, *u) for u in units]
+                    results = (f.result() for f in futures)  # merged in unit order, whatever order they finish in
+                    defects = merge_results(results, out, acc)
+            else:
+                defects = merge_results((run_unit(settings, cli, base, *u) for u in units), out, acc)
         report_path = os.path.splitext(args.out)[0] + ".report.json"
         with open(report_path, "w") as fh:
             json.dump(build_report(acc), fh, indent=1, sort_keys=True)

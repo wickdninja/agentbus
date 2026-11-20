@@ -112,8 +112,9 @@ together, up to 10 times; after that the event is a `note` by a uniformly drawn 
 - `join`: when fewer than N agents are live; the actor is the next name from the pool (not drawn).
 - `leave`: a live agent other than `lead`, when at least 2 live agents besides `lead` exist.
 
-**Draw order inside a step.** Type and actor; then the event's own draws in the order this section lists them
-(claim sort and target, recipient, topic, reply target, body); then the actor's inbox read; then the crash draw.
+**Draw order inside a step.** Time gap; type and actor; then the event's own draws in the order this section lists them
+(claim sort and target, recipient, topic, reply target, body); then the actor's inbox read; then the crash draw. The
+next subsection fixes every draw's form and order.
 
 **Targets inside an event.** A reply's target is drawn uniformly among the actor's eligible open items. A release
 drops a uniform claim among the actor's live claims; a renewal renews a uniform one of them. A `done` has
@@ -215,6 +216,49 @@ happen as the history says. P7's bytes are the sum over its three refreshes.
 (crashes, parity, replay checks, oracle-parser disagreements) and never summarised by arm; no comparison between arms
 is computed on any seed before Stage 1's registered run.
 
+### Simulator draw order
+
+Every random draw of a history comes from its one `random.Random`, in this order. Draws a registered function makes
+(`draw_event`, `choose_new_resource`, `choose_fact_key`, `choose_fact_value`, `make_body`, `p7_pick`, and the target
+rules) are made inside it; "draw" below means the call named. `choice(L)` is `rng.choice(L)` on the list `L` sorted
+ascending (names, resources and ids, ids numerically), except `corpus` and `items`, which stay in file order.
+
+1. **Start.** After the N joins, `lead`'s goal is `choice(corpus)` over `data/corpus.txt` in file order. The start makes no
+   time, inbox or crash draw: its events are not steps, so they have no inbox read and no crash draw.
+2. **Time gap.** A step's first draw is its gap, `round(rng.expovariate(1 / mean))` seconds, before the type, because
+   `release` and `claim` eligibility depend on which claims are live at the step's time.
+3. **Type and actor.** `draw_event`.
+4. **Claim.** The sort is one `rng.random()` scaled by the sum of the shares of the sorts possible for the actor, walked
+   in the order renewal, takeover, new (the first sort whose share exceeds the remainder; the last sort when none
+   does). Then the target: a renewal, `choice` over the actor's live claims; a takeover, `choice` over the live claims of
+   other agents; a new claim, `choose_new_resource` with every live claim's resource. Then, for a new claim and a
+   takeover only, the purpose `choice(corpus)` (file order); a renewal keeps the purpose it holds.
+5. **Release.** `choice` over the actor's live claims.
+6. **Fact.** `choose_fact_key`, then `choose_fact_value`.
+7. **Message** (every kind but a claim, release, fact, join or leave), in this order:
+   a. Recipient: `rng.random() < broadcast share` means everyone. Else, when any agent has left, `rng.random() < 0.10`
+      means `choice` over the agents that have left; else (and when nobody has left, with no
+      draw for that 0.10) `choice` over the agents on the roster other than the actor. Every kind draws its recipient
+      this way, replies included: a reply is not addressed to the sender of what it answers.
+   b. Topic: a decision, `rng.random() < 0.95` means `decision`, else `choice(items)`; any other kind,
+      `rng.random() < 0.6` means `choice(items)`, else none.
+   c. Reply target (an answer, done or dropped only): `choice` over the actor's eligible open items. A done then draws
+      `rng.random() < 0.20`, which drops its `reply_to`. An answer or a done that kept its `reply_to` then draws
+      `rng.random() < 0.05`; on a hit, when some message already replies to the target, one more `rng.random() < 0.5`
+      sends an `answer` replying to the latest reply to the target, and otherwise (or when nothing replies to it yet)
+      a `note` replying to the target. A dropped draws neither.
+   d. Body: a handoff, its topic or else `choice(items)` as SLUG, then three `choice(corpus)` sentences; a decision,
+      `make_body` then `choice(items)` for the subject; any other kind, `make_body`.
+8. **Inbox read.** `rng.random() < 0.5`; the draw is made even when the actor just left, and then no read is written (a
+   left agent has no inbox).
+9. **Crash.** `rng.random() < crash probability`; on a hit, `choice` over the live agents other than `lead`.
+
+Message ids count posts and takeover alerts in order. A checkpoint after event k includes that step's own inbox read and
+nothing of step k + 1; an agent is live at k when it is on the roster and has not crashed after step k's crash draw.
+Instances are numbered from 0 in their seed string. A P7 instance's outcome is "wrong" when any of its nine slots (three
+refreshes, three answers each) is wrong, else "cannot decide" when any is, else derivable. The parameter table above is
+`PARAMS` in `registered.py`, and a test compares the two.
+
 ### Clock rule and time checks
 
 `AGENTBUS_TEST_NOW` is read once at module load and the clock then runs on with the wall clock. So the replay starts a
@@ -259,7 +303,7 @@ A claim lasts 120 minutes from its CLAIM or TAKEOVER line unless renewed.
   `LEAVE`, `CLAIM` (path = resource, text = purpose; also a renewal), `TAKEOVER` (from = new holder, to = old holder,
   followed by its `ALERT`), `RELEASE`, `FACT` (from = writer, topic = key, text = value) and `GOAL` (from = setter,
   text = goal).
-- A leave is rendered as one `RELEASE` per claim it dropped, then `LEAVE`, at the leave's time. A crash writes nothing.
+- A leave is rendered as one `RELEASE` per claim row the agent holds, live or expired (the bus deletes every row the agent holds), then `LEAVE`, at the leave's time. A crash writes nothing.
   Inbox consumption writes nothing. Nothing is ever rewritten and there is no state section.
 
 The renderer is `render_ledger` in `registered.py`; rendering a prefix of the events gives a prefix of the file.

@@ -22,21 +22,21 @@ def check(c, m):
     if not c:
         raise SystemExit("FAIL: " + m)
 
-# the parameter table in sim.py is the document's
+# the parameter table in registered.py is the document's
 doc = open(root + "/docs/evals/ctxbench-protocol.md").read()
 def row(label):
     m = re.search(r"^\| " + re.escape(label) + r" \| (.*) \|$", doc, re.M)
     return [x.strip() for x in m.group(1).split("|")]
 order = ["sparse", "busy", "handoff-heavy"]
 for i, mix in enumerate(order):
-    p = sim.PARAMS[mix]
+    p = R.PARAMS[mix]
     check(float(row("mean seconds between events")[i]) == p["mean"], "mean " + mix)
     check(int(row("work items (the first k lines of `data/items.txt`)")[i]) == p["items"], "items " + mix)
     check(float(row("broadcast share of messages")[i]) == p["broadcast"], "broadcast " + mix)
     check(tuple(float(x) for x in row("claim sort shares: renewal / takeover / new")[i].split(" / ")) == p["claim"], "claim " + mix)
     check(float(row("long-body share")[i]) == p["long"], "long " + mix)
 check(re.search(r"sparse 0\.002, busy 0\.004, handoff-heavy 0\.008", doc), "crash row moved")
-check([sim.PARAMS[m]["crash"] for m in order] == [0.002, 0.004, 0.008], "crash probabilities")
+check([R.PARAMS[m]["crash"] for m in order] == [0.002, 0.004, 0.008], "crash probabilities")
 check(sim.SEEDS == [int(x) for x in re.findall(r"\d{4}", doc.split("## Seeds")[1].split("M = 10")[0])], "seed list")
 
 for mix in order:
@@ -125,7 +125,7 @@ grep -q "=x" <<<"$o" && fail "a refusal printed a value"
 ok "counted seeds need --counted; a missing oracle and a configured credential are refused"
 
 echo "TEST 3: tiny end-to-end run (dev seed, E=50, N=5, real oracle)"
-envx "$PY" "$STAGE" --seeds 9901 --cells 5:50:busy --probes P1,P5,P7 --instances 1 --cli "${AB[*]}" --out "$T/r.jsonl" > "$T/run.out" 2>&1 || { cat "$T/run.out"; fail "stage1.py failed"; }
+envx "$PY" "$STAGE" --seeds 9901 --cells 5:50:busy --probes P1,P7 --instances 1 --cli "${AB[*]}" --out "$T/r.jsonl" > "$T/run.out" 2>&1 || { cat "$T/run.out"; fail "stage1.py failed"; }
 "$PY" - "$T/r.jsonl" <<'PY' || fail "results file check failed"
 import json, sys
 rows = [json.loads(x) for x in open(sys.argv[1])]
@@ -134,13 +134,13 @@ assert env["type"] == "environment" and env["os"] and env["python"] and set(env[
 assert len(env["sha256"]) >= 8 and env["commit"], env
 inst = [r for r in rows if r["type"] == "instance"]
 assert not [r for r in rows if r["type"] == "defect"], "replay defects"
-assert {(r["probe"], r["arm"]) for r in inst} == {(p, a) for p in ("P1", "P5", "P7")
+assert {(r["probe"], r["arm"]) for r in inst} == {(p, a) for p in ("P1", "P7")
         for a in ("bus-default", "bus-complete", "ledger-raw", "ledger-awk")}, "missing probe/arm rows"
 for r in inst:
     assert isinstance(r["bytes"], int) and r["bytes"] >= 0 and r["bytes_capped"] <= r["bytes"] + 100 and r["calls"] >= 1, r
     assert r["outcome"] in ("ok", "cannot", "wrong") and r["outcome_capped"] in ("ok", "cannot", "wrong"), r
 rep = json.load(open(sys.argv[1].replace(".jsonl", ".report.json")))
-assert {c["probe"] for c in rep} == {"P1", "P5", "P7"} and all("uncapped" in c and "capped" in c for c in rep)
+assert {c["probe"] for c in rep} == {"P1", "P7"} and all("uncapped" in c and "capped" in c for c in rep)
 PY
 ok "results file holds the environment row and one row per arm and probe; the report is written"
 

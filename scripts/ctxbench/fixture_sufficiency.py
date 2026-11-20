@@ -392,7 +392,34 @@ def times(fx, cli):
         check(False, "TIME a log row off the simulated times was not a defect")
     except R.ReplayDefect:
         pass
-    print("PASS: TIME a slow reader and an off-time stored row are replay defects")
+    # a renewal keeps the first claim's start and moves the expiry: the rule before this repair flagged every such history
+    ren = joins("07:00:00", "lead", "alice", "bob", "carol") + [
+        ev("07:00:00", "carol", "claim", res="src/legacy/", purpose="delete the old importer"),
+        ev("09:00:00", "bob", "claim", res="src/parser/", purpose="escaped delimiters"),
+        ev("09:30:00", "bob", "claim", res="src/parser/", purpose="escaped delimiters"),  # a renewal
+        ev("09:40:00", "carol", "leave")]  # her claim expired at 09:00; the bus still deletes the row
+    bus = os.path.join(fx.tmp, "F8", "bus")
+    R.build_bus(fx.run, bus, ren)  # the repaired check accepts it (build_bus raises ReplayDefect otherwise)
+    db = os.path.join(bus, "bus.db")
+    con = sqlite3.connect(db)
+    rows = list(con.execute("SELECT claimed_at, expires_at FROM claims"))
+    check(rows == [(T("09:00:00"), T("11:30:00"))], f"TIME F8 renewal rows {rows}")
+    old = lambda: [r for r in rows if r[1] != R.iso(R.parse_ts(r[0]) + R.TTL)]  # noqa: E731  (the old rule)
+    check(old(), "TIME F8 the old claim rule no longer flags a renewal, so the fixture proves nothing")
+    for sql in ("UPDATE claims SET expires_at='2026-11-19T11:30:01Z'", "UPDATE claims SET claimed_at='2026-11-19T08:59:59Z'"):
+        bad = os.path.join(fx.tmp, "F8bad.db")
+        shutil.copy(db, bad)
+        c2 = sqlite3.connect(bad)
+        c2.execute(sql)
+        c2.commit()
+        c2.close()
+        try:
+            R.check_stored_times(bad, ren)
+            check(False, f"TIME a claim time off by one second was not a defect ({sql})")
+        except R.ReplayDefect:
+            pass
+    con.close()
+    print("PASS: TIME a slow reader and an off-time stored row are replay defects; a renewal is accepted, off by a second is not")
 
 
 def report():
