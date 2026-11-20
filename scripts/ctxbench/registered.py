@@ -79,7 +79,8 @@ class Runner:
 
 # ---- replay of semantic events -------------------------------------------------------------------------------------
 # An event is (iso_time, actor, action, fields). post: kind, to ("*" = everyone), body, topic, reply_to.
-# claim: res, purpose, frm (a takeover). release: res. join, leave, inbox (a consuming read): no fields.
+# claim: res, purpose, frm (a takeover). release: res. goal: text. fact: key, value (never the key's current value:
+# the bus records nothing for an unchanged write). join, leave, inbox (a consuming read): no fields.
 
 def apply_event(run, db, ev):
     at, actor, action, f = ev
@@ -101,6 +102,10 @@ def apply_event(run, db, ev):
         run.bus(db, at, *args)
     elif action == "release":
         run.bus(db, at, "--as", actor, "release", f["res"])
+    elif action == "goal":
+        run.bus(db, at, "--as", actor, "goal", f["text"])
+    elif action == "fact":
+        run.bus(db, at, "--as", actor, "ctx", "set", f["key"], f["value"])
     else:
         raise SystemExit(f"FAIL: unknown action {action}")
 
@@ -124,7 +129,7 @@ def check_stored_times(db, events):
         for (ts,) in con.execute("SELECT last_seen FROM agents"):
             if ts not in times:
                 raise ReplayDefect(f"last_seen {ts} is not a simulated time")
-        for (ts,) in con.execute("SELECT updated_at FROM context"):
+        for (ts,) in con.execute("SELECT updated_at FROM context UNION ALL SELECT updated_at FROM context_history"):
             if ts not in times:
                 raise ReplayDefect(f"fact stamped {ts}")
     finally:
@@ -196,6 +201,10 @@ def render_ledger(events):
         elif action == "release":
             add(ts, "RELEASE", None, actor, None, None, f["res"], None, "")
             held.pop(f["res"], None)
+        elif action == "goal":
+            add(ts, "GOAL", None, actor, None, None, None, None, f["text"])
+        elif action == "fact":
+            add(ts, "FACT", None, actor, None, f["key"], None, None, f["value"])
         elif action == "post":
             mid += 1
             to = "all" if f["to"] == "*" else f["to"]
@@ -542,11 +551,16 @@ class Session:
             triple = []
             for p in ("p1", "p3", "p4"):
                 _, text, cut = d.get(p)
-                vals = {int(x.split(" ", 1)[1]) for x in text.split("\n") if x}
-                triple.append(CANNOT if cut else vals)
+                if cut:  # checked before parsing: a cut answer never reaches int()
+                    triple.append(CANNOT)
+                    continue
+                triple.append({int(x.split(" ", 1)[1]) for x in text.split("\n") if x})
             return d, tuple(triple)
         # ledger-raw
-        n_text, _ = put("count", self.run.sh(self.copy, "wc -l < COORDINATION.md"))
+        n_text, n_cut = put("count", self.run.sh(self.copy, "wc -l < COORDINATION.md"))
+        if n_cut or self.rows is None:  # without the line count the cursor is lost: this and every later refresh
+            self.rows = None
+            return d, (CANNOT, CANNOT, CANNOT)
         n = int(n_text.strip())
         if self.lines_read == 0:
             text, cut = put("rows", self.run.sh(self.copy, GREP.format(P7_KINDS)))
@@ -608,6 +622,29 @@ def draw_event(rng, mix, eligible_actors, live):
         if actors:
             return kind, rng.choice(actors)
     return "note", rng.choice(sorted(live))
+
+
+def choose_fact_key(rng, set_keys, keys):
+    """A fact event's key. set_keys: the keys already set, in the order first set; keys: data/fact_keys.txt. One uniform
+    draw u first; u < 0.5 and any key set, or every key already used: a uniform key among those set (in that order);
+    otherwise the next unused key in list order."""
+    u = rng.random()
+    unused = [k for k in keys if k not in set_keys]
+    if set_keys and (u < 0.5 or not unused):
+        return rng.choice(list(set_keys))
+    return unused[0]
+
+
+def choose_fact_value(rng, corpus, current):
+    """A fact's value: a uniform corpus line other than the key's current value (an unchanged write records nothing)."""
+    return rng.choice([s for s in corpus if s != current])
+
+
+def make_body(rng, corpus, long_share):
+    """A message body: one uniform draw u; u < long_share: k uniform on 24 to 40 sentences, else k uniform on 1 to 6;
+    then k sentences drawn uniformly with replacement, joined by a space."""
+    k = rng.randint(24, 40) if rng.random() < long_share else rng.randint(1, 6)
+    return " ".join(rng.choice(corpus) for _ in range(k))
 
 
 def item_resources(item, files=4):

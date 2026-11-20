@@ -75,7 +75,8 @@ Every probe names an agent (`me`) and a checkpoint time (`now`), given to every 
 
 A seeded simulator (`scripts/ctxbench/sim.py`, B-M1) writes one semantic event list per history and calls the
 registered choice rules in `registered.py` (`draw_event`, `choose_new_resource`, `p2_target`, `p6_target`,
-`checkpoint_now`, `p7_pick`, `name_at`); it does not re-implement them. Both arms are rendered from that one list.
+`checkpoint_now`, `p7_pick`, `name_at`, `choose_fact_key`, `choose_fact_value`, `make_body`) and replays through
+`apply_event`; it does not re-implement them. Both arms are rendered from that one list.
 
 **Grid.** N in {5, 8} agents; E in {50, 1000, 5000} events; three mixes (sparse, busy, handoff-heavy). 18 histories
 per seed.
@@ -84,14 +85,21 @@ per seed.
 `sha256("SEED:N:E:MIX")`; one per instance, seeded from `sha256("SEED:N:E:MIX:PROBE:INSTANCE")`. Every draw named
 below comes from these, in the order the rules state.
 
-**Time.** The clock starts at 2026-11-19T09:00:00Z. Each event's time is the previous event's time plus a gap drawn
-from an exponential distribution with the mix's mean and rounded to whole seconds (0 allowed), so times never go
+**Time.** The clock starts at 2026-11-19T09:00:00Z. Each event's time is the previous event's time plus
+`round(rng.expovariate(1 / mean))` seconds (Python's `round`; 0 allowed), with the mix's mean, so times never go
 backwards. Events are applied in list order.
 
-**Agents and names.** `lead` plus N-1 agents join at the start (these N joins count toward E). Names come from
+**Start.** At the start time: `lead` joins, then `name_at(0)` to `name_at(N-2)` join (no join options: no role, tool,
+model or branch), then `lead` sets the goal (`goal TEXT`) to a uniform corpus line. These N + 1 events count toward E.
+The goal never changes after that in a simulated history.
+
+**What counts toward E.** Joins, the goal, messages, claims (new, renewal, takeover), releases, facts and leaves. Not
+inbox reads, crashes, or the alert a takeover generates.
+
+**Agents and names.** `lead` plus N-1 agents join at the start. Names come from
 `data/names.txt` in order; after the 40th the list repeats with a suffix (`alice2`, ..., then `alice3`, ...), so the
 pool never runs out and a name is never reused (`name_at`). `lead` never leaves or crashes, and sets the goal once at
-the start (one event). Live means on the roster and not crashed.
+the start (see Start). Live means on the roster and not crashed.
 
 **Event type and actor** (`draw_event`). The type is drawn from the mix table; the actor is then drawn uniformly
 among the live agents for which that type is eligible. A type with no eligible actor is redrawn, type and actor
@@ -104,7 +112,11 @@ together, up to 10 times; after that the event is a `note` by a uniformly drawn 
 - `join`: when fewer than N agents are live; the actor is the next name from the pool (not drawn).
 - `leave`: a live agent other than `lead`, when at least 2 live agents besides `lead` exist.
 
-**Targets inside an event.** A reply's target is drawn uniformly among the actor's eligible open items. A `done` has
+**Draw order inside a step.** Type and actor; then the event's own draws in the order this section lists them
+(claim sort and target, recipient, topic, reply target, body); then the actor's inbox read; then the crash draw.
+
+**Targets inside an event.** A reply's target is drawn uniformly among the actor's eligible open items. A release
+drops a uniform claim among the actor's live claims; a renewal renews a uniform one of them. A `done` has
 no reply_to with probability 0.20 (it closes nothing). With probability 0.05 an answer or done is sent instead as a
 `note` replying to the same message, or as an `answer` replying to the latest reply to it (it closes nothing).
 
@@ -123,7 +135,8 @@ over the possible ones): a renewal (the actor claims again a resource it holds l
 are exempt from the no-overlap rule; a new claim must overlap no live claim of any agent and its resource comes from
 `choose_new_resource`, the one resource rule: the folder sort (`src/SLUG/`) with probability 0.3, else the file sort
 (`src/SLUG/f1.py` to `f4.py`), uniformly among that sort's free resources, else the other sort's; not possible when
-none is free. Every claim uses the default 120-minute TTL, so the bus logs no refusal.
+none is free. Every claim uses the default 120-minute TTL, so the bus logs no refusal. Purpose: a new claim and a
+takeover get a uniform corpus line; a renewal keeps the claim's current purpose (so the bus logs nothing for it).
 
 **Takeover expansion.** A takeover is one event in E. On the bus it ends the old holder's claim, starts the new one,
 logs `claim_taken` and inserts an `alert` message (the next message id, same time, topic `claim`) from the new holder
@@ -163,10 +176,16 @@ probability 0.6, else none.
 | claim sort shares: renewal / takeover / new | 0.20 / 0.05 / 0.75 | 0.20 / 0.10 / 0.70 | 0.20 / 0.20 / 0.60 |
 | long-body share | 0.03 | 0.05 | 0.08 |
 
-**Bodies.** Sentences from `data/corpus.txt`, drawn with replacement. A normal body is k sentences, k uniform on 1 to
-6, joined by a space. A long body is k uniform on 24 to 40 (usually over 2,048 bytes, so a listing cuts it). A
-handoff body is `branch SLUG; S1; S2; S3` (three sentences). A decision body is a normal or long body, a line break and
-`Subject: SLUG`. A fact value is one sentence.
+**Bodies** (`make_body`). Sentences from `data/corpus.txt`, drawn uniformly with replacement. One draw against the
+mix's long-body share: a long body is k sentences, k uniform on 24 to 40 (usually over 2,048 bytes, so a listing cuts
+it); else a normal body, k uniform on 1 to 6; joined by a space. Every message kind uses `make_body` except: a handoff
+body is `branch SLUG; S1; S2; S3` (three sentences; SLUG is the message's topic, else a uniform item); a decision body
+is `make_body`, a line break and `Subject: SLUG` with a uniform item.
+
+**Facts** (`ctx set KEY VALUE`). The key comes from `choose_fact_key` over `data/fact_keys.txt` (24 keys): one uniform
+draw; below 0.5 with any key already set, or once every key is used, a uniform key among those already set; otherwise
+the next unused key in list order. The value (`choose_fact_value`) is a uniform corpus line other than the key's current
+value, because the bus records nothing for an unchanged write. Any live agent may write a fact.
 
 **Inbox consumption.** After each of its own events, an agent runs a consuming `inbox` with probability 0.5 (the skill
 says to read inbox each turn). It is a step in the event list but not one of the E events. It moves only that agent's
@@ -238,7 +257,8 @@ A claim lasts 120 minutes from its CLAIM or TAKEOVER line unless renewed.
 - Values before `|` are percent-encoded so they hold no space, `|`, `%`, `=`, tab or newline.
 - Kinds: message kinds in capitals (`NOTE QUESTION ANSWER HANDOFF DECISION ALERT DONE TODO DROPPED`), plus `JOIN`,
   `LEAVE`, `CLAIM` (path = resource, text = purpose; also a renewal), `TAKEOVER` (from = new holder, to = old holder,
-  followed by its `ALERT`), `RELEASE`, `FACT` (topic = key, text = value) and `GOAL`.
+  followed by its `ALERT`), `RELEASE`, `FACT` (from = writer, topic = key, text = value) and `GOAL` (from = setter,
+  text = goal).
 - A leave is rendered as one `RELEASE` per claim it dropped, then `LEAVE`, at the leave's time. A crash writes nothing.
   Inbox consumption writes nothing. Nothing is ever rewritten and there is no state section.
 
@@ -362,7 +382,9 @@ more than these numbers.
 
 `scripts/ctxbench/fixture_sufficiency.py`, run by `tests/test_ctxbench_fixture.sh` in the suite, builds histories
 with the real CLI (one process per step), renders each ledger, and checks every registered procedure, adapter, parser,
-choice rule, time check and report function. Each also fails when the rule it covers is broken.
+choice rule, time check and report function. Each also fails when the rule it covers is broken. The suite runs them in two files, each under 60 s:
+`tests/test_ctxbench_fixture.sh` (PARITY, F1 to F5, F7, and the data-file hashes) and `tests/test_ctxbench_rules.sh`
+(CAP, F6, GEN, TIME, REPORT).
 
 - **F1 (N1).** lead, alice, bob and carol join at 11:50; lead posts todo #1 to carol and #2 to bob at 12:10; carol
   leaves at 12:20; bob leaves at 12:00 (A) or 12:20 (B). `me` alice at 12:30. P4 = {1} in A, {1, 2} in B for
@@ -379,21 +401,28 @@ choice rule, time check and report function. Each also fails when the rule it co
 - **F5.** A decision whose subject sits past byte 2,048: Bus-complete reads it whole with `read --id`; Bus-default's
   parser cannot decide.
 - **F6 (P7).** Three refreshes with `me` closing a todo and answering a question inside the windows and a todo owner
-  leaving: every arm's session parser gives the hand-derived triples.
+  leaving: every arm's session parser gives the hand-derived triples. Capped (cap 3), every arm returns "cannot decide"
+  for each cut source, checked before any parsing, and never raises; an empty Ledger-awk answer is not cut and stays
+  derivable.
+- **F7.** A goal, a goal change, three fact writes (one key written twice) and a todo: P1 and P4 in every arm, and
+  PARITY over the goal and fact writes.
 - **CAP.** A cut ledger source is a miss; cut JSON is a miss without parsing; a cut unused source (Bus-default's inbox)
   changes nothing; a cut first P5 output makes no second call, in both arms that have one.
 - **GEN.** On scripted draws: type then actor, redraw with the actor, the note fallback; the resource rule and its
   fallbacks; P2 and P6 with empty pools; the P7 scan (an agent leaving in the window is no candidate; the scan wraps;
-  no candidate at all); the checkpoint guard; the name pool past 40.
+  no candidate at all); the checkpoint guard; the name pool past 40; fact keys (first, next unused, update, list
+  exhausted) and values (never the current one); normal and long bodies.
 - **TIME.** A reader taking over a second is a replay defect; a stored log time off the simulated times is a replay
   defect.
-- **PARITY.** In every fixture history the bus's messages, the takeover alert included, equal the ledger's.
+- **PARITY.** In every fixture history the bus's messages (the takeover alert included) equal the ledger's message
+  lines, and the bus's goal and fact history (key, value, writer, time) equals the ledger's `GOAL` and `FACT` lines.
 - **REPORT.** A zero numerator, a zero denominator and 0/0 are kept and labelled; quartiles; outcome counts.
 
 ## Data files
 
 Committed in this PR; a change is a registration repair. `data/corpus.txt` is generated by `gen_corpus.py`
-(a fixed grammar and `random.Random(20261119)`; 200 unique lines, 40 to 200 bytes each, corpus mean 90 to 130;
+(a fixed grammar and `random.Random(20261119)`; 200 unique lines, 40 to 200 bytes each, corpus mean 90 to 130 (the committed file: 47 to
+123 bytes, mean 92.8);
 `gen_corpus.py --check` proves the committed file is its output). The test checks these hashes.
 
 | File | sha256 |
@@ -402,6 +431,7 @@ Committed in this PR; a change is a registration repair. `data/corpus.txt` is ge
 | `scripts/ctxbench/data/corpus.txt` | `eb1338e9a99c90d55a99c7d4b7323e8256a744e734413670952ab174b9756321` |
 | `scripts/ctxbench/data/names.txt` | `1e01307a202d7dc90f3174e4f5d611d5a8fa47fbc97cd3d8047e9676569b78c2` |
 | `scripts/ctxbench/data/items.txt` | `ee3a22da6fbdba8307c1e17c0f3f030fbf45aad5e48376fd0f7a2a4fdf5921eb` |
+| `scripts/ctxbench/data/fact_keys.txt` | `15e183e299dd8ef88294f86aa5e21f193d3b4832d857603e06ed6515079d21a0` |
 
 ## Seeds
 

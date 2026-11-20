@@ -95,6 +95,13 @@ F4 = joins("11:50:00", "lead", "alice", "bob") + [
     ev("12:10:00", "bob", "leave")]
 LONG = " ".join(["The cache layer needs another pass under load before we turn the flag on for everyone."] * 25)
 F5 = joins("11:50:00", "lead", "alice") + [post("12:00:00", "lead", "decision", LONG + "\nSubject: cache", topic="decision")]
+F7 = joins("09:00:00", "lead", "alice", "bob") + [
+    ev("09:00:00", "lead", "goal", text="Ship the uploader retry budget this week."),
+    ev("09:01:00", "alice", "fact", key="release-branch", value="release/0.5 is cut from main every Thursday."),
+    ev("09:02:00", "bob", "fact", key="api-base-url", value="Staging answers on the internal host only."),
+    ev("09:03:00", "alice", "fact", key="release-branch", value="release/0.5 moved to Friday for this week only."),
+    ev("09:04:00", "lead", "goal", text="Ship the uploader retry budget and the parser fix this week."),
+    post("09:05:00", "lead", "todo", "Keep the release branch fact current.", "alice")]
 
 ALL = R.ARMS
 C = R.CANNOT
@@ -107,7 +114,7 @@ def same(ans, **over):
 
 
 HISTORIES = {"F1-A": f1("12:00:00"), "F1-B": f1("12:20:00"), "F2-A": f2("parser"), "F2-B": f2("uploader"),
-             "F3": F3, "F4": F4, "F5": F5}
+             "F3": F3, "F4": F4, "F5": F5, "F7": F7}
 CASES = [  # (history, now, probe, inputs, expected per arm)
     ("F1-A", T("12:30:00"), "P4", {}, same({1}, bus_default=C)),
     ("F1-B", T("12:30:00"), "P4", {}, same({1, 2}, bus_default=C)),
@@ -124,6 +131,8 @@ CASES = [  # (history, now, probe, inputs, expected per arm)
     ("F3", T("09:30:00"), "P6", {"y": "docs"}, same(set())),
     ("F4", T("12:30:00"), "P4", {}, same({1}, bus_default=C)),
     ("F5", T("12:30:00"), "P5", {}, same((1, "cache"), bus_default=C)),
+    ("F7", T("09:30:00"), "P1", {}, same({1})),
+    ("F7", T("09:30:00"), "P4", {}, same({1})),
 ]
 
 
@@ -152,7 +161,7 @@ class Fx:
 
     def probe(self, name, arm, probe, now, inputs, cap=None):
         """Run on a fresh copy; a reader-time defect retries on a new copy (at most 3 tries, then fail)."""
-        bus, led = self.built[name]
+        bus, led = self.history(name, HISTORIES[name])
         for _ in range(3):
             try:
                 d = R.execute(self.run, arm, probe, self.copy(bus if arm.startswith("bus-") else led), ME, now, inputs, cap)
@@ -175,9 +184,32 @@ def parity(fx):
         con = sqlite3.connect(os.path.join(bus, "bus.db"))
         bus_msgs = [tuple(r) for r in con.execute("SELECT id, kind, sender, recipient, topic, reply_to, body FROM messages ORDER BY id")]
         con.close()
+        con = sqlite3.connect(os.path.join(bus, "bus.db"))
+        bus_facts = [tuple(r) for r in con.execute("SELECT key, value, updated_by, updated_at FROM context_history ORDER BY id")]
+        con.close()
         with open(os.path.join(led, "COORDINATION.md")) as fh:
-            check(bus_msgs == R.ledger_messages(fh.read()), f"{name}: bus and ledger messages differ")
-    print(f"PASS: PARITY bus and ledger hold the same messages, the takeover alert included ({len(HISTORIES)} histories)")
+            text = fh.read()
+        check(bus_msgs == R.ledger_messages(text), f"{name}: bus and ledger messages differ")
+        check(bus_facts == ledger_facts(text), f"{name}: bus and ledger facts differ:\n{bus_facts}\n{ledger_facts(text)}")
+    check(len(ledger_facts(open(os.path.join(fx.built["F7"][1], "COORDINATION.md")).read())) == 5, "PARITY F7 has five goal and fact writes")
+    print(f"PASS: PARITY bus and ledger hold the same messages (takeover alert included) and the same goal and fact "
+          f"writes ({len(HISTORIES)} histories)")
+
+
+def ledger_facts(text):
+    """(key, value, by, ts) of every GOAL and FACT line, values joined: for the parity check."""
+    out, cur = [], None
+    for line in text.splitlines():
+        m = re.match(r"^- eid=E\d+ ts=(\S+) kind=(GOAL|FACT) id=\S+ from=(\S+) to=\S+ topic=(\S+) path=\S+ reply_to=\S+ \| ?(.*)$", line)
+        if m:
+            ts, kind, frm, topic, value = m.groups()
+            cur = ["goal" if kind == "GOAL" else topic, value, frm, ts]
+            out.append(cur)
+        elif line.startswith("- "):
+            cur = None
+        elif cur is not None and line.startswith("  "):
+            cur[1] += "\n" + line[2:]
+    return [tuple(x) for x in out]
 
 
 def cases(fx):
@@ -194,7 +226,7 @@ def cases(fx):
     check(t("F1-A", "bus-default") == t("F1-B", "bus-default"), "F1 Bus-default text differs between the histories")
     check(t("F1-A", "bus-complete")[0] == t("F1-B", "bus-complete")[0], "F1 brief --json alone differs")
     strip = lambda s: re.sub(r"(?m)^\d+:- eid=E\d+ ", "- ", s)
-    a, b = (strip(fx.run.sh(fx.built[h][1], R.GREP.format("TODO|DONE|DROPPED"))) for h in ("F1-A", "F1-B"))
+    a, b = (strip(fx.run.sh(fx.history(h, HISTORIES[h])[1], R.GREP.format("TODO|DONE|DROPPED"))) for h in ("F1-A", "F1-B"))
     check(a == b, "F1 the ledger's TODO lines differ")
     # F2: the v1 recipe prints identical text for both histories
     old = []
@@ -263,13 +295,40 @@ def p7(fx):
             exp = (want_default if arm == "bus-default" else want)[k]
             check(triple == exp, f"F6 {arm} refresh {k + 1}: {triple!r}, expected {exp!r}")
     print("PASS: F6 P7 three refreshes, me acting in the windows, every arm's session parser")
+    # capped: cap 3 cuts every bus output, the ledger line count and every non-empty awk answer; nothing may raise
+    capped_want = {"ledger-awk": [(C, C, C), (set(), C, C), (set(), C, C)]}
+    for arm in ALL:
+        copy = fx.copy(bus if arm.startswith("bus-") else led)
+        s, events = R.Session(fx.run, arm, copy, ME), list(base)
+        for k, now in enumerate(refreshes):
+            if k:
+                for e in (w1, w2)[k - 1]:
+                    events.append(e)
+                    if arm.startswith("bus-"):
+                        R.apply_event(fx.run, os.path.join(copy, "bus.db"), e)
+                if not arm.startswith("bus-"):
+                    with open(os.path.join(copy, "COORDINATION.md"), "w") as fh:
+                        fh.write(R.render_ledger(events))
+            try:
+                d, triple = s.refresh(now, cap=3)
+            except R.ReplayDefect:
+                raise SystemExit(f"FAIL: F6 capped {arm} refresh {k + 1}: reader-time defect")
+            exp = capped_want.get(arm, [(C, C, C)] * 3)[k]
+            check(triple == exp, f"F6 capped {arm} refresh {k + 1}: {triple!r}, expected {exp!r}")
+            check(any(c for _, _, c in d.calls), f"F6 capped {arm} refresh {k + 1}: nothing was cut")
+    print("PASS: F6 capped P7: every arm returns cannot-decide for a cut source and never raises")
 
 
 class Script:
     """A scripted stand-in for random.Random: random() and choice() return the next scripted value or index."""
 
-    def __init__(self, randoms=(), choices=()):
-        self.r, self.c = list(randoms), list(choices)
+    def __init__(self, randoms=(), choices=(), ints=()):
+        self.r, self.c, self.i = list(randoms), list(choices), list(ints)
+
+    def randint(self, a, b):
+        v = self.i.pop(0)
+        assert a <= v <= b, (a, v, b)
+        return v
 
     def random(self):
         return self.r.pop(0)
@@ -302,19 +361,27 @@ def gen():
     # checkpoint guard: a claim expiring at 12:01:00 forbids now in [11:59:00, 12:01:00)
     check(R.checkpoint_now(T("12:00:00"), 10, [T("12:01:00")]) == T("12:01:00"), "GEN guard scan")
     check(R.checkpoint_now(T("12:00:00"), 10, []) == T("12:00:10"), "GEN guard free")
+    keys = R.load_list("fact_keys.txt")
+    check(R.choose_fact_key(Script([0.9]), [], keys) == "release-branch", "GEN first fact key")
+    check(R.choose_fact_key(Script([0.9]), ["release-branch"], keys) == "api-base-url", "GEN next unused key")
+    check(R.choose_fact_key(Script([0.2], [0]), ["release-branch", "api-base-url"], keys) == "release-branch", "GEN update a set key")
+    check(R.choose_fact_key(Script([0.9], [1]), keys, keys) == keys[1], "GEN key list exhausted")
+    check(R.choose_fact_value(Script([], [0]), ["a", "b"], "a") == "b", "GEN fact value never the current one")
+    check(R.make_body(Script([0.5], [1, 0], [2]), ["s1", "s2"], 0.05) == "s2 s1", "GEN normal body")
+    check(R.make_body(Script([0.01], [0] * 24, [24]), ["s1"], 0.05) == " ".join(["s1"] * 24), "GEN long body")
     check(R.name_at(0) == "alice" and R.name_at(39) == "nolan" and R.name_at(40) == "alice2" and R.name_at(81) == "bob3", "GEN names")
     print("PASS: GEN actor and redraw, one resource rule, empty-pool fallbacks, P7 scan, checkpoint guard, name pool")
 
 
 def times(fx, cli):
     slow = R.Runner(["sh", "-c", 'sleep 1.1; exec "$@"', "slow"] + cli, os.path.join(fx.tmp, "slow"))
-    db = os.path.join(fx.built["F4"][0], "bus.db")
+    db = os.path.join(fx.history("F4", F4)[0], "bus.db")
     try:
         slow.bus(db, T("12:30:00"), "--json", "who", measured=True)
         check(False, "TIME a reader over one second was not a defect")
     except R.ReplayDefect:
         pass
-    bad = fx.copy(fx.built["F3"][0])
+    bad = fx.copy(fx.history("F3", F3)[0])
     con = sqlite3.connect(os.path.join(bad, "bus.db"))
     con.execute("UPDATE log SET ts='2026-11-19T09:15:01Z' WHERE id=(SELECT MAX(id) FROM log)")
     con.commit()
@@ -344,22 +411,26 @@ def report():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--group", choices=("core", "rules", "all"), default="all",
+                    help="core: PARITY and F1-F5, F7; rules: CAP, F6, GEN, TIME, REPORT (the suite runs each in its own file)")
     ap.add_argument("--cli", help="the command that runs agentbus, split on whitespace (default: this Python and bin/agentbus)")
     args = ap.parse_args()
     cli = args.cli.split() if args.cli else [sys.executable, os.path.join(R.ROOT, "bin", "agentbus")]
     tmp = tempfile.mkdtemp(prefix="ctxbench-fixture.")
     try:
         fx = Fx(R.Runner(cli, tmp), tmp)
-        parity(fx)
-        cases(fx)
-        cap(fx)
-        p7(fx)
-        gen()
-        times(fx, cli)
-        report()
+        if args.group in ("core", "all"):
+            parity(fx)
+            cases(fx)
+        if args.group in ("rules", "all"):
+            cap(fx)
+            p7(fx)
+            gen()
+            times(fx, cli)
+            report()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print("ctxbench sufficiency fixture: all checks passed")
+    print(f"ctxbench sufficiency fixture ({args.group}): all checks passed")
 
 
 if __name__ == "__main__":
