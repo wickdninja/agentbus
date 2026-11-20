@@ -6921,7 +6921,7 @@
     "replace": "HOOK_NAME_RE = re.compile(r\"[A-Za-z0-9._-]{1,41}\")",
     "count": 1,
     "run": "tests/test_roster_rules.sh",
-    "expect": "expected bad_input but succeeded: python3"
+    "expect": "expected bad_input but succeeded"
   },
   {
     "name": "join refuses a 40-character name",
@@ -7089,7 +7089,7 @@
     "replace": "        if a.request_id is not None:",
     "count": 1,
     "run": "tests/test_roster_rules.sh",
-    "expect": "expected not_on_roster but succeeded: python3 /"
+    "expect": "expected not_on_roster but succeeded"
   },
   {
     "name": "claim skips the roster check",
@@ -7149,7 +7149,7 @@
     "replace": "    if True:\n        return   # a name already",
     "count": 1,
     "run": "tests/test_roster_rules.sh",
-    "expect": "expected not_on_roster but succeeded: python3 /"
+    "expect": "expected not_on_roster but succeeded"
   },
   {
     "name": "a name that could never join is told to join",
