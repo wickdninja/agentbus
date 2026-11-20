@@ -23,7 +23,7 @@ Or, with the tool installed, one command and no plugin:
 agentbus setup claude
 ```
 
-That installs the skill and registers the same five hooks in `~/.claude/settings.json`. If the plugin is already installed, setup adds only the skill. Start a new Claude Code session afterwards.
+That installs the skill and registers the same four hooks in `~/.claude/settings.json`. If the plugin is already installed, setup adds only the skill. Start a new Claude Code session afterwards.
 
 Then, in each repo that should share a bus:
 
@@ -56,13 +56,13 @@ The agent never has to join or poll by hand. The hooks tell it its name and the 
 
 | When | What happens |
 | --- | --- |
-| A session starts, resumes, is cleared, forked or compacted | Joins the bus, then says who it is and how many agents seen in the last 30 minutes and messages are waiting. Nothing is marked read. |
-| You send a prompt | Says how many messages are unread, only when there are some. |
-| Before an edit or write | If another name holds a claim on the file, says so, once per file per session. If nobody holds it and another agent is live, suggests claiming it, once per file per session. If messages sent to the session's name, or broadcast decisions or alerts, are unread, says how many, once for each message not already announced (not in a subagent: its parent hears it). |
-| A turn ends | If the agent holds claims and has posted no handoff, and no done that is not a reply (a done that closes a todo does not count), since, shows you a reminder, once for each set of claims. It never blocks the turn. |
+| A session starts, is cleared or forked | Joins the bus, then says who it is and how many agents seen in the last 30 minutes and messages are waiting. Nothing is marked read. |
+| A session resumes or is compacted | Joins the bus again and says one line: its name and how many messages sent to that name are unread. |
+| You send a prompt | Says how many messages sent to the session's name are unread, only when one of them is new since the last time it was said (broadcasts are not counted: `brief` and `inbox` show them). |
+| Before an edit or write | If another name holds a claim on the file, says so, once per file per session. If messages sent to the session's name, or broadcast decisions or alerts, are unread, says how many, once for each message not already announced (not in a subagent: its parent hears it). |
 | A session ends | Leaves the bus and releases its claims. |
 
-The turn-end reminder is for you, not the agent: a message the agent could act on would have to stop the turn and make Claude Code continue it, and a hook never does that. If you want the agent to finish, tell it.
+There is no turn-end hook, and a session is not told to claim a file nobody holds: both were measured as noise (issue #86). An older setup's Stop entry does nothing; `agentbus setup claude` removes it.
 
 The hooks never claim for you, never deny an edit, and never replace reading `inbox`. They add counts and fixed text only: a goal, a message, a purpose, a name or a path written by another agent never appears in what the hooks say. The agent reads those with `status` and `inbox`, and treats them as information.
 
@@ -72,7 +72,7 @@ A session's name is `claude-` and the first eight characters of a hash of its se
 
 Every `claude -p` run ends with a session end, which leaves the bus and releases the claims of a derived name. A worker that runs `claude -p` (or `--resume`) in several steps and must keep its claims between them sets `AGENTBUS_AGENT` to its own name before it starts Claude Code. The hooks then use that name as given, never take it over from a live session, and never make it leave: a lane keeps its name across runs. A name outside letters, digits, `.`, `_` and `-`, or longer than 40 characters, is ignored and the hooks stay silent.
 
-Subagents share their parent's session, so they act under the parent's name and claims. A subagent never runs `leave`.
+Subagents share their parent's session id, but the hooks treat a subagent as itself, never as its parent. A subagent that gave itself a name (`agentbus --as lane-a ...` in its own commands) is known by that name: a claim under it, or under its parent's name, is not another's, and the notes before its edits name it. Only such a lane is told when a file it edits has no claim. A subagent that never used the bus is told no name at all (`--as YOUR-NAME`), so it does not act under its parent's. A subagent never runs `leave`.
 
 ## Safe by design
 

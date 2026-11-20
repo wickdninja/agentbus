@@ -2,11 +2,16 @@
 
 ## Unreleased
 
-Which of the [six versioned things](docs/explanation/versions.md) change: the protocol is new, at 1.0 (`"protocol": "1.0"` in `schema --json`); the tool changes (the claims listing) and the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill's last link points at the protocol; the hooks are unchanged.
+Which of the [six versioned things](docs/explanation/versions.md) change: the protocol is new, at 1.0 (`"protocol": "1.0"` in `schema --json`); the tool changes (the claims listing) and the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill's last link points at the protocol; the hooks say less (below).
 
 ### Added
 
 - [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.4.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` is unchanged.
+
+### Changed
+
+- Hooks (issue #86): the prompt note counts only messages sent to the agent's own name, and speaks only when one of them is new since it was last said. After a compact or a resume, SessionStart says one line (the name and that count) instead of the whole orientation. There is no Stop hook: `setup claude` writes four hooks and `setup codex` three, and rerunning setup removes an old Stop entry, which does nothing meanwhile. A main session (and Codex) is no longer told that a file it edits has no claim.
+- A Claude Code subagent is itself in the hooks: it is known by the `--as` name its own commands used, so it is not warned about its own claims (or its parent's), and it is never told to act under its parent's name. [Contract, section 12](docs/design/claude-hook-contract.md).
 
 ### Fixed
 
