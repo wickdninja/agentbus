@@ -57,7 +57,7 @@ Listings default to 20 rows for `inbox` and each section of `status` (its recent
 
 ## Goal
 
-`agentbus --as NAME goal "text"` sets the shared goal; `agentbus goal` shows it as `goal (alice, 2d ago): TEXT`, with who set it and how long ago. `-` reads the text from stdin. `--json` prints `{goal, set_by, set_at}`, or `null` when there is none. Setting the goal it already holds changes nothing and reports `unchanged: true`.
+`agentbus --as NAME goal "text"` sets the shared goal; `agentbus goal` shows it as `goal (alice, 2d ago): TEXT`, with who set it and how long ago. `-` reads the text from stdin. `--json` prints `{goal, set_by, set_at}`; when there is none, each of the three is `null`. Setting the goal it already holds changes nothing and reports `unchanged: true`.
 
 The goal is the fact `goal`, so `ctx history goal` lists every version. `join` and `brief` print `goal (alice, 2d ago): ...` when one is set, and `status` opens with `== goal (alice, 2d ago): ...`. `watch` pins it on the row under its header (🎯, or ◆ without emoji) and leaves it out of Facts.
 

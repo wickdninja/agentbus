@@ -7,7 +7,12 @@ behavior in section 10.
 
 Protocol 1.0 is the observable behavior of agentbus 0.4.0. The SQLite command line in `bin/agentbus` is its reference
 implementation, and the test suite (`tests/`) is the conformance kit for that binding. Where this text and the
-reference implementation disagree, the disagreement is a bug in one of them; section 14 lists the known ones.
+reference implementation disagree, one of them has a bug. Section 14 is different: it lists behavior this text states
+as it is today and a later version may change.
+
+The conformance target of 1.0 is this document together with its CLI binding, the [reference](reference.md): an
+implementation conforms when it behaves as both say and passes `bash tests/run_all.sh`. A binding other than the CLI
+(a library, a server) has no conformance path in 1.0.
 
 ## 1. Conventions and terms
 
@@ -34,8 +39,8 @@ Terms:
 - **Log**: an append-only list of audit rows (time, name, action, detail).
 - **Now**: the current time of the process performing an operation, in UTC, at one-second resolution, written
   `YYYY-MM-DDTHH:MM:SSZ`. Times compare as these strings.
-- **Core**: what every implementation of protocol 1.0 does (sections 2 to 8). **Profiles**: optional additions
-  (section 9), each an optimization an experiment has to justify.
+- **Core**: what every implementation of protocol 1.0 does (sections 2 to 8, 11 and 12). **Profiles**: optional
+  additions (section 9), each an optimization an experiment has to justify.
 
 ## 2. Operations at a glance
 
@@ -47,13 +52,15 @@ Terms:
 | post | append one message | P-MSG-1 to P-MSG-9 |
 | inbox | deliver unread messages to a name, then acknowledge them | P-DLV-1 to P-DLV-6 |
 | read | list messages by id, no cursor effect | P-DLV-7 |
-| ctx set, ctx get, ctx history | set a fact, read facts, list a fact's history | P-FACT-1 to P-FACT-6 |
+| ctx set, ctx get, ctx history | set a fact, read facts, list a fact's history | P-FACT-1 to P-FACT-6, P-FACT-9 |
 | goal | set or show the fact `goal` | P-FACT-7, P-FACT-8 |
-| claim | take or renew claims, all or none; `--from` takes named holders' claims | P-CLAIM-1 to P-CLAIM-16 |
-| release | let go of own claims, all or none | P-CLAIM-17, P-CLAIM-18 |
+| claim | take or renew claims, all or none; `--from` takes named holders' claims | P-CLAIM-1 to P-CLAIM-16, P-CLAIM-19 to P-CLAIM-21 |
+| release | let go of own claims, all or none | P-CLAIM-17, P-CLAIM-18, P-CLAIM-22 |
 | claims | list claims with their state | P-CLAIM-8 |
-| log | list audit rows; add one | P-LOG-1, P-LOG-2 |
-| `--request-id` | make a retried post or join return the first result | P-MSG-8, P-ID-8 |
+| log | list audit rows; add one | P-LOG-1 to P-LOG-3 |
+
+`--request-id` is a flag, not an operation: it makes a retried post or join return the first result (P-MSG-8,
+P-ID-8), and every other write ignores it.
 
 What closes each kind of message:
 
@@ -75,10 +82,15 @@ Field lists are the `schema --json` objects of the reference implementation (`Ag
 ### Names
 
 - **P-ID-1** A name accepted by join MUST match `[A-Za-z0-9._-]{1,40}`. A name already on the roster that does not
-  match (written by an older version) keeps working for every other operation.
-- **P-ID-2** An identifier (a name, a recipient, a topic, a fact key, a claim resource) MUST NOT contain a control
-  character (Unicode category Cc) or a bidirectional override or isolate; the operation is refused with `bad_input`.
-  Bodies and values are free text.
+  match (written by an older version) keeps working for every other operation, unless it holds a character P-ID-2
+  refuses: such a name can no longer be passed as the caller's name, and its claims end by expiry.
+- **P-ID-2** These inputs MUST be refused with `bad_input` when they contain a control character (Unicode category
+  Cc: C0, DEL, C1) or one of U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069: the caller's name (`--as` or
+  `AGENTBUS_AGENT`), a recipient (`post --to`), a topic (`post --topic`, `read --topic`), a fact key, and a claim or
+  release resource. Bodies, values, purposes and log actions are free text. `claim --from` names are not checked
+  (section 14).
+- Lengths: a name that joins is at most 40 characters (P-ID-1) and a resource at most 1024 (P-LIM-1). A recipient
+  need not match P-ID-1 and, like a topic, a fact key and a log action, has no length limit in 1.0 (section 14).
 
 ### Messages
 
@@ -99,7 +111,9 @@ Field lists are the `schema --json` objects of the reference implementation (`Ag
 A resource is either a scheme name or a path.
 
 - **P-CLAIM-1** A resource that starts with `[A-Za-z][A-Za-z0-9+._-]*:` is a scheme name (`issue:17`, `area:billing`).
-  It MUST be compared exactly, with no hierarchy: `issue:17` and `issue:17:sub` do not overlap.
+  It MUST be compared exactly, with no hierarchy: `issue:17` and `issue:17:sub` do not overlap. The test applies to
+  the stored (normalised) form: `./area:x/` is a path when given and is stored as `area:x/`, which is then a scheme
+  name, so it does not hold `area:x/file` (section 14).
 - **P-CLAIM-2** Any other resource is a path relative to the bus's directory. It MUST be stored normalised: `./`,
   repeated slashes and `..` steps are resolved (POSIX `normpath`), and a trailing `/` is kept as a folder marker.
   An absolute path, a path that climbs out of the bus directory, and an empty path or `.` are refused with
@@ -107,6 +121,7 @@ A resource is either a scheme name or a path.
 - **P-CLAIM-3** Two path claims MUST overlap when they name the same path, or one is a folder that holds the other,
   with or without the trailing `/`. Comparison is case-sensitive.
 - A resource is at most 1024 characters.
+- Claims of one holder never conflict with each other: a name may hold `src/` and `src/a.py` at once.
 - A claim has a holder (a name), an optional purpose, `claimed_at` and `expires_at`.
 
 ### Roster
@@ -122,31 +137,36 @@ section 11; the CLI's exit codes for them live in the binding.
 ### Writes need a joined name
 
 - **P-ID-3** `post`, `claim`, `ctx set`, `goal TEXT` and `log add` MUST refuse a name that is not on the roster with
-  `not_on_roster`, and write nothing. `release` and `leave` act only on the caller's own rows and need no roster
+  `not_on_roster`, and write nothing; a name that is not on the roster and could never join (P-ID-1) is refused with
+  `bad_input` instead. `release` and `leave` act only on the caller's own rows and need no roster
   entry.
 - `inbox`, `read`, `who`, `claims`, `ctx get`, `ctx history`, `goal` (show) and `log show` do not require a roster
   entry.
 
 ### Liveness
 
-- **P-ID-4** Every operation that succeeds under a name other than join, leave and watch MUST refresh that name's
-  `last_seen` to now if it is on the roster. A failed operation refreshes nothing. `wait` refreshes it when it starts
-  and, if it waited, again when it ends.
+- **P-ID-4** Every operation on a bus that succeeds under a name, other than join, leave and watch, SHOULD refresh
+  that name's `last_seen` to now if it is on the roster. The refresh is best effort: a separate atomic step after the
+  operation's own and before its output, whose failure is ignored, so an operation can succeed with no refresh, or
+  refresh and then fail to write its output. A refused operation refreshes nothing. `wait` refreshes it when it starts
+  and, if it waited, again when it ends. Commands that open no bus (`schema`, `skill`) refresh nothing.
 
 ### join
 
 - **P-ID-5** When the name is on the roster and its `last_seen` is less than the live window (30 minutes) old and not
   in the future, join MUST refuse with `name_active`, unless the caller passes `--takeover` or the caller's
-  environment already names it (`AGENTBUS_AGENT` equals the name).
-- **P-ID-6** join MUST insert or update the roster entry with `last_seen` = now. With `--takeover`, fields the caller
-  did not give (tool, model, role) keep their old values; without it they are replaced. A rejoin keeps the name's
-  cursor and its claims.
+  environment already names it (`AGENTBUS_AGENT` equals the name), which counts as `--takeover`.
+- **P-ID-6** join MUST insert or update the roster entry with `last_seen` = now. On a rejoin `joined_at` stays; `cwd`
+  and `branch` are always replaced; with `--takeover` (given, or implied by `AGENTBUS_AGENT`) tool, model and role
+  that the caller did not give keep their old values, and without it they are replaced. A rejoin keeps the name's
+  cursor and its claims. A duplicate join (P-ID-8) changes nothing, `last_seen` included.
 - **P-ID-7** join MUST create the name's cursor only when it has none, with `last_read_id` = 0 and `bcast_from` = the
   highest message id at that moment. A new name therefore receives every direct message ever sent to it, and
   broadcasts only from its first join on.
 - **P-ID-8** join with `--request-id TOKEN`, when the name is on the roster and its latest join log row carries the
-  same token, MUST return the first result with `duplicate: true` if the flags are the same, and refuse with
-  `request_id_reused` if they differ.
+  same token, MUST return `duplicate: true` without writing if tool, model, branch and role equal those of that row
+  (cwd and `--takeover` are not compared), and refuse with `request_id_reused` if they differ. The result is built
+  from the bus as it is now (the current goal), not stored. The token lives only in the log (section 14).
 - join writes a `join` log row.
 
 ### leave
@@ -158,8 +178,8 @@ section 11; the CLI's exit codes for them live in the binding.
 
 ### who
 
-- **P-ID-11** who MUST list every roster entry; nothing removes an entry except leave (section 14, roster never
-  forgets).
+- **P-ID-11** who MUST list every roster entry. Nothing removes an entry except leave (gap: roster never forgets,
+  section 14).
 
 ### post
 
@@ -196,18 +216,20 @@ section 11; the CLI's exit codes for them live in the binding.
 
 ### read
 
-- **P-DLV-7** read MUST return messages by id, with filters `--since`, `--before`, `--topic` and `--id`, and MUST NOT
-  change any cursor. `--id` with no such message refuses with `no_message`.
+- **P-DLV-7** read MUST return messages by id, with filters `--since ID` (ids above ID, exclusive), `--before`
+  (an opaque cursor of the binding), `--topic` and `--id`, and MUST NOT change any cursor. `--id` with no such message
+  refuses with `no_message`.
 
 ### ctx set, ctx get, ctx history
 
 - **P-FACT-1** ctx set MUST be last-writer-wins: there is no compare-and-set and no delete.
-- **P-FACT-2** Setting the value a fact already holds MUST write nothing and report `unchanged: true`, keeping the
-  previous setter and time.
+- **P-FACT-2** Setting the value a fact already holds MUST write no fact, history or log row and report
+  `unchanged: true`, keeping the previous setter and time (the caller's `last_seen` is still refreshed, P-ID-4).
 - **P-FACT-3** A change MUST write the fact and one history row in the same atomic step.
 - **P-FACT-4** ctx set on the key `goal` MUST be refused with `bad_input`.
 - **P-FACT-5** ctx get of a missing key MUST refuse with `no_context_key`.
 - **P-FACT-6** ctx history MUST list a key's values in the order they were written.
+- **P-FACT-9** ctx get with no key MUST list every fact except `goal`; `ctx get goal` and `ctx history goal` read it.
 
 ### goal
 
@@ -230,28 +252,42 @@ section 11; the CLI's exit codes for them live in the binding.
   is given. `renewed` is true only when the old claim was still live.
 - **P-CLAIM-10** The TTL MUST default to 120 minutes and be refused (`bad_input`) outside 1 to 10080 minutes. Nothing
   renews a claim except claiming it again.
-- **P-CLAIM-11** A claim call MUST name at most 100 resources and at most 100 `--from` holders.
-- **P-CLAIM-12** `claim --from HOLDER` MUST move the named holders' live claims that are in the way to the caller, in
-  the same atomic step as the rest of the batch, and only when every blocker is a named holder; otherwise it refuses
-  with `claim_conflict` and changes nothing.
+- **P-CLAIM-11** A claim call MUST name at most 100 resources, counted as given (before duplicates are dropped), and
+  at most 100 distinct `--from` holders (duplicates are dropped first).
+- **P-CLAIM-12** `claim --from HOLDER` MUST, only when every blocker is a named holder and in the same atomic step as
+  the rest of the batch, delete the named holders' live claims that overlap each resource asked, then claim each
+  resource for the caller by the ordinary rules (P-CLAIM-9): a new claim gets `claimed_at` = now, the caller's purpose
+  (or none) and the caller's TTL; nothing of the holder's claim carries over. Otherwise it refuses with
+  `claim_conflict` and changes nothing.
 - **P-CLAIM-13** A claim MUST move whole: when a named holder's claim on a folder above the resource is in the way,
   `--from` refuses and names that folder as the target.
-- **P-CLAIM-14** A named holder with nothing in the way MUST be refused with `bad_input` (a stale command), unless the
-  caller already holds every resource asked. Naming yourself is refused with `bad_input`.
+- **P-CLAIM-14** When no resource is blocked, a named holder with nothing in the way MUST be refused with `bad_input`
+  (a stale command), unless the caller already holds a live claim on every resource asked. A blocked resource is
+  refused with `claim_conflict` first, whatever the named holders hold. Naming yourself is refused with `bad_input`.
 - **P-CLAIM-15** For each holder it took from, `claim --from` MUST, in the same step, write a `claim_taken` log row and
   post an `alert` with topic `claim` from the taker to that holder. The holder stays on the roster.
 - **P-CLAIM-16** Claims MUST be advisory: no operation refuses an edit, a post or a read because of a claim.
+- **P-CLAIM-19** Opening a bus for writing MUST first rewrite stored path claims that are not in normalised form
+  (rows another tool wrote), in its own atomic step before the operation: when two rows become one, the later expiry
+  is kept, and every change is logged. This step stands even when the operation is then refused.
+- **P-CLAIM-20** A claim's `expires_at` MUST be computed from now plus the TTL when the operation starts, before it
+  waits for the write lock; the live test inside the atomic step uses a fresh now. A long wait shortens the claim.
+- **P-CLAIM-21** Reclaiming one's own claim with the same purpose MUST write no log row, whether the old claim was live
+  or expired; a new claim or a changed purpose writes one.
 - A refusal carries the holder, its `claimed_at`, `expires_at`, purpose, `last_seen` and idle minutes, and the
   `claim --from` command that would take it (`claim_from`); `takeover` repeats it only when the holder has been idle
-  for at least the live window. A refused batch writes one `claim_refused` log row after the refusal.
+  for at least the live window. A refused batch also writes a `claim_refused` log row (P-LOG-3).
 
 ### release
 
 - **P-CLAIM-17** release MUST act only on the caller's own claims, matching the resource as given or either spelling
-  of its normalised path, and take all or none: when one is not held, it refuses with `not_held` and releases nothing,
+  of its normalised path (a resource that fails P-CLAIM-2, such as an absolute path, is refused with `bad_input`
+  before any lookup, so only `release --all` or leave removes such a stored claim), and take all or none: when one is not held, it refuses with `not_held` and releases nothing,
   unless `--if-held` is given, which skips the ones not held.
-- **P-CLAIM-18** release MUST NOT split a claim: releasing a path inside a held folder is `not_held`. `release --all`
-  deletes every claim of the caller.
+- **P-CLAIM-18** release MUST NOT split a claim: releasing a path inside a held folder is `not_held` (gap: release
+  granularity, section 14).
+- **P-CLAIM-22** `release --all` MUST delete every claim of the caller, and like an `--if-held` release that released
+  nothing, writes no log row when there was nothing to release.
 
 ### claims
 
@@ -261,10 +297,13 @@ expiry; a later claim of the same resource replaces the row.
 
 ### log
 
-- **P-LOG-1** join, leave (when it changed anything), claim (a new claim or a changed purpose), release, a `--from`
-  move, a refused claim batch and a goal change MUST each append a log row. post and ctx set write none.
-- **P-LOG-2** log add MUST append one row with the caller's name, a free action word and a detail; it is not
-  idempotent (section 14, #28).
+- **P-LOG-1** join (not a duplicate one, P-ID-8), leave (when it changed anything), claim (a new claim or a changed
+  purpose, P-CLAIM-21), a claim auto-released (P-CLAIM-6), each resource release let go of, a `--from` move and a
+  goal change MUST each append a log row, inside the operation's atomic step. post and ctx set write none.
+- **P-LOG-2** log add MUST append one row with the caller's name, a free action word and a detail (gap: not
+  idempotent, section 14).
+- **P-LOG-3** A refused claim batch SHOULD write one `claim_refused` log row. It is best effort: a separate atomic step
+  after the refusal, whose failure is ignored, so the caller still gets `claim_conflict`.
 
 ## 5. State machines
 
@@ -310,7 +349,8 @@ expire or are taken with `--from`.
 ## 6. Delivery and atomicity
 
 - **P-ATOM-1** Each state-changing operation MUST be atomic: its checks and writes take effect together or not at
-  all, and no other operation's writes interleave with them.
+  all, and no other operation's writes interleave with them. The steps outside it are named: the claim normalisation
+  of P-CLAIM-19 before it, and the best-effort `last_seen` refresh (P-ID-4) and `claim_refused` row (P-LOG-3) after it.
 - **P-ATOM-2** The compound steps of section 4 MUST each be one atomic step: a claim batch with its auto-releases,
   `--from` moves, log rows and alerts; leave's claim and roster deletes; a post with its closing decision; join with
   its cursor; a fact change with its history row.
@@ -351,34 +391,33 @@ These views are definitions: each item below binds any implementation that shows
   roster are the only trace a crashed holder leaves.
 - **P-VIEW-5** Takeable todo for name N: an open todo whose owner is N, or whose owner is not on the roster and has a
   `leave` log row with a time at or after the todo's time. N's own come first, then by id. This view consults the
-  log: a client needs the roster and the `leave` rows of the log to compute it (section 14, log as protocol). A
-  crashed owner (still on the roster, no `leave` row) makes no todo takeable.
+  log: a client needs the roster and the `leave` rows of the log to compute it (gap: log as protocol, section 14). A
+  crashed owner (still on the roster, no `leave` row) makes no todo takeable (gap: crashed owners, section 14).
 
 Views may hide rows: a consumer MAY leave out kinds it does not know (section 12).
 
 ## 9. Profiles
 
 A profile is an optimization on top of the core. Each is OPTIONAL, and each is kept only while an experiment shows
-agents do better with it than without it. Issue B (ctxbench, "Do the protocol's derived views save context?") is the
-first such experiment.
+agents do better with it than without it. ctxbench, "do the protocol's derived views save context?", is the
+first such experiment ([#80](https://github.com/wickdninja/agentbus/issues/80)).
 
 | Profile | What it adds | The experiment that would justify it |
 | --- | --- | --- |
-| `brief` | one read with the goal, roster and held claims, open questions, open todos, expired claims of present holders, unread handoffs and alerts, pending between others, changed facts, and one `next:` command; section limits of 5 rows, bodies cut at 200 characters in JSON and 90 in text, goal at 300 | context tokens and wrong actions of a late joiner with `brief` against `who`, `claims`, `read` and `inbox` (Issue B) |
+| `brief` | one read with the goal, roster and held claims, open questions, open todos, expired claims of present holders, unread handoffs and alerts, pending between others, changed facts, and one `next:` command; section limits of 5 rows, bodies cut at 200 characters in JSON and 90 in text, goal at 300 | context tokens and wrong actions of a late joiner with `brief` against `who`, `claims`, `read` and `inbox` ([#80](https://github.com/wickdninja/agentbus/issues/80)) |
 | `next:` order | unread, then a question to answer, then a takeable todo (P-VIEW-5), then `claim` | whether agents follow it to the right work faster than reading the sections |
 | `wait` | block until unread > 0, polling every 2 seconds, 600 s default and 1800 s cap, exit 124 on timeout | idle time between a message and its reader with and without a background `wait` |
 | `watch` | a live read-only view for people; counts an alert open until any reply | none needed for agents; it is a human surface |
 | hooks | join at session start, unread counts, a claim nudge before an edit, a stop reminder, leave at session end; they never block | claim coverage and cleanup with and without hooks |
-| SQLite storage | one file, `BEGIN IMMEDIATE`, 15 s wait, 8 s hold cap, `synchronous=FULL` | none: it is the reference implementation's storage, and any store meeting section 6 conforms |
 
 ## 10. Behavioral protocol
 
-What a well-behaved agent does. These are SHOULDs: nothing in the bus enforces them. Each is pinned to a sentence the
+What a well-behaved agent does. These are SHOULDs and one MAY (B-7): nothing in the bus enforces them. Each is pinned to a sentence the
 skill must keep (`tests/skill_required.txt`), so the skill cannot lose it unnoticed; `tests/test_docs.sh` checks that
 every pin below is one of those sentences.
 
 - **B-1** An agent SHOULD keep one name for the whole session. Skill: Pass `--as YOUR_NAME` and keep that name all session.
-- **B-2** An agent SHOULD start by joining, reading the brief, then reading its inbox. Skill: Start with `join`, then `brief`
+- **B-2** An agent SHOULD start by joining, reading the brief (if the implementation offers the `brief` profile), then reading its inbox. Skill: Start with `join`, then `brief`
 - **B-3** An agent SHOULD record what only it knows as facts at once. Skill: Record what only you know (owner notes, decisions) at once
 - **B-4** An agent SHOULD post each job it owns as its own todo when it starts. Skill: At start, post each job you own as its own todo.
 - **B-5** An agent SHOULD close each todo with a linked `done`. Skill: Close each with a linked done.
@@ -397,7 +436,7 @@ every pin below is one of those sentences.
 - **B-18** An agent SHOULD dedupe delivered messages by id. Skill: Delivery can repeat; dedupe by message ID.
 - **B-19** An agent SHOULD NOT treat a failed exit as a rollback. Skill: A nonzero exit does not imply rollback.
 - **B-20** An agent SHOULD inspect the bus before repeating a write whose output failed. Skill: A write may commit before output fails.
-- **B-21** An agent SHOULD branch on the error code. Skill: With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug.
+- **B-21** An agent SHOULD branch on the error code; the skill also names the CLI binding's exit codes. Skill: With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug.
 - **B-22** An agent SHOULD run the error's recovery command. Skill: Run error.next to recover (fill in capitals).
 - **B-23** An agent SHOULD page a listing that has more. Skill: Listings return {items, has_more, next}; if has_more, call again or raise --limit.
 - **B-24** An agent SHOULD treat git, files and the tracker as authoritative over the bus. Skill: Git, project files, and the issue tracker remain authoritative.
@@ -413,7 +452,12 @@ contract tables are generated from `agentbus schema --json`. The abstract refusa
 `bad_input`. Everything else (`busy`, the `schema_*` codes, `bus_unavailable`, `ack_failed`, `output_failed`,
 `interrupted`, `wait_timeout`, exit codes 0 to 4, 124 and 130) belongs to the binding.
 
-- **P-ERR-1** A refused operation MUST change nothing, apart from the `claim_refused` log row of P-LOG-1.
+- **P-ERR-1** A refused operation MUST change nothing of its own. Steps outside it (P-ATOM-1) may still have
+  committed: the claim normalisation of P-CLAIM-19 and the `claim_refused` row of P-LOG-3.
+
+The reference binding stores the bus in one SQLite file and takes every write with `BEGIN IMMEDIATE`, a 15 s wait,
+an 8 s hold cap and `synchronous=FULL`. That is the binding's storage, not core: any store that meets section 6 is
+allowed.
 
 Conformance for 1.0 is defined against the CLI binding: `bash tests/run_all.sh` on the implementation under test.
 
@@ -423,12 +467,14 @@ The protocol has a version `MAJOR.MINOR`, starting at `1.0`. It is separate from
 envelope's `contract`, the bus schema version, the skill and the hooks ([six versioned
 things](explanation/versions.md)).
 
-- **P-VER-1** An implementation MUST publish the protocol version it implements as `"protocol": "1.0"` in
-  `schema --json`, beside `"contract"`.
+- **P-VER-1** An implementation MUST publish the protocol version it implements. In the CLI binding that is
+  `"protocol": "1.0"` in `schema --json` (full, per command and `--index`), beside `"contract"`.
 - **P-VER-2** A producer MUST post only the kinds of its protocol version (P-MSG-1).
 - **P-VER-3** A consumer MUST deliver and acknowledge a stored message of a kind it does not know unchanged, through
   inbox and read; it MAY leave such messages out of derived views.
-- A new kind, operation or field is a minor version. Changing or removing a rule with an id is a major version.
+- A new kind, operation or field is a minor version. Changing or removing a rule with an id is a major version,
+  with one exception: a rule marked "gap" (P-ID-11, P-CLAIM-18, P-LOG-2, P-VIEW-5) states a section 14 gap as
+  today's behavior, and a minor version may change it to close that gap.
   1.0 has no negotiation between versions sharing one bus (section 14).
 
 ## 13. Security considerations
@@ -451,6 +497,12 @@ Current behavior that 1.0 documents and a later minor version may change.
   they expire or are taken with `--from`. [#69](https://github.com/wickdninja/agentbus/issues/69)
 - **Crashed owners' todos are never takeable.** P-VIEW-5 needs a `leave` row; a crashed owner never wrote one.
   (issue to file)
+- **`claim --from` names skip the identifier check** (P-ID-2): a holder name with a newline is accepted. (issue to file)
+- **Normalised paths can become scheme names** (P-CLAIM-1): `./area:x/` is stored as `area:x/` and then compared
+  exactly. (issue to file)
+- **No length limit** on a recipient, a topic, a fact key or a log action. (issue to file)
+- **The join token lives only in the log** (P-ID-8): a join retry is recognised by the latest join log row, so the
+  log is part of the protocol here too. (issue to file)
 - **Name reuse.** Cursors survive leave and a rejoin keeps cursor and claims, so a new agent under an old name
   receives the old name's unread direct mail and holds its live claims. After 30 idle minutes any session may join
   under the name. (issue to file)
@@ -459,8 +511,8 @@ Current behavior that 1.0 documents and a later minor version may change.
   (issue to file)
 - **`--from` is honor-system.** No check that a handoff gave the work. (issue to file)
 - **Goal authority.** Any name may set the goal; there is no lead role. (issue to file)
-- **Log as protocol.** P-VIEW-5 reads the log's `leave` rows, so the log is part of the protocol for that view only;
-  post and ctx set write no log row. (issue to file)
+- **Log as protocol.** P-VIEW-5 reads the log's `leave` rows and P-ID-8 its join rows, so the log is part of the
+  protocol for those two; post and ctx set write no log row. (issue to file)
 - **No compatibility gate between versions on one bus.** Nothing stops an implementation of one protocol version from
   writing to a bus another version reads; there is no negotiation. (issue to file)
 - **Inbox needs no roster entry.** Any name can consume the inbox of a name it is not, including one that never
@@ -481,4 +533,3 @@ Current behavior that 1.0 documents and a later minor version may change.
 - **Pending between others in `brief`** counts a handoff or alert to a name that left as pending.
   [#70](https://github.com/wickdninja/agentbus/issues/70)
 - **Alert closure** is a `watch` rule (any reply closes it); the core has none. (issue to file)
-- **Limits are enforced by the CLI binding only**; another binding has to enforce section 7 itself. (issue to file)
