@@ -79,13 +79,13 @@ def listings():
         for i, resource in enumerate(['src/api/', 'tests/', 'docs/']):
             c.execute('INSERT INTO claims VALUES(?,?,?,?,?)', (resource, 'codex', 'review', stamp(now), stamp(now+datetime.timedelta(minutes=120) if i < 2 else now-datetime.timedelta(minutes=1))))
         c.commit()
-    for cmd, count in [('who', 4), ('claims', 3)]:
+    for cmd, count in [('who', 4), ('claims', 2)]:  # the expired docs/ claim is not listed (issue 86 T2)
         text = ok(cmd, db=db)
         lines = text.splitlines()
         assert len(lines) == count, text
         assert all(l.startswith('  ') and len(physical_rows(l, 80)) == 1 for l in lines), text
         # a claim's expiry carries its date when it falls on tomorrow
-        assert ('seen 2m ago' in text if cmd == 'who' else len(re.findall(r'for 2h \(until (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d\)', text)) == 2 and text.count('expired') == 1), text
+        assert ('seen 2m ago' in text if cmd == 'who' else len(re.findall(r'for 2h \(until (?:[A-Z][a-z]{2} \d{1,2} )?\d\d:\d\d\)', text)) == 2 and text.count('expired') == 0), text
         section = ok('status', db=db).split('== '+('agents' if cmd == 'who' else 'claims')+'\n', 1)[1].split('\n\n', 1)[0]
         assert section.splitlines() == lines, (section, text)
     expected = {'  '+name.ljust(26)+'  '+role.ljust(11)+'  codex  seen 2m ago'
@@ -152,7 +152,7 @@ def errors():
     e = error('no_message','--as','a','post','hi','--reply-to','99',db=db); assert e['id'] == 99
     e = error('not_held','--as','a','release','nothing',db=db); assert e['resource'] == 'nothing'
     error('no_bus','who')
-    for args in [('lgo',), ('read','--limit','bad'), ('--as','a','post','hi','--kind','fyi'), ('--as','a','post',''),
+    for args in [('lgo',), ('read','--limit','bad'), ('--as','a','post','hi','--kind','dropped'), ('--as','a','post',''),
                  ('--as','a','claim','../x'), ('--as','a','claim','x','--ttl-min','0')]:
         error('bad_input', *args, db=db)
     ok('--as','b','join',db=db)

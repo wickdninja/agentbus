@@ -70,7 +70,7 @@ print("PASS: exit 1 for every refusal, in human and --json mode")
 # 2: usage. The same for argparse errors, unknown commands and invalid values, in both modes
 both(db, ["lgo"], 2, "bad_input")
 both(db, ["read", "--limit", "abc"], 2, "bad_input")
-both(db, ["--as", "a", "post", "hi", "--kind", "fyi"], 2, "bad_input")
+both(db, ["--as", "a", "post", "hi", "--kind", "dropped"], 2, "bad_input")  # an invented kind posts a note (issue 86)
 both(db, ["--as", "a", "post"], 2, "bad_input")
 both(db, ["post"], 2, "bad_input")        # no identity
 both(db, ["--as", "a", "claim", "../x"], 2, "bad_input")

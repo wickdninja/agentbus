@@ -219,6 +219,15 @@
        }
       }
      }
+    },
+    "recorded": {
+     "type": "boolean"
+    },
+    "warnings": {
+     "type": "array",
+     "items": {
+      "$ref": "#/objects/Warning"
+     }
     }
    }
   },
@@ -586,6 +595,30 @@
     },
     "discovered": {
      "type": "string"
+    },
+    "kind": {
+     "type": "string"
+    },
+    "kinds": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "resource": {
+     "type": "string"
+    },
+    "held": {
+     "type": "string"
+    },
+    "checkout": {
+     "type": "string"
+    },
+    "purpose": {
+     "type": [
+      "string",
+      "null"
+     ]
     }
    }
   },
@@ -881,6 +914,31 @@
    ],
    "meaning": "The message was delivered to --to NAME, but no agent with that name has joined. did_you_mean lists the closest roster names (at most 3, possibly none). roster lists the agents that have joined, by name (the 10 most recently seen at most); roster_total is how many there are.",
    "action": "If the name is a typo, post again to a name in did_you_mean or roster. The first message waits for the typo."
+  },
+  "held_in_other_checkout": {
+   "fields": [
+    "resource",
+    "held",
+    "name",
+    "checkout",
+    "purpose"
+   ],
+   "commands": [
+    "claim"
+   ],
+   "meaning": "name holds held (resource itself, or a folder above or inside it) and joined in another git checkout (checkout), so the claim was not refused: separate worktrees do not share files. When held is resource itself it stays name's and the result says recorded false; otherwise your claim is recorded beside it.",
+   "action": "Go ahead in your own checkout and post what you touch; the merge decides. In the same checkout the claim is refused as before."
+  },
+  "unknown_kind": {
+   "fields": [
+    "kind",
+    "kinds"
+   ],
+   "commands": [
+    "post"
+   ],
+   "meaning": "--kind named no kind agentbus has, so the message was posted as a note. kind is the word given; kinds lists the kinds.",
+   "action": "Nothing to repeat: the message is delivered. Use one of kinds next time (decision for a ruling, alert for a problem)."
   },
   "bus_env_mismatch": {
    "fields": [
@@ -3465,6 +3523,7 @@
      "bus",
      "me",
      "goal",
+     "rulings",
      "agents",
      "questions",
      "todos",
@@ -3513,6 +3572,20 @@
         "$ref": "#/objects/BriefGoal"
        }
       ]
+     },
+     "rulings": {
+      "type": "object",
+      "required": [
+       "items"
+      ],
+      "properties": {
+       "items": {
+        "type": "array",
+        "items": {
+         "$ref": "#/objects/BriefMessage"
+        }
+       }
+      }
      },
      "agents": {
       "type": "object",
@@ -3640,6 +3713,7 @@
      "omitted": {
       "type": "object",
       "required": [
+       "rulings",
        "agents",
        "questions",
        "todos",
@@ -3649,6 +3723,9 @@
        "facts"
       ],
       "properties": {
+       "rulings": {
+        "type": "integer"
+       },
        "agents": {
         "type": "integer"
        },

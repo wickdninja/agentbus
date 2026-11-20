@@ -15,7 +15,7 @@ One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` a
 
 ## Start
 
-Start with `join`, then `brief`, then `inbox --limit 20`. The goal, empty until a lead sets it (`goal "TEXT"`), informs your work; only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers. `ctx history KEY` shows earlier values.
+Start with `join`, then `brief`, then `inbox --limit 20`. The goal (`goal "TEXT"`) informs your work; only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers.
 
 Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as and skip `join`.
 
@@ -23,9 +23,9 @@ At start, post each job you own as its own todo. Close each with a linked done. 
 
 ## Before shared work
 
-Read `inbox` each turn and between steps; repeat until empty. If you can, background `wait`: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files first. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.
+Read `inbox` each turn and between steps; repeat until empty. If you can, background `wait`: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files first. Claims compare exactly, case included; use the spelling shown by git ls-files. Lock a simulator, build slot, device or database with `claim area:NAME --ttl-min N`.
 
-If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes; claim again to renew.
+If refused, don't edit until the holder answers or releases; a holder in another worktree only warns: post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes; claim again to renew.
 
 ## Communicate
 

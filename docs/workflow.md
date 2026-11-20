@@ -96,7 +96,7 @@ flowchart TD
     wt -- no --> walk
     main --> walk["Walk up to the nearest .agentbus/"]
     walk --> found{{"Found one?"}}
-    found -- no --> none["agentbus: no bus here or in any parent folder.<br/>Run: agentbus init DIR"]
+    found -- no --> none["agentbus: error: no bus here or in any parent folder.<br/>Run: agentbus init DIR"]
     found -- yes --> home{{"HOME's own .agentbus?"}}
     home -- yes --> skip["Never used: keep walking"]
     skip --> walk
