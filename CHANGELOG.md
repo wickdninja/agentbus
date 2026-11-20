@@ -8,10 +8,16 @@ Which of the [six versioned things](docs/explanation/versions.md) change: the pr
 
 - [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.4.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` is unchanged.
 
-### Changed
+### Changed (learning cycle 0, [#86](https://github.com/wickdninja/agentbus/issues/86))
 
 - Hooks (issue #86): the prompt note counts only messages sent to the agent's own name, and speaks only when one of them is new since it was last said. After a compact or a resume, SessionStart says one line (the name and that count) instead of the whole orientation. There is no Stop hook: `setup claude` writes four hooks and `setup codex` three, and rerunning setup removes an old Stop entry, which does nothing meanwhile. A main session (and Codex) is no longer told that a file it edits has no claim.
 - A Claude Code subagent is itself in the hooks: it is known by the `--as` name its own commands used, so it is not warned about its own claims (or its parent's), and it is never told to act under its parent's name. [Contract, section 12](docs/design/claude-hook-contract.md).
+- `brief` lists the rulings that still stand (decisions, and posts on topic `ruling`; a later one on the same subject or replying to it replaces it), and lists agents holding a live claim first, so a lane needs `brief` alone instead of `read --topic ruling --limit 50` and `claims`.
+- `claims` (and `status`) list live claims only; expired rows are never shown. `brief` still names expired claims of holders on the roster.
+- A text-mode error starts `agentbus: error:` or `agentbus: refused:`, and one that wraps ends with `agentbus: refused (CODE, exit N)`, so `| head` and `| tail` both show it. `--json` errors are unchanged.
+- `post --kind` with a word that is not a kind posts a note with an `unknown_kind` warning naming the kinds; `send` is `post`; `--to all` and `--to everyone` broadcast. A name not on the roster still gets its message.
+- A path claim held by an agent in another git worktree warns (`held_in_other_checkout`) and names the holder instead of refusing; the same resource stays the holder's (`recorded: false`). In the same checkout, and for scheme names such as `area:ios-sim`, a claim is refused as before.
+- The skill teaches `claim area:NAME --ttl-min N` to lock a simulator, build slot, device or database.
 
 ### Fixed
 

@@ -30,7 +30,7 @@ before = snapshot()
 for args in [('ctx', 'set', '', 'value'), ('ctx', 'get', ''), ('ctx', 'history', '')]:
     p = run('--as', 'a', *args)
     assert p.returncode == 2 and p.stdout == '', (args, p)  # a usage error: exit 2
-    assert p.stderr == 'agentbus: KEY must not be empty. List facts with: agentbus ctx get\n', p.stderr
+    assert p.stderr == 'agentbus: error: KEY must not be empty. List facts with: agentbus ctx get\n', p.stderr
     assert snapshot() == before, (args, 'changed bus')
     # A missing bus must not be created by an invalid key either.
     with tempfile.TemporaryDirectory() as d:
@@ -57,7 +57,8 @@ for args, message in [
             assert json.loads(p.stderr) == {'error': {'code': code, 'message': message, 'retryable': False, 'committed': False, 'next': nxt, field: value}}, p.stderr
             assert len(p.stderr.splitlines()) == 1, p.stderr
         else:
-            assert p.stderr == 'agentbus: ' + message + '\n', p.stderr
+            label = 'refused' if args[0] == 'release' else 'error'  # not_held is a refusal (issue 86 A3)
+            assert p.stderr == 'agentbus: ' + label + ': ' + message + '\n', p.stderr
         assert snapshot() == before, (args, 'changed bus')
 PY
 ok "empty keys write nothing, omitted get lists, and exact missing-object errors explain recovery"

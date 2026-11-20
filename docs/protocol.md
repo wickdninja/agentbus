@@ -54,9 +54,9 @@ Terms:
 | read | list messages by id, no cursor effect | P-DLV-7 |
 | ctx set, ctx get, ctx history | set a fact, read facts, list a fact's history | P-FACT-1 to P-FACT-6, P-FACT-9 |
 | goal | set or show the fact `goal` | P-FACT-7, P-FACT-8 |
-| claim | take or renew claims, all or none; `--from` takes named holders' claims | P-CLAIM-1 to P-CLAIM-16, P-CLAIM-19 to P-CLAIM-21 |
+| claim | take or renew claims, all or none; `--from` takes named holders' claims | P-CLAIM-1 to P-CLAIM-16, P-CLAIM-19 to P-CLAIM-21, P-CLAIM-23 |
 | release | let go of own claims, all or none | P-CLAIM-17, P-CLAIM-18, P-CLAIM-22 |
-| claims | list claims with their state | P-CLAIM-8 |
+| claims | list live claims | P-CLAIM-8 |
 | log | list audit rows; add one | P-LOG-1 to P-LOG-3 |
 
 `--request-id` is a flag, not an operation: it makes a retried post return the first result and a retried join return a result built from current state (P-MSG-8,
@@ -95,8 +95,10 @@ Field lists are the `schema --json` objects of the reference implementation (`Ag
 ### Messages
 
 - **P-MSG-1** The kind of a posted message MUST be one of the closed set of protocol 1.0: `note`, `question`,
-  `answer`, `handoff`, `decision`, `alert`, `done`, `todo`, `dropped`. Any other kind is refused with `bad_input`.
-- A message has exactly one recipient: one name, or `*` (everyone). The default is `*`.
+  `answer`, `handoff`, `decision`, `alert`, `done`, `todo`, `dropped`. A post that names any other kind is stored as
+  `note` and succeeds with the warning `unknown_kind` (one stderr line naming the kinds).
+- A message has exactly one recipient: one name, or `*` (everyone). The default is `*`; `all` and `everyone`, in any
+  case, mean `*`.
 - A topic is a free label used only to filter (`read --topic`). The decision convention (`--kind decision --topic
   decision`) is not enforced.
 - A body is text of 1 to 65536 bytes after trimming surrounding whitespace.
@@ -241,7 +243,14 @@ section 11; the CLI's exit codes for them live in the binding.
 
 - **P-CLAIM-4** One claim call MUST take every resource it names or none of them, in one atomic step.
 - **P-CLAIM-5** A resource MUST be refused (`claim_conflict`) when it overlaps a live claim held by another name that
-  is on the roster. Nothing in the batch is claimed.
+  is on the roster and works in the same checkout. Nothing in the batch is claimed. A name's checkout is the nearest
+  folder holding `.git` at or above the folder it joined in (`agents.cwd`); when either name's checkout is unknown,
+  they share one.
+- **P-CLAIM-23** A live path claim held by a name in a different checkout (another git worktree or repo) MUST NOT block a
+  path (a scheme name such as `area:ios-sim` names one thing every checkout shares and blocks as in P-CLAIM-5):
+  the claim succeeds with the warning `held_in_other_checkout` naming the holder. When the holder holds that same
+  resource it stays the holder's, nothing is written for it, and its result says `recorded: false`; a claim that only
+  overlaps the holder's is recorded beside it.
 - **P-CLAIM-6** A claim held by a name that is not on the roster MUST NOT block, and a live one that overlaps a
   resource being claimed MUST be deleted in the same step and logged as auto-released.
 - **P-CLAIM-7** An expired claim MUST NOT block.
@@ -293,9 +302,10 @@ section 11; the CLI's exit codes for them live in the binding.
 
 ### claims
 
-The claims listing returns every stored claim, live and expired, each with `state` `held` or `expired` by
-P-CLAIM-8. `claims --stale` lists only live claims of names not on the roster. Expired rows are not deleted by
-expiry; a later claim of the same resource replaces the row.
+The claims listing returns live claims only, each with `state` `held` (P-CLAIM-8); an expired row is never listed, in
+`claims` or `status`. `brief` names the expired claims of holders still on the roster. `claims --stale` lists only live
+claims of names not on the roster. Expired rows are not deleted by expiry; a later claim of the same resource replaces
+the row.
 
 ### log
 

@@ -478,7 +478,23 @@ class Diag:
         text = self.msg.rstrip()
         if saved:
             text += ("" if text[-1:] in ".!?" else ".") + " The command's change was saved before this."
-        return diag(text)
+        return error_text(text, self.code)
+
+
+# Codes whose exit means the bus said no to what was asked (the command ran); every other code is an error.
+REFUSAL_CODES = ("claim_conflict", "not_held", "name_active", "not_on_roster", "request_id_reused", "copy_newer")
+
+
+def error_text(text, code):
+    """A refusal or an error as stderr shows it in text mode: its first line says `refused:` or `error:`, and when it
+    wraps to more than one row a last row says so again with the code and exit status, so `| head -1` and `| tail -1`
+    both show that the command failed (issue 86: 72% of agent calls pipe, and the exit status of a pipe is the tail's)."""
+    label = "refused" if code in REFUSAL_CODES else "error"
+    out = diag(f"{label}: {text}")
+    if "\n" in out:
+        status = CONTRACT["errors"].get(code, CONTRACT["errors"]["internal"])["exit"]
+        out += "\n" + diag(f"{label} ({code}, exit {status})")  # one row at any width of 45 columns or more
+    return out
 
 
 def file_changed(path):
@@ -581,8 +597,9 @@ CONTRACT = {
                      "state": {"type": "string", "enum": ["held", "expired"]}}),
         "ClaimResult": _o({"resource": _STR, "agent": _STR, "purpose": _NSTR, "claimed_at": _STR, "expires_at": _STR,
                            "auto_released": _list(_o({"resource": _STR, "agent": _STR})), "auto_released_count": _INT,
-                           "renewed": _BOOL, "previous_purpose": _NSTR, "taken_from": _list(_o({"resource": _STR, "agent": _STR}))},
-                          optional=("previous_purpose", "taken_from")),
+                           "renewed": _BOOL, "previous_purpose": _NSTR, "taken_from": _list(_o({"resource": _STR, "agent": _STR})),
+                           "recorded": _BOOL, "warnings": {"type": "array", "items": {"$ref": "#/objects/Warning"}}},
+                          optional=("previous_purpose", "taken_from", "recorded", "warnings")),
         "Fact": _o({"key": _STR, "value": _STR, "updated_by": _STR, "updated_at": _STR, "unchanged": _BOOL}, optional=("unchanged",)),
         "FactVersion": _o({"id": _INT, "key": _STR, "value": _NSTR, "updated_by": _STR, "updated_at": _STR}),
         "LogEntry": _o({"id": _INT, "ts": _STR, "agent": _STR, "action": _STR, "detail": _NSTR}),
@@ -599,8 +616,10 @@ CONTRACT = {
                            "fix": _NSTR, "hint": _NSTR, "scope": {"type": "string", "enum": ["user", "project"]}},
                            optional=("scope",)),
         "Warning": _o({"code": _STR, "name": _STR, "did_you_mean": _list(_STR), "roster": _list(_STR), "roster_total": _INT,
-                       "agentbus_db": _STR, "discovered": _STR},
-                      optional=("name", "did_you_mean", "roster", "roster_total", "agentbus_db", "discovered")),
+                       "agentbus_db": _STR, "discovered": _STR, "kind": _STR, "kinds": _list(_STR), "resource": _STR, "held": _STR,
+                       "checkout": _STR, "purpose": _NSTR},
+                      optional=("name", "did_you_mean", "roster", "roster_total", "agentbus_db", "discovered", "kind", "kinds",
+                                "resource", "held", "checkout", "purpose")),
         "Envelope": _env({}),
     },
     # A warning is not an error: the command succeeded, and its result carries "warnings": [Warning].
@@ -610,6 +629,15 @@ CONTRACT = {
                                                "did_you_mean lists the closest roster names (at most 3, possibly none). roster lists "
                                                "the agents that have joined, by name (the 10 most recently seen at most); roster_total is how many there are.",
                                     "action": "If the name is a typo, post again to a name in did_you_mean or roster. The first message waits for the typo."},
+        "held_in_other_checkout": {"fields": ["resource", "held", "name", "checkout", "purpose"], "commands": ["claim"],
+                                   "meaning": "name holds held (resource itself, or a folder above or inside it) and joined in another git checkout "
+                                              "(checkout), so the claim was not refused: separate worktrees do not share files. When held is resource "
+                                              "itself it stays name's and the result says recorded false; otherwise your claim is recorded beside it.",
+                                   "action": "Go ahead in your own checkout and post what you touch; the merge decides. In the same checkout the "
+                                             "claim is refused as before."},
+        "unknown_kind": {"fields": ["kind", "kinds"], "commands": ["post"],
+                         "meaning": "--kind named no kind agentbus has, so the message was posted as a note. kind is the word given; kinds lists the kinds.",
+                         "action": "Nothing to repeat: the message is delivered. Use one of kinds next time (decision for a ruling, alert for a problem)."},
         "bus_env_mismatch": {"fields": ["agentbus_db", "discovered"], "commands": ["join", "brief"],
                              "meaning": "AGENTBUS_DB names a bus other than the one this folder finds (the nearest .agentbus above it, or the main "
                                         "checkout's for a linked worktree). The command used AGENTBUS_DB. Given only when discovery finds a bus "
@@ -4416,8 +4444,13 @@ def read_inputs(a):
         refuse_invalid_name(me(a), a)
     if a.cmd == "post":
         me(a)
+        a._kind_warnings = []
         if a.kind not in KINDS:
-            die(f"unknown kind '{a.kind}'; use one of: {', '.join(KINDS)}", "bad_input")
+            # an invented kind posts as a note (issue 86): refusing it lost the lane's message
+            a._kind_warnings = [{"code": "unknown_kind", "kind": a.kind, "kinds": list(KINDS)}]
+            a.kind = "note"
+        if a.to.strip().lower() in BROADCAST_NAMES:
+            a.to = "*"
         if a.kind == "dropped" and a.reply_to is None:
             brief_cmd = next_command(a, "brief", "--limit", "-1")
             die("dropped closes a todo: give its id with --reply-to ID. The open todos are listed by: " + brief_cmd,
@@ -4439,9 +4472,19 @@ def read_inputs(a):
                             'or pipe text to goal -.')
 
 
+BROADCAST_NAMES = ("all", "everyone")  # --to all or everyone (any case) means every agent, as no --to does (issue 86)
+COMMAND_ALIASES = {"send": "post"}    # a word agents reach for, run as the command it names
+
+
+def kind_warning_text(w):
+    return f"unknown kind '{w['kind']}': posted as a note. Kinds: {', '.join(w['kinds'])}"
+
+
 def cmd_post(con, a):
     name = me(a)
     body = a._body
+    for w in a._kind_warnings:
+        note(kind_warning_text(w))
     with immediate(con):
         require_joined(con, name, a)
         if a.request_id is not None:
@@ -4453,7 +4496,7 @@ def cmd_post(con, a):
                 warnings = roster_warnings(con, a.to)
                 for w in warnings:
                     note(warn_text(w, a))
-                dup = {"id": old['id'], "duplicate": True, "warnings": warnings}
+                dup = {"id": old['id'], "duplicate": True, "warnings": a._kind_warnings + warnings}
                 if a.kind in TODO_CLOSERS and a.reply_to is not None:
                     dup["closed"] = closed_by(con, old['id'], a.reply_to)  # what the first response said
                 emit(a, dup,
@@ -4470,7 +4513,7 @@ def cmd_post(con, a):
         note(warn_text(w, a))
     if said:
         note(said)
-    result = {"id": cur.lastrowid, "warnings": warnings}
+    result = {"id": cur.lastrowid, "warnings": a._kind_warnings + warnings}
     if a.kind in TODO_CLOSERS and a.reply_to is not None:
         result["closed"] = closed
     emit(a, result, "posted #{} to {} [{}]", cur.lastrowid, "everyone" if a.to == "*" else a.to, a.kind)
@@ -5022,6 +5065,43 @@ def tell_taken(con, a, name, wanted, taken):
                     (t, name, h, "alert", "claim", f"{name} took your claim on {what} with claim --from and now holds {holds} ({why}).", None, None))
 
 
+CHECKOUT_PATH_MAX = 4096  # a stored folder longer than this is no checkout (a lane can write any cwd)
+
+
+def checkout_of(path):
+    """The working tree a folder is in: the nearest folder at or above it that holds .git (a folder in a main checkout,
+    a file in a linked worktree or submodule), resolved; None when there is none, the folder is gone, or the path is not
+    one. Each git worktree is its own checkout, and so is another repo: either way the files on disk are separate.
+    Plain stats, no git: it runs inside claim's write lock (issue 86 L1)."""
+    if not isinstance(path, str) or not path or len(path) > CHECKOUT_PATH_MAX or "\x00" in path:
+        return None
+    try:
+        here = os.path.realpath(path)
+        if not os.path.isdir(here):
+            return None
+        while True:
+            if os.path.lexists(os.path.join(here, ".git")):
+                return here
+            up = os.path.dirname(here)
+            if up == here:
+                return None
+            here = up
+    except (OSError, ValueError):
+        return None
+
+
+def other_checkout(con, name, holder, cache):
+    """The checkout `holder` joined in when it is not `name`'s, else None (the same checkout, or either is unknown: a
+    claim is then refused as it always was). cache: {agent: checkout} for this command."""
+    def of(agent):
+        if agent not in cache:
+            row = con.execute("SELECT cwd FROM agents WHERE name=?", (agent,)).fetchone()
+            cache[agent] = checkout_of(row[0] if row else None)
+        return cache[agent]
+    mine, theirs = of(name), of(holder)
+    return theirs if mine and theirs and mine != theirs else None
+
+
 def cmd_claim(con, a):
     name = me(a)
     if a.ttl_min < 1 or a.ttl_min > MAX_TTL_MIN:
@@ -5045,8 +5125,19 @@ def cmd_claim(con, a):
         t = now()
         # All or nothing: every resource is checked before any is taken, so a refusal changes nothing.
         plan, blocked, holds = [], [], set()
+        shared, checkouts = [], {}  # shared: (resource, blocker, its checkout) held in another git worktree
         for res in wanted:
             b, odd = claim_blocker(con, name, res, t, skip=froms)
+            if not froms and is_path(res):
+                # A holder in another checkout (git worktree) does not block a path: the files on disk are separate. It is
+                # named in a warning instead, and the next holder in the way is looked for. Its claims stay its own. A
+                # scheme name (area:ios-sim, issue:17) is one thing every checkout shares, so it is refused as always.
+                passed = []
+                while b and other_checkout(con, name, b["holder"], checkouts):
+                    shared.append((res, b, checkouts[b["holder"]]))
+                    passed.append(b["holder"])
+                    b, odd = claim_blocker(con, name, res, t, skip=passed)
+                odd = [x for x in odd if x[1]["agent"] not in passed]
             raw_moves = []
             if froms and not b:
                 # the --from holders' claims under bytes that are not UTF-8: a folder above refuses like any other; the rest
@@ -5102,6 +5193,11 @@ def cmd_claim(con, a):
             for res, odd, raw_moves in plan:
                 shown = move_named(con, res, t, froms, taken) if froms else []
                 shown += move_named_raw(con, res, raw_moves, taken, gone)
+                keeper = next((b["holder"] for r, b, _ in shared if r == res and b["same"]), None)
+                if keeper:  # the same resource, held in another checkout: it stays the holder's, nothing is written
+                    done.append({"resource": res, "agent": name, "purpose": a.purpose, "claimed_at": t, "expires_at": exp,
+                                 "auto_released": [], "auto_released_count": 0, "renewed": False, "recorded": False, "kept_by": keeper})
+                    continue
                 result = take_claim(con, a, name, res, t, exp, odd)
                 if froms:
                     result["taken_from"] = shown[:AUTO_RELEASE_SHOWN]
@@ -5111,6 +5207,14 @@ def cmd_claim(con, a):
     if blocked:  # nothing was changed; the log row is its own short write
         log_refusal(con, name, blocked)
         refuse_claim(a, name, blocked, len(wanted), len(a.resource) > 1, froms, batch)
+    warnings = [{"code": "held_in_other_checkout", "resource": res, "held": b["held"], "name": b["holder"], "checkout": co,
+                 "purpose": b["purpose"]} for res, b, co in shared]
+    for w in warnings:
+        note(f"{w['name']} holds {w['held']} in another checkout ({w['checkout']}): separate worktrees do not share files, so "
+             f"go ahead and post what you touch; the merge decides.")
+    if a.json:  # the holder is named in the warning; kept_by is only for the text line
+        for r in done:
+            r.pop("kept_by", None)
     ttl = a.ttl_min * 60
     told = ""
     if taken:
@@ -5121,6 +5225,11 @@ def cmd_claim(con, a):
     if len(a.resource) == 1:
         result = done[0]
         res = result["resource"]
+        if warnings:
+            result["warnings"] = warnings
+        if result.get("recorded") is False:
+            emit(a, result, "not recorded: {} stays {}'s (another checkout); nothing is in your way", res, result.get("kept_by", ""))
+            return
         if a.json or "previous_purpose" not in result:
             if result["renewed"]:
                 emit(a, result, "renewed {} {}{}", res, until_phrase(ttl, exp), told)
@@ -5134,15 +5243,19 @@ def cmd_claim(con, a):
     results = done
     renewed = sum(1 for r in results if r["renewed"])
     if a.json:
-        print_json({"claims": results, "claimed_count": len(results)})
+        print_json({"claims": results, "claimed_count": len(results), **({"warnings": warnings} if warnings else {})})
         return
+    recorded = sum(1 for r in results if r.get("recorded", True))
     if renewed == len(results):
         show("renewed {} {}{}", plural(len(results), "resource"), until_phrase(ttl, exp), told)
     elif not renewed:
-        show("claimed {} {}{}", plural(len(results), "resource"), until_phrase(ttl, exp), told)
+        show("claimed {} {}{}", plural(recorded, "resource"), until_phrase(ttl, exp), told)
     else:
         show("claimed {}, renewed {} {}{}", len(results) - renewed, renewed, until_phrase(ttl, exp), told)
     for r in results:
+        if r.get("recorded") is False:
+            show("{} (not recorded: it stays {}'s, another checkout)", r["resource"], r.get("kept_by", ""), row=True)
+            continue
         show("{}{}", r["resource"], " (renewed)" if renewed and renewed != len(results) and r["renewed"] else "", row=True)
 
 
@@ -5190,8 +5303,9 @@ def q_claims(con, stale=False, limit=LISTING_LIMIT):
                WHERE ag.name IS NULL AND c.expires_at > ?
                ORDER BY c.resource"""
         return capped(con, q, (now(), now()), limit)
-    q = """SELECT *, CASE WHEN expires_at <= ? THEN 'expired' ELSE 'held' END AS state
-           FROM claims ORDER BY resource"""
+    # Live claims only (issue 86): an expired row is never listed. brief names the expired claims of holders still on the
+    # roster, the one place that row still matters (work a crash left).
+    q = """SELECT *, 'held' AS state FROM claims WHERE expires_at > ? ORDER BY resource"""
     return capped(con, q, (now(),), limit)
 
 
@@ -5731,7 +5845,10 @@ class Parser(argparse.ArgumentParser):
                 + f"See: {see or ' '.join(cmd_words(self)) + ' --help'}")
         if _JSON_ERRORS:
             die(text, "bad_input", next=see or " ".join(cmd_words(self)) + " --help")
-        note(text)
+        if _HELD:
+            note(text)
+        else:
+            sys.stderr.write(error_text(text, "bad_input") + "\n")
         raise SystemExit(2)
 
     def _check_value(self, action, value):
@@ -5866,9 +5983,9 @@ def register_post(sub):
     po = sub("post", help="Send a message (body '-' reads stdin)")
     po.add_argument("body", nargs="*", help="The message. Several words are joined; - reads it from stdin.")
     po.add_argument("--to", default="*", metavar="NAME", action=OneName,
-                    help="Deliver to this one agent name; omitted means broadcast. A name not on the roster still gets the message, with a warning.")
+                    help="Deliver to this one agent name; omitted, all or everyone means broadcast. A name not on the roster still gets the message, with a warning.")
     po.add_argument("--kind", default="note",
-                    help="Message kind: note, question, answer, handoff, decision, alert, done, todo, dropped. Default: note.")
+                    help="Message kind: note, question, answer, handoff, decision, alert, done, todo, dropped. Default: note. Another word posts a note, with a warning.")
     po.add_argument("--topic", help="Optional topic label, filterable with read --topic.")
     po.add_argument("--reply-to", type=integer, metavar="ID",
                     help="Link to an earlier message; does not choose the recipient.")
@@ -5935,7 +6052,7 @@ def register_release(sub):
 
 
 def register_claims(sub):
-    cl_list = sub("claims", help="List claims")
+    cl_list = sub("claims", help="List claims", description="List live claims. An expired claim is not shown; brief names the expired claims of agents still on the roster.")
     cl_list.add_argument("--stale", action="store_true", help="Show claims held by agents not on roster")
     limit_arg(cl_list, what="claims")
 
@@ -8936,7 +9053,7 @@ SKILL_TEXT = (
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal, empty until a lead sets it (`goal "TEXT"`), informs your work; only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers. `ctx history KEY` shows earlier values.\n'
+    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal (`goal "TEXT"`) informs your work; only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers.\n'
     '\n'
     'Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as and skip `join`.\n'
     '\n'
@@ -8944,9 +9061,9 @@ SKILL_TEXT = (
     '\n'
     '## Before shared work\n'
     '\n'
-    'Read `inbox` each turn and between steps; repeat until empty. If you can, background `wait`: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files first. Directory claims include descendants. Claims compare exactly, case included; use the spelling shown by git ls-files.\n'
+    'Read `inbox` each turn and between steps; repeat until empty. If you can, background `wait`: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files first. Claims compare exactly, case included; use the spelling shown by git ls-files. Lock a simulator, build slot, device or database with `claim area:NAME --ttl-min N`.\n'
     '\n'
-    "If refused: shared checkout, don't edit until the holder answers or releases; separate branch, post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes; claim again to renew.\n"
+    "If refused, don't edit until the holder answers or releases; a holder in another worktree only warns: post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes; claim again to renew.\n"
     '\n'
     '## Communicate\n'
     '\n'
@@ -14399,6 +14516,36 @@ def _brief_expired_claims(con, limit):
     return [dict(r) for r in rows], more
 
 
+RULING_SCAN = 500        # the newest rulings brief reads to decide which still stand; older ones are not shown
+RULING_GENERIC_TOPICS = ("", "ruling", "rulings", "decision", "decisions")  # topics that label a ruling, not its subject
+RULING_WHERE = "(m.kind='decision' OR (m.topic='ruling' AND m.kind NOT IN ('question', 'answer')))"
+
+
+def _brief_rulings(con, limit):
+    """The rulings that still stand, newest first (issue 86): a ruling is a message of kind decision, or one on topic ruling
+    that is not a question or an answer. A later ruling replaces an earlier one when it replies to it directly, or when both
+    name the same subject as their topic (a topic in RULING_GENERIC_TOPICS, or none, names no subject). Only the newest
+    RULING_SCAN rulings are read; an older one is not shown, so a bus a lane flooded with decisions stays bounded."""
+    scan = con.execute(f"SELECT m.id AS id, substr(m.topic, 1, {BRIEF_NAME_MAX}) AS topic, m.reply_to AS reply_to FROM messages m "
+                       f"WHERE {RULING_WHERE} ORDER BY m.id DESC LIMIT ?", (RULING_SCAN,)).fetchall()
+    replaced, subjects, live = set(), set(), []
+    for r in scan:   # newest first: a ruling is live unless a newer one replaced it
+        topic = r["topic"] if isinstance(r["topic"], str) else ""
+        subject = None if topic.strip().lower() in RULING_GENERIC_TOPICS else topic
+        if r["id"] not in replaced and (subject is None or subject not in subjects):
+            live.append(r["id"])
+        if subject is not None:
+            subjects.add(subject)
+        if isinstance(r["reply_to"], int):
+            replaced.add(r["reply_to"])
+    shown = live if limit < 0 else live[:limit]
+    rows = []
+    if shown:
+        rows = con.execute(f"SELECT {_brief_msg_columns('m.')} FROM messages m WHERE m.id IN ({','.join('?' * len(shown))}) "
+                           "ORDER BY m.id DESC", shown).fetchall()
+    return _brief_rows(rows), len(live) - len(shown)
+
+
 def _brief_next(con, a, me_name, joined, unread_total):
     """(the one command to run next, the id of the todo it reads or None), addressed to the bus this brief read (--up N is
     kept: an inbox run on the inner bus would read and mark read messages the brief never showed). Unread first, then a
@@ -14440,7 +14587,10 @@ def cmd_brief(con, a):
     # who is here, and what each holds
     agent_rows, agents_more = capped(
         con, f"SELECT rowid AS rid, {cut('name', BRIEF_NAME_MAX)} AS name, {cut('role', BRIEF_NAME_MAX)} AS role, "
-             f"{cut('tool', BRIEF_NAME_MAX)} AS tool, last_seen FROM agents ORDER BY last_seen DESC, name", (), limit)
+             f"{cut('tool', BRIEF_NAME_MAX)} AS tool, last_seen FROM agents "
+             # an agent holding a live claim first, so a claim is never hidden behind agents seen more recently (issue 86)
+             f"ORDER BY EXISTS (SELECT 1 FROM claims c WHERE c.agent = agents.name AND c.expires_at > ?) DESC, last_seen DESC, name",
+        (t,), limit)
     agents = []
     for r in agent_rows:
         held, held_more = capped(
@@ -14451,6 +14601,7 @@ def cmd_brief(con, a):
                        "claims": [dict(c) for c in held], "claims_omitted": held_more})
     joined = bool(me_name) and con.execute("SELECT 1 FROM agents WHERE name=?", (me_name,)).fetchone() is not None
 
+    rulings, rulings_more = _brief_rulings(con, limit)
     questions, questions_more = _brief_open_questions(con, me_name, limit)
     todos, todos_more = _brief_open_todos(con, limit)
     expired, expired_more = _brief_expired_claims(con, limit)
@@ -14497,13 +14648,13 @@ def cmd_brief(con, a):
     fact_keys = [r["full_key"] for r in fact_rows]
     next_cmd, next_todo = _brief_next(con, a, me_name, joined, unread_total)
     result = {"bus": a._db, "me": {"name": me_name, "joined": joined} if me_name else None, "goal": goal,
-              "agents": {"items": agents}, "questions": {"items": questions},
+              "rulings": {"items": rulings}, "agents": {"items": agents}, "questions": {"items": questions},
               "todos": {"items": todos},
               "expired_claims": {"items": expired, "next": next_command(a, "--as", me_name or "NAME", "claim", "PATH", "--purpose", "WHY", as_=False) if expired or expired_more else None},
               "unread": {"total": unread_total, "items": unread},
               "pending_others": {"items": others, "next": next_command(a, "read", "--id", others[0]["id"], as_=False) if others else None},
               "facts": {"since": since, "items": [{k: v for k, v in row.items() if k != "full_key"} for row in _brief_rows(fact_rows)]},
-              "omitted": {"agents": agents_more, "questions": questions_more, "todos": todos_more, "expired_claims": expired_more,
+              "omitted": {"rulings": rulings_more, "agents": agents_more, "questions": questions_more, "todos": todos_more, "expired_claims": expired_more,
                           "unread": unread_more, "pending_others": others_more, "facts": facts_more},
               "next": next_cmd}
     warnings = bus_env_warnings(a.up)
@@ -14557,6 +14708,17 @@ def _brief_show(a, r, limit, next_todo=None, fact_keys=()):
              _brief_line(g["goal"], BRIEF_GOAL_MAX) + ("..." if g["truncated"] else ""))
     else:
         show("goal: none set")
+
+    rl = r["rulings"]["items"]
+    if rl or omitted["rulings"]:
+        show("rulings, newest first ({}):", len(rl) + omitted["rulings"])
+        for m in rl:
+            topic = f" ({_brief_line(m['topic'], 40)})" if m["topic"] else ""
+            show("#{} {}{}: {}", m["id"], _brief_line(m["sender"], 40), topic,
+                 _brief_cut(a, m["body"], BRIEF_BODY_TEXT, m["body_truncated"], "read", "--id", m["id"]), row=True)
+        more(omitted["rulings"])
+    else:
+        show("rulings: none")
 
     agents = r["agents"]["items"]
     if agents or omitted["agents"]:
@@ -14657,12 +14819,14 @@ def _brief_show(a, r, limit, next_todo=None, fact_keys=()):
 
 def register_brief(sub):
     b = sub("brief", help="The agent's first call: the goal, who holds what, open questions, unread handoffs, changed facts",
-            description="The agent's first call, after join and whenever it comes back: what is going on, in one short read. It shows the goal; who is here and what "
-                        "each holds and why; open questions; what is pending between other agents; your unread handoffs and alerts; "
+            description="The agent's first call, after join and whenever it comes back: what is going on, in one short read. It shows the goal; the rulings that still stand; who is here and what "
+                        "each holds and why (agents holding a live claim first); open questions; what is pending between other agents; your unread handoffs and alerts; "
                         "facts changed since your last read; and one next: line with the command to run. It only reads: it never marks anything read, so run inbox afterwards to "
                         "consume your messages. An open question has the kind question, is addressed to you or to everyone, and has no "
                         "answer: no message of kind answer replies to it directly (an answer to a reply to it does not count). Open todos are every todo no done or dropped replies to, whoever owns it: the owner is the named recipient, else the sender. Expired claims, when their holder is still on the roster, are listed with the plain claim command. Pending between others are the same unanswered questions, and handoffs and alerts that the agent they name has not yet read, when they are addressed to another agent by name; next: shows how to read one. Changed facts are those "
                         "updated since the last message you read with inbox (every fact before a first read), except your own and the goal. "
+                        "A ruling is a message of kind decision, or one on topic ruling that is not a question or an answer; a later ruling replaces one it replies to, "
+                        "or one with the same topic when the topic names a subject (not ruling or decision). "
                         "Without --as it shows the bus as a bystander: no unread, and only questions to everyone.")
     limit_arg(b, default=BRIEF_LIMIT, what="rows in each section")
 
@@ -14687,6 +14851,7 @@ CONTRACT["commands"]["brief"] = _cmd(
     "What is going on: the goal, who holds what, open questions, unread handoffs and alerts, changed facts, and the next command",
     _o({"bus": _STR, "me": {"anyOf": [{"type": "null"}, _o({"name": _STR, "joined": _BOOL})]},
         "goal": {"anyOf": [{"type": "null"}, _ref("BriefGoal")]},
+        "rulings": _o({"items": _list(_ref("BriefMessage"))}),
         "agents": _o({"items": _list(_ref("BriefAgent"))}),
         "questions": _o({"items": _list(_ref("BriefMessage"))}),
         "todos": _o({"items": _list(_ref("BriefTodo"))}),
@@ -14694,7 +14859,7 @@ CONTRACT["commands"]["brief"] = _cmd(
         "unread": _o({"total": _INT, "items": _list(_ref("BriefMessage"))}),
         "pending_others": _o({"items": _list(_ref("BriefMessage")), "next": _NSTR}),
         "facts": _o({"since": _NSTR, "items": _list(_ref("BriefFact"))}),
-        "omitted": _o({"agents": _INT, "questions": _INT, "todos": _INT, "expired_claims": _INT, "unread": _INT, "pending_others": _INT, "facts": _INT}),
+        "omitted": _o({"rulings": _INT, "agents": _INT, "questions": _INT, "todos": _INT, "expired_claims": _INT, "unread": _INT, "pending_others": _INT, "facts": _INT}),
         "next": _STR, "warnings": _list(_ref("Warning"))}, optional=("warnings",)))
 
 
@@ -14944,7 +15109,7 @@ def main():
         raise SystemExit(EARLY_COMMANDS[argv[0]](argv[1:]) or 0)  # not sys.exit: test_security TEST 7
     p = build_parser()
     try:
-        a = p.parse_args()
+        a = p.parse_args(alias_command(argv))
     except SystemExit:
         write_help()  # --help / --version, into a reader that may have gone away
         raise
@@ -14971,6 +15136,23 @@ def main():
     if a.json:
         flush_notes()  # only a fully successful command may emit non-error notices
     release_end(notice)
+
+
+def alias_command(argv):
+    """argv with a COMMAND_ALIASES word in the command's place replaced by the command it names (send -> post). The
+    command is the first word that is not a global flag (--as NAME, --up N, --json) or its value."""
+    argv, i = list(argv), 0
+    while i < len(argv):
+        w = argv[i]
+        if w in ("--as", "--up"):
+            i += 2
+        elif w == "--json" or w.startswith(("--as=", "--up=")):
+            i += 1
+        else:
+            if w in COMMAND_ALIASES:
+                argv[i] = COMMAND_ALIASES[w]
+            break
+    return argv
 
 
 def run(a):

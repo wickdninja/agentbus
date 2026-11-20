@@ -99,7 +99,8 @@ PY
 ok "help describes routing, limits, identity, installation, and action-specific usage"
 
 out=$(agentbus lgo 2>&1 >/dev/null || true)
-case "$out" in "agentbus: unknown command 'lgo'. Did you mean log? Commands: join, leave, who, "*", brief, demo. See: agentbus --help") ;; *) fail "unknown command hint: $out" ;; esac
-expect_fail "unknown kind 'fyi'; use one of: note, question, answer, handoff, decision, alert, done, todo, dropped" agentbus --as claude post hi --kind fyi
+case "$out" in "agentbus: error: unknown command 'lgo'. Did you mean log? Commands: join, leave, who, "*", brief, demo. See: agentbus --help") ;; *) fail "unknown command hint: $out" ;; esac
+agentbus --as claude post hi --kind fyi 2>&1 >/dev/null | grep -qF "unknown kind 'fyi': posted as a note. Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped" \
+  || fail "an invented kind does not post as a note with the kinds named"
 expect_fail "claude was active less than a minute ago" agentbus --as claude join
 ok "typos get concise suggestions, invalid kinds echo their value, and a recent join reads naturally"
