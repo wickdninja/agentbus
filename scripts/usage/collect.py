@@ -6,6 +6,18 @@ Every root flag is repeatable and REPLACES that source's defaults. Missing roots
 are empty populations. --work-pattern is a case-sensitive fnmatch rule on cwd
 (or the encoded Claude project directory when cwd is absent); all else is personal.
 --brain-name explicitly identifies coordinators, and is never exported.
+--exclude-pattern (fnmatch on a transcript's file path or any cwd it records) and
+--exclude-entrypoint (Claude entrypoint) drop scripted sessions from every metric;
+sources.excluded_sessions counts them. Cycle 0 used two populations:
+  Claude transcripts report (trial cohort out): --exclude-pattern '*/-*value-run*'
+    '*/-*axtrial*' '*/-*hauntd-lab*' '*/-private-var-folders-*' '*/never-lost/ax-trial*'
+  hooks report (eval out): --exclude-entrypoint sdk-cli --exclude-pattern
+    '/private/var/folders/*' '/var/folders/*' '/tmp/*' '/private/tmp/*'
+Hooks are Claude Code hook records only; the codex-lane "## Agentbus" brief is
+prompt text. Stop runs and wall time come from stop_hook_summary when present;
+Stop timeouts always come from hook_cancelled. An own-claim warning is a held
+warning whose edited file an earlier claim attempt by this session covers, refused
+or not.
 
 Windows are inclusive UTC epoch seconds (ISO 8601 is also accepted on the CLI).
 Omitted bounds come from observed activity, never the clock. Undated events are
@@ -120,7 +132,7 @@ def schema():
     }
     return {
         "schema_version": 1, "cycle": 0, "window": zeros(("start", "end", "explicit_start", "explicit_end")),
-        "sources": zeros(("bus_files", "deduplicated_buses", "bus_read_errors", "missing_bus_tables", "claude_files", "codex_files", "history_files", "input_read_errors", "malformed_records", "duplicate_records", "undated_records", "unresolved_tool_calls", "unparsed_exec_calls")),
+        "sources": zeros(("bus_files", "deduplicated_buses", "bus_read_errors", "missing_bus_tables", "claude_files", "codex_files", "history_files", "excluded_sessions", "input_read_errors", "malformed_records", "duplicate_records", "undated_records", "unresolved_tool_calls", "unparsed_exec_calls")),
         "unavailable": {k: 1 for k in ("historical_roster", "historical_claims", "human_review", "release_metadata", "annotations", "tokenizer", "unobserved_runs", "reference_data", "brain_configuration", "historical_worktrees")},
         "workspaces": {b: copy.deepcopy(bucket) for b in ("personal", "work")},
     }
@@ -170,7 +182,8 @@ def tokenize(command):
 
 
 def is_bus(word):
-    return os.path.basename(word) in ("agentbus", "agentbus.py")
+    # Quotes survive when shlex falls back to split() (e.g. a trailing "\\").
+    return os.path.basename(word.strip("\"'")) in ("agentbus", "agentbus.py")
 
 
 def parse(command):
@@ -453,7 +466,7 @@ class Collector:
             candidates.append((str(first.get("timestamp", "")), path))
         for _, path in sorted(candidates):
             rows = list(self.records(path))
-            session = {"source": source, "id": (source, str(path)), "workspace": str(path.parent), "sub": "subagents" in path.parts, "events": [], "names": set()}
+            session = {"path": str(path), "entry": "", "cwds": set(), "source": source, "id": (source, str(path)), "workspace": str(path.parent), "sub": "subagents" in path.parts, "events": [], "names": set()}
             tools, requests, completions = {}, {}, []
             completed_commands = {}
             for row in rows:
@@ -494,6 +507,9 @@ class Collector:
                     self.seen.add(key)
                 if row.get("cwd"):
                     session["workspace"] = row["cwd"]
+                    session["cwds"].add(row["cwd"])
+                if row.get("entrypoint") and not session["entry"]:
+                    session["entry"] = row["entrypoint"]
                 if source == "claude" and row.get("sessionId") and not session["sub"]:
                     session["id"] = (source, row["sessionId"])
                 if row.get("type") in ("assistant", "user", "session_meta"):
@@ -504,6 +520,7 @@ class Collector:
                 if source == "codex":
                     if row.get("type") == "session_meta":
                         session["workspace"] = payload.get("cwd") or session["workspace"]
+                        session["cwds"].add(session["workspace"])
                         session["id"] = (source, payload.get("id") or str(path))
                     hook = payload.get("hookSpecificOutput", payload)
                     if isinstance(hook, dict) and hook.get("additionalContext"):
@@ -560,9 +577,9 @@ class Collector:
                             for content in payload.get("content", []):
                                 tx = text_of(content)
                                 block = re.search(r"## Agentbus\n.*?(?=\n---|\n## (?!Agentbus)|\Z)", tx, re.S)
-                                if block and payload.get("role") == "user":
-                                    self.injection(session, ts, "SessionStart", block[0])
-                                elif tx.startswith("agentbus:"):
+                                # The codex-lane "## Agentbus" brief is prompt text, not a
+                                # hook injection (cycle 0: zero hook context reached Codex).
+                                if not block and tx.startswith("agentbus:"):
                                     self.injection(session, ts, "other", tx)
                                 match = re.search(r"You are (\S+) on the (\S+) bus", tx)
                                 if match:
@@ -593,7 +610,9 @@ class Collector:
                         ev = tools.get(block.get("tool_use_id"))
                         if ev is not None:
                             ev.update(out=text_of(block.get("content")) if parse(ev["cmd"]) else "", complete=True)
-                    if not results and not row.get("isMeta") and text_of(content).strip():
+                    typed = text_of(content).lstrip()
+                    # A typed prompt: not a task notification or a slash/local command echo.
+                    if not results and not row.get("isMeta") and typed and not typed.startswith(("<task-notification", "<command-", "<local-command")):
                         session["events"].append({"type": "prompt", "ts": ts})
                 elif row.get("type") == "attachment":
                     attachment = row.get("attachment") or {}
@@ -605,12 +624,16 @@ class Collector:
                             if isinstance(tx, str) and tx.startswith("agentbus:"):
                                 self.injection(session, ts, event, tx, attachment.get("hookName", ""))
                                 session["events"][-1]["tool_id"] = attachment.get("toolUseID")
-                    elif typ in ("hook_success", "hook_cancelled", "hook_error", "hook_non_blocking_error", "hook_blocking_error") and ("hook claude" in attachment.get("command", "") or "agentbus:" in attachment.get("stdout", "")) and not (event == "Stop" and stop_summaries):
-                        session["events"].append({"type": "hook_run", "ts": ts, "event": event if event in EVENTS else "other", "timeout": int(typ == "hook_cancelled"), "ms": attachment.get("durationMs") or 0})
+                    elif typ in ("hook_success", "hook_cancelled", "hook_error", "hook_non_blocking_error", "hook_blocking_error") and ("hook claude" in attachment.get("command", "") or "agentbus:" in attachment.get("stdout", "")):
+                        # Stop runs and wall time come from stop_hook_summary when the
+                        # transcript has one; its timeouts still come from hook_cancelled.
+                        summarized = event == "Stop" and stop_summaries
+                        if not summarized or typ == "hook_cancelled":
+                            session["events"].append({"type": "hook_run", "ts": ts, "event": event if event in EVENTS else "other", "run": int(not summarized), "timeout": int(typ == "hook_cancelled"), "ms": 0 if summarized else attachment.get("durationMs") or 0})
                 elif row.get("type") == "system" and row.get("subtype") == "stop_hook_summary":
                     for info in row.get("hookInfos") or []:
                         if isinstance(info, dict) and "hook claude" in info.get("command", ""):
-                            session["events"].append({"type": "hook_run", "ts": ts, "event": "Stop", "timeout": 0, "ms": info.get("durationMs") or 0})
+                            session["events"].append({"type": "hook_run", "ts": ts, "event": "Stop", "run": 1, "timeout": 0, "ms": info.get("durationMs") or 0})
             for completion in completions:
                 ev = requests.get(completion.get("call_id"))
                 if ev is not None:
@@ -730,9 +753,17 @@ class Collector:
             p["answer_minutes_p50"] = quantile(latencies, .5)
             c["cross_worktree_share"] = share(c["cross_worktree_refusals"], c["worktree_classified_refusals"])
 
+    def excluded(self, session):
+        """Scripted populations (cycle 0: eval and trial runs) leave every metric."""
+        places = [session["path"]] + sorted(session["cwds"])
+        return session["entry"] in self.args.exclude_entrypoint or any(fnmatch.fnmatchcase(place, rule) for place in places for rule in self.args.exclude_pattern)
+
     def measure_sessions(self):
         sizes, identities, adopted = {}, {}, set()
         for session in self.sessions:
+            if self.excluded(session):
+                self.result["sources"]["excluded_sessions"] += 1
+                continue
             bucket_name = self.bucket(session["workspace"])
             bucket = self.result["workspaces"][bucket_name]
             events = [e for e in session["events"] if self.within(e.get("ts"))]
@@ -774,7 +805,7 @@ class Collector:
                     if any(c["verb"] == "claims" for c in invocations):
                         self.claim_output(bucket["claims"], ev)
                 elif typ == "hook_run":
-                    bucket["hooks"]["runs"][ev["event"]] += 1
+                    bucket["hooks"]["runs"][ev["event"]] += ev["run"]
                     bucket["hooks"]["timeouts"][ev["event"]] += ev["timeout"]
                     bucket["hooks"]["wall_ms"][ev["event"]] += ev["ms"]
                 elif typ == "injection":
@@ -805,7 +836,9 @@ class Collector:
                         target = next((t for t in events[:i] if t.get("id") == ev.get("tool_id") and ev.get("tool_id")), {})
                         owned = False
                         for tool in events[:i]:
-                            if tool["type"] != "tool" or not tool["complete"] or failure_lines(tool["out"]):
+                            # Cycle 0 rule: an earlier claim attempt under a name this
+                            # session used, refused or not (refusals included 10 of 107).
+                            if tool["type"] != "tool" or not tool["complete"]:
                                 continue
                             for call in parse(tool["cmd"]):
                                 if call["verb"] != "claim" or not call["name"] or call["name"] not in names:
@@ -923,6 +956,8 @@ def arguments(argv=None):
     for flag in ("bus-root", "retired-root", "claude-root", "codex-root", "history"):
         parser.add_argument("--" + flag, action="append", help="repeatable; overrides this source's defaults")
     parser.add_argument("--work-pattern", action="append", default=[], help="fnmatch rule on cwd/project; all other workspaces are personal")
+    parser.add_argument("--exclude-pattern", action="append", default=[], help="fnmatch rule on a transcript's file path or any cwd it records; matching sessions leave every metric")
+    parser.add_argument("--exclude-entrypoint", action="append", default=[], help="Claude entrypoint (e.g. sdk-cli) whose sessions leave every metric")
     parser.add_argument("--history-workspace", default="", help="workspace used to bucket human commands (history has no cwd)")
     parser.add_argument("--brain-name", action="append", default=[])
     parser.add_argument("--start", type=time_arg)

@@ -386,7 +386,73 @@ examples = [
 for command_text, wanted in examples:
     assert [c["verb"] for c in collect.parse(command_text)] == wanted, command_text
 assert collect.parse("AGENTBUS_AGENT=hidden agentbus inbox")[0]["name"] == "hidden"
+# Rule: a trailing "\" makes shlex fall back to split(), which keeps quotes; the
+# quoted alias must still resolve (cycle 0 counted these 9 invocations).
+continued = 'B="agentbus --as x" && \\\n$B post "a b" --kind note && \\\n$B post "c" --kind answer'
+assert [c["verb"] for c in collect.parse(continued)] == ["post", "post"]
 print("PASS: cycle-0 parser handles quotes, heredocs, aliases, wrappers and substitutions")
+
+# Rule: scripted populations leave every metric. --exclude-pattern matches the
+# transcript path or any recorded cwd (fixtures avoid real tmp roots: mktemp is under them); --exclude-entrypoint matches Claude's entrypoint.
+scripted = temp / "scripted"
+def tool_rows(sid, cwd, entry, tid):
+    base = dict(timestamp=ts, sessionId=sid, cwd=cwd, entrypoint=entry)
+    return [dict(base, type="assistant", uuid=tid + "-a", message={"content": [{"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": "agentbus --as a post hi"}}]}),
+            dict(base, type="user", uuid=tid + "-u", message={"content": [{"type": "tool_result", "tool_use_id": tid, "content": "ok"}]})]
+jsonl(scripted / "claude" / "-tmp-value-run-x-proj" / "trial.jsonl", tool_rows("trial", personal_cwd, "cli", "t1"))
+jsonl(scripted / "claude" / "-real" / "eval.jsonl", tool_rows("eval", "/eval-tmp/x", "cli", "t2"))
+jsonl(scripted / "claude" / "-real" / "sdk.jsonl", tool_rows("sdk", personal_cwd, "sdk-cli", "t3"))
+jsonl(scripted / "claude" / "-real" / "kept.jsonl", tool_rows("kept", personal_cwd, "cli", "t4"))
+base_args = ["--cycle", "1", "--bus-root", str(scripted), "--claude-root", str(scripted / "claude"), "--codex-root", str(scripted / "none"), "--history", str(scripted / "none"), "--output", "-"]
+def posts(*extra):
+    out = json.loads(subprocess.check_output([sys.executable, str(script)] + base_args + list(extra), text=True, timeout=15))
+    return out["workspaces"]["personal"]["verbs"]["claude"]["post"]["calls"], out["sources"]["excluded_sessions"]
+assert posts() == (4, 0)
+assert posts("--exclude-pattern", "*value-run*") == (3, 1)
+assert posts("--exclude-pattern", "/eval-tmp/*") == (3, 1)
+assert posts("--exclude-entrypoint", "sdk-cli") == (3, 1)
+assert posts("--exclude-pattern", "*value-run*", "--exclude-pattern", "/eval-tmp/*", "--exclude-entrypoint", "sdk-cli") == (1, 3)
+print("PASS: scripted-run exclusion by transcript path, cwd and entrypoint")
+
+# Rule: the codex-lane "## Agentbus" brief is prompt text, not a hook injection.
+assert sum(data["workspaces"][b]["hooks"]["events"]["SessionStart"]["injections"] for b in ("personal", "work")) == 1  # the Claude one only
+print("PASS: Codex prompt brief is not counted as a SessionStart hook")
+
+# Rule: with a stop_hook_summary, Stop runs come from the summary only, but a
+# hook_cancelled Stop still counts as a timeout (cycle 0: 16 real Stop timeouts).
+# Rule: an own claim is any earlier claim attempt under the session's names, even
+# one the bus refused (cycle 0 counted attempts).
+hooked = temp / "hooked"
+hb = dict(timestamp=ts, sessionId="hooked", cwd=personal_cwd)
+jsonl(hooked / "claude" / "p" / "s" / "subagents" / "lane.jsonl", [
+    dict(hb, type="system", uuid="h1", subtype="stop_hook_summary", hookInfos=[{"command": "agentbus hook claude", "durationMs": 50}]),
+    dict(hb, type="attachment", uuid="h2", attachment={"type": "hook_cancelled", "hookEvent": "Stop", "command": "agentbus hook claude", "durationMs": 6000}),
+    dict(hb, type="assistant", uuid="h3", message={"content": [{"type": "tool_use", "id": "c1", "name": "Bash", "input": {"command": "agentbus --as lane-x claim src/a.py"}}]}),
+    dict(hb, type="user", uuid="h4", message={"content": [{"type": "tool_result", "tool_use_id": "c1", "content": "agentbus: src/a.py is claimed by other until later"}]}),
+    dict(hb, type="assistant", uuid="h5", message={"content": [{"type": "tool_use", "id": "e1", "name": "Edit", "input": {"file_path": "/w/src/a.py"}}]}),
+    dict(hb, type="attachment", uuid="h6", attachment={"type": "hook_additional_context", "hookEvent": "PreToolUse", "toolUseID": "e1", "content": ["agentbus: a claim under a different name covers this file"]}),
+])
+hooks = json.loads(subprocess.check_output([sys.executable, str(script), "--cycle", "1", "--bus-root", str(hooked), "--claude-root", str(hooked / "claude"), "--codex-root", str(hooked / "none"), "--history", str(hooked / "none"), "--output", "-"], text=True, timeout=15))["workspaces"]["personal"]["hooks"]
+assert hooks["runs"]["Stop"] == 1 and hooks["timeouts"]["Stop"] == 1 and hooks["wall_ms"]["Stop"] == 50, hooks["runs"]
+assert hooks["own_claim_warnings"] == 1
+print("PASS: Stop timeouts beside summaries, own-claim warnings count refused attempts")
+
+# Rule: only a typed prompt ends an unread action window; a task notification or a
+# slash-command echo does not (cycle 0 measured 1,033 notes after notifications).
+typed = temp / "typed"
+tb = dict(timestamp=ts, sessionId="typed", cwd=personal_cwd)
+jsonl(typed / "claude" / "p" / "main.jsonl", [
+    dict(tb, type="attachment", uuid="p1", attachment={"type": "hook_additional_context", "hookEvent": "UserPromptSubmit", "content": ["agentbus: 1 unread message"]}),
+    dict(tb, type="user", uuid="p2", message={"content": "<task-notification>lane finished</task-notification>"}),
+    dict(tb, type="user", uuid="p3", message={"content": "<command-name>/clear</command-name>"}),
+    dict(tb, type="assistant", uuid="p4", message={"content": [{"type": "tool_use", "id": "i1", "name": "Bash", "input": {"command": "agentbus --as a inbox"}}]}),
+    dict(tb, type="attachment", uuid="p5", attachment={"type": "hook_additional_context", "hookEvent": "UserPromptSubmit", "content": ["agentbus: 2 unread messages"]}),
+    dict(tb, type="user", uuid="p6", message={"content": "a typed prompt"}),
+    dict(tb, type="assistant", uuid="p7", message={"content": [{"type": "tool_use", "id": "i2", "name": "Bash", "input": {"command": "agentbus --as a inbox"}}]}),
+])
+unread = json.loads(subprocess.check_output([sys.executable, str(script), "--cycle", "1", "--bus-root", str(typed), "--claude-root", str(typed / "claude"), "--codex-root", str(typed / "none"), "--history", str(typed / "none"), "--output", "-"], text=True, timeout=15))["workspaces"]["personal"]["hooks"]["types"]["unread"]
+assert unread["injections"] == 2 and unread["actions"] == 1, unread
+print("PASS: task notifications and command echoes do not end an action window")
 db.close()
 PYTEST
 ok "usage collector fixture suite"
