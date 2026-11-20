@@ -8606,5 +8606,17 @@
     "count": 1,
     "run": "tests/test_conformance.sh",
     "expect": "the gate printed no count of automated and manual ids"
+  },
+  {
+    "name": "releasing several named resources writes one log row",
+    "must": [
+      "P-LOG-1"
+    ],
+    "file": "bin/agentbus",
+    "find": "\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ log\\(con,\\ name,\\ \"release\",\\ \",\\ \"\\.join\\(map\\(str,\\ paths\\)\\)\\)",
+    "replace": "            if raw == held[0][0]:\n                log(con, name, \"release\", \", \".join(str(p) for _, _, ps in held for p in ps))",
+    "count": 1,
+    "run": "tests/test_roster_rules.sh",
+    "expect": "releasing two named resources wrote 1 release rows"
   }
 ]

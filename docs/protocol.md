@@ -300,8 +300,8 @@ expiry; a later claim of the same resource replaces the row.
 ### log
 
 - **P-LOG-1** join (not a duplicate one, P-ID-8), leave (when it changed anything), claim (a new claim or a changed
-  purpose, P-CLAIM-21), a claim auto-released (P-CLAIM-6), a release that let go of anything (one row per release
-  call, naming every resource it let go of, including `release --all`), a `--from` move and a goal change MUST each
+  purpose, P-CLAIM-21), a claim auto-released (P-CLAIM-6), a release that let go of anything (one row per resource named,
+  listing the stored spellings it matched; `release --all` writes one row naming every claim it let go of), a `--from` move and a goal change MUST each
   append a log row, inside the operation's atomic step. post and ctx set write none.
 - **P-LOG-2** log add MUST append one row with the caller's name, a free action word and a detail (gap: not
   idempotent, section 14).

@@ -55,12 +55,17 @@ echo "TEST P-ID-2: control and bidi characters are refused with bad_input in the
 agentbus --as ca join >/dev/null
 n=$(count messages)
 # every character of the list, through one input; every input, through one character
+# the 16 run side by side; each writes its verdict to a file
+k=0
 while IFS= read -r -d '' c; do
-  jfail bad_input "${AB[@]}" --json --as ca post "x" --topic "t${c}x"
+  k=$((k + 1))
+  ( jfail bad_input "${AB[@]}" --json --as ca post "x" --topic "t${c}x" ) >"$T/bidi$k.out" 2>&1 &
 done < <(python3 -c '
 import sys
 for c in "\n\t\x7f\x85\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069":
     sys.stdout.buffer.write(c.encode() + b"\0")')
+wait
+for f in "$T"/bidi*.out; do [ ! -s "$f" ] || fail "$(head -c 300 "$f" | tr '\n' ' ')"; done
 c=$'\n'
 jfail bad_input "${AB[@]}" --json --as "ca${c}x" post "x"
 jfail bad_input "${AB[@]}" --json --as ca post "x" --to "r${c}x"
@@ -226,8 +231,13 @@ r0=$(logs release)
 agentbus --as lg release lg/a.py >/dev/null
 [ "$(logs release)" = $((r0 + 1)) ] || fail "a release wrote no release row"
 [ "$(one "SELECT detail FROM log WHERE action='release' ORDER BY id DESC LIMIT 1")" = "lg/a.py" ] || fail "the release row does not name the resource: $(one "SELECT detail FROM log WHERE action='release' ORDER BY id DESC LIMIT 1")"
+agentbus --as lg claim lg/m1.py lg/m2.py >/dev/null
+r1=$(logs release)
+agentbus --as lg release lg/m1.py lg/m2.py >/dev/null
+[ "$(logs release)" = $((r1 + 2)) ] || fail "releasing two named resources wrote $(( $(logs release) - r1 )) release rows, want 2"
+[ "$(rows "SELECT detail FROM (SELECT detail FROM log WHERE action='release' ORDER BY id DESC LIMIT 2) ORDER BY detail" | tr '\n' ' ')" = "lg/m1.py lg/m2.py " ] || fail "the release rows do not each name their own resource"
 agentbus --as lg release --all >/dev/null
-[ "$(logs release)" = $((r0 + 2)) ] || fail "release --all wrote $(( $(logs release) - r0 - 1 )) rows, want 1"
+[ "$(logs release)" = $((r0 + 4)) ] || fail "release --all wrote $(( $(logs release) - r0 - 1 )) rows, want 1"
 d=$(one "SELECT detail FROM log WHERE action='release' ORDER BY id DESC LIMIT 1")
 case "$d" in *lg/b.py*lg/c.py*) ;; *) fail "the release --all row does not name every resource: $d" ;; esac
 agentbus --as lg claim lg/x.py >/dev/null
