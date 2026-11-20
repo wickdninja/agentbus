@@ -65,10 +65,10 @@ against the oracle exactly (set equality, or equality of the pair for P5).
 | P4 | Todos I may take | ids of takeable todos (D7) |
 | P5 | The latest decision | `(id, subject)` of the decision (D8) with the largest id, or `null` |
 | P6 | Is anyone already working on Y | names of agents that hold a live claim overlapping `src/Y/`, or own an open todo with topic `Y` and are on the roster |
-| P7 | Session: what is on my plate, K=5 times | at each refresh, the triple (P1, P3, P4); scored correct only if all 5 refreshes are |
+| P7 | Session: what is on my plate, K=3 times | at each refresh, the triple (P1, P3, P4); scored correct only if all 3 refreshes are |
 
 P7 runs one session over one copy: refresh 1 at the checkpoint, then 10 further simulated events, refresh 2, and so
-on to refresh 5 (40 interleaved events in all). Its token measure is the sum over the five refreshes.
+on to refresh 3 (20 interleaved events in all). Its token measure is the sum over the three refreshes.
 
 Targets: X in P2 is, with probability 1/2, a file under a path some live claim covers at the checkpoint, else a file
 drawn uniformly from the mix's path pool. Y in P6 is, with probability 1/2, an item someone is working on, else drawn
@@ -365,8 +365,10 @@ result.
 
 ## Scope of Stage 3
 
-Busy mix only; E in {50, 5000}; N in {5, 8}; P1 to P7; three arms; two models; 10 seeds; M = 5 instances per seed.
-That is 2 x 2 x 7 x 3 x 2 x 10 x 5 = 8,400 trials (7,200 single-question, 1,200 P7 sessions). Stage 1 runs the full
+Busy mix only; N = 8; E in {50, 5000}; the primary probes P1, P2, P3, P4 and the session probe P7 (3 refreshes);
+three arms; two models; 10 seeds; M = 5 instances per seed. That is 2 x 5 x 3 x 2 x 10 x 5 = 3,000 trials (2,400
+single-question, 600 P7 sessions). N = 5, P5 and P6 are Stage 1 only: they cost no tokens there, and the Stage 3 grid
+is sized to what the subscriptions can carry with zero overage. Stage 1 runs the full
 grid (2 x 3 x 3 x 7 x 3 x 10 x 10 = 37,800 procedure runs), which costs CPU only.
 
 ## Budget
@@ -383,14 +385,14 @@ earlier results and outputs, has input at most R x P + (C + O) x R(R-1)/2 and ou
 | Trial | Requests R | Input bound | Output bound | Total bound |
 | --- | ---: | ---: | ---: | ---: |
 | P1 to P6 (12 calls + answer) | 13 | 325,000 + 9,500 x 78 = 1,066,000 | 26,000 | 1,092,000 |
-| P7 (5 x 6 calls + 5 answers) | 35 | 875,000 + 9,500 x 595 = 6,527,500 | 70,000 | 6,597,500 |
+| P7 (3 x 6 calls + 3 answers) | 21 | 525,000 + 9,500 x 210 = 2,520,000 | 42,000 | 2,562,000 |
 
 | Run | Trials | Bound (tokens) |
 | --- | ---: | ---: |
-| counted, P1 to P6 | 7,200 | 7,862,400,000 |
-| counted, P7 | 1,200 | 7,917,000,000 |
-| counted total | 8,400 | 15,779,400,000 (about 7.89 billion per model) |
-| sizing pilot (2 seeds, M = 1) | 336 | 631,176,000 |
+| counted, P1 to P4 | 2,400 | 2,620,800,000 |
+| counted, P7 | 600 | 1,537,200,000 |
+| counted total | 3,000 | 4,158,000,000 (about 2.08 billion per model) |
+| sizing pilot (2 seeds, M = 1) | 120 | 166,320,000 |
 
 The bound is loose by design (full ceilings, no caching, maximum outputs); real use is expected to be a small fraction,
 which is what the pilot measures.
@@ -400,7 +402,8 @@ never reported as findings. From it the maintainer commits, in a Change log entr
 numeric ceiling in tokens per model (input, cache write, cache read and output separately), and the per-trial
 reservation (the pilot's largest observed trial of that kind times 2, capped at the analytic bound). If the ceiling
 does not fit the plans' headroom, scope is cut in that same entry, before any counted call, in this order: M from 5 to
-3, then P7's refreshes from 5 to 3; never by dropping an arm or a primary probe.
+3, then the OpenAI model moves to a secondary run after the Anthropic run completes; never by dropping an arm or a
+primary probe.
 
 **Spend ledger and admission.** A persisted JSON Lines ledger (`ctxbench-spend.jsonl` in the run folder) records every
 trial's reservation and its actual usage. Before each trial the runner reserves the per-trial reservation; if spent
