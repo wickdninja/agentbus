@@ -112,10 +112,11 @@ ucache.mkdir(parents=True, mode=0o700)
 (ucache/'release-check.json').chmod(0o600)
 upd = shape(j('update', '--check'), running=str, latest=(str, null), update_available=bool, install=dict, argv=null, commands=(list, null), download=(dict, null), notes=(str, null))
 assert upd['update_available'] is True and upd['latest'] == '0.9.0' and set(upd['install']) == {'method', 'url'}, upd   # a clone here, another method when run installed
-schema = shape(j('schema', keep=True), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
+schema = shape(j('schema', keep=True), contract=int, protocol=str, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 assert schema['contract'] == 1 and 'post' in schema['commands']
-shape(j('schema', 'post', keep=True), contract=int, agentbus=str, commands=dict, objects=dict, error_fields=dict, errors=dict, warnings=dict, common_errors=list, more=str)
-shape(j('schema', 'post', '--full', keep=True), contract=int, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
+assert schema['protocol'] == '1.0' and list(schema)[:2] == ['contract', 'protocol'], list(schema)  # docs/protocol.md P-VER-1
+shape(j('schema', 'post', keep=True), contract=int, protocol=str, agentbus=str, commands=dict, objects=dict, error_fields=dict, errors=dict, warnings=dict, common_errors=list, more=str)
+shape(j('schema', 'post', '--full', keep=True), contract=int, protocol=str, agentbus=str, commands=dict, global_args=list, objects=dict, error_fields=dict, errors=dict, warnings=dict, exit_codes=dict, env=dict)
 listing(j('buses'), level=int, directory=str, exists=bool, copy_version=(str, null), stale=bool)
 assert shape(j('skill'), text=str)['text'].startswith('---\nname: agentbus\n')
 assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbus\n')
