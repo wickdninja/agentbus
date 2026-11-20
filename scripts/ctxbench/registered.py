@@ -557,7 +557,7 @@ class Session:
                 triple.append({int(x.split(" ", 1)[1]) for x in text.split("\n") if x})
             return d, tuple(triple)
         # ledger-raw
-        n_text, n_cut = put("count", self.run.sh(self.copy, "wc -l < COORDINATION.md"))
+        n_text, n_cut = put("count", self.run.sh(self.copy, "awk 'END{print NR}' COORDINATION.md"))
         if n_cut or self.rows is None:  # without the line count the cursor is lost: this and every later refresh
             self.rows = None
             return d, (CANNOT, CANNOT, CANNOT)

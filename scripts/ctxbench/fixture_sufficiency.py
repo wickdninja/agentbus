@@ -315,7 +315,8 @@ def p7(fx):
                 raise SystemExit(f"FAIL: F6 capped {arm} refresh {k + 1}: reader-time defect") from None
             exp = capped_want.get(arm, [(C, C, C)] * 3)[k]
             check(triple == exp, f"F6 capped {arm} refresh {k + 1}: {triple!r}, expected {exp!r}")
-            check(any(c for _, _, c in d.calls), f"F6 capped {arm} refresh {k + 1}: nothing was cut")
+            if k == 0:  # later refreshes are cannot-decide by state (a cut loses rows for good), with or without a cut
+                check(any(c for _, _, c in d.calls), f"F6 capped {arm} refresh 1: nothing was cut")
     print("PASS: F6 capped P7: every arm returns cannot-decide for a cut source and never raises")
 
 

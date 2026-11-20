@@ -302,7 +302,7 @@ genuine decision is expanded:
 2. when step 1 printed line L: `awk -v L=L 'NR==L{p=1; print; next} p && /^- eid=/{exit} p{print}' COORDINATION.md`
 
 **Ledger-raw P7.** The reader keeps a private line cursor and its folded rows, as R3 allows. Each refresh first runs
-`wc -l < COORDINATION.md` (giving n). Refresh 1 then runs `GREP(TODO|DONE|DROPPED|QUESTION|ANSWER|JOIN|LEAVE)`;
+`awk 'END{print NR}' COORDINATION.md` (giving n; awk, not `wc -l`, whose padding differs between BSD and GNU and would change the byte count by platform). Refresh 1 then runs `GREP(TODO|DONE|DROPPED|QUESTION|ANSWER|JOIN|LEAVE)`;
 refresh k > 1 runs `sed -n 'L,np' COORDINATION.md | grep -n -E 'kind=(TODO|DONE|DROPPED|QUESTION|ANSWER|JOIN|LEAVE)( |$)' | cut -d'|' -f1`
 with L one past the previous refresh's n. The bus arms recompute each refresh.
 
@@ -341,6 +341,8 @@ default cap of a common agent harness) followed by the line `[ctxbench: output c
 count what was kept plus the marker.
 
 ## Measures
+
+Stage 1 runs every arm on one machine in one batch. The results file records the OS, the Python version, and the `awk`, `grep`, `sed`, `cut` and `tail` versions; byte counts are compared only within that run, because tool output can differ in whitespace between BSD and GNU tools.
 
 Per instance and arm, uncapped and capped:
 - **Delivered bytes**: UTF-8 bytes of the output of every call, summed after path normalisation. Zero is a normal value
