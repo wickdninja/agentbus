@@ -124,8 +124,10 @@ grep -q "=x" <<<"$o" && fail "a refusal printed a value"
 [ ! -e "$T/x.jsonl" ] || fail "a refused run wrote a results file"
 ok "counted seeds need --counted; a missing oracle and a configured credential are refused"
 
-echo "TEST 3: tiny end-to-end run (dev seed, E=50, N=5, real oracle)"
-envx "$PY" "$STAGE" --seeds 9901 --cells 5:50:busy --probes P1,P7 --instances 1 --cli "${AB[*]}" --out "$T/r.jsonl" > "$T/run.out" 2>&1 || { cat "$T/run.out"; fail "stage1.py failed"; }
+if o=$(envx "$PY" "$STAGE" --seeds 4127 --counted --cells 5:20:busy --out "$T/x.jsonl" 2>&1); then fail "a counted seed ran an off-grid cell"; fi
+echo "$o" | grep -q "not in the grid" || fail "the off-grid refusal for a counted seed did not say why: $o"
+echo "TEST 3: tiny end-to-end run (dev seed, E=30, N=5, real oracle)"
+envx "$PY" "$STAGE" --seeds 9901 --cells 5:30:busy --probes P1,P7 --instances 1 --cli "${AB[*]}" --out "$T/r.jsonl" > "$T/run.out" 2>&1 || { cat "$T/run.out"; fail "stage1.py failed"; }
 "$PY" - "$T/r.jsonl" <<'PY' || fail "results file check failed"
 import json, sys
 rows = [json.loads(x) for x in open(sys.argv[1])]

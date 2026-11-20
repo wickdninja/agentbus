@@ -358,10 +358,15 @@ def merge_results(results, out, acc):
     return defects
 
 
-def parse_cells(text):
+def parse_cells(text, dev_only=False):
+    """Cells as N:E:MIX. Counted seeds take only the registered grid; development seeds (never counted) may use any
+    N >= 2 and E >= 10 so tests can stay small."""
     cells = []
     for part in text.split(","):
         n, e, mix = part.split(":")
+        if dev_only and int(n) >= 2 and int(e) >= 10 and mix in sim.GRID_MIX:
+            cells.append((int(n), int(e), mix))
+            continue
         if int(n) not in sim.GRID_N or int(e) not in sim.GRID_E or mix not in sim.GRID_MIX:
             raise SystemExit(f"stage1: cell {part!r} is not in the grid (N {sim.GRID_N}, E {sim.GRID_E}, mix {sim.GRID_MIX})")
         cells.append((int(n), int(e), mix))
@@ -386,7 +391,8 @@ def parse_args(argv):
     if args.dev and args.seeds:
         raise SystemExit("stage1: --dev and --seeds are exclusive")
     args.seed_list = sim.DEV_SEEDS if args.dev else ([int(x) for x in args.seeds.split(",")] if args.seeds else sim.SEEDS)
-    args.cell_list = parse_cells(args.cells) if args.cells else [(n, e, m) for n in sim.GRID_N for e in sim.GRID_E for m in sim.GRID_MIX]
+    dev_only = all(s in sim.DEV_SEEDS for s in args.seed_list)
+    args.cell_list = parse_cells(args.cells, dev_only) if args.cells else [(n, e, m) for n in sim.GRID_N for e in sim.GRID_E for m in sim.GRID_MIX]
     args.probes = args.probes.split(",") if args.probes else list(sim.PROBES)
     bad = [p for p in args.probes if p not in sim.PROBES]
     if bad:

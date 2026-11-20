@@ -10,7 +10,7 @@ STAGE="$TESTS_DIR/../scripts/ctxbench/stage1.py"
 envx() { env -u AGENTBUS_DB -u AGENTBUS_AGENT -u CODEX_HOME -u CLAUDE_CONFIG_DIR -u CLAUDE_PID -u CLAUDECODE "$@"; }
 
 echo "TEST 1: serial and --jobs 2 give byte-identical results"
-a=(--seeds 9901,9902 --cells 5:50:busy --probes P1 --instances 1 --cli "${AB[*]}")
+a=(--seeds 9901,9902 --cells 5:20:busy --probes P1 --instances 1 --cli "${AB[*]}")
 envx "$PY" "$STAGE" "${a[@]}" --out "$T/serial.jsonl" > "$T/s.out" 2>&1 || { cat "$T/s.out"; fail "serial run failed"; }
 envx "$PY" "$STAGE" "${a[@]}" --jobs 2 --out "$T/par.jsonl" > "$T/p.out" 2>&1 || { cat "$T/p.out"; fail "--jobs 2 run failed"; }
 [ "$(grep -c '"type": "instance"' "$T/serial.jsonl")" = 8 ] || fail "the serial run did not write 2 seeds x 1 probe x 4 arms rows"

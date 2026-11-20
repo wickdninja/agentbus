@@ -212,7 +212,7 @@ of event c, refresh 2 after events c+1 to c+10 at the time of event c+10, refres
 time of event c+20, so refresh times never go backwards. `me`'s own events and scheduled inbox reads inside the window
 happen as the history says. P7's bytes are the sum over its three refreshes.
 
-**Development seeds.** B-M1 builds and debugs on seeds 9901 and 9902 only. Their output is inspected for defects
+**Development seeds.** B-M1 builds and debugs on seeds 9901 and 9902 only. A run whose seeds are all development seeds may use cells off the registered grid (any N >= 2, E >= 10) so tests stay small; counted seeds take only the grid, and the runner refuses otherwise. Their output is inspected for defects
 (crashes, parity, replay checks, oracle-parser disagreements) and never summarised by arm; no comparison between arms
 is computed on any seed before Stage 1's registered run.
 
