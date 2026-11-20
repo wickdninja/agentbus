@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-# The version policy as a table. Five things carry a version: the installed tool (I), a bus folder's copy (C), the
+# The version policy as a table. Six things carry a version: the installed tool (I), a bus folder's copy (C), the
 # bus schema (S), the skill (K) and the hooks (H). Each row builds one combination in a temp HOME with the v0.1.0
 # fixture copy (tests/fixtures/legacy/agentbus-0.1.0) and the current tool, runs the commands and asserts what the
 # code does. Where the epic's wording and the code differ, the row follows the code (listed at the end of the file).

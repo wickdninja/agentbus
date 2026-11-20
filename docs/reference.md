@@ -32,7 +32,7 @@ Claims and messages are per bus; nothing merges across buses.
 
 ## Claims and messages
 
-Follow the [skill](../skills/agentbus/SKILL.md): join, check inbox between steps, claim before editing, release when done, and leave.
+Follow the [protocol](protocol.md): join, check inbox between steps, claim before editing, release when done, and leave.
 
 Every write (`post`, `claim`, `ctx set`, `goal`, `log add`) needs a name on the roster: under a name that has not joined, or has left, it fails with `not_on_roster` and writes nothing. Names are `[A-Za-z0-9._-]{1,40}` (`join` refuses others; a name already on a bus keeps working). `join` takes the name either way, `--as NAME join` or `join NAME`; every other command takes it with `--as` (or `AGENTBUS_AGENT`) only. `post --to` takes one name; a name not on the roster still gets the message, with a `recipient_not_on_roster` warning that lists close matches. `goal` is the shared goal's reserved fact key: set it with `goal TEXT`, not `ctx set`.
 
@@ -57,7 +57,7 @@ Listings default to 20 rows for `inbox` and each section of `status` (its recent
 
 ## Goal
 
-`agentbus --as NAME goal "text"` sets the shared goal; `agentbus goal` shows it as `goal (alice, 2d ago): TEXT`, with who set it and how long ago. `-` reads the text from stdin. `--json` prints `{goal, set_by, set_at}`, or `null` when there is none. Setting the goal it already holds changes nothing and reports `unchanged: true`.
+`agentbus --as NAME goal "text"` sets the shared goal; `agentbus goal` shows it as `goal (alice, 2d ago): TEXT`, with who set it and how long ago. `-` reads the text from stdin. `--json` prints `{goal, set_by, set_at}`; when there is none, each of the three is `null`. Setting the goal it already holds changes nothing and reports `unchanged: true`.
 
 The goal is the fact `goal`, so `ctx history goal` lists every version. `join` and `brief` print `goal (alice, 2d ago): ...` when one is set, and `status` opens with `== goal (alice, 2d ago): ...`. `watch` pins it on the row under its header (🎯, or ◆ without emoji) and leaves it out of Facts.
 
@@ -164,7 +164,7 @@ Other commands return one object. `{...}` lists exact keys; `[X]` is an array of
 | `buses` | `{"items": [BusLevel], "has_more": boolean, "next": string or null}` |
 | `init` | `{"directory": string, "copy": string, "old": string, "new": string, "exclude_added": boolean, "gitignore_rule": boolean, "outer": string or null}` |
 | `upgrade` | `{"directory": string, "old": string, "new": string, "schema_old": integer or null, "schema_new": integer or null, "backup": string or null}, or with --all or --dry-run {"buses": [UpgradeRow], "upgraded": integer, "current": integer, "skipped": integer, "failed": integer, "would_upgrade": integer (--dry-run)}` |
-| `schema` | `the full schema {"contract": integer, "agentbus": string, "commands": object, "global_args": [object], "objects": object, "errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command's commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env and every error it can raise); with --index {"contract": integer, "agentbus": string, "commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}` |
+| `schema` | `the full schema {"contract": integer, "protocol": string, "agentbus": string, "commands": object, "global_args": [object], "objects": object, "errors": object, "warnings": object, "exit_codes": object, "error_fields": object, "env": object}; with COMMAND only that command's commands, objects, error_fields, warnings and the errors of its own (common_errors names the rest; with --full also global_args, exit_codes, env and every error it can raise); with --index {"contract": integer, "protocol": string, "agentbus": string, "commands": {NAME: {"args": [string], "errors": [string]}}, "global_args": [string], "common_errors": [string]}` |
 | `help` | `{"command": string or null, "text": string}` |
 | `completion` | `{"shell": string, "text": string}` |
 | `skill` | `{"text": string}` |

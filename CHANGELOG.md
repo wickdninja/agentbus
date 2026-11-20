@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Which of the [six versioned things](docs/explanation/versions.md) change: the protocol is new, at 1.0 (`"protocol": "1.0"` in `schema --json`); the tool changes (the claims listing) and the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill's last link points at the protocol; the hooks are unchanged.
+
+### Added
+
+- [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.4.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` is unchanged.
+
+### Fixed
+
+- `claims` showed a claim as `held` in the second it expired, while `claim` already let another agent take it and `brief` listed it as expired. A claim is now expired from `expires_at <= now` everywhere.
+- The docs said a crashed holder drops off the roster and the next claim releases its claims. It stays on the roster (only `leave` or the SessionEnd hook removes a name), so its claims hold until they expire or are taken with `claim --from`.
+
 ## 0.4.0 - 2026-11-19
 
 Which of the [five versioned things](docs/explanation/versions.md) change: the tool is 0.4.0; the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill changes (the todo and dropped kinds, and shorter); the hooks keep their commands but say new things (SessionStart counts open todos, the Stop hook ignores a `done` that is a reply), and `agentbus update` refreshes what setup installed; plugin users update the plugin.

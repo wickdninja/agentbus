@@ -51,7 +51,7 @@ sequenceDiagram
 
 ## Claim lifecycle
 
-A claim is held until it is released (release, or the holder runs leave), its TTL expires, or its holder drops off the roster and the next claim auto-releases it; claiming again renews it, and an overlapping claim from a different agent is refused.
+A claim is held until it is released (release, or the holder runs leave), its TTL expires, or another agent takes it with `claim --from HOLDER`; claiming again renews it, and an overlapping claim from a different agent is refused. A holder that crashed stays on the roster (only leave, or the SessionEnd hook, removes a name), so its claims hold until they expire or are taken.
 
 ```mermaid
 stateDiagram-v2
@@ -62,7 +62,7 @@ stateDiagram-v2
     state "refused<br/>another agent claims an overlapping path" as refused
     state "released<br/>release PATH" as released
     state "expired<br/>TTL passes, 120 min default" as expired
-    state "holder gone<br/>off the roster (crashed or stale)" as gone
+    state "taken<br/>another agent runs claim --from HOLDER" as taken
 
     [*] --> free
     free --> held: claim PATH
@@ -72,15 +72,15 @@ stateDiagram-v2
     refused --> held: claim_conflict names the holder
     held --> released
     held --> expired
-    held --> gone
+    held --> taken
     released --> free
     expired --> free
-    gone --> free: next claim auto-releases
+    taken --> held: now the taker's
 ```
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="diagrams/claims-dark.png">
-  <img src="diagrams/claims-light.png" alt="Claim lifecycle: free, then held after claim PATH; held can be renewed, refused to another agent, released, expired, or lost when the holder goes; each path returns to free" width="100%">
+  <img src="diagrams/claims-light.png" alt="Claim lifecycle: free, then held after claim PATH; held can be renewed, refused to another agent, released, expired, or taken by another agent with claim --from; released and expired return to free, taken stays held by the taker" width="100%">
 </picture>
 
 ## Which bus a command uses

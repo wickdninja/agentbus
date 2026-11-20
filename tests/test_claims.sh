@@ -534,4 +534,24 @@ echo "release with no resource and --up names the claims command for that same b
 expect_fail "See: agentbus --as NAME --up 1 claims" agentbus --as me --up 1 release
 expect_fail "See: agentbus --as NAME claims" agentbus --as me release
 ok "the release hint carries --up when it was given"
+echo
+echo "TEST: a claim is expired at the second it expires: claims, brief and claim agree at expires_at == now (docs/protocol.md)"
+# Bug it catches: the claims listing said 'held' when expires_at == now (it tested expires_at < now), while claim
+# already let another agent take it (live only while expires_at > now) and brief listed it as expired.
+# AGENTBUS_TEST_NOW (a test-only hook) starts the tool's clock at that UTC second; a run takes well under a second
+# to read the clock, so now is exactly the expiry.
+export AGENTBUS_DB="$TMP/boundary.db"
+agentbus --as eb1 join >/dev/null; agentbus --as eb2 join >/dev/null
+exp=$(AGENTBUS_TEST_NOW=2030-01-01T10:00:00Z agentbus --as eb1 --json claim edge.py --ttl-min 1 | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["expires_at"])')
+[ "$exp" = 2030-01-01T10:01:00Z ] || fail "the claim did not expire one minute after the pinned clock: $exp"
+AGENTBUS_TEST_NOW="$exp" agentbus --json claims | "$PY" -c 'import json,sys; s={c["resource"]: c["state"] for c in json.load(sys.stdin)["items"]}; assert s == {"edge.py": "expired"}, s' \
+  || fail "claims shows a claim at expires_at == now as held, not expired"
+AGENTBUS_TEST_NOW="$exp" agentbus --json brief | "$PY" -c 'import json,sys; e=[c["resource"] for c in json.load(sys.stdin)["expired_claims"]["items"]]; assert e == ["edge.py"], e' \
+  || fail "brief does not list the claim at expires_at == now as expired"
+before_expiry=2030-01-01T10:00:30Z
+AGENTBUS_TEST_NOW="$before_expiry" agentbus --json claims | "$PY" -c 'import json,sys; s={c["resource"]: c["state"] for c in json.load(sys.stdin)["items"]}; assert s == {"edge.py": "held"}, s' \
+  || fail "claims shows a claim 30 seconds before its expiry as expired"
+AGENTBUS_TEST_NOW="$exp" agentbus --as eb2 --json claim edge.py | "$PY" -c 'import json,sys; r=json.load(sys.stdin); assert r["agent"] == "eb2", r' \
+  || fail "another agent could not claim at expires_at == now"
+ok "at expires_at == now the claim is expired in claims and brief, and another agent may take it"
 echo "All tests passed!"
