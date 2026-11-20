@@ -40,3 +40,7 @@ The two real harnesses' command lines (`harness_argv` in `scripts/agent-eval/run
 ## Record results
 
 Append the table to `docs/evals/<version>.md` with `--record docs/evals/0.2.0.md`. The skill-only arm on v0.1.0 is the baseline; the hooks arm must be no worse than it in every cell.
+
+## ctxbench: do the derived views save context?
+
+A separate study (issue #80): as coordination history grows, how many tokens does an agent spend to learn the state it needs, and how often is it right, reading `brief`, inbox and the other derived views versus the same history kept as a raw Markdown ledger? Its pre-registration is [ctxbench-protocol.md](ctxbench-protocol.md), committed before any code computes a result; changes after that are dated entries in its Change log. `tests/test_ctxbench_fixture.sh` runs the sufficiency fixture (`scripts/ctxbench/fixture_sufficiency.py`) in the suite; it spends no tokens and computes no study numbers.
