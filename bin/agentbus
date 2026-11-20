@@ -4442,6 +4442,10 @@ def read_inputs(a):
         die(f"{GOAL_KEY} is reserved; use: {goal_cmd}", "bad_input", next=goal_cmd, field="key")
     if a.cmd == "join" and not HOOK_NAME_RE.fullmatch(me(a)):
         refuse_invalid_name(me(a), a)
+    if a.cmd == "join" and me(a).lower() in BROADCAST_NAMES:
+        join = next_command(a, "--as", "NAME", "join", as_=False)
+        die(f"'{me(a)}' is not a name an agent can have: a post to it broadcasts to everyone. Pick another, for example: {join}",
+            "bad_input", next=join, field="name")
     if a.cmd == "post":
         me(a)
         a._kind_warnings = []
@@ -12863,11 +12867,18 @@ def hook_pre_tool_use(payload):
     try:
         held, unclaimed = [], []
         peers = con.execute(f"SELECT 1 FROM agents WHERE name NOT IN ({marks}) AND last_seen>=? LIMIT 1", (*mine, hook_cutoff())).fetchone() is not None
+        # The same rule claim follows: a path held by an agent that joined in another git checkout is not warned about (the
+        # files on disk are separate); a scheme name, and a holder in this checkout or in none known, still are. This
+        # session's checkout is its payload cwd, so it is seeded into other_checkout's cache under its name.
+        here = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
+        checkouts = {name: checkout_of(here)}
         for rel, paths in rels:
             own, holders = False, set()
             for where, params in (f for path in paths for f in overlap_filters(path)):
-                holders.update(con.execute(f"SELECT agent, claimed_at FROM claims WHERE ({where}) AND {live} AND agent NOT IN ({marks}) AND {on_roster} "
-                                           "ORDER BY agent, claimed_at LIMIT 20", (*params, t, *mine)).fetchall())
+                holders.update((agent, claimed_at) for agent, claimed_at, resource in
+                               con.execute(f"SELECT agent, claimed_at, resource FROM claims WHERE ({where}) AND {live} AND agent NOT IN ({marks}) AND {on_roster} "
+                                           "ORDER BY agent, claimed_at LIMIT 20", (*params, t, *mine)).fetchall()
+                               if not (is_path(resource) and other_checkout(con, name, agent, checkouts)))
                 if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent IN ({marks}) LIMIT 1",
                                (*params, t, *mine)).fetchone():
                     own = True

@@ -110,6 +110,25 @@ ab --as "$N" claim mine.txt >/dev/null
 SUB mine.txt a1; quiet || fail "Q5: a lane was warned about its parent's claim: rc $RC out $OUT"
 ok "subagent: own claims and the parent's are not warned, siblings are, notes name the lane"
 
+echo "TEST Q6: a held path is not warned about when its holder joined in another git checkout; same checkout and scheme names still are"
+# Bug it catches: claim stopped refusing across worktrees (issue 86 L1) but the PreToolUse hook still told a session in one
+# worktree that a file was held by an agent in the other, and "leave it until the holder answers" was wrong there: separate
+# worktrees never touch the same file on disk.
+newbus q6; forget; N=$(dname "$SID1"); MAIN=$P; WT="$T/q6-wt"
+git -C "$MAIN" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base; git -C "$MAIN" worktree add -q "$WT" -b q6-wt
+HCWD="$WT" SS
+ab --as inmain join --tool t >/dev/null; HCWD="$WT" ab --as inwt join --tool t >/dev/null
+ab --as inmain claim far.txt >/dev/null; ab --as inmain claim "area:far" >/dev/null; ab --as inwt claim near.txt >/dev/null
+q6held="agentbus: a claim under a different name covers this file. See who and why: agentbus --as $N claims. In a shared checkout, leave it until the holder answers or releases it; if your user or a handoff gave you its work, agentbus --as $N claim PATH --from HOLDER. On a separate branch, post what you are touching."
+q6pre() { HCWD="$1" hook PreToolUse "$(HCWD="$1" payload pre_tool_use_write session_id="\"$SID1\"" tool_input.file_path="\"$1/$2\"")"; }
+q6pre "$WT" far.txt; quiet || fail "Q6: a file held by an agent in the other worktree was warned about: rc $RC out $OUT err $ERR"
+q6pre "$WT" near.txt; [ "$(text_of)" = "$q6held" ] || fail "Q6: a file held by an agent in the same worktree was not warned about: rc $RC out $OUT err $ERR"
+forget; q6pre "$MAIN" near.txt; quiet || fail "Q6: the main checkout was warned about a file held in the worktree: rc $RC out $OUT err $ERR"
+forget; q6pre "$MAIN" far.txt; [ "$(text_of)" = "$q6held" ] || fail "Q6: a file held by an agent in the same (main) checkout was not warned about: rc $RC out $OUT err $ERR"
+forget; q6pre "$WT" "area:far"; [ "$(text_of)" = "$q6held" ] || fail "Q6: a scheme name held by another checkout's agent was not warned about: rc $RC out $OUT err $ERR"
+ok "held path: silent across checkouts, warned in the same checkout, scheme names always"
+
+echo
 echo "TEST 99: every output this file made is built from the documented templates"
 check_templates 6
 ok "every output is a template with digits, kinds and the agent's own name only"

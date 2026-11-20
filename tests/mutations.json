@@ -6118,5 +6118,23 @@
     "count": 1,
     "run": "tests/test_brief.sh",
     "expect": "brief rulings are"
+  },
+  {
+    "name": "hook warns about a path held in another checkout",
+    "file": "bin/agentbus",
+    "find": "                               if not \\(is_path\\(resource\\) and other_checkout\\(con, name, agent, checkouts\\)\\)\\)\\n",
+    "replace": "                               )\\n",
+    "count": 1,
+    "run": "tests/test_hooks_claude_quiet.sh",
+    "expect": "Q6: a file held by an agent in the other worktree was warned about"
+  },
+  {
+    "name": "join accepts the broadcast names",
+    "file": "bin/agentbus",
+    "find": "    if a\\.cmd == \"join\" and me\\(a\\)\\.lower\\(\\) in BROADCAST_NAMES:\\n",
+    "replace": "    if a.cmd == \"join\" and False:\\n",
+    "count": 1,
+    "run": "tests/test_post_forgiving.sh",
+    "expect": "was accepted"
   }
 ]

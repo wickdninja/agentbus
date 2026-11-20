@@ -42,6 +42,22 @@ n=$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("
 [ "$n" = 0 ] || fail "$n messages were stored for a recipient named all or everyone"
 ok "all and everyone mean *"
 
+echo "TEST: join refuses the names a post to which broadcasts (all, everyone, any case)"
+# Bug it catches: --to all now broadcasts, so an agent that joined as "all" could never be written to and every message
+# to it went to everyone.
+for nm in all everyone ALL Everyone; do
+  rc=0; agentbus --as "$nm" join >"$T/out" 2>"$T/err" || rc=$?
+  [ "$rc" != 0 ] || fail "join --as $nm was accepted"
+  [ "$(wc -l <"$T/err" | tr -d ' ')" = 1 ] || fail "join --as $nm: the refusal is not one line: $(cat "$T/err")"
+  grep -qF "a post to it broadcasts to everyone" "$T/err" || fail "join --as $nm: no reason: $(cat "$T/err")"
+  agentbus --as "$nm" --json join >/dev/null 2>"$T/jerr" || true   # the --json error is on stderr, and join exits 2
+  code=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["error"]["code"])' "$T/jerr") || fail "join --as $nm --json: no error object"
+  [ "$code" = bad_input ] || fail "join --as $nm: code $code, not bad_input"
+done
+n=$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("SELECT COUNT(*) FROM agents WHERE lower(name) IN (\"all\", \"everyone\")").fetchone()[0])' "$AGENTBUS_DB")
+[ "$n" = 0 ] || fail "$n agents joined as all or everyone"
+ok "join refuses all and everyone with bad_input and one line"
+
 echo "TEST: a name not on the roster still gets the message, with its warning (P-MSG-5)"
 out=$(agentbus --as lane post "for later" --to successor 2>"$T/err") || fail "post to a future name failed"
 case "$out" in "posted #"*" to successor [note]") ;; *) fail "post to a future name: $out" ;; esac
