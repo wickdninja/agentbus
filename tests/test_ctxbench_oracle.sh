@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Independent semantic fixtures only. No CLI or registered parser is run.
+# ctxbench oracle (docs/evals/ctxbench-protocol.md, Oracle): the independent oracle against hand-derived fixtures only.
+# No CLI and no registered parser runs here; the oracle is written from the definitions D1 to D8 alone.
 set -euo pipefail
-cd "$(dirname "$0")/.."
-PYTHONDONTWRITEBYTECODE=1 python3 scripts/ctxbench/oracle_fixtures.py
+source "$(dirname "$0")/lib.sh"
+cd "$TESTS_DIR/.."
+PYTHONDONTWRITEBYTECODE=1 "$PY" scripts/ctxbench/oracle_fixtures.py || fail "the oracle failed its hand-derived fixtures"
+ok "the oracle passes every hand-derived fixture"
+echo "All ctxbench oracle tests passed"
