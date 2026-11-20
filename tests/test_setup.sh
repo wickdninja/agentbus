@@ -344,7 +344,7 @@ reset
 # the stop hint repeats the whole command, scope and flags included
 AGENTBUS_TEST_SETUP_FAIL=2 run_setup codex --scope project
 [ "$RC" = 1 ] && grep -q "stopped\. Written before this: .*\. Fix that and run again: agentbus setup codex --scope project\$" <<<"$OUT" || fail "the stop hint of the report drops the scope: exit $RC: $OUT"
-grep -q "^agentbus: setup codex stopped: .*\. Fix that and run again: agentbus setup codex --scope project\." <<<"$OUT" || fail "the stop hint of the error drops the scope: $OUT"
+grep -q "^agentbus: error: setup codex stopped: .*\. Fix that and run again: agentbus setup codex --scope project\." <<<"$OUT" || fail "the stop hint of the error drops the scope: $OUT"
 reset
 AGENTBUS_TEST_SETUP_FAIL=1 run_setup claude
 [ "$RC" = 1 ] && grep -qF "Written before this: nothing." <<<"$OUT" && [ ! -e "$SKILL_DIR" ] || fail "failure at piece 1: $RC $OUT"
