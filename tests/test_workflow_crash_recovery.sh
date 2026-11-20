@@ -26,18 +26,17 @@ say "claimed src/a.py <left>" agentbus --as w1 claim src/a.py --purpose "edit a"
 say "claimed lib/ <left>" agentbus --as w1 claim lib/ --purpose "edit lib"
 say "claimed docs/x.md <left>" agentbus --as w2 claim docs/x.md --purpose "docs"
 say "posted #1 to w1 [handoff]" agentbus --as boss post "please finish b" --to w1 --kind handoff
-refuse 1 "agentbus: src/a.py is claimed by w1 since <TS> until <TS> (purpose: \"edit a\"). In a shared checkout, leave it until w1 answers or releases it; ask: agentbus --as boss post QUESTION --to w1 --kind question. On a separate branch, post what you are touching; the merge decides. w1 was last seen <ago>. If your user or a handoff gave you w1's work, take it: agentbus --as boss claim src/a.py --from w1" \
+refuse 1 "agentbus: refused: src/a.py is claimed by w1 since <TS> until <TS> (purpose: \"edit a\"). In a shared checkout, leave it until w1 answers or releases it; ask: agentbus --as boss post QUESTION --to w1 --kind question. On a separate branch, post what you are touching; the merge decides. w1 was last seen <ago>. If your user or a handoff gave you w1's work, take it: agentbus --as boss claim src/a.py --from w1" \
   agentbus --as boss claim src/a.py
 ok "w1 holds src/a.py and the boss is refused while the claim is live"
 
 echo "STEP 2: w1 disappears; its claim on src/a.py runs out"
 sql_write "UPDATE claims SET expires_at='2020-01-01T00:00:00Z' WHERE resource='src/a.py'"
-is_equal "the listing says expired" "docs/x.md w2 held
-lib/ w1 held
-src/a.py w1 expired" "$(claims_state)"
+is_equal "the listing leaves the expired claim out (live claims only, issue 86 T2)" "docs/x.md w2 held
+lib/ w1 held" "$(claims_state)"
 say "claimed src/a.py <left>" agentbus --as boss claim src/a.py --purpose "take over a"
 is_equal "the boss holds src/a.py now" "src/a.py|boss|take over a" "$(sql "SELECT resource, agent, purpose FROM claims WHERE resource='src/a.py'")"
-ok "an expired claim is reported as expired and does not block"
+ok "an expired claim leaves the listing and does not block"
 
 echo "STEP 3: w2's roster entry goes away while its claim is still live; the next overlapping claim releases it"
 sql_write "DELETE FROM agents WHERE name='w2'"
@@ -53,7 +52,7 @@ is_equal "the release is in the log" "docs/x.md auto-released from w2 (not on ro
 ok "auto-release listed in the claim result and the log"
 
 echo "STEP 4: w1 comes back: a live-looking name needs --takeover, and its mail is still there"
-refuse 1 "agentbus: w1 was active <ago> ago and may be another live session. Pick your own name (run: agentbus --as w1-2 join), or pass --takeover only if that session is you." \
+refuse 1 "agentbus: refused: w1 was active <ago> ago and may be another live session. Pick your own name (run: agentbus --as w1-2 join), or pass --takeover only if that session is you." \
   agentbus --as w1 join --tool codex
 is_equal "w1 is still on the roster after the refusal" "w1" "$(sql "SELECT name FROM agents WHERE name='w1'")"
 say "joined as w1 on $BUSLINE" agentbus --as w1 join --tool codex --takeover
