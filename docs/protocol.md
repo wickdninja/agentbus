@@ -59,7 +59,7 @@ Terms:
 | claims | list claims with their state | P-CLAIM-8 |
 | log | list audit rows; add one | P-LOG-1 to P-LOG-3 |
 
-`--request-id` is a flag, not an operation: it makes a retried post or join return the first result (P-MSG-8,
+`--request-id` is a flag, not an operation: it makes a retried post return the first result and a retried join return a result built from current state (P-MSG-8,
 P-ID-8), and every other write ignores it.
 
 What closes each kind of message:
@@ -268,8 +268,10 @@ section 11; the CLI's exit codes for them live in the binding.
   post an `alert` with topic `claim` from the taker to that holder. The holder stays on the roster.
 - **P-CLAIM-16** Claims MUST be advisory: no operation refuses an edit, a post or a read because of a claim.
 - **P-CLAIM-19** Opening a bus for writing MUST first rewrite stored path claims that are not in normalised form
-  (rows another tool wrote), in its own atomic step before the operation: when two rows become one, the later expiry
-  is kept, and every change is logged. This step stands even when the operation is then refused.
+  (rows another tool wrote), up to 500 rows per opening, in its own atomic step before the operation: when two rows
+  become one, the later expiry is kept, and every change is logged. This step stands even when the operation is then
+  refused. Rows past the 500th wait for a later opening, and until then an unnormalised spelling does not block an
+  overlapping claim (gap, section 14).
 - **P-CLAIM-20** A claim's `expires_at` MUST be computed from now plus the TTL when the operation starts, before it
   waits for the write lock; the live test inside the atomic step uses a fresh now. A long wait shortens the claim.
 - **P-CLAIM-21** Reclaiming one's own claim with the same purpose MUST write no log row, whether the old claim was live
@@ -298,8 +300,9 @@ expiry; a later claim of the same resource replaces the row.
 ### log
 
 - **P-LOG-1** join (not a duplicate one, P-ID-8), leave (when it changed anything), claim (a new claim or a changed
-  purpose, P-CLAIM-21), a claim auto-released (P-CLAIM-6), each resource release let go of, a `--from` move and a
-  goal change MUST each append a log row, inside the operation's atomic step. post and ctx set write none.
+  purpose, P-CLAIM-21), a claim auto-released (P-CLAIM-6), a release that let go of anything (one row per release
+  call, naming every resource it let go of, including `release --all`), a `--from` move and a goal change MUST each
+  append a log row, inside the operation's atomic step. post and ctx set write none.
 - **P-LOG-2** log add MUST append one row with the caller's name, a free action word and a detail (gap: not
   idempotent, section 14).
 - **P-LOG-3** A refused claim batch SHOULD write one `claim_refused` log row. It is best effort: a separate atomic step
@@ -360,8 +363,9 @@ expire or are taken with `--from`.
   them delivers the same messages again. Consumers dedupe by message id.
 - **P-ATOM-3** All times one operation writes MUST come from one clock, the writing process's, at one-second
   resolution in UTC (section 14, clock).
-- Reads (`read`, `brief`, `wait`, `watch`, `who`, `claims`, `ctx get`, `log show`) change no data other than the
-  caller's `last_seen`.
+- Reads (`read`, `brief`, `wait`, `watch`, `who`, `claims`, `ctx get`, `log show`) change no messages, cursors,
+  facts or roster rows other than the caller's `last_seen`. A read that opens the bus for writing still runs the
+  normalisation step of P-CLAIM-19, which may rewrite stored claim spellings and add log rows.
 
 ## 7. Limits
 
@@ -498,6 +502,9 @@ Current behavior that 1.0 documents and a later minor version may change.
 - **Crashed owners' todos are never takeable.** P-VIEW-5 needs a `leave` row; a crashed owner never wrote one.
   [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **`claim --from` names skip the identifier check** (P-ID-2): a holder name with a newline is accepted. [#83](https://github.com/wickdninja/agentbus/issues/83)
+- **Normalisation backlog** (P-CLAIM-19): an opening rewrites at most 500 unnormalised claim rows, so with more
+  stored, a later spelling such as `./legacy//500` does not block a claim on `legacy/500` until a later opening
+  reaches it. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Normalised paths can become scheme names** (P-CLAIM-1): `./area:x/` is stored as `area:x/` and then compared
   exactly. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **No length limit** on a recipient, a topic, a fact key or a log action. [#83](https://github.com/wickdninja/agentbus/issues/83)
