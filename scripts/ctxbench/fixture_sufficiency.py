@@ -291,7 +291,7 @@ def p7(fx):
                     break
                 except R.ReplayDefect:
                     if attempt == 2 or arm == "bus-default":  # a consuming refresh cannot be retried in place
-                        raise SystemExit(f"FAIL: F6 {arm} refresh {k + 1}: reader-time defect")
+                        raise SystemExit(f"FAIL: F6 {arm} refresh {k + 1}: reader-time defect") from None
             exp = (want_default if arm == "bus-default" else want)[k]
             check(triple == exp, f"F6 {arm} refresh {k + 1}: {triple!r}, expected {exp!r}")
     print("PASS: F6 P7 three refreshes, me acting in the windows, every arm's session parser")
@@ -312,7 +312,7 @@ def p7(fx):
             try:
                 d, triple = s.refresh(now, cap=3)
             except R.ReplayDefect:
-                raise SystemExit(f"FAIL: F6 capped {arm} refresh {k + 1}: reader-time defect")
+                raise SystemExit(f"FAIL: F6 capped {arm} refresh {k + 1}: reader-time defect") from None
             exp = capped_want.get(arm, [(C, C, C)] * 3)[k]
             check(triple == exp, f"F6 capped {arm} refresh {k + 1}: {triple!r}, expected {exp!r}")
             check(any(c for _, _, c in d.calls), f"F6 capped {arm} refresh {k + 1}: nothing was cut")
