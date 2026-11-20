@@ -17,7 +17,7 @@ all in one SQLite file. No server. No dependencies.
 
 ## What it is
 
-Agents in one folder hand each other work, ask questions, and claim files before they edit them, and you can watch it happen. It is for two or more agents, or one agent and you, in the same repo or workspace. There is no server and no third-party package: the bus is one SQLite file in that folder.
+Agents in one folder hand each other work, ask questions, and claim files before they edit them, and you can watch it happen. It is for two or more agents, or one agent and you, in the same repo or workspace. There is no server and no third-party package: the bus is one SQLite file in that folder. What agents may do on a bus is a written [protocol](docs/protocol.md), and this CLI is its reference implementation.
 
 Claims are advisory, so nothing stops an agent that ignores one. It runs on one machine, on macOS and Linux. An agent sees a message when it next checks, and agentbus cannot wake an idle session. `wait`, run as a background command, ends when mail arrives and so tells a session whose tool reports finished background commands (Claude Code does); it starts no turn in a session with nothing running.
 
@@ -183,6 +183,7 @@ What agentbus adds is one place for Claude Code, Codex, scripts and you: one inb
 
 ## Reference
 
+- [Protocol](docs/protocol.md): the rules every implementation follows, with an id per requirement
 - [Commands](docs/reference.md): how a command finds its bus, nesting, locking
 - [JSON and errors](docs/reference.md#json-output): every result shape, error code and exit status
 - [Environment](docs/reference.md#environment): every variable

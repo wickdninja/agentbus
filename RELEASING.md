@@ -10,7 +10,7 @@ Tags are `vX.Y.Z` or `vX.Y.ZrcN`, nothing else (no `a`, `b`, `dev`). A release c
    - **Release candidate `vX.Y.ZrcN`:**
      - `__version__` in `bin/agentbus` becomes `X.Y.ZrcN`;
      - `.claude-plugin/plugin.json` version is `X.Y.ZrcN` and the `ref` in `.claude-plugin/marketplace.json` is the rc tag (a git source, never a `./` path, never `main`);
-     - the `CHANGELOG.md` heading is `## X.Y.Z - YYYY-MM-DD` (the final version, with the section stating which of the five versioned things changed: tool, copy, schema, skill, hooks);
+     - the `CHANGELOG.md` heading is `## X.Y.Z - YYYY-MM-DD` (the final version, with the section stating which of the six versioned things changed: tool, copy, schema, skill, hooks, protocol);
      - the skill hashes: `python3 scripts/embed_skill.py --release`;
      - **no pin change and no `tests/released_commands.txt` line:** the README and `docs/` keep pinning the last final release, which must already exist as a git tag (`release_check.py` fails if it does not).
    - **Final tag `vX.Y.Z`:** one commit that moves all of these together, merged before the tag is made on it:

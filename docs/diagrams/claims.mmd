@@ -6,7 +6,7 @@ stateDiagram-v2
     state "refused<br/>another agent claims an overlapping path" as refused
     state "released<br/>release PATH" as released
     state "expired<br/>TTL passes, 120 min default" as expired
-    state "holder gone<br/>off the roster (crashed or stale)" as gone
+    state "taken<br/>another agent runs claim --from HOLDER" as taken
 
     [*] --> free
     free --> held: claim PATH
@@ -16,7 +16,7 @@ stateDiagram-v2
     refused --> held: claim_conflict names the holder
     held --> released
     held --> expired
-    held --> gone
+    held --> taken
     released --> free
     expired --> free
-    gone --> free: next claim auto-releases
+    taken --> held: now the taker's

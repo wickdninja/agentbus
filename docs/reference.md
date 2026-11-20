@@ -32,7 +32,7 @@ Claims and messages are per bus; nothing merges across buses.
 
 ## Claims and messages
 
-Follow the [skill](../skills/agentbus/SKILL.md): join, check inbox between steps, claim before editing, release when done, and leave.
+Follow the [protocol](protocol.md): join, check inbox between steps, claim before editing, release when done, and leave.
 
 Every write (`post`, `claim`, `ctx set`, `goal`, `log add`) needs a name on the roster: under a name that has not joined, or has left, it fails with `not_on_roster` and writes nothing. Names are `[A-Za-z0-9._-]{1,40}` (`join` refuses others; a name already on a bus keeps working). `join` takes the name either way, `--as NAME join` or `join NAME`; every other command takes it with `--as` (or `AGENTBUS_AGENT`) only. `post --to` takes one name; a name not on the roster still gets the message, with a `recipient_not_on_roster` warning that lists close matches. `goal` is the shared goal's reserved fact key: set it with `goal TEXT`, not `ctx set`.
 

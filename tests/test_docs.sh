@@ -394,4 +394,61 @@ for name in files:
 print(f'Checked {len(checked)} documented command forms against --help')
 PY
 ok "documented commands, actions and flags exist; README links the executable demo; tracked text has no em-dashes"
+
+# docs/protocol.md: every requirement (a list item, table row or paragraph with MUST, MUST NOT, SHALL, SHALL NOT or
+# REQUIRED) carries a bold id **P-AREA-N**, no id is defined twice, every plain P-AREA-N it mentions is defined, and every behavioral pin (a line starting - **B-N**) ends
+# in "Skill: PHRASE" with PHRASE a line of tests/skill_required.txt. Keywords inside "quotes" or `code` are not counted
+# (the BCP 14 boilerplate). Bug it catches: a requirement added without an id has no test or mutation to name it.
+SPEC_LINT="$T/spec_lint.py"
+cat >"$SPEC_LINT" <<'PY'
+import re, sys
+spec_path, pins_path = sys.argv[1:]
+text = open(spec_path, encoding="utf-8").read()
+pins = {ln.split("|", 2)[2] for ln in open(pins_path, encoding="utf-8").read().splitlines() if ln and not ln.startswith("#")}
+KEY = re.compile(r"\b(?:MUST NOT|SHALL NOT|MUST|SHALL|REQUIRED)\b")
+DEF = re.compile(r"\*\*(P-[A-Z]+-[0-9]+)\*\*")
+# Units: a list item with its indented continuation lines, a table row, or a paragraph; code blocks are skipped.
+units, fence = [], False
+for n, line in enumerate(text.splitlines(), 1):
+    if line.startswith("```"):
+        fence = not fence
+        continue
+    if fence or not line.strip():
+        units.append(None)
+        continue
+    cont = units and units[-1] is not None and (line.startswith("  ") or not re.match(r"(- |\| |#)", line)) and not units[-1][1].startswith(("|", "#"))
+    if cont:
+        units[-1] = (units[-1][0], units[-1][1] + " " + line.strip())
+    else:
+        units.append((n, line))
+problems, defined = [], {}
+for n, line in [u for u in units if u]:
+    bare = re.sub(r'`[^`]*`|"[^"]*"', "", line)
+    ids = DEF.findall(line)
+    for i in ids:
+        if i in defined:
+            problems.append(f"line {n}: {i} is already defined on line {defined[i]}")
+        defined.setdefault(i, n)
+    if KEY.search(bare) and not ids:
+        problems.append(f"line {n}: a requirement with no id: {line.strip()[:100]}")
+    b = re.match(r"- \*\*B-[0-9]+\*\* .* Skill: (.+)$", line)
+    if line.startswith("- **B-") and (not b or b.group(1) not in pins):
+        problems.append(f"line {n}: a behavioral pin whose Skill: phrase is not in tests/skill_required.txt: {line.strip()[:100]}")
+for m in re.finditer(r"(?<![*\w-])(P-[A-Z]+-[0-9]+)\b", text):
+    if m.group(1) not in defined:
+        problems.append(f"{m.group(1)} is mentioned but never defined")
+if not defined:
+    problems.append("no requirement ids at all")
+if problems:
+    sys.exit("FAIL: docs/protocol.md: " + "; ".join(problems))
+print(f"{len(defined)} requirement ids")
+PY
+SPEC="$(dirname "$BIN")/../docs/protocol.md"; PINS="$TESTS_DIR/skill_required.txt"
+"$PY" "$SPEC_LINT" "$SPEC" "$PINS" || fail "the MUST-id lint failed on docs/protocol.md (above)"
+# Negative controls: an id-less MUST, a duplicated id, an undefined reference and a pin the skill does not keep each fail.
+for bad in '- A reader MUST do this.' '- **P-ID-1** A copy MUST clash.' 'See P-NOPE-9.' '- **B-99** Agents SHOULD dance. Skill: Dance.'; do
+  { cat "$SPEC"; printf '%s\n' "$bad"; } >"$T/spec_bad.md"
+  if "$PY" "$SPEC_LINT" "$T/spec_bad.md" "$PINS" >/dev/null 2>&1; then fail "the MUST-id lint passed a planted line: $bad"; fi
+done
+ok "docs/protocol.md: every requirement has a unique id, references resolve, behavioral pins are skill sentences"
 all_passed "All docs tests passed"
