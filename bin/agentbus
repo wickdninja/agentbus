@@ -599,8 +599,8 @@ CONTRACT = {
                            "fix": _NSTR, "hint": _NSTR, "scope": {"type": "string", "enum": ["user", "project"]}},
                            optional=("scope",)),
         "Warning": _o({"code": _STR, "name": _STR, "did_you_mean": _list(_STR), "roster": _list(_STR), "roster_total": _INT,
-                       "agentbus_db": _STR, "discovered": _STR},
-                      optional=("name", "did_you_mean", "roster", "roster_total", "agentbus_db", "discovered")),
+                       "agentbus_db": _STR, "discovered": _STR, "kind": _STR, "kinds": _list(_STR)},
+                      optional=("name", "did_you_mean", "roster", "roster_total", "agentbus_db", "discovered", "kind", "kinds")),
         "Envelope": _env({}),
     },
     # A warning is not an error: the command succeeded, and its result carries "warnings": [Warning].
@@ -610,6 +610,9 @@ CONTRACT = {
                                                "did_you_mean lists the closest roster names (at most 3, possibly none). roster lists "
                                                "the agents that have joined, by name (the 10 most recently seen at most); roster_total is how many there are.",
                                     "action": "If the name is a typo, post again to a name in did_you_mean or roster. The first message waits for the typo."},
+        "unknown_kind": {"fields": ["kind", "kinds"], "commands": ["post"],
+                         "meaning": "--kind named no kind agentbus has, so the message was posted as a note. kind is the word given; kinds lists the kinds.",
+                         "action": "Nothing to repeat: the message is delivered. Use one of kinds next time (decision for a ruling, alert for a problem)."},
         "bus_env_mismatch": {"fields": ["agentbus_db", "discovered"], "commands": ["join", "brief"],
                              "meaning": "AGENTBUS_DB names a bus other than the one this folder finds (the nearest .agentbus above it, or the main "
                                         "checkout's for a linked worktree). The command used AGENTBUS_DB. Given only when discovery finds a bus "
@@ -4416,8 +4419,13 @@ def read_inputs(a):
         refuse_invalid_name(me(a), a)
     if a.cmd == "post":
         me(a)
+        a._kind_warnings = []
         if a.kind not in KINDS:
-            die(f"unknown kind '{a.kind}'; use one of: {', '.join(KINDS)}", "bad_input")
+            # an invented kind posts as a note (issue 86): refusing it lost the lane's message
+            a._kind_warnings = [{"code": "unknown_kind", "kind": a.kind, "kinds": list(KINDS)}]
+            a.kind = "note"
+        if a.to.strip().lower() in BROADCAST_NAMES:
+            a.to = "*"
         if a.kind == "dropped" and a.reply_to is None:
             brief_cmd = next_command(a, "brief", "--limit", "-1")
             die("dropped closes a todo: give its id with --reply-to ID. The open todos are listed by: " + brief_cmd,
@@ -4439,9 +4447,19 @@ def read_inputs(a):
                             'or pipe text to goal -.')
 
 
+BROADCAST_NAMES = ("all", "everyone")  # --to all or everyone (any case) means every agent, as no --to does (issue 86)
+COMMAND_ALIASES = {"send": "post"}    # a word agents reach for, run as the command it names
+
+
+def kind_warning_text(w):
+    return f"unknown kind '{w['kind']}': posted as a note. Kinds: {', '.join(w['kinds'])}"
+
+
 def cmd_post(con, a):
     name = me(a)
     body = a._body
+    for w in a._kind_warnings:
+        note(kind_warning_text(w))
     with immediate(con):
         require_joined(con, name, a)
         if a.request_id is not None:
@@ -4453,7 +4471,7 @@ def cmd_post(con, a):
                 warnings = roster_warnings(con, a.to)
                 for w in warnings:
                     note(warn_text(w, a))
-                dup = {"id": old['id'], "duplicate": True, "warnings": warnings}
+                dup = {"id": old['id'], "duplicate": True, "warnings": a._kind_warnings + warnings}
                 if a.kind in TODO_CLOSERS and a.reply_to is not None:
                     dup["closed"] = closed_by(con, old['id'], a.reply_to)  # what the first response said
                 emit(a, dup,
@@ -4470,7 +4488,7 @@ def cmd_post(con, a):
         note(warn_text(w, a))
     if said:
         note(said)
-    result = {"id": cur.lastrowid, "warnings": warnings}
+    result = {"id": cur.lastrowid, "warnings": a._kind_warnings + warnings}
     if a.kind in TODO_CLOSERS and a.reply_to is not None:
         result["closed"] = closed
     emit(a, result, "posted #{} to {} [{}]", cur.lastrowid, "everyone" if a.to == "*" else a.to, a.kind)
@@ -5867,9 +5885,9 @@ def register_post(sub):
     po = sub("post", help="Send a message (body '-' reads stdin)")
     po.add_argument("body", nargs="*", help="The message. Several words are joined; - reads it from stdin.")
     po.add_argument("--to", default="*", metavar="NAME", action=OneName,
-                    help="Deliver to this one agent name; omitted means broadcast. A name not on the roster still gets the message, with a warning.")
+                    help="Deliver to this one agent name; omitted, all or everyone means broadcast. A name not on the roster still gets the message, with a warning.")
     po.add_argument("--kind", default="note",
-                    help="Message kind: note, question, answer, handoff, decision, alert, done, todo, dropped. Default: note.")
+                    help="Message kind: note, question, answer, handoff, decision, alert, done, todo, dropped. Default: note. Another word posts a note, with a warning.")
     po.add_argument("--topic", help="Optional topic label, filterable with read --topic.")
     po.add_argument("--reply-to", type=integer, metavar="ID",
                     help="Link to an earlier message; does not choose the recipient.")
@@ -14909,7 +14927,7 @@ def main():
         raise SystemExit(EARLY_COMMANDS[argv[0]](argv[1:]) or 0)  # not sys.exit: test_security TEST 7
     p = build_parser()
     try:
-        a = p.parse_args()
+        a = p.parse_args(alias_command(argv))
     except SystemExit:
         write_help()  # --help / --version, into a reader that may have gone away
         raise
@@ -14936,6 +14954,23 @@ def main():
     if a.json:
         flush_notes()  # only a fully successful command may emit non-error notices
     release_end(notice)
+
+
+def alias_command(argv):
+    """argv with a COMMAND_ALIASES word in the command's place replaced by the command it names (send -> post). The
+    command is the first word that is not a global flag (--as NAME, --up N, --json) or its value."""
+    argv, i = list(argv), 0
+    while i < len(argv):
+        w = argv[i]
+        if w in ("--as", "--up"):
+            i += 2
+        elif w == "--json" or w.startswith(("--as=", "--up=")):
+            i += 1
+        else:
+            if w in COMMAND_ALIASES:
+                argv[i] = COMMAND_ALIASES[w]
+            break
+    return argv
 
 
 def run(a):

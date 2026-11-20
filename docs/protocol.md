@@ -95,8 +95,10 @@ Field lists are the `schema --json` objects of the reference implementation (`Ag
 ### Messages
 
 - **P-MSG-1** The kind of a posted message MUST be one of the closed set of protocol 1.0: `note`, `question`,
-  `answer`, `handoff`, `decision`, `alert`, `done`, `todo`, `dropped`. Any other kind is refused with `bad_input`.
-- A message has exactly one recipient: one name, or `*` (everyone). The default is `*`.
+  `answer`, `handoff`, `decision`, `alert`, `done`, `todo`, `dropped`. A post that names any other kind is stored as
+  `note` and succeeds with the warning `unknown_kind` (one stderr line naming the kinds).
+- A message has exactly one recipient: one name, or `*` (everyone). The default is `*`; `all` and `everyone`, in any
+  case, mean `*`.
 - A topic is a free label used only to filter (`read --topic`). The decision convention (`--kind decision --topic
   decision`) is not enforced.
 - A body is text of 1 to 65536 bytes after trimming surrounding whitespace.
