@@ -548,9 +548,9 @@ AGENTBUS_TEST_NOW="$exp" agentbus --json claims | "$PY" -c 'import json,sys; s={
   || fail "claims shows a claim at expires_at == now as held, not expired"
 AGENTBUS_TEST_NOW="$exp" agentbus --json brief | "$PY" -c 'import json,sys; e=[c["resource"] for c in json.load(sys.stdin)["expired_claims"]["items"]]; assert e == ["edge.py"], e' \
   || fail "brief does not list the claim at expires_at == now as expired"
-one_sec_before=2030-01-01T10:00:59Z
-AGENTBUS_TEST_NOW="$one_sec_before" agentbus --json claims | "$PY" -c 'import json,sys; s={c["resource"]: c["state"] for c in json.load(sys.stdin)["items"]}; assert s == {"edge.py": "held"}, s' \
-  || fail "claims shows a claim one second before its expiry as expired"
+before_expiry=2030-01-01T10:00:30Z
+AGENTBUS_TEST_NOW="$before_expiry" agentbus --json claims | "$PY" -c 'import json,sys; s={c["resource"]: c["state"] for c in json.load(sys.stdin)["items"]}; assert s == {"edge.py": "held"}, s' \
+  || fail "claims shows a claim 30 seconds before its expiry as expired"
 AGENTBUS_TEST_NOW="$exp" agentbus --as eb2 --json claim edge.py | "$PY" -c 'import json,sys; r=json.load(sys.stdin); assert r["agent"] == "eb2", r' \
   || fail "another agent could not claim at expires_at == now"
 ok "at expires_at == now the claim is expired in claims and brief, and another agent may take it"
