@@ -106,6 +106,7 @@ FUNC = re.compile(r"(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{([^}]*)\
 PREFIX = set("then do else elif { ( ! time command exec sudo nohup if while until xargs builtin noglob".split())
 GLOBAL_ARGS = {"--as", "--up", "--db", "--project"}
 PYTHON = re.compile(r"^(?:.*/)?python3?(?:\.\d+)?$")
+INTERPRETER = re.compile(r"^(?:.*/)?(?:python3?(?:\.\d+)?|node|ruby|perl)$")
 
 
 def zeros(keys):
@@ -186,6 +187,49 @@ def is_bus(word):
     return os.path.basename(word.strip("\"'")) in ("agentbus", "agentbus.py")
 
 
+def open_quote(line):
+    """The quote character a shell line leaves open, or None."""
+    quote, i = None, 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and quote != "'":
+            i += 1
+        elif quote:
+            quote = None if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1].isspace()):
+            break
+        i += 1
+    return quote
+
+
+def logical_lines(command):
+    """Physical lines, with heredoc bodies dropped and an interpreter's quoted
+    multi-line program (python3 -c "...") joined into one line: text inside a
+    program is not a command word."""
+    lines = command.splitlines()
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        quote = open_quote(line)
+        if quote and any(INTERPRETER.match(w.strip("\"'")) for w in tokenize(line)):
+            while quote and i < len(lines):
+                line += "\n" + lines[i]
+                i += 1
+                quote = open_quote(line)
+            tail = line.rsplit("\n", 1)[-1]
+        else:
+            tail = line
+        out.append(line)
+        for match in HEREDOC.finditer(tail):
+            while i < len(lines) and lines[i].strip() != match[2]:
+                i += 1
+            i += 1
+    return out
+
+
 def parse(command):
     """Cycle-0 shell parser: parse executable positions, never quoted prose."""
     aliases = {}
@@ -196,18 +240,8 @@ def parse(command):
                 aliases[match[1]] = [w for w in body[j + 1:] if w not in ("$@", ";")]
                 break
     command = FUNC.sub(" ; ", command)
-    lines = command.splitlines()
-    stripped, i = [], 0
-    while i < len(lines):
-        line = lines[i]
-        stripped.append(line)
-        i += 1
-        for match in HEREDOC.finditer(line):
-            while i < len(lines) and lines[i].strip() != match[2]:
-                i += 1
-            i += 1
     segments = []
-    for line in "\n".join(stripped).replace("$(", " ; ").replace("`", " ; ").splitlines():
+    for line in (l.replace("$(", " ; ").replace("`", " ; ") for l in logical_lines(command)):
         seg = []
         for word in tokenize(line):
             if word and set(word) <= set(";&|()<>"):
@@ -479,6 +513,11 @@ class Collector:
                     completed_commands[signature] = completed_commands.get(signature, 0) + 1
             stop_summaries = any(r.get("type") == "system" and r.get("subtype") == "stop_hook_summary" and any(isinstance(info, dict) and "hook claude" in info.get("command", "") for info in r.get("hookInfos") or []) for r in rows)
             occurrences = {}
+            # A Claude hook's source ("SessionStart:compact") is named on its
+            # hook_success attachment; the injected text arrives on a separate
+            # hook_additional_context record whose parentUuid is that record.
+            hook_names = {r["uuid"]: (r.get("attachment") or {}).get("hookName") or "" for r in rows if r.get("uuid") and r.get("type") == "attachment" and (r.get("attachment") or {}).get("type") == "hook_success"}
+            last_hook_name = {}
             if source == "codex":
                 meta = next((r["payload"] for r in rows if r.get("type") == "session_meta" and isinstance(r.get("payload"), dict)), {})
                 session["id"] = (source, meta.get("id") or str(path))
@@ -618,11 +657,16 @@ class Collector:
                     attachment = row.get("attachment") or {}
                     typ = attachment.get("type")
                     event = attachment.get("hookEvent")
+                    if typ == "hook_success" and attachment.get("hookName"):
+                        last_hook_name[event] = attachment["hookName"]
                     if typ == "hook_additional_context":
                         texts = attachment.get("content")
+                        name = attachment.get("hookName", "")
+                        if ":" not in name:
+                            name = hook_names.get(row.get("parentUuid")) or last_hook_name.get(event) or name
                         for tx in texts if isinstance(texts, list) else [texts]:
                             if isinstance(tx, str) and tx.startswith("agentbus:"):
-                                self.injection(session, ts, event, tx, attachment.get("hookName", ""))
+                                self.injection(session, ts, event, tx, name)
                                 session["events"][-1]["tool_id"] = attachment.get("toolUseID")
                     elif typ in ("hook_success", "hook_cancelled", "hook_error", "hook_non_blocking_error", "hook_blocking_error") and ("hook claude" in attachment.get("command", "") or "agentbus:" in attachment.get("stdout", "")):
                         # Stop runs and wall time come from stop_hook_summary when the
@@ -650,7 +694,7 @@ class Collector:
 
     @staticmethod
     def injection(session, ts, event, text, hook_name=""):
-        session["events"].append({"type": "injection", "ts": ts, "event": event if event in EVENTS else "other", "text": text, "kind": hook_kind(text), "compact": int("compact" in hook_name)})
+        session["events"].append({"type": "injection", "ts": ts, "event": event if event in EVENTS else "other", "text": text, "kind": hook_kind(text), "compact": int(hook_name.rsplit(":", 1)[-1] == "compact")})
 
     def read_history(self):
         for root in self.args.history:

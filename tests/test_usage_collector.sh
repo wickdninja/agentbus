@@ -391,6 +391,16 @@ assert collect.parse("AGENTBUS_AGENT=hidden agentbus inbox")[0]["name"] == "hidd
 continued = 'B="agentbus --as x" && \\\n$B post "a b" --kind note && \\\n$B post "c" --kind answer'
 assert [c["verb"] for c in collect.parse(continued)] == ["post", "post"]
 print("PASS: cycle-0 parser handles quotes, heredocs, aliases, wrappers and substitutions")
+# Rule: text inside an interpreter's program is not a command word (cycle 0 counted
+# 40 Codex invocations from multi-line python3 -c bodies). A full-path interpreter
+# that runs agentbus itself still counts.
+program = 'python3 -B -c "\nimport subprocess\nagentbus inbox\n/x/bin/agentbus claim a --purpose b\nprint(1)\n"\nagentbus --as a post hi'
+assert [c["verb"] for c in collect.parse(program)] == ["post"], collect.parse(program)
+quoted = "cd /w && python3 -I -c '\nagentbus join a\n' && agentbus --as a leave"
+assert [c["verb"] for c in collect.parse(quoted)] == ["leave"]
+assert [c["verb"] for c in collect.parse("/usr/bin/python3 /w/bin/agentbus --as a inbox")] == ["inbox"]
+assert [c["verb"] for c in collect.parse("python3 -c 'print(1)'\nagentbus --as a inbox")] == ["inbox"]
+print("PASS: agentbus words inside an interpreter program are not calls")
 
 # Rule: scripted populations leave every metric. --exclude-pattern matches the
 # transcript path or any recorded cwd (fixtures avoid real tmp roots: mktemp is under them); --exclude-entrypoint matches Claude's entrypoint.
@@ -453,6 +463,19 @@ jsonl(typed / "claude" / "p" / "main.jsonl", [
 unread = json.loads(subprocess.check_output([sys.executable, str(script), "--cycle", "1", "--bus-root", str(typed), "--claude-root", str(typed / "claude"), "--codex-root", str(typed / "none"), "--history", str(typed / "none"), "--output", "-"], text=True, timeout=15))["workspaces"]["personal"]["hooks"]["types"]["unread"]
 assert unread["injections"] == 2 and unread["actions"] == 1, unread
 print("PASS: task notifications and command echoes do not end an action window")
+
+# Rule: the hook source ("SessionStart:compact") sits on the hook_success record;
+# the injected text arrives on a separate hook_additional_context record whose
+# parentUuid is that record (cycle 0: 220 orientations after a compact, measured 0).
+compact = temp / "compact"
+cb = dict(timestamp=ts, sessionId="compact", cwd=personal_cwd)
+def orient(uid, parent, name):
+    return [dict(cb, type="attachment", uuid=uid + "s", attachment={"type": "hook_success", "hookName": "SessionStart:" + name, "hookEvent": "SessionStart", "toolUseID": uid + "t", "stdout": "{}", "command": "agentbus hook claude session-start", "exitCode": 0, "durationMs": 5}),
+            dict(cb, type="attachment", uuid=uid, parentUuid=uid + "s", attachment={"type": "hook_additional_context", "hookName": "SessionStart", "hookEvent": "SessionStart", "toolUseID": "SessionStart", "content": ["agentbus: you are on the bus as a. Claim before you edit."]})]
+jsonl(compact / "claude" / "p" / "main.jsonl", orient("o1", None, "startup") + orient("o2", None, "compact") + orient("o3", None, "resume") + orient("o4", None, "compact"))
+chooks = json.loads(subprocess.check_output([sys.executable, str(script), "--cycle", "1", "--bus-root", str(compact), "--claude-root", str(compact / "claude"), "--codex-root", str(compact / "none"), "--history", str(compact / "none"), "--output", "-"], text=True, timeout=15))["workspaces"]["personal"]["hooks"]
+assert chooks["types"]["orientation"]["injections"] == 4 and chooks["compact_orientations"] == 2, chooks["compact_orientations"]
+print("PASS: orientations delivered by a compact SessionStart are flagged")
 db.close()
 PYTEST
 ok "usage collector fixture suite"
