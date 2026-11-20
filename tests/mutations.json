@@ -6019,5 +6019,86 @@
     "count": 1,
     "run": "tests/test_agent_dx.sh",
     "expect": "leave matched case-insensitively"
+  },
+  {
+    "name": "an invented --kind is refused again (issue 86 A4)",
+    "file": "bin/agentbus",
+    "find": "            a\\.kind = \"note\"\\n",
+    "replace": "            die(\"unknown kind\", \"bad_input\")\n",
+    "count": 1,
+    "run": "tests/test_post_forgiving.sh",
+    "expect": "post --kind status failed"
+  },
+  {
+    "name": "send is no longer post (issue 86 A4)",
+    "file": "bin/agentbus",
+    "find": "COMMAND_ALIASES = \\{\"send\": \"post\"\\}",
+    "replace": "COMMAND_ALIASES = {}",
+    "count": 1,
+    "run": "tests/test_post_forgiving.sh",
+    "expect": "send failed"
+  },
+  {
+    "name": "post to all goes to a name, not everyone (issue 86 A4)",
+    "file": "bin/agentbus",
+    "find": "            a\\.to = \"\\*\"\\n",
+    "replace": "            a.to = a.to\n",
+    "count": 1,
+    "run": "tests/test_post_forgiving.sh",
+    "expect": "did not broadcast"
+  },
+  {
+    "name": "a wrapped error loses its closing row (issue 86 A3)",
+    "file": "bin/agentbus",
+    "find": "        out \\+= \"\\\\n\" \\+ diag\\(f\"\\{label\\} \\(\\{code\\}, exit \\{status\\}\\)\"\\)",
+    "replace": "        out += \"\"",
+    "count": 1,
+    "run": "tests/test_error_lines.sh",
+    "expect": "the last line of"
+  },
+  {
+    "name": "an error's first line loses refused/error (issue 86 A3)",
+    "file": "bin/agentbus",
+    "find": "    out = diag\\(f\"\\{label\\}: \\{text\\}\"\\)",
+    "replace": "    out = diag(text)",
+    "count": 1,
+    "run": "tests/test_error_lines.sh",
+    "expect": "does not start"
+  },
+  {
+    "name": "a holder in another worktree blocks again (issue 86 L1)",
+    "file": "bin/agentbus",
+    "find": "    return theirs if mine and theirs and mine != theirs else None",
+    "replace": "    return None",
+    "count": 1,
+    "run": "tests/test_claim_worktrees.sh",
+    "expect": "a claim held in another worktree was refused"
+  },
+  {
+    "name": "an area claim passes across worktrees (issue 86 L1)",
+    "file": "bin/agentbus",
+    "find": "            if not froms and is_path\\(res\\):",
+    "replace": "            if not froms:",
+    "count": 1,
+    "run": "tests/test_claim_worktrees.sh",
+    "expect": "a lane in another worktree took area:ios-sim"
+  },
+  {
+    "name": "claims lists expired rows again (issue 86 T2)",
+    "file": "bin/agentbus",
+    "find": "WHERE expires_at > \\? ORDER BY resource\"\"\"",
+    "replace": "WHERE ? IS NOT NULL ORDER BY resource\"\"\"",
+    "count": 1,
+    "run": "tests/test_claims.sh",
+    "expect": "expired claims:"
+  },
+  {
+    "name": "brief shows no rulings (issue 86 T1)",
+    "file": "bin/agentbus",
+    "find": "    rulings, rulings_more = _brief_rulings\\(con, limit\\)",
+    "replace": "    rulings, rulings_more = [], 0",
+    "count": 1,
+    "run": "tests/test_brief.sh",
+    "expect": "brief rulings are"
   }
 ]
