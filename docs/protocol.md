@@ -496,40 +496,40 @@ Current behavior that 1.0 documents and a later minor version may change.
 - **Roster never forgets.** A crashed agent stays on the roster; nothing prunes it by age, so its claims block until
   they expire or are taken with `--from`. [#69](https://github.com/wickdninja/agentbus/issues/69)
 - **Crashed owners' todos are never takeable.** P-VIEW-5 needs a `leave` row; a crashed owner never wrote one.
-  (issue to file)
-- **`claim --from` names skip the identifier check** (P-ID-2): a holder name with a newline is accepted. (issue to file)
+  [#83](https://github.com/wickdninja/agentbus/issues/83)
+- **`claim --from` names skip the identifier check** (P-ID-2): a holder name with a newline is accepted. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Normalised paths can become scheme names** (P-CLAIM-1): `./area:x/` is stored as `area:x/` and then compared
-  exactly. (issue to file)
-- **No length limit** on a recipient, a topic, a fact key or a log action. (issue to file)
+  exactly. [#83](https://github.com/wickdninja/agentbus/issues/83)
+- **No length limit** on a recipient, a topic, a fact key or a log action. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **The join token lives only in the log** (P-ID-8): a join retry is recognised by the latest join log row, so the
-  log is part of the protocol here too. (issue to file)
+  log is part of the protocol here too. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Name reuse.** Cursors survive leave and a rejoin keeps cursor and claims, so a new agent under an old name
   receives the old name's unread direct mail and holds its live claims. After 30 idle minutes any session may join
-  under the name. (issue to file)
+  under the name. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Clock and single sequencer.** Times come from each writer's own clock and compare as strings; ordering relies on
   one store assigning ids under one write lock. A distributed binding needs a sequencer and a trusted time source.
-  (issue to file)
-- **`--from` is honor-system.** No check that a handoff gave the work. (issue to file)
-- **Goal authority.** Any name may set the goal; there is no lead role. (issue to file)
+  [#83](https://github.com/wickdninja/agentbus/issues/83)
+- **`--from` is honor-system.** No check that a handoff gave the work. [#83](https://github.com/wickdninja/agentbus/issues/83)
+- **Goal authority.** Any name may set the goal; there is no lead role. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Log as protocol.** P-VIEW-5 reads the log's `leave` rows and P-ID-8 its join rows, so the log is part of the
-  protocol for those two; post and ctx set write no log row. (issue to file)
+  protocol for those two; post and ctx set write no log row. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **No compatibility gate between versions on one bus.** Nothing stops an implementation of one protocol version from
-  writing to a bus another version reads; there is no negotiation. (issue to file)
+  writing to a bus another version reads; there is no negotiation. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Inbox needs no roster entry.** Any name can consume the inbox of a name it is not, including one that never
-  joined. (issue to file)
+  joined. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Typo recipients.** A message to a name that never joins is a dead letter until someone joins under that name.
-  (issue to file)
+  [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Paths are relative to the bus, not the caller's folder.** `claim a.py` run from `src/` claims `a.py`.
   [#75](https://github.com/wickdninja/agentbus/issues/75)
 - **Whole-resource claims.** A claim covers a whole file or folder, never a region.
   [#26](https://github.com/wickdninja/agentbus/issues/26)
 - **Release granularity.** A path inside a held folder cannot be released alone (P-CLAIM-18). Renewing an expired own
-  claim keeps the old `claimed_at` but reports `renewed: false`. (issue to file)
+  claim keeps the old `claimed_at` but reports `renewed: false`. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Case-sensitive resources** on case-insensitive file systems: `README.md` and `readme.md` do not overlap.
-  (issue to file)
+  [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **`log add` has no request id.** [#28](https://github.com/wickdninja/agentbus/issues/28)
 - **Changed facts in `brief`** are measured from the time of the last message read, not a fact cursor.
   [#30](https://github.com/wickdninja/agentbus/issues/30)
 - **Pending between others in `brief`** counts a handoff or alert to a name that left as pending.
   [#70](https://github.com/wickdninja/agentbus/issues/70)
-- **Alert closure** is a `watch` rule (any reply closes it); the core has none. (issue to file)
+- **Alert closure** is a `watch` rule (any reply closes it); the core has none. [#83](https://github.com/wickdninja/agentbus/issues/83)
