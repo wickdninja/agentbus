@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ctxbench Stage 1 runner, --jobs: cells run in parallel processes and the results are merged in a fixed order, so a
-# parallel run's results file and report are byte-identical to a serial run's. Tiny run on two development seeds.
+# parallel run's results file and defect summary are byte-identical to a serial run's. Tiny run on two development seeds.
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -15,7 +15,7 @@ envx "$PY" "$STAGE" "${a[@]}" --out "$T/serial.jsonl" > "$T/s.out" 2>&1 || { cat
 envx "$PY" "$STAGE" "${a[@]}" --jobs 2 --out "$T/par.jsonl" > "$T/p.out" 2>&1 || { cat "$T/p.out"; fail "--jobs 2 run failed"; }
 [ "$(grep -c '"type": "instance"' "$T/serial.jsonl")" = 8 ] || fail "the serial run did not write 2 seeds x 1 probe x 4 arms rows"
 cmp "$T/serial.jsonl" "$T/par.jsonl" || fail "the --jobs 2 results file differs from the serial one"
-cmp "$T/serial.report.json" "$T/par.report.json" || fail "the --jobs 2 report differs from the serial one"
-ok "serial and --jobs 2 results and reports are byte-identical"
+cmp "$T/serial.defects.json" "$T/par.defects.json" || fail "the --jobs 2 defect summary differs from the serial one"
+ok "serial and --jobs 2 results and defect summaries are byte-identical"
 
 echo "All ctxbench jobs tests passed"

@@ -141,9 +141,9 @@ assert {(r["probe"], r["arm"]) for r in inst} == {(p, a) for p in ("P1", "P7")
 for r in inst:
     assert isinstance(r["bytes"], int) and r["bytes"] >= 0 and r["bytes_capped"] <= r["bytes"] + 100 and r["calls"] >= 1, r
     assert r["outcome"] in ("ok", "cannot", "wrong") and r["outcome_capped"] in ("ok", "cannot", "wrong"), r
-rep = json.load(open(sys.argv[1].replace(".jsonl", ".report.json")))
-assert {c["probe"] for c in rep} == {"P1", "P7"} and all("uncapped" in c and "capped" in c for c in rep)
+    assert isinstance(r["calls_capped"], int) and r["calls_capped"] >= 1, r
 PY
-ok "results file holds the environment row and one row per arm and probe; the report is written"
+[ ! -e "$T/r.report.json" ] || fail "a development run wrote the comparative report"
+ok "results file holds the environment row and one row per arm and probe (bytes, calls, calls capped, outcomes)"
 
 echo "All ctxbench simulator tests passed"

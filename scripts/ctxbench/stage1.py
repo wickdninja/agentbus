@@ -4,7 +4,8 @@
 For each cell (N, E, mix) and seed: builds the history (sim.py), replays it into a bus one process per timestamp and
 renders the ledger (registered.py), draws the probe instances, runs every arm's registered procedure on a fresh copy,
 uncapped and capped, and checks each parser's answer against the oracle. Writes one JSON Lines row per instance and arm,
-and the descriptive report (registered.py's cell_report) beside it. It prints no arm numbers.
+and a defects-only summary (<out>.defects.json) beside it; the descriptive report (registered.py's cell_report, <out>.report.json) is
+written only with --counted. It prints no arm numbers.
 
   stage1.py --dev --out results.jsonl                       seeds 9901 and 9902 only, to find defects
   stage1.py --counted --out results.jsonl                   the registered run: the 30 seeds, 18 histories each
@@ -119,17 +120,28 @@ def jsonable(x):
     return x
 
 
-class Cell:
-    """One history: its events, built bus snapshots and ledgers, and the copies the arms run on."""
+FAULT = None  # fault-injection hook for tests: a callable (point, context dict) that may raise R.ReplayDefect; never set by the CLI
 
-    def __init__(self, run, tmp, hist):
-        self.run, self.tmp, self.hist = run, tmp, hist
+
+def inject(point, ctx):
+    if FAULT is not None:
+        FAULT(point, dict(ctx))
+
+
+class Cell:
+    """One history: its events, built bus snapshots and ledgers, and the copies the arms run on. `ctx` names where the
+    runner is (seed, cell, attempt, probe, instance, arm, cap) for defect rows and the fault hook."""
+
+    def __init__(self, run, tmp, hist, ctx):
+        self.run, self.tmp, self.hist, self.ctx = run, tmp, hist, ctx
         self.n = 0
         self.snaps = {}  # step -> bus folder holding that prefix
 
     def build(self, steps):
         """Replay the whole history into one bus, copying the bus folder after each step in `steps`."""
         h = self.hist
+        self.ctx.update(point="build", probe=None, instance=None, arm=None, cap=None)
+        inject("build", self.ctx)
         bus = os.path.join(self.tmp, "bus")
         os.makedirs(bus)
         db = os.path.join(bus, "bus.db")
@@ -171,11 +183,15 @@ class Cell:
 
     # ---- P1 to P6
     def probe_once(self, spec, arm, cap):
+        self.ctx.update(point="probe", probe=spec["probe"], instance=spec["instance"], arm=arm, cap=cap)
+        inject("probe", self.ctx)
         d = R.execute(self.run, arm, spec["probe"], self.copy(arm, spec["c"]), spec["me"], spec["now"], spec["inputs"], cap)
         return d, R.answer(arm, spec["probe"], d, spec["me"], spec["now"], spec["inputs"])
 
     # ---- P7
     def session_once(self, spec, arm, cap):
+        self.ctx.update(point="session", probe="P7", instance=spec["instance"], arm=arm, cap=cap)
+        inject("session", self.ctx)
         steps = spec["refreshes"]
         copy = self.copy(arm, steps[0])
         s = R.Session(self.run, arm, copy, spec["me"])
@@ -189,80 +205,50 @@ class Cell:
         return deliveries, triples
 
 
-def run_with_retries(fn):
-    """A replay defect reruns the instance on fresh copies; DEFECT_TRIES defects in a row is returned as a defect."""
-    last = None
-    for _ in range(DEFECT_TRIES):
-        try:
-            return fn(), None
-        except R.ReplayDefect as exc:
-            last = str(exc)
-    return None, last
-
-
 def measure_probe(cell, spec, arm, oracle_answer):
-    """(row fields) for one arm of a P1 to P6 instance, or (None, defect text)."""
-    def go(cap):
-        d, got = cell.probe_once(spec, arm, cap)
-        return d, got
-
-    res, defect = run_with_retries(lambda: go(None))
-    if defect:
-        return None, defect
-    d, got = res
+    """The row fields for one arm of a P1 to P6 instance. A replay defect propagates: the whole seed-cell reruns."""
+    d, got = cell.probe_once(spec, arm, None)
     row = {"bytes": d.bytes, "calls": len(d.calls), "outcome": classify(got, oracle_answer),
            "answer": jsonable(got) if got != R.CANNOT else R.CANNOT}
     if any(len(t) > R.CAP for _, t, _ in d.calls):  # a cut is possible: measure again with the cap on a fresh copy
-        res, defect = run_with_retries(lambda: go(R.CAP))
-        if defect:
-            return None, defect
-        dc, gotc = res
-        row.update(bytes_capped=dc.bytes, outcome_capped=classify(gotc, oracle_answer))
+        dc, gotc = cell.probe_once(spec, arm, R.CAP)
+        row.update(bytes_capped=dc.bytes, calls_capped=len(dc.calls), outcome_capped=classify(gotc, oracle_answer))
     else:  # no output reached the cap, so the capped run is the uncapped run
-        row.update(bytes_capped=d.bytes, outcome_capped=row["outcome"])
-    return row, None
+        row.update(bytes_capped=d.bytes, calls_capped=row["calls"], outcome_capped=row["outcome"])
+    return row
 
 
 def measure_session(cell, spec, arm, oracle_triples):
-    def go(cap):
-        return cell.session_once(spec, arm, cap)
-
     def fold(triples):
         outcomes = [classify(got, want) for t, w in zip(triples, oracle_triples) for got, want in zip(t, w)]
         if "wrong" in outcomes:
             return "wrong"
         return "cannot" if "cannot" in outcomes else "ok"
 
-    res, defect = run_with_retries(lambda: go(None))
-    if defect:
-        return None, defect
-    ds, triples = res
+    ds, triples = cell.session_once(spec, arm, None)
     texts = [len(t) for d in ds for _, t, _ in d.calls]
     row = {"bytes": sum(d.bytes for d in ds), "calls": sum(len(d.calls) for d in ds), "outcome": fold(triples),
            "answer": [[jsonable(x) if x != R.CANNOT else R.CANNOT for x in t] for t in triples]}
     if any(n > R.CAP for n in texts):
-        res, defect = run_with_retries(lambda: go(R.CAP))
-        if defect:
-            return None, defect
-        dsc, triplesc = res
-        row.update(bytes_capped=sum(d.bytes for d in dsc), outcome_capped=fold(triplesc))
+        dsc, triplesc = cell.session_once(spec, arm, R.CAP)
+        row.update(bytes_capped=sum(d.bytes for d in dsc), calls_capped=sum(len(d.calls) for d in dsc),
+                   outcome_capped=fold(triplesc))
     else:
-        row.update(bytes_capped=row["bytes"], outcome_capped=row["outcome"])
-    return row, None
+        row.update(bytes_capped=row["bytes"], calls_capped=row["calls"], outcome_capped=row["outcome"])
+    return row
 
 
-def run_cell(args, run, tmp, seed, n, e, mix, oracle, out, acc, log):
+def run_cell(args, run, tmp, seed, n, e, mix, out, acc, ctx):
     hist = sim.build_history(seed, n, e, mix)
     specs, empty = [], []
     for probe in args.probes:
         for i in range(args.instances):
             spec = sim.draw_instance(hist, seed, probe, i)
             (specs if spec else empty).append(spec or {"probe": probe, "instance": i})
-    cell = Cell(run, tmp, hist)
+    cell = Cell(run, tmp, hist, ctx)
     steps = [s["c"] for s in specs]
     cell.build(steps)
     base = {"seed": seed, "N": n, "E": e, "mix": mix}
-    defects = 0
     for spec in empty:
         out.write(json.dumps(dict(base, type="no-p7-candidate", probe=spec["probe"], instance=spec["instance"])) + "\n")
         acc.setdefault((n, e, mix, "P7"), {}).setdefault("no_candidate", 0)
@@ -274,18 +260,7 @@ def run_cell(args, run, tmp, seed, n, e, mix, oracle, out, acc, log):
                           for p in ("P1", "P3", "P4")) for k in spec["refreshes"]]
         else:
             want = normal(probe, args.oracle(hist.upto(spec["c"]), probe, spec["me"], spec["now"], spec["inputs"]))
-        rows = {}
-        for arm in R.ARMS:
-            row, defect = (measure_session if probe == "P7" else measure_probe)(cell, spec, arm, want)
-            if defect:
-                defects += 1
-                out.write(json.dumps(dict(base, type="defect", probe=probe, instance=spec["instance"], arm=arm,
-                                          defect=defect)) + "\n")
-                rows = None
-                break
-            rows[arm] = row
-        if rows is None:  # a replay defect reruns every arm of the seed: nothing of this instance is scored
-            continue
+        rows = {arm: (measure_session if probe == "P7" else measure_probe)(cell, spec, arm, want) for arm in R.ARMS}
         for arm, row in rows.items():
             meta = {k: v for k, v in spec.items() if k not in ("probe", "instance")}
             out.write(json.dumps(dict(base, type="instance", probe=probe, instance=spec["instance"], arm=arm,
@@ -293,8 +268,7 @@ def run_cell(args, run, tmp, seed, n, e, mix, oracle, out, acc, log):
             slot = acc.setdefault((n, e, mix, probe), {}).setdefault("arms", {}).setdefault(arm, {}).setdefault(seed, [])
             slot.append((row["bytes"], row["bytes_capped"], row["outcome"], row["outcome_capped"]))
     out.flush()
-    log(f"seed {seed} N={n} E={e} {mix}: {len(specs)} instances, {defects} defects")
-    return defects
+    return len(specs)
 
 
 def jsonable_oracle(want):
@@ -326,36 +300,76 @@ def build_report(acc):
 
 # ---- command line ----------------------------------------------------------------------------------------------
 
+def scratch_dir(base, seed, n, e, mix):
+    """A scratch folder no other unit or attempt shares, even for the same unit."""
+    return tempfile.mkdtemp(prefix=f"{seed}-{n}-{e}-{mix}.", dir=base)
+
+
 def run_unit(settings, cli, base, seed, n, e, mix):
-    """One (seed, cell) on its own folder, runner and oracle; returns (results text, accumulator, replay defects). Units
-    share nothing, so they can run in separate processes and be merged in a fixed order."""
+    """One (seed, cell) on its own folder, runner and oracle. A replay defect reruns the whole seed-cell, every arm of
+    every instance, on a fresh folder, up to DEFECT_TRIES times; a seed-cell that still has a defect is excluded: it
+    writes defect rows and no instance rows, and the report never sees it. Every defect is a row, a cleared one too.
+    Returns {"text": results rows, "acc": the report's accumulator, "defects": [rows], "excluded": bool, "instances": n}.
+    Units share nothing, so they can run in separate processes and be merged in a fixed order."""
     args = argparse.Namespace(probes=settings["probes"], instances=settings["instances"],
                               oracle=load_oracle(settings["oracle_file"]))
-    tmp = os.path.join(base, f"{seed}-{n}-{e}-{mix}")
-    os.makedirs(tmp)
-    out, acc = io.StringIO(), {}
-    try:
-        defects = run_cell(args, R.Runner(cli, tmp), tmp, seed, n, e, mix, args.oracle, out, acc,
-                           lambda m: print(m, file=sys.stderr, flush=True))
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-    return out.getvalue(), acc, defects
+    unit = {"seed": seed, "N": n, "E": e, "mix": mix}
+    defects = []
+    for attempt in range(1, DEFECT_TRIES + 1):
+        tmp = scratch_dir(base, seed, n, e, mix)
+        out, acc = io.StringIO(), {}
+        ctx = dict(unit, attempt=attempt)
+        try:
+            count = run_cell(args, R.Runner(cli, tmp), tmp, seed, n, e, mix, out, acc, ctx)
+        except R.ReplayDefect as exc:
+            last = attempt == DEFECT_TRIES
+            defects.append(dict(unit, type="defect", attempt=attempt, where={k: ctx.get(k) for k in ("point", "probe", "instance", "arm", "cap")},
+                                defect=str(exc), outcome="excluded" if last else "rerun"))
+            continue
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        text = "".join(json.dumps(d) + "\n" for d in defects) + out.getvalue()
+        print(f"seed {seed} N={n} E={e} {mix}: {count} instances, {len(defects)} defects", file=sys.stderr, flush=True)
+        return {"text": text, "acc": acc, "defects": defects, "excluded": False, "instances": count}
+    print(f"seed {seed} N={n} E={e} {mix}: excluded after {DEFECT_TRIES} defects", file=sys.stderr, flush=True)
+    return {"text": "".join(json.dumps(d) + "\n" for d in defects), "acc": {}, "defects": defects, "excluded": True,
+            "instances": 0}
+
+
+def disagreements(text):
+    """The oracle-parser disagreements of a unit's rows, one entry each (no counts by arm)."""
+    out = []
+    for line in text.splitlines():
+        r = json.loads(line)
+        if r["type"] == "instance":
+            for variant, key in (("uncapped", "outcome"), ("capped", "outcome_capped")):
+                if r[key] == "wrong":
+                    out.append({k: r[k] for k in ("seed", "N", "E", "mix", "probe", "instance", "arm")} | {"variant": variant})
+    return out
 
 
 def merge_results(results, out, acc):
-    """Write each unit's rows and fold its accumulator into acc, in the order given; returns the replay defect count."""
-    defects = 0
-    for text, part, n in results:
-        out.write(text)
-        defects += n
-        for key, data in part.items():
+    """Write each unit's rows and fold its accumulator into acc, in the order given; returns the defect summary:
+    defects and oracle-parser disagreements only, never a per-arm aggregate."""
+    summary = {"defect_rows": [], "excluded_seed_cells": [], "oracle_parser_disagreements": [], "defects_cleared_by_rerun": 0}
+    for r in results:
+        out.write(r["text"])
+        summary["defect_rows"] += r["defects"]
+        if not r["excluded"]:
+            summary["defects_cleared_by_rerun"] += len(r["defects"])
+        if r["excluded"]:
+            d = r["defects"][-1]
+            summary["excluded_seed_cells"].append({k: d[k] for k in ("seed", "N", "E", "mix")})
+        summary["oracle_parser_disagreements"] += disagreements(r["text"])
+        for key, data in r["acc"].items():
             into = acc.setdefault(key, {})
             if "no_candidate" in data:
                 into["no_candidate"] = into.get("no_candidate", 0) + data["no_candidate"]
             for arm, seeds in data.get("arms", {}).items():
                 for seed, rows in seeds.items():
                     into.setdefault("arms", {}).setdefault(arm, {}).setdefault(seed, []).extend(rows)
-    return defects
+    summary["defects_total"] = len(summary["defect_rows"])
+    return summary
 
 
 def parse_cells(text, dev_only=False):
@@ -397,6 +411,10 @@ def parse_args(argv):
     bad = [p for p in args.probes if p not in sim.PROBES]
     if bad:
         raise SystemExit(f"stage1: unknown probe {bad}")
+    for what, items in (("seeds", args.seed_list), ("cells", args.cell_list)):
+        dup = sorted({str(x) for x in items if items.count(x) > 1})
+        if dup:
+            raise SystemExit(f"stage1: duplicate {what} {dup}: every (seed, cell) unit must be unique")
     if args.jobs < 1:
         raise SystemExit("stage1: --jobs must be at least 1")
     if args.instances < 1:
@@ -414,9 +432,10 @@ def main(argv=None):
     check_environment()
     cli = args.cli.split() if args.cli else [sys.executable, os.path.join(R.ROOT, "bin", "agentbus")]
     base = args.tmp or tempfile.mkdtemp(prefix="ctxbench-stage1.")
-    acc, defects = {}, 0
+    acc = {}
     units = [(seed, n, e, mix) for seed in args.seed_list for n, e, mix in args.cell_list]
     settings = {"probes": args.probes, "instances": args.instances, "oracle_file": args.oracle_file}
+    stem = os.path.splitext(args.out)[0]
     try:
         with open(args.out, "w") as out:
             out.write(json.dumps(environment_row()) + "\n")
@@ -424,18 +443,26 @@ def main(argv=None):
                 with ProcessPoolExecutor(max_workers=args.jobs) as pool:
                     futures = [pool.submit(run_unit, settings, cli, base, *u) for u in units]
                     results = (f.result() for f in futures)  # merged in unit order, whatever order they finish in
-                    defects = merge_results(results, out, acc)
+                    summary = merge_results(results, out, acc)
             else:
-                defects = merge_results((run_unit(settings, cli, base, *u) for u in units), out, acc)
-        report_path = os.path.splitext(args.out)[0] + ".report.json"
-        with open(report_path, "w") as fh:
-            json.dump(build_report(acc), fh, indent=1, sort_keys=True)
+                summary = merge_results((run_unit(settings, cli, base, *u) for u in units), out, acc)
+        with open(stem + ".defects.json", "w") as fh:
+            json.dump(summary, fh, indent=1, sort_keys=True)
             fh.write("\n")
+        report_path = None
+        if args.counted:  # arm comparisons exist only for the registered run (protocol: development seeds are never summarised by arm)
+            report_path = stem + ".report.json"
+            with open(report_path, "w") as fh:
+                json.dump(build_report(acc), fh, indent=1, sort_keys=True)
+                fh.write("\n")
     finally:
         if not args.tmp:
             shutil.rmtree(base, ignore_errors=True)
-    print(f"stage1: done; results {args.out}, report {report_path}, {defects} replay defects")
-    return 3 if defects else 0
+    ex = len(summary["excluded_seed_cells"])
+    print(f"stage1: done; results {args.out}, defects {stem}.defects.json" + (f", report {report_path}" if report_path else "")
+          + f"; {summary['defects_total']} replay defects ({summary['defects_cleared_by_rerun']} cleared by rerun), "
+          f"{ex} seed-cells excluded")
+    return 3 if ex else 0
 
 
 if __name__ == "__main__":
