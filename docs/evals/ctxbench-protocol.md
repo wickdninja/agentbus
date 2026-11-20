@@ -1,12 +1,13 @@
 # ctxbench protocol (pre-registration, Stage 1)
 
 Issue #80, milestone B-M0. This document freezes Stage 1: what is measured, on which histories, by which procedures
-and parsers, and how the numbers are read. Stage 1 runs only after this document merges.
+and parsers, and how the numbers are reported. Stage 1 runs only after this document merges.
 
-**Freeze rule.** After merge nothing in this document changes, with one exception: a registration repair proven by a
-new failing fixture (a fixture that fails on the registered text or code and passes on the repair), recorded as a dated
-entry in the Change log at the end. The text above the log is never edited. Stage 3 (a model reading) is not
-registered here; the appendix lists what its separate registration must contain.
+**Freeze rule.** After merge nothing in this document, `scripts/ctxbench/registered.py`, `scripts/ctxbench/ledger_awk/`
+or `scripts/ctxbench/data/` changes, with one exception: a registration repair proven by a new failing fixture (a
+fixture that fails on the registered text or code and passes on the repair), recorded as a dated entry in the Change
+log at the end. The text above the log is never edited. Stage 3 (a model reading) is not registered here; the appendix
+lists what its separate registration must contain.
 
 ## The question
 
@@ -17,15 +18,15 @@ baseline is the same protocol kept as raw text: one append-only Markdown file an
 maintained summary. A ledger with a locking helper and reducers is the protocol on a second transport; the Ledger-awk
 arm below is a sensitivity check toward it, not a test of it.
 
-"The views save nothing", "the raw ledger wins" and "inconclusive" are all valid results and are reported as plainly
-as a win.
+## What Stage 1 is
 
-## Stage 1 in one paragraph
-
-Code, not a model, runs a registered command list per arm and probe on a fresh copy of a simulated history, counts
-the bytes those commands print, and gives the printed text to that arm's registered reference parser. The parser's
-answer is compared with an independent oracle. No tokens are spent. Bytes are the unit: tokens per byte differ between
-JSON and Markdown, so Stage 1 makes no token claim and never reports bytes / 4 as a finding; Stage 3 measures tokens.
+**A deterministic measurement, with no inferential claim.** Code, not a model, runs a registered command list per arm
+and probe on a fresh copy of a simulated history, counts the bytes those commands print, and gives the printed text to
+that arm's registered reference parser, whose answer is compared with an independent oracle. Stage 1 reports what the
+registered procedures return on the registered histories: no p-values, no hypothesis tests, no confidence intervals,
+no verdicts. No tokens are spent. Bytes are the unit: tokens per byte differ between JSON and Markdown, so Stage 1 makes
+no token claim; Stage 3 measures tokens. Its results are the input to Stage 3's registration, which carries the
+hypotheses.
 
 ## Definitions (the reader text)
 
@@ -58,7 +59,7 @@ failing fixture like any other.
 
 ## Probes
 
-Every probe names an agent (`me`) and a checkpoint time (`now`), given to every arm. Answers are scored exactly.
+Every probe names an agent (`me`) and a checkpoint time (`now`), given to every arm. Answers are compared exactly.
 
 | Probe | Question | Answer |
 | --- | --- | --- |
@@ -70,74 +71,71 @@ Every probe names an agent (`me`) and a checkpoint time (`now`), given to every 
 | P6 | Is anyone already working on Y | names holding a live claim that overlaps `src/Y/`, plus owners on the roster of an open todo with topic `Y` |
 | P7 | Session: what is on my plate, K = 3 times | at each refresh the triple (P1, P3, P4); derivable only if all three refreshes are |
 
-**P7.** One session on one copy. Refresh 1 runs at checkpoint event c with `now` = the time of event c; then exactly 10
-simulated events are applied (events c+1 to c+10), refresh 2 runs with `now` = the time of event c+10; 10 more events,
-refresh 3 at the time of event c+20. Refresh times therefore never go backwards. `me` may act inside the interleaved
-events like any agent (post, claim, close a todo), but cannot leave or crash there, and its own scheduled inbox reads
-are suppressed: in a P7 session the refreshes are `me`'s reads. P7's bytes are the sum over its three refreshes.
-
-**Targets.** X in P2 is, with probability 1/2, a file under a resource some live claim covers at the checkpoint, else
-a file drawn uniformly from the path pool. Y in P6 is, with probability 1/2, an item someone works on (by P6's rule),
-else drawn uniformly from the item list. Both draws come from the instance seed.
-
 ## Histories
 
-A seeded simulator (`scripts/ctxbench/sim.py`, B-M1) writes one semantic event list per history; both arms are
-rendered from that one list.
+A seeded simulator (`scripts/ctxbench/sim.py`, B-M1) writes one semantic event list per history and calls the
+registered choice rules in `registered.py` (`draw_event`, `choose_new_resource`, `p2_target`, `p6_target`,
+`checkpoint_now`, `p7_pick`, `name_at`); it does not re-implement them. Both arms are rendered from that one list.
 
 **Grid.** N in {5, 8} agents; E in {50, 1000, 5000} events; three mixes (sparse, busy, handoff-heavy). 18 histories
 per seed.
 
+**Randomness.** One `random.Random` per history, seeded with the first 8 bytes, big-endian, of
+`sha256("SEED:N:E:MIX")`; one per instance, seeded from `sha256("SEED:N:E:MIX:PROBE:INSTANCE")`. Every draw named
+below comes from these, in the order the rules state.
+
 **Time.** The clock starts at 2026-11-19T09:00:00Z. Each event's time is the previous event's time plus a gap drawn
 from an exponential distribution with the mix's mean and rounded to whole seconds (0 allowed), so times never go
-backwards. Events of one history are applied in list order.
+backwards. Events are applied in list order.
 
-**Agents and names.** `lead` plus N-1 agents join at the start (these N joins count toward E). Names come from a fixed
-list of 40 first names in order; after the 40th the list repeats with a suffix (`alice2`, ..., then `alice3`, ...), so
-the pool never runs out and a name is never reused. `lead` never leaves or crashes, and sets the goal once at the
-start (one event). Live means on the roster and not crashed.
+**Agents and names.** `lead` plus N-1 agents join at the start (these N joins count toward E). Names come from
+`data/names.txt` in order; after the 40th the list repeats with a suffix (`alice2`, ..., then `alice3`, ...), so the
+pool never runs out and a name is never reused (`name_at`). `lead` never leaves or crashes, and sets the goal once at
+the start (one event). Live means on the roster and not crashed.
 
-**Eligibility and redraw.** Each event's type is drawn from the mix. If the drawn type is not eligible (rules below),
-it is redrawn from the full mix, up to 10 times; after that the event is a `note`. Eligibility:
-- `join`: fewer than N agents live. The newcomer takes the next name from the pool.
-- `leave`: at least 2 live agents besides `lead` (and, inside a P7 window, not `me`). A random eligible agent leaves.
-- `answer`: an open question addressed to the actor or to everyone, not sent by the actor, exists.
-- `done`, `dropped` with reply_to: the actor owns or may take (D7) an open todo.
-- `claim` (see Claims): a claim of the drawn sort is possible.
-- `release`: the actor holds a live claim.
+**Event type and actor** (`draw_event`). The type is drawn from the mix table; the actor is then drawn uniformly
+among the live agents for which that type is eligible. A type with no eligible actor is redrawn, type and actor
+together, up to 10 times; after that the event is a `note` by a uniformly drawn live agent. Eligible actors:
+- `note`, `question`, `decision`, `alert`, `handoff`, `todo`, `fact`: every live agent.
+- `answer`: a live agent with an open question addressed to it or to everyone and not sent by it.
+- `done`, `dropped`: a live agent that owns or may take (D7) an open todo.
+- `claim`: a live agent for which at least one claim sort (below) is possible.
+- `release`: a live agent holding a live claim.
+- `join`: when fewer than N agents are live; the actor is the next name from the pool (not drawn).
+- `leave`: a live agent other than `lead`, when at least 2 live agents besides `lead` exist.
 
-**Crashes.** Separately from E, after each event a live agent other than `lead` (and, inside a P7 window, other than
-`me`) crashes with the mix's crash probability. It never acts again, writes nothing to either arm, and stays on the bus
-roster (D1). Crash probability per event: sparse 0.002, busy 0.004, handoff-heavy 0.008.
+**Targets inside an event.** A reply's target is drawn uniformly among the actor's eligible open items. A `done` has
+no reply_to with probability 0.20 (it closes nothing). With probability 0.05 an answer or done is sent instead as a
+`note` replying to the same message, or as an `answer` replying to the latest reply to it (it closes nothing).
+
+**Crashes.** Separately from E, after each event a live agent other than `lead` crashes with the mix's crash
+probability (uniform among them). It never acts again, writes nothing to either arm, and stays on the bus roster (D1).
+Crash probability per event: sparse 0.002, busy 0.004, handoff-heavy 0.008.
 
 **Recipients.** A message goes to everyone with the mix's broadcast share, else to one named agent other than the
 actor. The named recipient is, with probability 0.10 when any agent has left, drawn uniformly from agents that have
 left (so a todo to an owner who already left, the hard case of D7, occurs at a registered rate); otherwise uniformly
 from the agents on the roster (crashed ones included, since others cannot tell).
 
-**Claims.** Each claim event is, by the mix's shares, a renewal, a takeover or a new claim. Precedence: a renewal (the
-actor claims again a resource it holds live) and a takeover (`claim RESOURCE --from HOLDER` on a resource another agent
-holds live) are exempt from the no-overlap rule; a new claim must overlap no live claim of any agent. A renewal needs a
-live claim of the actor; a takeover needs a live claim of another agent (it takes that exact resource from its
-holder); a new claim draws a resource uniformly among the pool's resources that overlap no live claim. Resources are an
-item folder `src/SLUG/` (probability 0.3) or one of its files `src/SLUG/fN.py`. Every claim uses the default 120-minute
-TTL. Claims are never refused, so the bus logs no refusal.
+**Claims.** A claim's sort is drawn by the shares below among the sorts possible for the actor (shares renormalised
+over the possible ones): a renewal (the actor claims again a resource it holds live), a takeover
+(`claim RESOURCE --from HOLDER` on a uniformly drawn live claim of another agent) or a new claim. Renewals and takeovers
+are exempt from the no-overlap rule; a new claim must overlap no live claim of any agent and its resource comes from
+`choose_new_resource`, the one resource rule: the folder sort (`src/SLUG/`) with probability 0.3, else the file sort
+(`src/SLUG/f1.py` to `f4.py`), uniformly among that sort's free resources, else the other sort's; not possible when
+none is free. Every claim uses the default 120-minute TTL, so the bus logs no refusal.
 
 **Takeover expansion.** A takeover is one event in E. On the bus it ends the old holder's claim, starts the new one,
 logs `claim_taken` and inserts an `alert` message (the next message id, same time, topic `claim`) from the new holder
 to the old one, with the body `NEW took your claim on RES with claim --from and now holds RES (purpose: "P").` The
-ledger renders it as a `TAKEOVER` line followed by that `ALERT` line with the same id, body and time. The fixture
-checks this parity.
+ledger renders it as a `TAKEOVER` line followed by that `ALERT` line with the same id, body and time. Fixture PARITY
+checks this.
 
-**Topics.** A decision gets topic `decision` with probability 0.95, else an item slug (that message is not a D8
-decision); this rule overrides the general topic rule. Every other message gets an item slug as topic with probability
-0.6, else none.
+**Topics.** A decision gets topic `decision` with probability 0.95, else a uniform item slug (that message is not a D8
+decision); this rule overrides the general topic rule. Every other message gets a uniform item slug as topic with
+probability 0.6, else none.
 
-**Replies.** `answer` replies to an eligible open question. `done` and `dropped` reply to an eligible open todo, except
-that a `done` has no reply_to with probability 0.20 (it closes nothing). With probability 0.05 an answer or done is
-sent instead as a `note` replying to the same message, or as an answer replying to a reply (it closes nothing).
-
-**Event mixes** (share of E, per cent):
+**Event mixes** (share of E, per cent; the order is the draw order of `draw_type`):
 
 | Event | sparse | busy | handoff-heavy |
 | --- | ---: | ---: | ---: |
@@ -160,44 +158,65 @@ sent instead as a `note` replying to the same message, or as an answer replying 
 | Parameter | sparse | busy | handoff-heavy |
 | --- | ---: | ---: | ---: |
 | mean seconds between events | 120 | 20 | 45 |
-| work items (slug, folder `src/SLUG/`, files `f1.py` to `f4.py`) | 30 | 15 | 20 |
+| work items (the first k lines of `data/items.txt`) | 30 | 15 | 20 |
 | broadcast share of messages | 0.40 | 0.30 | 0.20 |
-| claim events that are renewals | 0.20 | 0.20 | 0.20 |
-| claim events that are takeovers | 0.05 | 0.10 | 0.20 |
+| claim sort shares: renewal / takeover / new | 0.20 / 0.05 / 0.75 | 0.20 / 0.10 / 0.70 | 0.20 / 0.20 / 0.60 |
 | long-body share | 0.03 | 0.05 | 0.08 |
 
-**Bodies.** Prose from a fixed corpus, `scripts/ctxbench/corpus.txt`, committed in B-M1 before Stage 1 runs, with its
-sha256 recorded in the Change log. The corpus is generated once by this rule: 200 lines, one English sentence each, of
-engineering coordination prose (status, intent, findings, requests) written for this benchmark; each line 40 to 200
-bytes of printable ASCII, with a corpus mean between 90 and 130 bytes; no line contains an agent name, `kind=`, `eid=`
-or a line break. A normal body is k sentences drawn with replacement, k uniform on 1 to 6, joined by a space. A long
-body is k uniform on 12 to 30 (usually over 2,048 bytes, so a listing cuts it). A handoff body is
-`BRANCH; STATE; NEXT STEP; CHECKS`, each part one corpus sentence (the branch part prefixed `branch ` and a slug). A
-decision body is a normal or long body followed by a line break and `Subject: SLUG`. A fact value is one sentence.
+**Bodies.** Sentences from `data/corpus.txt`, drawn with replacement. A normal body is k sentences, k uniform on 1 to
+6, joined by a space. A long body is k uniform on 24 to 40 (usually over 2,048 bytes, so a listing cuts it). A
+handoff body is `branch SLUG; S1; S2; S3` (three sentences). A decision body is a normal or long body, a line break and
+`Subject: SLUG`. A fact value is one sentence.
 
 **Inbox consumption.** After each of its own events, an agent runs a consuming `inbox` with probability 0.5 (the skill
-says to read inbox each turn). Consumption moves only that agent's bus cursor; it is not a coordination event and is
-not rendered in the ledger (a ledger reader keeps its own private cursor).
+says to read inbox each turn). It is a step in the event list but not one of the E events. It moves only that agent's
+bus cursor and is not rendered in the ledger (a ledger reader keeps its own private cursor).
 
-**Checkpoints.** The simulator writes E + 20 events. For each (history, probe, instance), the checkpoint index c is
-drawn uniformly from [ceil(0.9E), E], `me` uniformly from the agents live at c, and, for P1 to P6, `now` = the time of
-event c plus a uniform 1 to 300 seconds. P1 to P6 never see an event after c; P7 sees events up to c+20.
+**Checkpoints, P1 to P6.** The simulator writes E + 20 events. For each (history, probe, instance): c is drawn
+uniformly from [ceil(0.9E), E] and u0 uniformly from 1 to 300; `me` is drawn uniformly from the agents live at c.
+`now` = `checkpoint_now`: the time of event c plus u seconds, u scanned from u0 to 300 then 1 to u0-1, the first for
+which no claim live at c expires in (now, now + 120 s]. If no u qualifies, c moves to the next index (c+1, wrapping
+from E to ceil(0.9E)) and `me` is drawn again. P1 to P6 never see an event after c.
 
-### Clock rule
+**Targets.** X in P2 (`p2_target`): one uniform draw; below 0.5 and with any claim live at `now`, a file that a
+uniformly drawn live claim covers (the claimed file, or a uniform file of a claimed folder); otherwise, including when
+no claim is live, a uniform file of a uniform item. Y in P6 (`p6_target`): below 0.5 and with any active item (one
+someone works on by P6's rule), a uniform active item; otherwise, including when none is active, a uniform item.
+
+**P7 construction** (`p7_pick`). The history is shared by all instances and is never altered for one. c0 is drawn
+uniformly from [ceil(0.9E), E]. A candidate at c is an agent live at c and at c+20 with no leave or crash at events
+c+1 to c+20, provided no claim live at each refresh time expires within 120 s after it. The scan starts at c0 and
+follows the same next-index rule, each index at most once; at the first index with candidates, `me` is a uniform
+candidate. If no index qualifies, the instance is recorded as "no P7 candidate" and counted. Refresh 1 runs at the time
+of event c, refresh 2 after events c+1 to c+10 at the time of event c+10, refresh 3 after events c+11 to c+20 at the
+time of event c+20, so refresh times never go backwards. `me`'s own events and scheduled inbox reads inside the window
+happen as the history says. P7's bytes are the sum over its three refreshes.
+
+**Development seeds.** B-M1 builds and debugs on seeds 9901 and 9902 only. Their output is inspected for defects
+(crashes, parity, replay checks, oracle-parser disagreements) and never summarised by arm; no comparison between arms
+is computed on any seed before Stage 1's registered run.
+
+### Clock rule and time checks
 
 `AGENTBUS_TEST_NOW` is read once at module load and the clock then runs on with the wall clock. So the replay starts a
-fresh process (or re-imports the module with `runpy`) for every simulated event, with `AGENTBUS_TEST_NOW` set to that
-event's time, and every reader command runs in its own process with `AGENTBUS_TEST_NOW` set to the reader's `now`. A
-process stamps the intended second as long as it finishes within one second of loading; the replay reads back every
-stored time after a history is built and treats a mismatch as a replay defect. Every command runs with `TZ=UTC`,
-`LC_ALL=C`, `AGENTBUS_NO_UPDATE_CHECK=1` and `AGENTBUS_NO_UPDATE_NOTICE=1`.
+fresh process (or re-imports the module with `runpy`) for every simulated step, with `AGENTBUS_TEST_NOW` set to that
+step's time, and every reader command runs in its own process with `AGENTBUS_TEST_NOW` set to `now`. Every command runs
+with `TZ=UTC`, `LC_ALL=C`, `AGENTBUS_NO_UPDATE_CHECK=1` and `AGENTBUS_NO_UPDATE_NOTICE=1`.
+
+- **Reader time.** Each measured bus command is bracketed by a monotonic clock; the clock it ran on started at `now`
+  exactly (a whole second), so it stayed on `now`'s second only if the command took under one second. A command that
+  takes one second or more is a replay defect (`Runner.bus(measured=True)`). The checkpoint guard keeps any claim
+  expiry at least 120 s after `now` in any case.
+- **Stored times.** After a history is built, every stored time is read back (`check_stored_times`): message times in
+  order, every log row, every claim's start (with expiry exactly 120 minutes later), every `last_seen`, every fact.
+  Each must be a simulated step time; a mismatch is a replay defect.
+- **Defects.** A replay defect reruns every arm of that seed. It is never scored.
 
 ## Arms
 
-Each probe runs on a fresh copy of its history (the whole bus folder, or the ledger file) per arm and instance, so
-presence and cursor writes never leak between trials. Bus commands run as `agentbus --as ME ...`. Before bytes are
-counted, every occurrence of the copy's folder in the output is replaced by the fixed string `/ctxbench`, so a byte
-count never depends on a temp path.
+Each probe runs on a fresh copy of its history (the whole bus folder, or the ledger file) per arm and instance; a P7
+session runs on one copy for its three refreshes. Bus commands run as `agentbus --as ME ...`. Before bytes are counted,
+every occurrence of the copy's folder in the output is replaced by the fixed string `/ctxbench`.
 
 ### Ledger file format
 
@@ -223,21 +242,18 @@ A claim lasts 120 minutes from its CLAIM or TAKEOVER line unless renewed.
 - A leave is rendered as one `RELEASE` per claim it dropped, then `LEAVE`, at the leave's time. A crash writes nothing.
   Inbox consumption writes nothing. Nothing is ever rewritten and there is no state section.
 
-The reference renderer is `render_ledger` in `scripts/ctxbench/fixture_sufficiency.py`; B-M1's renderer must produce
-byte-identical output on every fixture history.
+The renderer is `render_ledger` in `registered.py`; rendering a prefix of the events gives a prefix of the file.
 
 ### The four arms
 
 - **Bus-default.** The skill's literal start sequence, in `--json` as the skill says to parse: `brief`, then
   `inbox --limit 20 --peek` (peek so a probe never consumes), plus `read --topic decision` for P5 only. Default limits:
-  `brief` shows 5 rows per section (`BRIEF_LIMIT`), so at N = 8 a roster-sized answer (P2, P6) is often cut and its
-  probe a miss. Those misses are structural, a property of the default, not of a parser. No parser uses the inbox
+  `brief` shows 5 rows per section, so at N = 8 a roster-sized answer (P2, P6) is often cut. No parser uses the inbox
   output; it is charged because the skill's sequence includes it.
 - **Bus-complete.** A registered procedure per probe that is sufficient to derive the answer from its own output, every
-  call charged, including `log show` for leave times (P4) and `read --id` for a body a listing cut at 2,048 bytes
-  (P5).
-- **Ledger-raw.** R3's shell recipes over `COORDINATION.md` (`grep -E`, which every machine has, in place of `rg`), cut
-  to the header fields (`cut -d'|' -f1`) wherever the probe needs no body.
+  call charged, including `log show` for leave times (P4) and `read --id` for a body a listing cut at 2,048 bytes (P5).
+- **Ledger-raw.** R3's shell recipes over `COORDINATION.md` (`grep -E` in place of `rg`, which not every machine has),
+  cut to the header fields (`cut -d'|' -f1`) wherever the probe needs no body.
 - **Ledger-awk** (sensitivity). One registered POSIX awk reducer per probe over the raw file
   (`scripts/ctxbench/ledger_awk/`), printing only the answer. It stands in for the strongest ledger reader short of a
   maintained helper. The reducers' own text is a prepared helper and is not counted as delivered bytes.
@@ -246,7 +262,7 @@ byte-identical output on every fixture history.
 
 `GREP(K)` stands for `grep -n -E 'kind=(K)( |$)' COORDINATION.md | cut -d'|' -f1`. `AWK(p, vars)` stands for
 `awk vars -f ledger_awk/common.awk -f ledger_awk/p.awk COORDINATION.md`. Bus commands are written without the leading
-`agentbus --as ME`.
+`agentbus --as ME`. The exact strings are in `registered.py` (`static_calls`, `execute`, `Session`).
 
 | Probe | Bus-default | Bus-complete | Ledger-raw | Ledger-awk |
 | --- | --- | --- | --- | --- |
@@ -265,140 +281,127 @@ genuine decision is expanded:
 1. `grep -n -E '^- eid=E[0-9]+ ts=[^ ]+ kind=DECISION id=[^ ]+ from=[^ ]+ to=[^ ]+ topic=decision ' COORDINATION.md | cut -d'|' -f1 | tail -n 1`
 2. when step 1 printed line L: `awk -v L=L 'NR==L{p=1; print; next} p && /^- eid=/{exit} p{print}' COORDINATION.md`
 
-The v1 recipe (`grep 'kind=DECISION .* topic=decision '`, expand the last hit) is not registered: fixture F2 shows two
-histories with different answers on which it prints identical text (Codex re-check, finding 4).
-
-**Ledger-raw P7.** The reader keeps a private line cursor and its own state, as R3 allows. Each refresh first runs
+**Ledger-raw P7.** The reader keeps a private line cursor and its folded rows, as R3 allows. Each refresh first runs
 `wc -l < COORDINATION.md` (giving n). Refresh 1 then runs `GREP(TODO|DONE|DROPPED|QUESTION|ANSWER|JOIN|LEAVE)`;
 refresh k > 1 runs `sed -n 'L,np' COORDINATION.md | grep -n -E 'kind=(TODO|DONE|DROPPED|QUESTION|ANSWER|JOIN|LEAVE)( |$)' | cut -d'|' -f1`
 with L one past the previous refresh's n. The bus arms recompute each refresh.
 
-### Reference parsers
+**Adaptive calls.** Only P5's second call depends on earlier output, and it is decided from delivered evidence alone:
+when the first output was cut by the cap, no second call is made and the probe cannot be decided.
 
-Each arm has one registered parser per probe (P7 applies P1's, P3's and P4's at each refresh). A parser sees only the
-text its procedure printed and the probe's inputs (`me`, `now`, X, Y). The parsers for P1 to P6 in all four arms are
-registered in this commit, in `scripts/ctxbench/fixture_sufficiency.py`, and fixture-tested there; B-M1 imports them
-or moves them verbatim with the fixture still passing, and does not rewrite them. Ledger-raw's P7 parser (state carried
-between refreshes) and the Bus-default P7 refresh parser are written in B-M1 and pass a P7 fixture before Stage 1
-runs. Every parser:
-- filters claims by `expires_at > now` (D5), never by the bus's `state` field;
-- excludes `me`'s own questions in P3 by sender;
-- returns "no answer" (a miss) when an evidence source the probe needs is incomplete, as below.
+### Reference parsers and the adapter
 
-**Completeness, per probe and source.** A source is incomplete when it says rows were left out (`has_more`,
-`omitted.<section>`, `claims_omitted`), was cut by the output cap, or does not parse. Only the sources the probe uses
-count; an omitted roster, for example, does not invalidate a complete todo list.
+Every parser of every arm, P1 to P7, is registered in `registered.py` (`parse_bus`, `parse_ledger_raw`,
+`parse_ledger_awk`, `Session`) and fixture-tested in this commit. B-M1 imports them and does not rewrite them. A parser
+sees only what its procedure delivered and the probe's inputs (`me`, `now`, X, Y). Every parser filters claims by
+`expires_at > now` (D5), never by the bus's `state` field, and excludes `me`'s own questions in P3 by sender.
 
-| Probe | Bus-default needs complete | Bus-complete needs complete | Ledger arms |
+**The cap and completeness adapter** (`deliver`, `answer`). Each call's output is tagged with the evidence source it
+provides. Before any parsing, a source the probe requires that was cut by the cap makes the outcome "cannot decide",
+so cut JSON never reaches a JSON parser; a cut source the probe does not use changes nothing. Ledger arms require every
+call they made. After that, a parser returns "cannot decide" when a required source says rows were left out
+(`has_more`, `omitted.<section>`, `claims_omitted`):
+
+| Probe | Bus-default requires | Bus-complete requires | Ledger arms |
 | --- | --- | --- | --- |
-| P1 | `brief` todos | `brief` todos | the command's output |
-| P2 | `brief` agents and each agent's claims | `claims` | the command's output |
-| P3 | `brief` questions | `brief` questions | the command's output |
-| P4 | `brief` todos, and no open todo whose owner is off the roster (no leave times: structural miss) | `brief` todos, `log` | the command's output |
-| P5 | the newest decision present with its whole body | the newest decision present; its whole body after `read --id` | the commands' output |
-| P6 | `brief` agents, claims and todos | `claims`; `brief` todos | the command's output |
+| P1 | `brief` todos | `brief` todos | every call |
+| P2 | `brief` agents and each agent's claims | `claims` | every call |
+| P3 | `brief` questions | `brief` questions | every call |
+| P4 | `brief` todos (and see below) | `brief` todos, `log` | every call |
+| P5 | the newest decision present with its whole body | the newest decision, whole after `read --id` | every call |
+| P6 | `brief` agents, claims and todos | `claims`; `brief` todos | every call |
+
+**Bus-default and `next`.** `brief`'s `next` command sometimes names a takeable todo (fixture F4), but it is chosen
+after unread messages and open questions and shows at most one todo, so whether it settles P4 depends on state a
+fixture cannot exhaust. The registered Bus-default parser does not use it: when an open todo's owner is off the roster,
+it cannot decide P4.
 
 **Output cap.** Every measure is reported twice: uncapped, and with each call's output cut at 30,000 characters (the
-default cap of a common agent harness), followed by the line `[ctxbench: output cut at 30000 characters]`. A cut
-source is incomplete. Capped bytes count what was kept plus the marker line.
+default cap of a common agent harness) followed by the line `[ctxbench: output cut at 30000 characters]`. Capped bytes
+count what was kept plus the marker.
 
-## Sufficiency fixtures
+## Measures
 
-`scripts/ctxbench/fixture_sufficiency.py`, run by `tests/test_ctxbench_fixture.sh` in the suite, builds hand-derived
-histories with the real CLI (one process per timestamp), renders each ledger, and checks every arm's procedure and
-parser on a fresh copy. A procedure that fails is not registered.
-
-- **F1 (N1).** lead, alice, bob and carol join at 11:50; lead posts todo #1 to carol and #2 to bob at 12:10; carol
-  leaves at 12:20; bob leaves at 12:00 (history A) or 12:20 (history B). Checkpoint 12:30, `me` alice. P4 = {1} in A
-  and {1, 2} in B for Bus-complete, Ledger-raw and Ledger-awk; Bus-default prints identical text for A and B, so its
-  P4 is a structural miss; without `log show` or the `LEAVE` lines the two histories read the same.
-- **F2 (Codex finding 4).** Decision #1 with the subject on a continuation line (`parser` in A, `uploader` in B), then a
-  note whose body quotes a decision header. P5 = (1, parser) and (1, uploader) in every arm; the v1 Ledger-raw recipe
-  prints identical text for A and B.
-- **F3.** An expired claim, a claim whose expiry equals `now` (not live, though the 0.4.0 `claims` listing calls it
-  held), a takeover, a todo closed by a linked `done`, a question replied to only by a note and an answer to that
-  note, a broadcast question answered, `me`'s own broadcast question, and a claimed then released folder. P1 = {2},
-  P3 = {5}, P2 for four paths, P6 for three items, every arm.
-- **Parity.** In every fixture history, the bus's messages, the takeover's alert included, equal the ledger's message
-  lines (id, kind, sender, recipient, topic, reply_to, body).
+Per instance and arm, uncapped and capped:
+- **Delivered bytes**: UTF-8 bytes of the output of every call, summed after path normalisation. Zero is a normal value
+  (an empty answer from a ledger arm): it is kept and reported, never dropped or replaced.
+- **Outcome**: "derivable by the registered parser" when the parser returns the oracle's answer; "the registered parser
+  cannot decide" when it returns that; "wrong" otherwise. The last two are misses. A miss says what the registered
+  parser could do with the delivered text, not that no reader could.
+- **Calls** in the procedure.
 
 ## Oracle
 
 1. **Independent.** The oracle (`scripts/ctxbench/oracle.py`, B-M1) is written from this document by a lane that has
    not read `bin/agentbus`, and folds the simulator's semantic event list with D1 to D8.
-2. **Hand fixtures first.** It must pass F1 to F3 and these before Stage 1 runs: a `done` with no reply_to closes
-   nothing; a broadcast todo's owner is its sender; a decision with another topic is not a D8 decision; a decision whose
-   subject sits past byte 2,048 of its body; an owner who left and rejoined makes the todo not takeable; a crashed
-   holder's claim stays live until it expires.
-3. **Three-way agreement.** For every instance Stage 1 records the oracle's answer and each arm's parser answer, and
-   reports agreement between the oracle and each parser per cell.
-4. **Disagreement.** A bus arm whose procedure was complete but whose answer disagrees with the oracle is scored a miss
-   (a bus error) in the primary analysis and filed as an issue; a rerun on a corrected bus is reported as secondary
-   only.
+2. **Hand fixtures first.** It must pass F1 to F6 and these before Stage 1 runs: a `done` with no reply_to closes
+   nothing; a broadcast todo's owner is its sender; a decision with another topic is not a D8 decision; an owner who
+   left and rejoined makes the todo not takeable; a crashed holder's claim stays live until it expires.
+3. **Three-way agreement.** Per cell, Stage 1 reports agreement between the oracle and each arm's parser.
+4. **Disagreement.** A bus arm whose procedure was complete but whose answer disagrees with the oracle is "wrong" (a bus
+   error) in the report and filed as an issue; a rerun on a corrected bus is reported separately.
 
-**Voiding.** Only a simulator or replay defect proven by a new failing fixture voids a run, and voiding reruns every arm
-of that seed, never only the arm that looked wrong.
+## Report
 
-## Measures
+Per (N, E, mix, probe) cell and arm, uncapped and capped (`cell_report`):
 
-Per instance and arm, uncapped and capped:
-- **Delivered bytes**: UTF-8 bytes of the output of every call in the procedure, summed (after path normalisation).
-- **Derivability**: 1 when the arm's parser returns the oracle's answer, else 0 (a miss, including "no answer").
-- **Calls** in the procedure.
+- **Bytes.** Per seed, the mean delivered bytes over its 10 instances. Across the 30 seeds: median, first and third
+  quartiles (`statistics.quantiles`, method `inclusive`), minimum and maximum. The per-seed values are in the results
+  file.
+- **Ratios.** For each bus arm over Ledger-raw and over Ledger-awk: the ratio of the medians and the ratio of the sums
+  of the per-seed values. A zero denominator is reported as `n/a: empty (numerator X, denominator 0)`, never imputed; a
+  zero numerator is a ratio of 0.
+- **Outcomes.** Instances derivable by the registered parser, of instances run; instances the parser cannot decide;
+  wrong instances; seeds with any miss, of 30.
+- **Agreement.** Oracle against each arm's parser, and the count of "no P7 candidate" instances.
 
-## Analysis
+Results go to `docs/evals/ctxbench-results.md` with the run's commit and the data-file hashes. No sentence in it says
+more than these numbers.
 
-- **Unit.** The seed. Each (N, E, mix, probe) cell has 30 seeds and M = 10 instances per seed. Per seed and arm: mean
-  bytes b over its instances, and derivability rate r over its instances.
-- **Bytes ratio** (arm A over arm B, per cell). Point estimate: the ratio of seed means, mean_s b_A(s) / mean_s
-  b_B(s). Interval: the per-seed log ratios d_s = ln(b_A(s) / b_B(s)) get a two-sided 95 per cent t interval (29 degrees
-  of freedom), exponentiated; the decision rules below use this interval (a geometric-mean ratio). The per-seed values
-  are published with the results.
-- **Derivability.** Per arm, the mean of r over seeds with a two-sided 95 per cent seed-level t interval. Differences
-  (arm A minus arm B) use the per-seed differences r_A(s) - r_B(s) the same way. When every per-seed value is equal
-  (for example every instance derivable in both arms), the t interval is undefined: the result is reported as the exact
-  counts, and its one-sided bound is the exact binomial bound on the instances (for 300 of 300, a miss rate below 1.23
-  per cent at one-sided 97.5 per cent).
-- **One convention.** Every interval in Stage 1 is two-sided 95 per cent at the seed level; every test below is the
-  matching one-sided t test (alpha 0.025 per side). In the all-equal case the non-inferiority p is exact: with zero
-  Bus-default misses among n instances where Ledger-raw also had none, p = 0.95^n (H0: a miss rate of at least 5 per
-  cent); with all per-seed differences equal to a value c, p = 0 when c > -0.05 and 1 otherwise.
-- **Comparisons** per cell: Bus-default / Ledger-raw (the hypotheses), Bus-complete / Ledger-raw, Ledger-awk /
-  Ledger-raw, and Bus-default / Bus-complete (whether `brief`'s defaults lose answers, the B-M3 question).
+## Fixtures
 
-### Hypotheses (Stage 1, Bus-default against Ledger-raw, uncapped)
+`scripts/ctxbench/fixture_sufficiency.py`, run by `tests/test_ctxbench_fixture.sh` in the suite, builds histories
+with the real CLI (one process per step), renders each ledger, and checks every registered procedure, adapter, parser,
+choice rule, time check and report function. Each also fails when the rule it covers is broken.
 
-- **H1** (secondary). At E = 50, for each N, mix and probe, the bytes ratio's interval lies inside the equivalence band
-  [0.8, 1.25]. An interval that contains 1.0 but leaves the band is inconclusive, not equivalence.
-- **H2** (primary family). At E = 5000, Bus-default is non-inferior on derivability (margin -5 percentage points) and
-  the bytes ratio's upper bound is below 0.5.
-- **Primary family.** N = 8, busy mix, E = 5000, probes P1, P2, P3, P4, P7: five H2 tests, Holm-corrected at
-  family-wise alpha 0.025 (one-sided). Each test's p-value is the larger of the non-inferiority p (one-sided t test of
-  mean r difference > -0.05) and the ratio p (one-sided t test of mean d_s < ln 0.5): H2 needs both (an
-  intersection-union test).
-- Everything else (H1, P5, P6, other cells, capped results, the other comparisons) is secondary, with the same
-  intervals and no correction. A secondary win cannot rescue a primary null.
+- **F1 (N1).** lead, alice, bob and carol join at 11:50; lead posts todo #1 to carol and #2 to bob at 12:10; carol
+  leaves at 12:20; bob leaves at 12:00 (A) or 12:20 (B). `me` alice at 12:30. P4 = {1} in A, {1, 2} in B for
+  Bus-complete and both ledger arms; Bus-default's parser cannot decide and its text is identical for A and B; without
+  `log show` or the `LEAVE` lines the two histories read the same.
+- **F2 (Codex finding 4).** Decision #1 with its subject on a continuation line (`parser` or `uploader`), then a note
+  whose body quotes a decision header. P5 = (1, parser) and (1, uploader) in every arm; the v1 recipe
+  (`grep 'kind=DECISION .* topic=decision '`, expand the last hit) prints identical text for both and is not registered.
+- **F3.** An expired claim, a claim whose expiry equals `now`, a takeover, a todo closed by a linked `done`, a question
+  replied to only by a note and an answer to that note, a broadcast question answered, `me`'s own broadcast question,
+  a claimed then released folder. P1, P3, P2 on four paths, P6 on three items, every arm.
+- **F4 (Codex re-check D).** The only open todo is to bob, who left after it was posted; P4 = {1}. Bus-default's parser
+  cannot decide, while `brief`'s `next` names `read --id 1` (recorded, not used).
+- **F5.** A decision whose subject sits past byte 2,048: Bus-complete reads it whole with `read --id`; Bus-default's
+  parser cannot decide.
+- **F6 (P7).** Three refreshes with `me` closing a todo and answering a question inside the windows and a todo owner
+  leaving: every arm's session parser gives the hand-derived triples.
+- **CAP.** A cut ledger source is a miss; cut JSON is a miss without parsing; a cut unused source (Bus-default's inbox)
+  changes nothing; a cut first P5 output makes no second call, in both arms that have one.
+- **GEN.** On scripted draws: type then actor, redraw with the actor, the note fallback; the resource rule and its
+  fallbacks; P2 and P6 with empty pools; the P7 scan (an agent leaving in the window is no candidate; the scan wraps;
+  no candidate at all); the checkpoint guard; the name pool past 40.
+- **TIME.** A reader taking over a second is a replay defect; a stored log time off the simulated times is a replay
+  defect.
+- **PARITY.** In every fixture history the bus's messages, the takeover alert included, equal the ledger's.
+- **REPORT.** A zero numerator, a zero denominator and 0/0 are kept and labelled; quartiles; outcome counts.
 
-### Decision table (per cell and comparison)
+## Data files
 
-Applied top to bottom; the first row that matches is the cell's label.
+Committed in this PR; a change is a registration repair. `data/corpus.txt` is generated by `gen_corpus.py`
+(a fixed grammar and `random.Random(20261119)`; 200 unique lines, 40 to 200 bytes each, corpus mean 90 to 130;
+`gen_corpus.py --check` proves the committed file is its output). The test checks these hashes.
 
-| Order | Row | Rule |
-| --- | --- | --- |
-| 1 | derivability loss | the derivability difference's upper bound is below -0.05 |
-| 2 | derivability not shown | the derivability difference's lower bound is below -0.05 |
-| 3 | cheaper by half | bytes ratio upper bound below 0.5 |
-| 4 | equivalent | bytes ratio interval inside [0.8, 1.25] |
-| 5 | cheaper | bytes ratio upper bound below 1.0 |
-| 6 | more expensive | bytes ratio lower bound above 1.0 |
-| 7 | inconclusive | anything else |
-
-Rows 1 and 2 report the bytes ratio beside the label but never as a saving.
-
-**Study-level rule.** The result says "the derived views save at least half the text at scale" only if H2 holds,
-after Holm, for all five primary probes; "for some probes" names the ones it holds for; otherwise "not shown". A
-derivability loss (row 1) on any primary probe is reported first, before any saving. A Bus-default loss to Bus-complete
-(row 1 in that comparison) is reported as "`brief`'s default limits are the wrong default" and is B-M3's input.
+| File | sha256 |
+| --- | --- |
+| `scripts/ctxbench/gen_corpus.py` | `dcb32a3b4b0e1f936e2cbd7d4cf54360969eb1be4ad0ceb47215a1061cb60d78` |
+| `scripts/ctxbench/data/corpus.txt` | `eb1338e9a99c90d55a99c7d4b7323e8256a744e734413670952ab174b9756321` |
+| `scripts/ctxbench/data/names.txt` | `1e01307a202d7dc90f3174e4f5d611d5a8fa47fbc97cd3d8047e9676569b78c2` |
+| `scripts/ctxbench/data/items.txt` | `ee3a22da6fbdba8307c1e17c0f3f030fbf45aad5e48376fd0f7a2a4fdf5921eb` |
 
 ## Seeds
 
@@ -407,21 +410,16 @@ Thirty base seeds, fixed now and used in every cell so arms and cells are paired
 `4127, 9341, 1586, 7203, 2648, 5519, 8872, 3065, 6794, 1930, 2417, 8156, 3742, 6081, 1299,`
 `7534, 4860, 9617, 5203, 3388, 7915, 1046, 6452, 2771, 8309, 4594, 9022, 5867, 3150, 7688`
 
-A history's seed is the first 8 bytes, big-endian, of `sha256("SEED:N:E:MIX")`; an instance's draws use
-`sha256("SEED:N:E:MIX:PROBE:INSTANCE")`. Stage 1 runs 2 x 3 x 3 x 7 x 4 x 30 x 10 = 151,200 procedure runs. It costs
-CPU time only.
-
-## Budget
-
-Stage 1 spends no tokens. Its runner refuses to start if any model credential or harness is configured in its
-environment.
+M = 10 instances per seed, cell and probe. Stage 1 runs 2 x 3 x 3 x 7 x 4 x 30 x 10 = 151,200 procedure runs. It
+costs CPU time only and spends no tokens; its runner refuses to start if a model credential or harness is configured
+in its environment.
 
 ## Threats to validity
 
 **Toward agentbus:**
 - The bus procedures and this document were written by the tool's authors. Mitigations: R3's format and recipes, the
-  Ledger-awk sensitivity arm, the independent oracle, and publication of one full ledger per cell.
-- Ledger-raw gets no prepared helper, so a bus win here says nothing against the protocol on a Markdown transport.
+  Ledger-awk arm, the independent oracle, and publication of one full ledger per cell.
+- Ledger-raw gets no prepared helper, so a bus result here says nothing against the protocol on a Markdown transport.
 - Bus errors that the oracle shares would be invisible; the oracle is written without reading the code.
 
 **Toward the ledger:**
@@ -429,12 +427,13 @@ environment.
   earn nothing. This is the read side only.
 - Ledger-raw's P7 keeps a private cursor and state; the bus arms recompute each refresh.
 - Bus-complete's `log show --limit -1` returns the whole log, including events P4 does not need.
+- Bus-default's parser does not use `next`, so some P4 states a reader could settle count as "cannot decide".
 - Ledger-awk's reducer text is not counted, and every ledger line holds a whole event, so `grep` returns exactly the
   events needed; a ledger written by agents would be messier.
-- Bus output is JSON, which may cost more tokens per byte than Markdown or less; Stage 1 says nothing about tokens.
+- JSON may cost more tokens per byte than Markdown, or fewer; Stage 1 says nothing about tokens.
 
 **Either way:**
-- Simulated histories and one corpus; the three mixes are a sensitivity check, not a guarantee.
+- Simulated histories and one generated corpus; the three mixes are a sensitivity check, not a guarantee.
 - Checkpoints sit in the last tenth of a history, so "history size" means E events.
 - Code reads the procedures; a model may read fewer or more. Stage 3 measures that.
 
@@ -443,35 +442,45 @@ environment.
 Stage 3 (a model with a shell answers the probes) is not registered by this document. Its own pre-registration,
 written after Stage 1's results, must contain at least the following, each made concrete:
 
-1. **Inference at the seed level.** Seeds are the unit (clusters); per-seed paired differences and per-seed log
-   ratios with t intervals, or exact sign-flip tests. No instance-level tests that treat a seed's instances as
-   independent.
-2. **More seeds over more instances**, for example 30 seeds x M = 2 rather than 10 x 5.
-3. **Power shown by clustered simulation** of the complete decision procedure (including Holm), covering perfect ties,
-   heavy-tailed per-seed costs and every permitted scope cut.
-4. **The H2 denominator** is each logged tool result tokenized once with the provider's own count of that exact text;
+1. **One cluster-valid procedure** for every interval, test and p-value, seeds as the unit (per-seed paired
+   differences and per-seed log ratios with t intervals, or exact sign-flip tests), with explicit bounds and p-values
+   for degenerate samples (perfect ties, all-equal differences). Never instance-level counts. The complete decision
+   procedure, Holm included, validated by simulation under clustered nulls and perfect ties (Codex re-check A).
+2. **One estimand per claim.** The point estimate, its interval and the wording of the claim concern the same
+   quantity; a geometric mean of per-seed ratios is reported and worded as that, never as "half the text" (Codex
+   re-check F).
+3. **Hypotheses, registered there:** H1, at small scale the token ratio's interval lies inside an equivalence band
+   (for example [0.8, 1.25]); an interval that merely contains 1 is inconclusive. H2, at large scale Bus-default is
+   non-inferior on correctness (for example a margin of -5 points) and its token ratio's upper bound is below 0.5. A
+   primary family with Holm correction and an intersection-union rule for H2.
+4. **A decision table** with rows for a correctness loss, correctness not shown, cheaper by half, equivalent, cheaper,
+   more expensive and inconclusive (and an inferior row), a precedence order, and a study-level rule; a correctness
+   loss is reported before any saving.
+5. **More seeds over more instances**, for example 30 seeds x M = 2 rather than 10 x 5.
+6. **Power shown by clustered simulation** of the complete decision procedure, covering perfect ties, heavy-tailed
+   per-seed costs and every permitted scope cut.
+7. **The H2 denominator** is each logged tool result tokenized once with the provider's own count of that exact text;
    no bytes-to-tokens calibration factor.
-5. **Ratios per model**, never silently pooled across models.
-6. **Admission** that reserves a worst case enforced per request (a hard output limit and a hard tool-result limit,
-   both in tokens) before dispatch, and charges unknown or missing usage pessimistically.
-7. **Whole paired seed blocks admitted before they start**, a fixed block order, arms interleaved inside a block, a
-   rule for every incomplete block, and a minimum confirmatory sample.
-8. **A pilot blinded to arm outcomes**: it reports usage and errors only, never correctness or ratios by arm.
-9. **A decision table** with rows for inferior, cheaper but not by half, and the others, a precedence order, and a
-   study-level rule.
-10. **Failures after the first tool call are arm outcomes**, never infrastructure replacements.
-11. **An exact answer-extraction rule** (the JSON object, where it must appear, what counts as unparseable).
-12. **Interpreter parity**: every arm's commands run through a wrapper with an absolute interpreter path; `python3` is
+8. **Ratios per model**, never silently pooled across models.
+9. **Admission** that reserves a worst case enforced per request (a hard output limit and a hard tool-result limit,
+   both in tokens) before dispatch, and charges unknown or missing usage pessimistically. Zero overage on every pool.
+10. **Whole paired seed blocks admitted before they start**, a fixed block order, arms interleaved inside a block, a
+    rule for every incomplete block, and a minimum confirmatory sample.
+11. **A pilot blinded to arm outcomes**: it reports usage and errors only, never correctness or ratios by arm.
+12. **Failures after the first tool call are arm outcomes**, never infrastructure replacements.
+13. **An exact answer-extraction rule** (the JSON object, where it must appear, what counts as unparseable).
+14. **Interpreter parity**: every arm's commands run through a wrapper with an absolute interpreter path; `python3` is
     absent from PATH in every arm, and the harness asserts it before each trial.
-13. **A P7 delivery specification**: how refreshes and interleaved events reach the model, and what each refresh
+15. **A P7 delivery specification**: how refreshes and interleaved events reach the model, and what each refresh
     prompt says.
-14. **The harness output cap** decided as part of the treatment (and then equal for all arms of a model) or raised
+16. **The harness output cap** decided as part of the treatment (and then equal for all arms of a model) or raised
     above every arm's largest output.
-15. Whether each arm is an enforced procedure or an instruction package, with permitted actions, batching, scratch
+17. Whether each arm is an enforced procedure or an instruction package, with permitted actions, batching, scratch
     state, call counting, and how departures from the arm's procedure are reported.
+18. **Zero-safe ratios**: the registered handling of zero numerators and denominators, tested.
 
 ## Change log
 
 Every change after this document merges is a new dated entry here, appended below: a registration repair with the
-failing fixture that proves it, or a value this document says is recorded later (the corpus hash, the spec's `P-`
-ids). Nothing above is ever edited.
+failing fixture that proves it, or a value this document says is recorded later (the spec's `P-` ids). Nothing above
+is ever edited.

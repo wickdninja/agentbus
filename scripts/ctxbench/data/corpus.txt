@@ -1,0 +1,200 @@
+Before I forget, the session check is slower than expected with escaped delimiters. The checks I ran are listed in the PR.
+Quick update: the retry loop is blocked since yesterday. I would rather fix it than skip the test.
+Before I forget, the error handling picked up a regression. Please do not merge until it is green.
+Small note: the config loader works locally for the large files.
+Once the review lands, the fixture data still fails since yesterday. I have not changed the public interface.
+After the last run, the release branch is blocked with escaped delimiters. Reverting is safe if we need to.
+After the last run, the cache layer still fails. I will look again after lunch.
+Quick update: the upload handler still fails on the second attempt. Ping me if you touch the same files.
+As of this morning, the retry loop is slower than expected with escaped delimiters.
+The rate limiter was rolled back when the input is empty. I will look again after lunch.
+Small note: the lint rule now passes with the old fixture. I have not changed the public interface.
+Small note: the new endpoint is ready for review after the rebase.
+Once the review lands, the build step lost its test coverage once the cache is warm. I will look again after lunch.
+For the record, the retry loop now passes. I have not changed the public interface.
+The batch job works locally with the old fixture.
+Before I forget, the docs page picked up a regression in the staging copy. This should not affect the other lanes.
+Heads up, the nightly export broke on main when the input is empty. The checks I ran are listed in the PR.
+The upload handler needs a decision with the old fixture. I will look again after lunch.
+As of this morning, the upload handler needs another pass with escaped delimiters. I have not changed the public interface.
+The release branch now passes in the staging copy. I have not changed the public interface.
+The rate limiter picked up a regression on the CI runner.
+Heads up, the build step still fails behind the feature flag. The checks I ran are listed in the PR.
+As of this morning, the session check is waiting on a reply on the CI runner. The logs are in the usual place.
+Heads up, the schema change needs a decision with escaped delimiters. I would rather fix it than skip the test.
+Once the review lands, the upload handler is blocked since yesterday. The checks I ran are listed in the PR.
+For the record, the release branch is half finished since yesterday. Reverting is safe if we need to.
+Quick update: the new endpoint picked up a regression with the old fixture. Ping me if you touch the same files.
+Small note: the build step is waiting on a reply behind the feature flag. Ping me if you touch the same files.
+The config loader picked up a regression on the CI runner. Please do not merge until it is green.
+Heads up, the fixture data broke on main with escaped delimiters. The checks I ran are listed in the PR.
+The config loader needs another pass behind the feature flag. I have not changed the public interface.
+The nightly export lost its test coverage once the cache is warm. The logs are in the usual place.
+After the last run, the retry loop needs another pass with escaped delimiters. Reverting is safe if we need to.
+Before I forget, the release branch is half finished. I will look again after lunch.
+The nightly export needs a decision. The checks I ran are listed in the PR.
+Before I forget, the rate limiter works locally on the second attempt. The logs are in the usual place.
+As of this morning, the session check broke on main under load.
+Quick update: the schema change picked up a regression.
+The parser change is slower than expected under load. I would rather fix it than skip the test.
+From what I can see, the upload handler is half finished for the large files. Reverting is safe if we need to.
+The retry loop is waiting on a reply on the CI runner. The checks I ran are listed in the PR.
+Small note: the docs page looks done for the large files. I would rather fix it than skip the test.
+Once the review lands, the retry loop picked up a regression with the old fixture. This should not affect the other lanes.
+Quick update: the config loader picked up a regression on the CI runner.
+Heads up, the config loader broke on main in the staging copy. This should not affect the other lanes.
+The upload handler was rolled back after the rebase.
+From what I can see, the error handling lost its test coverage under load. The logs are in the usual place.
+As of this morning, the upload handler needs another pass once the cache is warm. I will look again after lunch.
+Quick update: the session check needs a decision since yesterday. The logs are in the usual place.
+Quick update: the schema change still fails once the cache is warm. I will look again after lunch.
+Heads up, the migration script is ready for review after the rebase. The checks I ran are listed in the PR.
+Small note: the cache layer is slower than expected for the large files. This should not affect the other lanes.
+Quick update: the upload handler is slower than expected when the input is empty. I have not changed the public interface.
+Small note: the new endpoint was rolled back after the rebase. The logs are in the usual place.
+The rate limiter now passes with escaped delimiters. I have not changed the public interface.
+From what I can see, the config loader looks done on the CI runner. I have not changed the public interface.
+The migration script broke on main under load. This should not affect the other lanes.
+Quick update: the new endpoint works locally. Please do not merge until it is green.
+Heads up, the retry loop needs a decision behind the feature flag. I have not changed the public interface.
+Before I forget, the docs page picked up a regression in the staging copy. Reverting is safe if we need to.
+The config loader is blocked with escaped delimiters. I would rather fix it than skip the test.
+As of this morning, the new endpoint works locally once the cache is warm. The checks I ran are listed in the PR.
+As of this morning, the upload handler is ready for review for the large files.
+After the last run, the schema change is blocked once the cache is warm. Ping me if you touch the same files.
+The migration script lost its test coverage. The checks I ran are listed in the PR.
+The schema change is waiting on a reply with escaped delimiters. Ping me if you touch the same files.
+Before I forget, the timeout path was rolled back on the CI runner.
+From what I can see, the session check broke on main since yesterday.
+Once the review lands, the release branch broke on main since yesterday.
+After the last run, the upload handler is blocked on the second attempt. I have not changed the public interface.
+Before I forget, the cache layer needs another pass once the cache is warm.
+The migration script broke on main with the old fixture. The logs are in the usual place.
+After the last run, the cache layer now passes under load. Ping me if you touch the same files.
+Small note: the session check is slower than expected on the CI runner. The checks I ran are listed in the PR.
+For the record, the build step is ready for review in the staging copy. Please do not merge until it is green.
+Quick update: the error handling is waiting on a reply since yesterday. I would rather fix it than skip the test.
+Once the review lands, the release branch works locally on the CI runner. This should not affect the other lanes.
+As of this morning, the build step needs another pass since yesterday.
+Quick update: the nightly export is half finished since yesterday.
+The error handling was rolled back on the second attempt. Reverting is safe if we need to.
+As of this morning, the new endpoint is ready for review on the second attempt. Ping me if you touch the same files.
+Before I forget, the timeout path needs another pass with escaped delimiters. Reverting is safe if we need to.
+Before I forget, the release branch still fails for the large files. The logs are in the usual place.
+Small note: the rate limiter is blocked. Reverting is safe if we need to.
+Before I forget, the session check looks done since yesterday.
+Quick update: the error handling works locally on the CI runner.
+The error handling works locally for the large files.
+The lint rule needs another pass after the rebase.
+For the record, the fixture data looks done under load. I would rather fix it than skip the test.
+After the last run, the lint rule now passes on the CI runner. I will look again after lunch.
+Before I forget, the config loader lost its test coverage. The logs are in the usual place.
+The fixture data needs a decision on the second attempt. Please do not merge until it is green.
+After the last run, the batch job is blocked when the input is empty. I have not changed the public interface.
+From what I can see, the error handling needs a decision with escaped delimiters. I would rather fix it than skip the test.
+Heads up, the fixture data lost its test coverage once the cache is warm. Ping me if you touch the same files.
+Before I forget, the schema change now passes for the large files.
+Once the review lands, the parser change lost its test coverage on the second attempt.
+As of this morning, the parser change is half finished behind the feature flag. I will look again after lunch.
+The session check is blocked with the old fixture. Please do not merge until it is green.
+The config loader works locally with the old fixture. Ping me if you touch the same files.
+After the last run, the timeout path needs another pass for the large files. This should not affect the other lanes.
+Quick update: the nightly export needs another pass.
+Quick update: the nightly export was rolled back. Please do not merge until it is green.
+Small note: the schema change still fails when the input is empty. I will look again after lunch.
+As of this morning, the timeout path is blocked behind the feature flag. I have not changed the public interface.
+Heads up, the schema change is half finished with the old fixture. Please do not merge until it is green.
+Small note: the batch job looks done on the second attempt. Ping me if you touch the same files.
+From what I can see, the upload handler broke on main with escaped delimiters. I will look again after lunch.
+Heads up, the error handling needs another pass with the old fixture.
+The new endpoint is slower than expected since yesterday. The logs are in the usual place.
+As of this morning, the release branch is half finished after the rebase. I will look again after lunch.
+Quick update: the release branch looks done on the CI runner.
+For the record, the build step is waiting on a reply on the second attempt. I have not changed the public interface.
+As of this morning, the docs page is slower than expected in the staging copy. I have not changed the public interface.
+The flaky test needs another pass when the input is empty. Ping me if you touch the same files.
+As of this morning, the cache layer lost its test coverage for the large files. I will look again after lunch.
+The migration script is blocked after the rebase. I would rather fix it than skip the test.
+For the record, the docs page broke on main with the old fixture. Ping me if you touch the same files.
+The new endpoint is waiting on a reply for the large files. This should not affect the other lanes.
+Once the review lands, the release branch looks done under load. I have not changed the public interface.
+After the last run, the build step was rolled back on the CI runner. I will look again after lunch.
+The migration script is ready for review when the input is empty. The checks I ran are listed in the PR.
+After the last run, the rate limiter needs a decision under load. The checks I ran are listed in the PR.
+For the record, the docs page broke on main when the input is empty.
+Quick update: the lint rule needs a decision. Reverting is safe if we need to.
+As of this morning, the docs page picked up a regression behind the feature flag. The logs are in the usual place.
+Before I forget, the flaky test now passes once the cache is warm. Ping me if you touch the same files.
+The timeout path still fails behind the feature flag.
+Heads up, the error handling still fails on the second attempt. The logs are in the usual place.
+The upload handler still fails on the second attempt. The checks I ran are listed in the PR.
+The build step still fails in the staging copy.
+Before I forget, the nightly export is waiting on a reply after the rebase. The logs are in the usual place.
+After the last run, the retry loop was rolled back with the old fixture. Reverting is safe if we need to.
+As of this morning, the fixture data needs another pass with the old fixture.
+Small note: the release branch is slower than expected with escaped delimiters.
+The config loader broke on main after the rebase. This should not affect the other lanes.
+The migration script still fails under load. I will look again after lunch.
+The schema change picked up a regression in the staging copy. This should not affect the other lanes.
+The cache layer is ready for review after the rebase. I have not changed the public interface.
+Small note: the nightly export now passes after the rebase. The logs are in the usual place.
+The parser change picked up a regression once the cache is warm. The logs are in the usual place.
+The flaky test picked up a regression under load. The checks I ran are listed in the PR.
+Before I forget, the lint rule needs a decision under load. I will look again after lunch.
+The nightly export is blocked with escaped delimiters.
+Once the review lands, the upload handler now passes on the CI runner. The logs are in the usual place.
+Once the review lands, the build step was rolled back. Ping me if you touch the same files.
+The config loader broke on main with escaped delimiters. This should not affect the other lanes.
+As of this morning, the migration script is ready for review under load. The checks I ran are listed in the PR.
+Quick update: the batch job is ready for review since yesterday. The checks I ran are listed in the PR.
+From what I can see, the build step is ready for review once the cache is warm. I have not changed the public interface.
+As of this morning, the lint rule lost its test coverage since yesterday.
+As of this morning, the flaky test is waiting on a reply since yesterday. Reverting is safe if we need to.
+As of this morning, the retry loop works locally.
+Once the review lands, the upload handler needs a decision since yesterday. I have not changed the public interface.
+The rate limiter is half finished after the rebase. I have not changed the public interface.
+The nightly export is slower than expected in the staging copy.
+As of this morning, the batch job needs a decision for the large files.
+For the record, the batch job now passes on the second attempt.
+For the record, the parser change is waiting on a reply once the cache is warm. I have not changed the public interface.
+Once the review lands, the timeout path needs a decision once the cache is warm. This should not affect the other lanes.
+Quick update: the build step is slower than expected since yesterday. The logs are in the usual place.
+Heads up, the error handling works locally with escaped delimiters.
+For the record, the error handling is waiting on a reply with the old fixture. I will look again after lunch.
+From what I can see, the session check looks done when the input is empty. This should not affect the other lanes.
+Heads up, the config loader is blocked on the second attempt. Please do not merge until it is green.
+Small note: the nightly export was rolled back with the old fixture. I have not changed the public interface.
+Quick update: the migration script is ready for review on the CI runner. The logs are in the usual place.
+Heads up, the error handling looks done since yesterday. Ping me if you touch the same files.
+Heads up, the docs page is slower than expected after the rebase. I will look again after lunch.
+Heads up, the build step was rolled back since yesterday. I would rather fix it than skip the test.
+The schema change was rolled back behind the feature flag. Ping me if you touch the same files.
+Once the review lands, the error handling needs a decision on the CI runner. I will look again after lunch.
+The session check needs a decision in the staging copy. This should not affect the other lanes.
+Once the review lands, the fixture data still fails under load.
+As of this morning, the lint rule lost its test coverage on the second attempt. I will look again after lunch.
+The migration script is blocked with escaped delimiters.
+After the last run, the parser change lost its test coverage under load.
+As of this morning, the lint rule picked up a regression with escaped delimiters.
+The upload handler broke on main. I have not changed the public interface.
+Small note: the rate limiter is blocked. The logs are in the usual place.
+The lint rule works locally under load. This should not affect the other lanes.
+The error handling picked up a regression under load.
+Small note: the migration script looks done on the CI runner. I would rather fix it than skip the test.
+Before I forget, the fixture data looks done behind the feature flag. Reverting is safe if we need to.
+For the record, the new endpoint lost its test coverage on the second attempt.
+After the last run, the migration script broke on main with escaped delimiters. I would rather fix it than skip the test.
+Before I forget, the batch job is waiting on a reply on the CI runner. I will look again after lunch.
+From what I can see, the schema change now passes under load. I will look again after lunch.
+As of this morning, the build step picked up a regression for the large files.
+Once the review lands, the fixture data needs another pass since yesterday. Ping me if you touch the same files.
+From what I can see, the lint rule is blocked since yesterday.
+Quick update: the timeout path now passes on the second attempt. Please do not merge until it is green.
+From what I can see, the fixture data now passes.
+The config loader needs a decision on the CI runner. The checks I ran are listed in the PR.
+For the record, the migration script looks done on the CI runner. Please do not merge until it is green.
+The nightly export is waiting on a reply. I have not changed the public interface.
+Quick update: the config loader looks done behind the feature flag. The logs are in the usual place.
+The nightly export broke on main with escaped delimiters. I have not changed the public interface.
+Quick update: the batch job broke on main with escaped delimiters. I would rather fix it than skip the test.
+The parser change picked up a regression after the rebase. I have not changed the public interface.
