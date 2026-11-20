@@ -5190,8 +5190,9 @@ def q_claims(con, stale=False, limit=LISTING_LIMIT):
                WHERE ag.name IS NULL AND c.expires_at > ?
                ORDER BY c.resource"""
         return capped(con, q, (now(), now()), limit)
-    q = """SELECT *, CASE WHEN expires_at <= ? THEN 'expired' ELSE 'held' END AS state
-           FROM claims ORDER BY resource"""
+    # Live claims only (issue 86): an expired row is never listed. brief names the expired claims of holders still on the
+    # roster, the one place that row still matters (work a crash left).
+    q = """SELECT *, 'held' AS state FROM claims WHERE expires_at > ? ORDER BY resource"""
     return capped(con, q, (now(),), limit)
 
 
@@ -5935,7 +5936,7 @@ def register_release(sub):
 
 
 def register_claims(sub):
-    cl_list = sub("claims", help="List claims")
+    cl_list = sub("claims", help="List claims", description="List live claims. An expired claim is not shown; brief names the expired claims of agents still on the roster.")
     cl_list.add_argument("--stale", action="store_true", help="Show claims held by agents not on roster")
     limit_arg(cl_list, what="claims")
 
@@ -14315,6 +14316,36 @@ def _brief_expired_claims(con, limit):
     return [dict(r) for r in rows], more
 
 
+RULING_SCAN = 500        # the newest rulings brief reads to decide which still stand; older ones are not shown
+RULING_GENERIC_TOPICS = ("", "ruling", "rulings", "decision", "decisions")  # topics that label a ruling, not its subject
+RULING_WHERE = "(m.kind='decision' OR (m.topic='ruling' AND m.kind NOT IN ('question', 'answer')))"
+
+
+def _brief_rulings(con, limit):
+    """The rulings that still stand, newest first (issue 86): a ruling is a message of kind decision, or one on topic ruling
+    that is not a question or an answer. A later ruling replaces an earlier one when it replies to it directly, or when both
+    name the same subject as their topic (a topic in RULING_GENERIC_TOPICS, or none, names no subject). Only the newest
+    RULING_SCAN rulings are read; an older one is not shown, so a bus a lane flooded with decisions stays bounded."""
+    scan = con.execute(f"SELECT m.id AS id, substr(m.topic, 1, {BRIEF_NAME_MAX}) AS topic, m.reply_to AS reply_to FROM messages m "
+                       f"WHERE {RULING_WHERE} ORDER BY m.id DESC LIMIT ?", (RULING_SCAN,)).fetchall()
+    replaced, subjects, live = set(), set(), []
+    for r in scan:   # newest first: a ruling is live unless a newer one replaced it
+        topic = r["topic"] if isinstance(r["topic"], str) else ""
+        subject = None if topic.strip().lower() in RULING_GENERIC_TOPICS else topic
+        if r["id"] not in replaced and (subject is None or subject not in subjects):
+            live.append(r["id"])
+        if subject is not None:
+            subjects.add(subject)
+        if isinstance(r["reply_to"], int):
+            replaced.add(r["reply_to"])
+    shown = live if limit < 0 else live[:limit]
+    rows = []
+    if shown:
+        rows = con.execute(f"SELECT {_brief_msg_columns('m.')} FROM messages m WHERE m.id IN ({','.join('?' * len(shown))}) "
+                           "ORDER BY m.id DESC", shown).fetchall()
+    return _brief_rows(rows), len(live) - len(shown)
+
+
 def _brief_next(con, a, me_name, joined, unread_total):
     """(the one command to run next, the id of the todo it reads or None), addressed to the bus this brief read (--up N is
     kept: an inbox run on the inner bus would read and mark read messages the brief never showed). Unread first, then a
@@ -14356,7 +14387,10 @@ def cmd_brief(con, a):
     # who is here, and what each holds
     agent_rows, agents_more = capped(
         con, f"SELECT rowid AS rid, {cut('name', BRIEF_NAME_MAX)} AS name, {cut('role', BRIEF_NAME_MAX)} AS role, "
-             f"{cut('tool', BRIEF_NAME_MAX)} AS tool, last_seen FROM agents ORDER BY last_seen DESC, name", (), limit)
+             f"{cut('tool', BRIEF_NAME_MAX)} AS tool, last_seen FROM agents "
+             # an agent holding a live claim first, so a claim is never hidden behind agents seen more recently (issue 86)
+             f"ORDER BY EXISTS (SELECT 1 FROM claims c WHERE c.agent = agents.name AND c.expires_at > ?) DESC, last_seen DESC, name",
+        (t,), limit)
     agents = []
     for r in agent_rows:
         held, held_more = capped(
@@ -14367,6 +14401,7 @@ def cmd_brief(con, a):
                        "claims": [dict(c) for c in held], "claims_omitted": held_more})
     joined = bool(me_name) and con.execute("SELECT 1 FROM agents WHERE name=?", (me_name,)).fetchone() is not None
 
+    rulings, rulings_more = _brief_rulings(con, limit)
     questions, questions_more = _brief_open_questions(con, me_name, limit)
     todos, todos_more = _brief_open_todos(con, limit)
     expired, expired_more = _brief_expired_claims(con, limit)
@@ -14413,13 +14448,13 @@ def cmd_brief(con, a):
     fact_keys = [r["full_key"] for r in fact_rows]
     next_cmd, next_todo = _brief_next(con, a, me_name, joined, unread_total)
     result = {"bus": a._db, "me": {"name": me_name, "joined": joined} if me_name else None, "goal": goal,
-              "agents": {"items": agents}, "questions": {"items": questions},
+              "rulings": {"items": rulings}, "agents": {"items": agents}, "questions": {"items": questions},
               "todos": {"items": todos},
               "expired_claims": {"items": expired, "next": next_command(a, "--as", me_name or "NAME", "claim", "PATH", "--purpose", "WHY", as_=False) if expired or expired_more else None},
               "unread": {"total": unread_total, "items": unread},
               "pending_others": {"items": others, "next": next_command(a, "read", "--id", others[0]["id"], as_=False) if others else None},
               "facts": {"since": since, "items": [{k: v for k, v in row.items() if k != "full_key"} for row in _brief_rows(fact_rows)]},
-              "omitted": {"agents": agents_more, "questions": questions_more, "todos": todos_more, "expired_claims": expired_more,
+              "omitted": {"rulings": rulings_more, "agents": agents_more, "questions": questions_more, "todos": todos_more, "expired_claims": expired_more,
                           "unread": unread_more, "pending_others": others_more, "facts": facts_more},
               "next": next_cmd}
     warnings = bus_env_warnings(a.up)
@@ -14473,6 +14508,17 @@ def _brief_show(a, r, limit, next_todo=None, fact_keys=()):
              _brief_line(g["goal"], BRIEF_GOAL_MAX) + ("..." if g["truncated"] else ""))
     else:
         show("goal: none set")
+
+    rl = r["rulings"]["items"]
+    if rl or omitted["rulings"]:
+        show("rulings, newest first ({}):", len(rl) + omitted["rulings"])
+        for m in rl:
+            topic = f" ({_brief_line(m['topic'], 40)})" if m["topic"] else ""
+            show("#{} {}{}: {}", m["id"], _brief_line(m["sender"], 40), topic,
+                 _brief_cut(a, m["body"], BRIEF_BODY_TEXT, m["body_truncated"], "read", "--id", m["id"]), row=True)
+        more(omitted["rulings"])
+    else:
+        show("rulings: none")
 
     agents = r["agents"]["items"]
     if agents or omitted["agents"]:
@@ -14573,12 +14619,14 @@ def _brief_show(a, r, limit, next_todo=None, fact_keys=()):
 
 def register_brief(sub):
     b = sub("brief", help="The agent's first call: the goal, who holds what, open questions, unread handoffs, changed facts",
-            description="The agent's first call, after join and whenever it comes back: what is going on, in one short read. It shows the goal; who is here and what "
-                        "each holds and why; open questions; what is pending between other agents; your unread handoffs and alerts; "
+            description="The agent's first call, after join and whenever it comes back: what is going on, in one short read. It shows the goal; the rulings that still stand; who is here and what "
+                        "each holds and why (agents holding a live claim first); open questions; what is pending between other agents; your unread handoffs and alerts; "
                         "facts changed since your last read; and one next: line with the command to run. It only reads: it never marks anything read, so run inbox afterwards to "
                         "consume your messages. An open question has the kind question, is addressed to you or to everyone, and has no "
                         "answer: no message of kind answer replies to it directly (an answer to a reply to it does not count). Open todos are every todo no done or dropped replies to, whoever owns it: the owner is the named recipient, else the sender. Expired claims, when their holder is still on the roster, are listed with the plain claim command. Pending between others are the same unanswered questions, and handoffs and alerts that the agent they name has not yet read, when they are addressed to another agent by name; next: shows how to read one. Changed facts are those "
                         "updated since the last message you read with inbox (every fact before a first read), except your own and the goal. "
+                        "A ruling is a message of kind decision, or one on topic ruling that is not a question or an answer; a later ruling replaces one it replies to, "
+                        "or one with the same topic when the topic names a subject (not ruling or decision). "
                         "Without --as it shows the bus as a bystander: no unread, and only questions to everyone.")
     limit_arg(b, default=BRIEF_LIMIT, what="rows in each section")
 
@@ -14603,6 +14651,7 @@ CONTRACT["commands"]["brief"] = _cmd(
     "What is going on: the goal, who holds what, open questions, unread handoffs and alerts, changed facts, and the next command",
     _o({"bus": _STR, "me": {"anyOf": [{"type": "null"}, _o({"name": _STR, "joined": _BOOL})]},
         "goal": {"anyOf": [{"type": "null"}, _ref("BriefGoal")]},
+        "rulings": _o({"items": _list(_ref("BriefMessage"))}),
         "agents": _o({"items": _list(_ref("BriefAgent"))}),
         "questions": _o({"items": _list(_ref("BriefMessage"))}),
         "todos": _o({"items": _list(_ref("BriefTodo"))}),
@@ -14610,7 +14659,7 @@ CONTRACT["commands"]["brief"] = _cmd(
         "unread": _o({"total": _INT, "items": _list(_ref("BriefMessage"))}),
         "pending_others": _o({"items": _list(_ref("BriefMessage")), "next": _NSTR}),
         "facts": _o({"since": _NSTR, "items": _list(_ref("BriefFact"))}),
-        "omitted": _o({"agents": _INT, "questions": _INT, "todos": _INT, "expired_claims": _INT, "unread": _INT, "pending_others": _INT, "facts": _INT}),
+        "omitted": _o({"rulings": _INT, "agents": _INT, "questions": _INT, "todos": _INT, "expired_claims": _INT, "unread": _INT, "pending_others": _INT, "facts": _INT}),
         "next": _STR, "warnings": _list(_ref("Warning"))}, optional=("warnings",)))
 
 

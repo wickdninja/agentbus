@@ -293,9 +293,10 @@ section 11; the CLI's exit codes for them live in the binding.
 
 ### claims
 
-The claims listing returns every stored claim, live and expired, each with `state` `held` or `expired` by
-P-CLAIM-8. `claims --stale` lists only live claims of names not on the roster. Expired rows are not deleted by
-expiry; a later claim of the same resource replaces the row.
+The claims listing returns live claims only, each with `state` `held` (P-CLAIM-8); an expired row is never listed, in
+`claims` or `status`. `brief` names the expired claims of holders still on the roster. `claims --stale` lists only live
+claims of names not on the roster. Expired rows are not deleted by expiry; a later claim of the same resource replaces
+the row.
 
 ### log
 

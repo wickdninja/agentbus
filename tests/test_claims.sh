@@ -297,7 +297,8 @@ agentbus --as exa claim ex/dir/ --ttl-min 1 >/dev/null
 python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("UPDATE claims SET expires_at=? WHERE agent=?", ("2020-01-01T00:00:00Z", "exa")); c.commit()' "$AGENTBUS_DB"
 outof agentbus --as exb claim ex/a.py >/dev/null
 outof agentbus --as exb claim ex/dir/sub.py >/dev/null
-[ "$(agentbus --json claims | python3 -c 'import json,sys; print(" ".join(sorted(r["resource"]+"@"+r["agent"] for r in json.load(sys.stdin)["items"] if r["resource"].startswith("ex/"))))')" = "ex/a.py@exb ex/dir/@exa ex/dir/sub.py@exb" ] \
+# exa's expired ex/dir/ stays stored but is not listed (claims shows live claims only, issue 86 T2)
+[ "$(agentbus --json claims | python3 -c 'import json,sys; print(" ".join(sorted(r["resource"]+"@"+r["agent"] for r in json.load(sys.stdin)["items"] if r["resource"].startswith("ex/"))))')" = "ex/a.py@exb ex/dir/sub.py@exb" ] \
   || fail "expired claims: $(agentbus --json claims)"
 agentbus --as exa claim ex/b.py >/dev/null
 expect_fail "ex/b.py is claimed by exa" agentbus --as exb claim ex/b.py
@@ -544,8 +545,9 @@ export AGENTBUS_DB="$TMP/boundary.db"
 agentbus --as eb1 join >/dev/null; agentbus --as eb2 join >/dev/null
 exp=$(AGENTBUS_TEST_NOW=2030-01-01T10:00:00Z agentbus --as eb1 --json claim edge.py --ttl-min 1 | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["expires_at"])')
 [ "$exp" = 2030-01-01T10:01:00Z ] || fail "the claim did not expire one minute after the pinned clock: $exp"
-AGENTBUS_TEST_NOW="$exp" agentbus --json claims | "$PY" -c 'import json,sys; s={c["resource"]: c["state"] for c in json.load(sys.stdin)["items"]}; assert s == {"edge.py": "expired"}, s' \
-  || fail "claims shows a claim at expires_at == now as held, not expired"
+# Issue 86 T2: claims lists live claims only; at expires_at == now the claim is gone from the listing (brief keeps it).
+AGENTBUS_TEST_NOW="$exp" agentbus --json claims | "$PY" -c 'import json,sys; s={c["resource"]: c["state"] for c in json.load(sys.stdin)["items"]}; assert s == {}, s' \
+  || fail "claims shows a claim at expires_at == now"
 AGENTBUS_TEST_NOW="$exp" agentbus --json brief | "$PY" -c 'import json,sys; e=[c["resource"] for c in json.load(sys.stdin)["expired_claims"]["items"]]; assert e == ["edge.py"], e' \
   || fail "brief does not list the claim at expires_at == now as expired"
 before_expiry=2030-01-01T10:00:30Z
@@ -554,4 +556,24 @@ AGENTBUS_TEST_NOW="$before_expiry" agentbus --json claims | "$PY" -c 'import jso
 AGENTBUS_TEST_NOW="$exp" agentbus --as eb2 --json claim edge.py | "$PY" -c 'import json,sys; r=json.load(sys.stdin); assert r["agent"] == "eb2", r' \
   || fail "another agent could not claim at expires_at == now"
 ok "at expires_at == now the claim is expired in claims and brief, and another agent may take it"
+
+echo
+echo "TEST: claims lists live claims only; an expired row is never shown, in text, --json, --limit or status (issue 86 T2)"
+# Bug it catches: every expired row came back on every claims call (406 of 406 rows on one bus were expired), the
+# biggest share of a Codex lane's agentbus output.
+export AGENTBUS_DB="$TMP/live-only.db"
+agentbus --as lv1 join >/dev/null
+for i in 1 2 3; do agentbus --as lv1 claim "old$i.py" --ttl-min 1 >/dev/null; done
+agentbus --as lv1 claim live.py >/dev/null
+python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("UPDATE claims SET expires_at=? WHERE resource LIKE ?", ("2020-01-01T00:00:00Z", "old%")); c.commit()' "$AGENTBUS_DB"
+o=$(agentbus claims)
+case "$o" in *old*|*expired*) fail "claims shows an expired row: $o" ;; esac
+case "$o" in *live.py*) ;; *) fail "claims lost the live claim: $o" ;; esac
+[ "$(agentbus --json claims | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print([c["resource"] for c in d["items"]], d["has_more"])')" = "['live.py'] False" ] \
+  || fail "claims --json is not the live claim alone: $(agentbus --json claims)"
+[ "$(agentbus --json claims --limit 1 | "$PY" -c 'import json,sys; d=json.load(sys.stdin); print([c["resource"] for c in d["items"]], d["has_more"])')" = "['live.py'] False" ] \
+  || fail "claims --limit 1 counts expired rows: $(agentbus --json claims --limit 1)"
+agentbus --json status | "$PY" -c 'import json,sys; d=json.load(sys.stdin); r=[c["resource"] for c in d["claims"]]; assert r == ["live.py"] and d["omitted"]["claims"] == 0, d["claims"]' \
+  || fail "status lists an expired claim"
+ok "claims and status list live claims only"
 echo "All tests passed!"
