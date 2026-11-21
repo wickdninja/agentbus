@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch W1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="../assets/sb.css">
+<script>
+  window.SB_NEW = "W1";
+  window.SB_LABELS = { captured: "today, drawn by the real watch", mocked: "W1 design, drawn with watch's own code" };
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · W1</a>
+  <nav class="nav">
+    <a href="index.html" aria-current="page">Overview</a>
+    <a href="nothing.html">Nothing needs you</a>
+    <a href="needs-you.html">Two need you</a>
+    <a href="many.html">Many</a>
+    <a href="narrow.html">80 columns</a>
+    <a href="other-buses.html">Other buses</a>
+    <a href="reply.html">Reply</a>
+    <a href="themes.html">Light and dark</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+<div class="lede">
+  <h1>Watch opens on what needs you</h1>
+  <p>Today watch shows everything at once, and a question for you looks like every other line. With W1 it starts with the few things only you can settle, then who is working, then everything else.</p>
+</div>
+
+<section class="frame">
+  <h2>The screens</h2>
+  <div class="toc"><section><ol>
+    <li><a href="nothing.html"><span class="n">1</span><span><b>Nothing needs you</b><em>One plain line, then who is working.</em></span></a></li>
+    <li><a href="needs-you.html"><span class="n">2</span><span><b>Two things need you</b><em>A question and a handoff, each with its age, who sent it and a key.</em></span></a></li>
+    <li><a href="many.html"><span class="n">3</span><span><b>Many things need you</b><em>The four that have waited longest, and a line for the rest.</em></span></a></li>
+    <li><a href="narrow.html"><span class="n">4</span><span><b>A narrow terminal</b><em>The same screens at 80 columns.</em></span></a></li>
+  </ol></section><section><ol>
+    <li><a href="other-buses.html"><span class="n">5</span><span><b>Other buses</b><em>Work waiting in another folder, in one line.</em></span></a></li>
+    <li><a href="reply.html"><span class="n">6</span><span><b>You press 1</b><em>What is copied, and what the screen says.</em></span></a></li>
+    <li><a href="themes.html"><span class="n">7</span><span><b>Light and dark terminals</b><em>The same screen in both.</em></span></a></li>
+  </ol></section></div>
+</section>
+
+<section class="frame">
+  <h2>What counts as needing you</h2>
+  <p>Two kinds of message, and only when they are sent to you by name.</p>
+  <div class="rules"><div><b>A question</b><span>Needs you until you answer it.</span></div><div><b>A handoff</b><span>Needs you until you reply to it, with anything.</span></div><div><b>Order</b><span>The one that has waited longest comes first.</span></div><div><b>Working now</b><span>Every agent holding files right now, with what it is doing. This takes the place of the Agents and Claims lists; both are one Tab away.</span></div></div>
+</section>
+
+<section class="frame">
+  <h2>Turn it on</h2>
+  <p>Watch needs to know which name is yours. Put this in your shell profile once:</p>
+  <div class="context">export AGENTBUS_OWNER=nate</div>
+  <p style="margin-top:18px">Your agents already send to you by this name. Without it, watch looks as it does today, with one line at the top saying how to turn this on.</p>
+</section>
+
+<section class="frame">
+  <h2>How we will know it works</h2>
+  <p>Two numbers, read from the bus on both machines, before and after W1 ships.</p>
+  <div class="rules"><div><b>Time to your answer</b><span>The middle value, in minutes, from a question sent to you until your answer. Lower is better.</span></div><div><b>Left waiting</b><span>How many questions and handoffs to you waited more than an hour without a reply, per day. Lower is better.</span></div><div><b>And we ask you</b><span>Once, in the next cycle: does watch show you what you need first?</span></div></div>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="../frames/w1.js"></script>
+<script src="../assets/term.js"></script>
+</body>
+</html>

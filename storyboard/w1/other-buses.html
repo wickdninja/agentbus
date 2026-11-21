@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Other buses</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="../assets/sb.css">
+<script>
+  window.SB_NEW = "W1";
+  window.SB_LABELS = { captured: "today, drawn by the real watch", mocked: "W1 design, drawn with watch's own code" };
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · W1</a>
+  <nav class="nav">
+    <a href="index.html">Overview</a>
+    <a href="nothing.html">Nothing needs you</a>
+    <a href="needs-you.html">Two need you</a>
+    <a href="many.html">Many</a>
+    <a href="narrow.html">80 columns</a>
+    <a href="other-buses.html" aria-current="page">Other buses</a>
+    <a href="reply.html">Reply</a>
+    <a href="themes.html">Light and dark</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+<div class="lede">
+  <h1>Other buses</h1>
+  <p>Work in another folder can be waiting for you too. Watch adds one line under your list, and the count in the top bar.</p>
+</div>
+<section class="frame">
+  <h2><span class="n">5</span>Two other buses wait for you</h2>
+  <p>The hub has one thing for you and kidmath has two. The count in the top bar says 3 elsewhere.</p>
+  <figure class="term" data-set="mocked" data-frame="others-100"></figure>
+</section>
+<section class="frame">
+  <h2><span class="n"></span>Nothing here, one elsewhere</h2>
+  <p>Nothing waits in this folder, so the first line says so; the next says where to look.</p>
+  <div class="grid pair"><figure class="term" data-set="mocked" data-frame="calm-others-100"></figure><figure class="term" data-set="mocked" data-frame="others-80" data-title="80 columns"></figure></div>
+</section>
+<section class="frame">
+  <h2><span class="n"></span>The rules</h2>
+  <p></p>
+  <div class="rules"><div><b>Which buses</b><span>The ones agentbus already remembers on this machine, the same list agentbus update uses.</span></div><div><b>What it says</b><span>Each folder and how many things wait there for you. Too long for the line: just the totals.</span></div><div><b>To answer them</b><span>Open watch in that folder.</span></div></div>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="../frames/w1.js"></script>
+<script src="../assets/term.js"></script>
+</body>
+</html>

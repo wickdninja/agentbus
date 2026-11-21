@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two need you</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="../assets/sb.css">
+<script>
+  window.SB_NEW = "W1";
+  window.SB_LABELS = { captured: "today, drawn by the real watch", mocked: "W1 design, drawn with watch's own code" };
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · W1</a>
+  <nav class="nav">
+    <a href="index.html">Overview</a>
+    <a href="nothing.html">Nothing needs you</a>
+    <a href="needs-you.html" aria-current="page">Two need you</a>
+    <a href="many.html">Many</a>
+    <a href="narrow.html">80 columns</a>
+    <a href="other-buses.html">Other buses</a>
+    <a href="reply.html">Reply</a>
+    <a href="themes.html">Light and dark</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+<div class="lede">
+  <h1>Two things need you</h1>
+  <p>A question from tests and a handoff from worker. Each shows how long it has waited, who sent it, its first line, and the key that copies your reply.</p>
+</div>
+<section class="frame">
+  <h2><span class="n">2</span>A question and a handoff</h2>
+  <p>Switch to Today to compare: today the question is message #4 in the list, the same size as everything around it.</p>
+  <figure class="term" data-compare="captured:needs-100,mocked:needs-100"></figure>
+</section>
+<section class="frame">
+  <h2><span class="n"></span>How each line reads</h2>
+  <p>From left to right.</p>
+  <div class="rules"><div><b>1</b><span>The key. Press it to copy the reply for this one.</span></div><div><b>tests asks</b><span>Who sent it, in that agent's colour, and what it wants: asks, or hands off.</span></div><div><b>Should an expired token…</b><span>The first line of the message. Enter opens the whole thing.</span></div><div><b>12m</b><span>How long it has waited. Bold once it has waited an hour.</span></div><div><b>waiting longest 12m</b><span>The age of the oldest one, on the title line.</span></div></div>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="../frames/w1.js"></script>
+<script src="../assets/term.js"></script>
+</body>
+</html>

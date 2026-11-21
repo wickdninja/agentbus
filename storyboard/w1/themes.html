@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal themes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="../assets/sb.css">
+<script>
+  window.SB_NEW = "W1";
+  window.SB_LABELS = { captured: "today, drawn by the real watch", mocked: "W1 design, drawn with watch's own code" };
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · W1</a>
+  <nav class="nav">
+    <a href="index.html">Overview</a>
+    <a href="nothing.html">Nothing needs you</a>
+    <a href="needs-you.html">Two need you</a>
+    <a href="many.html">Many</a>
+    <a href="narrow.html">80 columns</a>
+    <a href="other-buses.html">Other buses</a>
+    <a href="reply.html">Reply</a>
+    <a href="themes.html" aria-current="page">Light and dark</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+<div class="lede">
+  <h1>Light and dark terminals</h1>
+  <p>Watch uses your terminal's own colours, so it follows whatever theme you run. Here is the same screen in both.</p>
+</div>
+<section class="frame">
+  <h2><span class="n">7</span>Two need you, light and dark</h2>
+  <p>Yellow is the one accent: the top bar, the Needs you title and its keys. Agents keep their own colours. Green appears only on "copied".</p>
+  <div class="grid two"><figure class="term" data-set="mocked" data-frame="needs-100" data-title="light terminal" data-term-theme="light"></figure><figure class="term" data-set="mocked" data-frame="needs-100" data-title="dark terminal" data-term-theme="dark"></figure></div>
+</section>
+<section class="frame">
+  <h2><span class="n"></span>Copied, light and dark</h2>
+  <p></p>
+  <div class="grid two"><figure class="term" data-set="mocked" data-frame="copied-80" data-title="light terminal" data-term-theme="light"></figure><figure class="term" data-set="mocked" data-frame="copied-80" data-title="dark terminal" data-term-theme="dark"></figure></div>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="../frames/w1.js"></script>
+<script src="../assets/term.js"></script>
+</body>
+</html>

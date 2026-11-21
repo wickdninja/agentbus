@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reply copied</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="../assets/sb.css">
+<script>
+  window.SB_NEW = "W1";
+  window.SB_LABELS = { captured: "today, drawn by the real watch", mocked: "W1 design, drawn with watch's own code" };
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · W1</a>
+  <nav class="nav">
+    <a href="index.html">Overview</a>
+    <a href="nothing.html">Nothing needs you</a>
+    <a href="needs-you.html">Two need you</a>
+    <a href="many.html">Many</a>
+    <a href="narrow.html">80 columns</a>
+    <a href="other-buses.html">Other buses</a>
+    <a href="reply.html" aria-current="page">Reply</a>
+    <a href="themes.html">Light and dark</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+<div class="lede">
+  <h1>You press 1</h1>
+  <p>Watch copies the reply command for the question, shows exactly what it copied under that line, and says what to do next.</p>
+</div>
+<section class="frame">
+  <h2><span class="n">6</span>Copied</h2>
+  <p>The command answers message #4 as you. Paste it, type your answer between the quotes, press Enter.</p>
+  <div class="grid pair"><figure class="term" data-set="mocked" data-frame="copied-100"></figure><figure class="term" data-set="mocked" data-frame="copied-80" data-title="80 columns"></figure></div>
+</section>
+<section class="frame">
+  <h2><span class="n"></span>What is copied</h2>
+  <p>For the question from tests:</p>
+  <div class="context">agentbus --as nate post --to tests --reply-to 4 --kind answer "..."</div>
+</section>
+<section class="frame">
+  <h2><span class="n"></span>The rules</h2>
+  <p></p>
+  <div class="rules"><div><b>A question</b><span>The copied command answers it, so it leaves your list once you send it.</span></div><div><b>A handoff</b><span>The copied command replies to it; any reply from you takes it off your list.</span></div><div><b>How long</b><span>The copied line stays until the next key you press.</span></div><div><b>If paste fails</b><span>The command is on screen, so you can select it by hand.</span></div></div>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="../frames/w1.js"></script>
+<script src="../assets/term.js"></script>
+</body>
+</html>

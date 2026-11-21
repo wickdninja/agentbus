@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Narrow terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="../assets/sb.css">
+<script>
+  window.SB_NEW = "W1";
+  window.SB_LABELS = { captured: "today, drawn by the real watch", mocked: "W1 design, drawn with watch's own code" };
+</script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="index.html">agentbus · W1</a>
+  <nav class="nav">
+    <a href="index.html">Overview</a>
+    <a href="nothing.html">Nothing needs you</a>
+    <a href="needs-you.html">Two need you</a>
+    <a href="many.html">Many</a>
+    <a href="narrow.html" aria-current="page">80 columns</a>
+    <a href="other-buses.html">Other buses</a>
+    <a href="reply.html">Reply</a>
+    <a href="themes.html">Light and dark</a>
+  </nav>
+  <div class="themes" role="group" aria-label="Theme">
+    <button type="button" data-theme-set="auto">Auto</button>
+    <button type="button" data-theme-set="light">Light</button>
+    <button type="button" data-theme-set="dark">Dark</button>
+  </div>
+</header>
+<main>
+<div class="lede">
+  <h1>A narrow terminal</h1>
+  <p>At 80 columns every line keeps its key, sender and age; the message is cut to fit, and Enter opens it whole.</p>
+</div>
+<section class="frame">
+  <h2><span class="n">4</span>Two need you, at 80 columns</h2>
+  <p></p>
+  <figure class="term" data-compare="captured:needs-80,mocked:needs-80" data-title="80 columns"></figure>
+</section>
+<section class="frame">
+  <h2><span class="n"></span>Many, at 80 columns</h2>
+  <p></p>
+  <figure class="term" data-compare="captured:many-80,mocked:many-80" data-title="80 columns"></figure>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.js"></script>
+<script src="../frames/w1.js"></script>
+<script src="../assets/term.js"></script>
+</body>
+</html>
