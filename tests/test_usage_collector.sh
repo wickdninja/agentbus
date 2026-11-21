@@ -476,6 +476,118 @@ jsonl(compact / "claude" / "p" / "main.jsonl", orient("o1", None, "startup") + o
 chooks = json.loads(subprocess.check_output([sys.executable, str(script), "--cycle", "1", "--bus-root", str(compact), "--claude-root", str(compact / "claude"), "--codex-root", str(compact / "none"), "--history", str(compact / "none"), "--output", "-"], text=True, timeout=15))["workspaces"]["personal"]["hooks"]
 assert chooks["types"]["orientation"]["injections"] == 4 and chooks["compact_orientations"] == 2, chooks["compact_orientations"]
 print("PASS: orientations delivered by a compact SessionStart are flagged")
+
+# Each addition has an isolated bus population; collect all regression failures
+# so the pre-change run demonstrates that all three features are missing.
+addition_failures = []
+def addition(name, check):
+    try:
+        check()
+    except (AssertionError, KeyError, SystemExit) as error:
+        addition_failures.append(name)
+        print("FAIL: " + name + " (" + type(error).__name__ + ")")
+    else:
+        print("PASS: " + name)
+
+def fixture_args(folder, *extra):
+    return ["--cycle", "1", "--bus-root", str(folder), "--retired-root", str(folder / "none"),
+            "--claude-root", str(folder / "claude"), "--codex-root", str(folder / "codex"),
+            "--history", str(folder / "none"), "--start", ts, "--end", "2026-01-01T02:00:00Z", *extra]
+
+def fixture_collect(folder, *extra):
+    result = collect.Collector(collect.arguments(fixture_args(folder, *extra))).collect()
+    collect.validate_cycle(result)
+    assert all(secret not in json.dumps(result) for secret in leaks)
+    return result["workspaces"]["personal"]
+
+def ghost_fixture():
+    folder = temp / "ghosts"
+    con = db_at(folder / "live" / "bus.db")
+    names = ("poster", "claimant", "logged-claim", "cursor-reader", "logged-reader",
+             "zero-cursor", "old-cursor", "old-post", "old-claim", "old-read", "join-only", private)
+    con.executemany("INSERT INTO agents VALUES(?,?,?,?)", [(n, private, ts, end) for n in names])
+    old = "2025-12-31T23:59:00Z"
+    con.executemany("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)", [
+        (1, old, "old-post", "*", "note", private, private, None),
+        (2, ts, "poster", "*", "note", private, private, None),
+    ])
+    con.executemany("INSERT INTO claims VALUES(?,?,?,?,?)", [
+        ("current", "claimant", private, ts, end), ("old", "old-claim", private, old, end),
+    ])
+    con.executemany("INSERT INTO cursors VALUES(?,?)", [("cursor-reader", 2), ("zero-cursor", 0), ("old-cursor", 1)])
+    con.executemany("INSERT INTO log VALUES(?,?,?,?,?)", [
+        (1, ts, "logged-reader", "read", private), (2, old, "old-read", "read", private),
+        (3, ts, "join-only", "join", private), (4, ts, "logged-claim", "claim", private),
+    ])
+    con.commit()
+    con.close()
+    # A bus without a log still recognizes cursor movement and snapshot claims.
+    con = db_at(folder / "no-log" / "bus.db")
+    con.execute("DROP TABLE log")
+    con.executemany("INSERT INTO agents VALUES(?,?,?,?)", [(n, private, ts, end) for n in ("reader", "ghost")])
+    con.execute("INSERT INTO messages VALUES(1,?,?,?,?,?,?,NULL)", (ts, "unrostered", "reader", "note", private, private))
+    con.execute("INSERT INTO cursors VALUES('reader',1)")
+    con.commit()
+    con.close()
+    assert fixture_collect(folder)["peer"]["ghost_roster_rows"] == 8
+    narrow = fixture_collect(folder, "--start", end)
+    assert narrow["peer"]["ghost_roster_rows"] == 14
+
+def owner_fixture():
+    folder = temp / "owners"
+    con = db_at(folder / "live" / "bus.db")
+    owner1, owner2 = leaks[1:3]
+    con.executemany("INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)", [
+        (1, ts, "a", owner1, "question", private, private, None),
+        (2, "2026-01-01T00:02:00Z", owner1, "*", "note", private, private, 1),
+        (3, ts, "b", owner2, "handoff", private, private, None),
+        (4, "2026-01-01T00:08:00Z", owner2, "b", "note", private, private, None),
+        (5, ts, "c", owner1, "question", private, private, None),
+        (6, "2026-01-01T00:20:00Z", owner1, "c", "question", private, private, None),
+        (7, ts, "d", owner1, "handoff", private, private, None),
+        (8, "2026-01-01T01:30:00Z", "e", owner2, "question", private, private, None),
+        (9, ts, "f", owner1, "note", private, private, None),
+        (10, ts, "x", "other", "question", private, private, None),
+        (11, "2025-12-31T23:59:00Z", owner1, "d", "note", private, private, None),
+        (12, "2026-01-01T02:01:00Z", owner1, "d", "answer", private, private, 7),
+        (13, "2026-01-01T00:30:00Z", "stranger", "e", "answer", private, private, 8),
+        (14, "2026-01-01T00:40:00Z", owner2, "b", "answer", private, private, 3),
+    ])
+    con.commit()
+    con.close()
+    assert all(value == 0 for value in fixture_collect(folder)["owner"].values())
+    metrics = fixture_collect(folder, "--owner-name", owner1, "--owner-name", owner2, "--owner-name", owner1)["owner"]
+    assert metrics == dict(questions_to_owner=5, answered=3, answer_minutes_p50=8, unanswered_after_1h=1), metrics
+    # The hour threshold is inclusive, and only requests in the window count.
+    metrics = fixture_collect(folder, "--owner-name", owner1, "--end", end)["owner"]
+    assert metrics == dict(questions_to_owner=3, answered=2, answer_minutes_p50=11, unanswered_after_1h=1), metrics
+
+def log_verb_fixture():
+    folder = temp / "removed-log"
+    base = dict(timestamp=ts, sessionId="removed-log", cwd=personal_cwd)
+    records = []
+    for i, (cmd, out) in enumerate([
+        ("agentbus log show", "agentbus: unknown command 'log'"),
+        ("agentbus log add hi", "usage: agentbus\nagentbus: error: argument cmd: invalid choice: 'log' (choose from 'join', 'post')"),
+        ("agentbus post hi; agentbus log show", '{"error": {"code": "bad_input", "message": "unknown command log"}}'),
+        ("agentbus invented", "agentbus: unknown command 'invented'"),
+    ]):
+        records.extend([
+            dict(base, type="assistant", uuid="log-a%d" % i, message={"content": [{"type": "tool_use", "id": str(i), "name": "Bash", "input": {"command": cmd}}]}),
+            dict(base, type="user", uuid="log-u%d" % i, message={"content": [{"type": "tool_result", "tool_use_id": str(i), "content": out}]}),
+        ])
+    jsonl(folder / "claude" / "main.jsonl", records)
+    verbs = fixture_collect(folder)["verbs"]["claude"]
+    assert verbs["log"]["calls"] == verbs["log"]["failures"] == 3
+    assert verbs["log"]["failures_by_text"]["log_verb"] == 3
+    assert verbs["log"]["failures_by_text"]["unknown_command"] == 0
+    assert verbs["unknown"]["failures_by_text"]["unknown_command"] == 1
+    assert verbs["post"]["failures"] == 0
+
+addition("ghost roster activity from bus tables, with and without logs", ghost_fixture)
+addition("repeatable private owner names and response metrics", owner_fixture)
+addition("removed log invocations have a distinct failure kind", log_verb_fixture)
+assert not addition_failures, addition_failures
 db.close()
 PYTEST
 ok "usage collector fixture suite"
