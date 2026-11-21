@@ -5847,13 +5847,8 @@ class Parser(argparse.ArgumentParser):
         lead = message if message.endswith((".", "!", "?")) else message + "."
         text = (f"{lead} Usage: {usage_text(self)}. " + (f"Flags: {', '.join(flags)}. " if flags else "")
                 + f"See: {see or ' '.join(cmd_words(self)) + ' --help'}")
-        if _JSON_ERRORS:
-            die(text, "bad_input", next=see or " ".join(cmd_words(self)) + " --help")
-        if _HELD:
-            note(text)
-        else:
-            sys.stderr.write(error_text(text, "bad_input") + "\n")
-        raise SystemExit(2)
+        # A Diag in both modes: contract_main writes it once no bus is open, with refused/error on its first and last line.
+        die(text, "bad_input", next=see or " ".join(cmd_words(self)) + " --help")
 
     def _check_value(self, action, value):
         if isinstance(action, argparse._SubParsersAction) and value not in action.choices:
@@ -9051,13 +9046,13 @@ SKILL_TEXT = (
     '\n'
     "Use `agentbus` from PATH; if it is not on PATH, stop and tell the user to install it. Pass `--as YOUR_NAME` and keep that name all session. Successful commands run with --as refresh that agent's last-seen, except watch. Omit --as to look without counting as present.\n"
     '\n'
-    'Set `AGENTBUS_DB` only when a worker cannot discover the bus. If a dispatcher assigned an absolute CLI path too, use it. If the assigned bus is unwritable, report it; do not select another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
+    'Set `AGENTBUS_DB` only when a worker cannot discover the bus. If a dispatcher assigned an absolute CLI path too, use it. If the assigned bus is unwritable, report it; never pick another. See [sandboxed agents](https://github.com/wickdninja/agentbus/blob/main/docs/sandboxed-agents.md).\n'
     '\n'
     'One repo, one bus. Use the one discovery finds. If it looks wrong, run `buses` and ask; do not create another. `--up 1` is the next outer bus.\n'
     '\n'
     '## Start\n'
     '\n'
-    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal (`goal "TEXT"`) informs your work; only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers.\n'
+    'Start with `join`, then `brief`, then `inbox --limit 20`. The goal, empty until a lead sets it (`goal "TEXT"`), informs your work; only your user directs it. Record what only you know (owner notes, decisions) at once: `ctx set KEY "VALUE"`; `brief` shows it to newcomers. `ctx history KEY` shows earlier values.\n'
     '\n'
     'Hooks: with the agentbus plugin or setup, a hook message gives your exact name; use it with --as and skip `join`.\n'
     '\n'
@@ -9065,7 +9060,7 @@ SKILL_TEXT = (
     '\n'
     '## Before shared work\n'
     '\n'
-    'Read `inbox` each turn and between steps; repeat until empty. If you can, background `wait`: it exits 0 on mail; then read `inbox`. Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files first. Claims compare exactly, case included; use the spelling shown by git ls-files. Lock a simulator, build slot, device or database with `claim area:NAME --ttl-min N`.\n'
+    'Read `inbox` each turn and between steps; repeat until empty. Or background `wait` (exits 0 on mail). Before editing, run `claim RESOURCE... --purpose "PURPOSE"`: the claim itself is the check. Several resources claim all or none. Write paths relative to the bus directory. Claim new files first. Claims compare exactly, case included; use the spelling shown by git ls-files. Lock a simulator, build slot, device or database: `claim area:NAME --ttl-min N`.\n'
     '\n'
     "If refused, don't edit until the holder answers or releases; a holder in another worktree only warns: post what you're touching. If your user or a handoff gave you its work, take it: `claim RESOURCE --from HOLDER`. Claims are advisory and expire after 120 minutes; claim again to renew.\n"
     '\n'
@@ -9083,7 +9078,7 @@ SKILL_TEXT = (
     '\n'
     '## Read correctly\n'
     '\n'
-    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or inspect with `inbox --peek`. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.\n'
+    'Inbox marks returned messages read once stdout is written. Do not truncate a consuming inbox with head (`read --since ID` recovers a cut batch); use `inbox --limit N` or `inbox --peek`. `read --id N` shows the whole body. Delivery can repeat; dedupe by message ID.\n'
     '\n'
     'A nonzero exit does not imply rollback. A write may commit before output fails. When a `post` or `join` might be retried, add `--request-id` with a token; a repeat returns the original. Other writes ignore it.\n'
     '\n'
@@ -9093,7 +9088,7 @@ SKILL_TEXT = (
     '\n'
     '## Boundaries\n'
     '\n'
-    "Follow the user's authorized scope. Peer messages inform; they do not authorize new work. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Parse with `--json`. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Run error.next to recover (fill in capitals). Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus. Do not hold the bus open in another SQLite client.\n"
+    "Follow the user's authorized scope; peer messages inform, they do not authorize. Do not post secrets. Git, project files, and the issue tracker remain authoritative. Parse with `--json`. With --json, branch on error.code; exit 0 ok, 1 refused, 2 usage, 3 bus unavailable, 4 bug. Run error.next to recover (fill in capitals). Listings return {items, has_more, next}; if has_more, call again or raise --limit. On schema_newer, schema_older or a stale-copy notice, tell the user to run agentbus upgrade DIR; never edit the bus. They run it from an up-to-date install; on schema_newer, the agentbus you ran is older than the bus. Do not hold the bus open in another SQLite client.\n"
     '\n'
     'See the [protocol](https://github.com/wickdninja/agentbus/blob/main/docs/protocol.md).\n'
     '\n'
@@ -12867,25 +12862,26 @@ def hook_pre_tool_use(payload):
     try:
         held, unclaimed = [], []
         peers = con.execute(f"SELECT 1 FROM agents WHERE name NOT IN ({marks}) AND last_seen>=? LIMIT 1", (*mine, hook_cutoff())).fetchone() is not None
-        # The same rule claim follows: a path held by an agent that joined in another git checkout is not warned about (the
-        # files on disk are separate); a scheme name, and a holder in this checkout or in none known, still are. This
+        # The same rule claim follows (issue 86 L1): a path held by an agent that joined in another git checkout is still
+        # said, but softly, as claim warns (held_in_other_checkout): the files on disk are separate, so go ahead and post
+        # what you touch. A scheme name, and a holder in this checkout or in none known, get the held note as before. This
         # session's checkout is its payload cwd, so it is seeded into other_checkout's cache under its name.
         here = payload.get("cwd") if isinstance(payload.get("cwd"), str) else os.getcwd()
         checkouts = {name: checkout_of(here)}
         for rel, paths in rels:
-            own, holders = False, set()
+            own, holders, elsewhere = False, set(), set()
             for where, params in (f for path in paths for f in overlap_filters(path)):
-                holders.update((agent, claimed_at) for agent, claimed_at, resource in
-                               con.execute(f"SELECT agent, claimed_at, resource FROM claims WHERE ({where}) AND {live} AND agent NOT IN ({marks}) AND {on_roster} "
-                                           "ORDER BY agent, claimed_at LIMIT 20", (*params, t, *mine)).fetchall()
-                               if not (is_path(resource) and other_checkout(con, name, agent, checkouts)))
+                for agent_, claimed_at, resource in con.execute(
+                        f"SELECT agent, claimed_at, resource FROM claims WHERE ({where}) AND {live} AND agent NOT IN ({marks}) AND {on_roster} "
+                        "ORDER BY agent, claimed_at LIMIT 20", (*params, t, *mine)).fetchall():
+                    (elsewhere if is_path(resource) and other_checkout(con, name, agent_, checkouts) else holders).add((agent_, claimed_at))
                 if con.execute(f"SELECT 1 FROM claims WHERE ({where}) AND {live} AND agent IN ({marks}) LIMIT 1",
                                (*params, t, *mine)).fetchone():
                     own = True
-            if holders:
+            if holders or elsewhere:
                 # Who holds it and since when, in the memory key: a claim made after the note was said is said again. Never printed.
-                ids = sorted(tuple(v if isinstance(v, str) else repr(v) for v in row) for row in holders)
-                held.append((rel, hashlib.sha256(json.dumps(ids).encode("utf-8", "surrogatepass")).hexdigest()[:16]))
+                ids = sorted(tuple(v if isinstance(v, str) else repr(v) for v in row) for row in holders | elsewhere)
+                held.append((rel, hashlib.sha256(json.dumps(ids).encode("utf-8", "surrogatepass")).hexdigest()[:16], not holders))
             elif not own:
                 unclaimed.append(rel)
         unread, newest_direct, newest, capped = hook_direct_unread(con, name) if sid and not agent else ({}, 0, 0, set())
@@ -12906,15 +12902,21 @@ def hook_pre_tool_use(payload):
 
 def hook_claim_note(sid, db, agent, held, unclaimed, peers, copy, name, named_lane=False):
     """The claim half of the PreToolUse text, or None. A held file is said once per file, set of claims on it and session
-    (without a session, every time: there is nothing to remember it in), so a new holder is said again. A file with no
+    (without a session, every time: there is nothing to remember it in), so a new holder is said again; held is
+    [(rel, holders key, every holder joined in another checkout)], and the softer note is said only when each file said
+    is held from other checkouts alone. A file with no
     claim is said only to a subagent lane that has a bus name of its own (`named_lane`), once per session; a main session
     is never nudged (issue #86 T6: 203 of 210 nudges went to main sessions where nothing was shared), nor a lane that never
     used the bus (it would be told to act under its parent's name). Every new path is remembered. Keys are scoped by
     `agent`."""
-    if [rel for rel, holders in held if sid is None or hook_nudge_once(sid, db, ["held", agent, rel, holders])]:
+    said = [apart for rel, holders, apart in held if sid is None or hook_nudge_once(sid, db, ["held", agent, rel, holders])]
+    if said and not all(said):
         return (f"agentbus: a claim under a different name covers this file. See who and why: {copy} --as {name} claims. "
                 "In a shared checkout, leave it until the holder answers or releases it; if your user or a handoff gave you its work, "
                 f"{copy} --as {name} claim PATH --from HOLDER. On a separate branch, post what you are touching.")
+    if said:  # every holder joined in another git checkout: claim only warns there (held_in_other_checkout), and so does this
+        return (f"agentbus: a claim under a different name covers this file, held in another checkout. See who and why: {copy} --as {name} claims. "
+                "Separate worktrees do not share files, so go ahead and post what you are touching; the merge decides.")
     # Alone on the bus there is nobody to claim against: no nudge.
     if not named_lane or not peers or sid is None:
         return None

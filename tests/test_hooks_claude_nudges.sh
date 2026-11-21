@@ -158,6 +158,8 @@ lane g1 ln12g; lane g2 ln12h
 SUBPRE "held:foo" g1; [ "$(text_of)" = "agentbus: this file has no claim. If you are editing it: agentbus --as ln12g claim PATH --purpose WHY" ] || fail "12g: the nudge for a file named held:foo: rc $RC out $OUT"
 ab --as a claim foo --purpose p >/dev/null
 SUBPRE foo g1; [ "$(text_of)" = "${held//$N/ln12g}" ] || fail "12g: a file named held:foo silenced the held note for foo: rc $RC out $OUT"
+# Only a named lane is ever nudged (issue #86 T6), so it is the one that shows a held file is never also nudged as unclaimed.
+SUBPRE foo g1; quiet || fail "12g: a held file noted once was then nudged as having no claim: rc $RC out $OUT"
 PRE foo; [ "$(text_of)" = "$held" ] || fail "12g: the parent was not told of the held foo: rc $RC out $OUT"
 PRE foo; quiet || fail "12g: the held note for foo came twice for one holder: rc $RC out $OUT"
 ab --as a release foo >/dev/null; ab --as b claim foo --purpose p >/dev/null
@@ -188,9 +190,11 @@ SUBPRE oldest.txt g1; quiet || fail "12g: new messages pushed a path out of a fu
 # Held notes have their own room: 200 paths with no claim push no held note out.
 ab --as a claim heldfull.txt --purpose p >/dev/null; PRE heldfull.txt; [ "$(text_of)" = "$held" ] || fail "12g: no held note for heldfull.txt: rc $RC out $OUT"
 "$PY" -c 'import json,sys; open(sys.argv[1],"a").writelines(json.dumps(["path","","more-%d" % i])+"\n" for i in range(200))' "$(memfile)"
-PRE one-more.txt; PRE heldfull.txt; quiet || fail "12g: paths with no claim pushed a held note out of the memory: rc $RC out $OUT"
+# The memory is trimmed when it is written: a named lane's nudge writes it (a main session is never nudged, issue #86 T6).
+SUBPRE one-more.txt g1; PRE heldfull.txt; quiet || fail "12g: paths with no claim pushed a held note out of the memory: rc $RC out $OUT"
 # A file an older agentbus wrote is never read: a line in it that parses as a mark forges nothing.
-forget; printf '["unread", "%s", 999999]\n["held", "", "heldfull.txt"]\n' "$N" >"$STATE/$SID1.seen"
+# It forges both marks: the one for every message said and the one for direct messages (issue #86 T3), which an edit reads.
+forget; printf '["unread", "%s", 999999]\n["unread", "%s direct", 999999]\n["held", "", "heldfull.txt"]\n' "$N" "$N" >"$STATE/$SID1.seen"
 ab --as a post "after legacy" --to "$N" --kind question >/dev/null
 PRE heldfull.txt; [ "$(text_of)" = "$held $(note "3 notes, 4 questions")" ] || fail "12g: an older agentbus's memory file was read: rc $RC out $OUT"
 rm -f "$STATE/$SID1.seen"
@@ -234,6 +238,10 @@ PRE m.txt "$SID2"; quiet || fail "12g: a broadcast decision sent before joining 
 ab --as a post "for you" --to "$N2" --kind question >/dev/null
 SS "$SID2"; grep -qF "1 unread message for you (1 question)" <<<"$(text_of)" || fail "12g: SessionStart did not count: rc $RC out $OUT"
 PRE m.txt "$SID2"; quiet || fail "12g: a message SessionStart announced was announced again by the next edit: rc $RC out $OUT"
+# A broadcast decision has its own mark (the direct one does not cover it): SessionStart announces it, so the edit does not.
+ab --as a post "rule" --kind decision >/dev/null
+SS "$SID2"; grep -qF "1 decision" <<<"$(text_of)" || fail "12g: SessionStart did not count a broadcast decision: rc $RC out $OUT"
+PRE m.txt "$SID2"; quiet || fail "12g: a message SessionStart announced was announced again by the next edit (a broadcast decision): rc $RC out $OUT"
 ok "typed keys, one held note per holder, subagents apart, unread marks apart, no session remembers nothing"
 
 echo

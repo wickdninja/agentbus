@@ -71,9 +71,12 @@ PY
 import json, sys
 d = json.loads(open(sys.argv[1]).read().replace("/home/user/proj", sys.argv[2])); d["session_id"] = sys.argv[3]; print(json.dumps(d))
 PY
-(cd "$P" && "$PY" "$CHECKOUT/bin/agentbus" hook claude UserPromptSubmit <"$T/pl") >"$T/h1"
-(cd "$P" && L hook claude UserPromptSubmit <"$T/pl") >"$T/h2"
-[ -s "$T/h1" ] && grep -q "1 unread message for you" "$T/h1" || fail "the script printed no unread notice, the test bus is wrong: $(cat "$T/h1")"
+# Each run keeps its hook memory in its own TMPDIR: the prompt note speaks once per new direct message (issue 86 T3), so a
+# second run sharing the first one's memory would rightly say nothing.
+mkdir -p "$T/tmp1" "$T/tmp2"
+(cd "$P" && TMPDIR="$T/tmp1" "$PY" "$CHECKOUT/bin/agentbus" hook claude UserPromptSubmit <"$T/pl") >"$T/h1"
+(cd "$P" && TMPDIR="$T/tmp2" L hook claude UserPromptSubmit <"$T/pl") >"$T/h2"
+[ -s "$T/h1" ] && grep -q "1 unread direct message for you" "$T/h1" || fail "the script printed no unread notice, the test bus is wrong: $(cat "$T/h1")"
 cmp -s "$T/h1" "$T/h2" || fail "launcher hook output differs from the script's: $(cat "$T/h2")"
 ok "--version, a bad command's status, and a hook's output match the script"
 

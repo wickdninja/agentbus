@@ -17,7 +17,7 @@ Which of the [six versioned things](docs/explanation/versions.md) change: the pr
 - A text-mode error starts `agentbus: error:` or `agentbus: refused:`, and one that wraps ends with `agentbus: refused (CODE, exit N)`, so `| head` and `| tail` both show it. `--json` errors are unchanged.
 - `post --kind` with a word that is not a kind posts a note with an `unknown_kind` warning naming the kinds; `send` is `post`; `--to all` and `--to everyone` broadcast. A name not on the roster still gets its message.
 - A path claim held by an agent in another git worktree warns (`held_in_other_checkout`) and names the holder instead of refusing; the same resource stays the holder's (`recorded: false`). In the same checkout, and for scheme names such as `area:ios-sim`, a claim is refused as before.
-- The PreToolUse hook's held-file warning follows the same worktree rule: a path held by an agent that joined in another git checkout is not warned about (a scheme name, and a holder in the same checkout, still are). `join` refuses the names `all` and `everyone` (any case), since a post to them broadcasts.
+- The PreToolUse hook's held-file warning follows the same worktree rule: for a path held by an agent that joined in another git checkout it says so and to post what you are touching, as `claim` does, instead of telling the agent to wait for the holder (a scheme name, and a holder in the same checkout, get the held warning as before). `join` refuses the names `all` and `everyone` (any case), since a post to them broadcasts.
 - The skill teaches `claim area:NAME --ttl-min N` to lock a simulator, build slot, device or database.
 
 ### Fixed

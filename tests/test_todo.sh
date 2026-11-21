@@ -326,9 +326,11 @@ print("PASS: huge and hostile todo and claim text keeps brief bounded and its li
 db = bus("kinds")
 join(db, "alice")
 p = run(db, "--as", "alice", "post", "x", "--kind", "bogus")
-check("todo" in p.stderr and "dropped" in p.stderr, "the unknown-kind error does not list todo and dropped: %r" % p.stderr)
+check("todo" in p.stderr and "dropped" in p.stderr, "the unknown-kind warning does not list todo and dropped: %r" % p.stderr)
 tid = pid(db, "alice", "check the thing", kind="todo")
-check([(m["id"], m["kind"]) for m in jok(db, "read")["items"]] == [(tid, "todo")], "read does not show the todo")
+# An unknown kind posts a note with a warning (issue 86 A4), so read shows that note, then the todo.
+check([m["kind"] for m in jok(db, "read")["items"]] == ["note", "todo"] and jok(db, "read")["items"][-1]["id"] == tid,
+      "read does not show the todo")
 help_ = ok(db, "post", "--help")
 check("todo" in help_ and "dropped" in help_, "post --help does not describe the new kinds")
 sch = jok(db, "schema")

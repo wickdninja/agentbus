@@ -671,8 +671,8 @@
     "find": "^            elif not own:\\n                unclaimed\\.append\\(rel\\)$",
     "replace": "            if not own:\n                unclaimed.append(rel)",
     "count": 1,
-    "run": "tests/test_hooks_claude_events.sh",
-    "expect": "a held file noted once was then nudged as having no claim"
+    "run": "tests/test_hooks_claude_nudges.sh",
+    "expect": "12g: a held file noted once was then nudged as having no claim"
   },
   {
     "name": "PreToolUse unread counts every broadcast kind",
@@ -740,11 +740,11 @@
   {
     "name": "a subagent's notes are remembered as its parent's",
     "file": "bin/agentbus",
-    "find": "agent = payload\\.get\\(\"agent_id\"\\) if isinstance\\(payload\\.get\\(\"agent_id\"\\), str\\) else \"\"",
-    "replace": "agent = \"\"",
+    "find": "\\[\"held\", agent, rel, holders\\]",
+    "replace": "[\"held\", \"\", rel, holders]",
     "count": 1,
     "run": "tests/test_hooks_claude_nudges.sh",
-    "expect": "12g: a subagent's held note used up its parent's"
+    "expect": "12g: the parent was not told of the held foo"
   },
   {
     "name": "a subagent is given its parent's unread note",
@@ -1577,7 +1577,7 @@
   {
     "name": "brief --json drops the AGENTBUS_DB warning",
     "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ \\ \\ \\ \\ result\\[\"warnings\"\\]\\ =\\ warnings",
+    "find": "^\\ \\ \\ \\ \\ \\ \\ \\ result\\[\"warnings\"\\]\\ =\\ warnings$",
     "replace": "        pass",
     "count": 1,
     "run": "tests/test_discovery.sh",
@@ -3890,11 +3890,20 @@
   {
     "name": "the claim-held note omits the name in the command",
     "file": "bin/agentbus",
-    "find": "See who and why: \\{copy\\} --as \\{name\\} claims\\. ",
-    "replace": "See who and why: {copy} claims. ",
+    "find": "covers this file\\. See who and why: \\{copy\\} --as \\{name\\} claims\\. ",
+    "replace": "covers this file. See who and why: {copy} claims. ",
     "count": 1,
     "run": "tests/test_hooks_codex.sh",
     "expect": "held path"
+  },
+  {
+    "name": "the other-checkout note omits the name in the command",
+    "file": "bin/agentbus",
+    "find": "held in another checkout\\. See who and why: \\{copy\\} --as \\{name\\} claims\\. ",
+    "replace": "held in another checkout. See who and why: {copy} claims. ",
+    "count": 1,
+    "run": "tests/test_hooks_codex.sh",
+    "expect": "a patch to a worktree file held in the main checkout was silent"
   },
   {
     "name": "the no-claim note does not name the file",
@@ -6120,13 +6129,22 @@
     "expect": "brief rulings are"
   },
   {
-    "name": "hook warns about a path held in another checkout",
+    "name": "hook gives the held note for a path held in another checkout",
     "file": "bin/agentbus",
-    "find": "                               if not \\(is_path\\(resource\\) and other_checkout\\(con, name, agent, checkouts\\)\\)\\)\\n",
-    "replace": "                               )\\n",
+    "find": "\\(elsewhere if is_path\\(resource\\) and other_checkout\\(con, name, agent_, checkouts\\) else holders\\)\\.add",
+    "replace": "holders.add",
     "count": 1,
     "run": "tests/test_hooks_claude_quiet.sh",
-    "expect": "Q6: a file held by an agent in the other worktree was warned about"
+    "expect": "Q6: a file held by an agent in the other worktree did not get the other-checkout note"
+  },
+  {
+    "name": "hook gives the other-checkout note for a holder in the same checkout",
+    "file": "bin/agentbus",
+    "find": "hexdigest\\(\\)\\[:16\\], not holders\\)\\)",
+    "replace": "hexdigest()[:16], True))",
+    "count": 1,
+    "run": "tests/test_hooks_claude_quiet.sh",
+    "expect": "Q5: the held warning did not name the lane"
   },
   {
     "name": "join accepts the broadcast names",
