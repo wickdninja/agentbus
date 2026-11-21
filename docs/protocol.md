@@ -48,7 +48,7 @@ Terms:
 | --- | --- | --- |
 | join | put a name on the roster; create its cursor if it has none | P-ID-1 to P-ID-8 |
 | leave | release every claim of the name and take it off the roster | P-ID-9, P-ID-10 |
-| who | list the roster | P-ID-11 |
+| who | list the roster entries that acted; count the rest | P-ID-11 |
 | post | append one message | P-MSG-1 to P-MSG-9 |
 | inbox | deliver unread messages to a name, then acknowledge them | P-DLV-1 to P-DLV-6 |
 | read | list messages by id, no cursor effect | P-DLV-7 |
@@ -57,7 +57,6 @@ Terms:
 | claim | take or renew claims, all or none; `--from` takes named holders' claims | P-CLAIM-1 to P-CLAIM-16, P-CLAIM-19 to P-CLAIM-21, P-CLAIM-23 |
 | release | let go of own claims, all or none | P-CLAIM-17, P-CLAIM-18, P-CLAIM-22 |
 | claims | list live claims | P-CLAIM-8 |
-| log | list audit rows; add one | P-LOG-1 to P-LOG-3 |
 
 `--request-id` is a flag, not an operation: it makes a retried post return the first result and a retried join return a result built from current state (P-MSG-8,
 P-ID-8), and every other write ignores it.
@@ -138,11 +137,11 @@ section 11; the CLI's exit codes for them live in the binding.
 
 ### Writes need a joined name
 
-- **P-ID-3** `post`, `claim`, `ctx set`, `goal TEXT` and `log add` MUST refuse a name that is not on the roster with
+- **P-ID-3** `post`, `claim`, `ctx set` and `goal TEXT` MUST refuse a name that is not on the roster with
   `not_on_roster`, and write nothing; a name that is not on the roster and could never join (P-ID-1) is refused with
   `bad_input` instead. `release` and `leave` act only on the caller's own rows and need no roster
   entry.
-- `inbox`, `read`, `who`, `claims`, `ctx get`, `ctx history`, `goal` (show) and `log show` do not require a roster
+- `inbox`, `read`, `who`, `claims`, `ctx get`, `ctx history`, `goal` (show) do not require a roster
   entry.
 
 ### Liveness
@@ -180,8 +179,9 @@ section 11; the CLI's exit codes for them live in the binding.
 
 ### who
 
-- **P-ID-11** who MUST list every roster entry. Nothing removes an entry except leave (gap: roster never forgets,
-  section 14).
+- **P-ID-11** who MUST list every roster entry that acted: sent a message, holds a claim or has a log row other
+  than join and leave, moved its cursor through inbox, or set a fact. It MUST count the other entries in one
+  figure. Nothing removes an entry except leave (gap: roster never forgets, section 14).
 
 ### post
 
@@ -313,8 +313,6 @@ the row.
   purpose, P-CLAIM-21), a claim auto-released (P-CLAIM-6), a release that let go of anything (one row per release
   call, naming every resource it let go of, including `release --all`), a `--from` move and a goal change MUST each
   append a log row, inside the operation's atomic step. post and ctx set write none.
-- **P-LOG-2** log add MUST append one row with the caller's name, a free action word and a detail (gap: not
-  idempotent, section 14).
 - **P-LOG-3** A refused claim batch SHOULD write one `claim_refused` log row. It is best effort: a separate atomic step
   after the refusal, whose failure is ignored, so the caller still gets `claim_conflict`.
 
@@ -373,7 +371,7 @@ expire or are taken with `--from`.
   them delivers the same messages again. Consumers dedupe by message id.
 - **P-ATOM-3** All times one operation writes MUST come from one clock, the writing process's, at one-second
   resolution in UTC (section 14, clock).
-- Reads (`read`, `brief`, `wait`, `watch`, `who`, `claims`, `ctx get`, `log show`) change no messages, cursors,
+- Reads (`read`, `brief`, `wait`, `watch`, `who`, `claims`, `ctx get`) change no messages, cursors,
   facts or roster rows other than the caller's `last_seen`. A read that opens the bus for writing still runs the
   normalisation step of P-CLAIM-19, which may rewrite stored claim spellings and add log rows.
 
@@ -418,7 +416,7 @@ first such experiment ([#80](https://github.com/wickdninja/agentbus/issues/80)).
 
 | Profile | What it adds | The experiment that would justify it |
 | --- | --- | --- |
-| `brief` | one read with the goal, roster and held claims, open questions, open todos, expired claims of present holders, unread handoffs and alerts, pending between others, changed facts, and one `next:` command; section limits of 5 rows, bodies cut at 200 characters in JSON and 90 in text, goal at 300 | context tokens and wrong actions of a late joiner with `brief` against `who`, `claims`, `read` and `inbox` ([#80](https://github.com/wickdninja/agentbus/issues/80)) |
+| `brief` | one read with the goal, the roster entries that acted (P-ID-11) and their held claims, open questions, open todos, expired claims of present holders, unread handoffs and alerts, pending between others, changed facts, and one `next:` command; section limits of 5 rows, bodies cut at 200 characters in JSON and 90 in text, goal at 300 | context tokens and wrong actions of a late joiner with `brief` against `who`, `claims`, `read` and `inbox` ([#80](https://github.com/wickdninja/agentbus/issues/80)) |
 | `next:` order | unread, then a question to answer, then a takeable todo (P-VIEW-5), then `claim` | whether agents follow it to the right work faster than reading the sections |
 | `wait` | block until unread > 0, polling every 2 seconds, 600 s default and 1800 s cap, exit 124 on timeout | idle time between a message and its reader with and without a background `wait` |
 | `watch` | a live read-only view for people; counts an alert open until any reply | none needed for agents; it is a human surface |
@@ -487,7 +485,7 @@ things](explanation/versions.md)).
 - **P-VER-3** A consumer MUST deliver and acknowledge a stored message of a kind it does not know unchanged, through
   inbox and read; it MAY leave such messages out of derived views.
 - A new kind, operation or field is a minor version. Changing or removing a rule with an id is a major version,
-  with one exception: a rule marked "gap" (P-ID-11, P-CLAIM-18, P-LOG-2, P-VIEW-5) states a section 14 gap as
+  with one exception: a rule marked "gap" (P-ID-11, P-CLAIM-18, P-VIEW-5) states a section 14 gap as
   today's behavior, and a minor version may change it to close that gap.
   1.0 has no negotiation between versions sharing one bus (section 14).
 
@@ -544,7 +542,6 @@ Current behavior that 1.0 documents and a later minor version may change.
   claim keeps the old `claimed_at` but reports `renewed: false`. [#83](https://github.com/wickdninja/agentbus/issues/83)
 - **Case-sensitive resources** on case-insensitive file systems: `README.md` and `readme.md` do not overlap.
   [#83](https://github.com/wickdninja/agentbus/issues/83)
-- **`log add` has no request id.** [#28](https://github.com/wickdninja/agentbus/issues/28)
 - **Changed facts in `brief`** are measured from the time of the last message read, not a fact cursor.
   [#30](https://github.com/wickdninja/agentbus/issues/30)
 - **Pending between others in `brief`** counts a handoff or alert to a name that left as pending.
