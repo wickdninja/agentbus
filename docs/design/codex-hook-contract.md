@@ -67,7 +67,7 @@ Not run: both runs used hooks that print nothing. Everything here is DOCS-ONLY (
 | Any, exit 0, no output | success, Codex continues |
 | Size | model-visible hook output is capped at about 2,500 tokens per handler by default (`additionalContextLimit`); the rest spills to a file under the temp dir |
 
-Safety for agentbus: a hook must never print `decision`, `continue:false`, `permissionDecision` or exit 2 (never blocks). Stop with `decision:"block"` would loop the agent; the Stop dialect emits only `{"systemMessage": "..."}` or nothing.
+Safety for agentbus: a hook must never print `decision`, `continue:false`, `permissionDecision` or exit 2 (never blocks). Stop with `decision:"block"` would loop the agent. agentbus registers no Stop hook since issue #86 (T4); an old entry exits 0 and prints nothing.
 
 These shapes must be confirmed by one run before 4.3 merges (the e2e gate in the runbook does this).
 

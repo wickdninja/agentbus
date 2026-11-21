@@ -21,7 +21,7 @@ check() {  # FIELD CODEPOINT -- args...
   local rc=0 err
   err=$("$@" 2>&1 >/dev/null) || rc=$?
   [ "$rc" = 2 ] || fail "$field: exit $rc, want 2 ($*)"
-  case "$err" in "agentbus: $field must not contain control characters (found U+$cp)"*) ;; *) fail "$field: message was: $err" ;; esac
+  case "$err" in "agentbus: error: $field must not contain control characters (found U+$cp)"*) ;; *) fail "$field: message was: $err" ;; esac
   rc=0; err=$("$@" --json 2>&1 >/dev/null) || rc=$?
   [ "$rc" = 2 ] || fail "$field --json: exit $rc"
   echo "$err" | "$PY" -c "import json,sys;e=json.load(sys.stdin)['error'];assert e['code']=='bad_input' and e['field']==sys.argv[1] and e['committed'] is False, e" "$field" || fail "$field: JSON error was $err"

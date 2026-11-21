@@ -113,7 +113,8 @@ c.execute("INSERT INTO context VALUES(?,?,?,?)", (ninf, inf, ninf, inf))
 c.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", ("k", ninf, inf, ninf))
 c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", (ninf, inf, ninf, inf))
 c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", (ninf, inf, ninf, inf, ninf))
-c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", (0, 0, 0, 0, 0))
+# expires_at is a live time: claims lists live claims only (issue 86 T2), and a row with expires_at 0 has expired.
+c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", (0, 0, 0, 0, "2999-01-01T00:00:00Z"))
 c.commit()
 PY
 # Loosened, the bus is refused (its shape is not agentbus's); with agentbus's definitions back, every
@@ -126,7 +127,7 @@ sweep "$D1"
 outof env AGENTBUS_DB="$D1" "${AB[@]}" who > "$T/zero.who"
 python3 -c 'import sys; assert any(r.split()==["0","0","0","0","0","seen","?","ago"] for r in open(sys.argv[1]))' "$T/zero.who" || fail "who hid numeric zero fields"
 outof env AGENTBUS_DB="$D1" "${AB[@]}" claims > "$T/zero.claims"
-python3 -c 'import sys; assert any(r.split()==["0","0","expired","0"] for r in open(sys.argv[1]))' "$T/zero.claims" || fail "claims hid numeric zero fields"
+python3 -c 'import sys; assert any(r.split()[:2]==["0","0"] and r.split()[-1]=="0" and r.split()[2]=="for" for r in open(sys.argv[1]))' "$T/zero.claims" || fail "claims hid numeric zero fields: $(cat "$T/zero.claims")"
 o=$(json_ok env AGENTBUS_DB="$D1" "${AB[@]}" --json who)
 printf '%s' "$o" | python3 -c 'import json,sys; r=[a for a in json.load(sys.stdin)["items"] if a["name"]=="infy2"][0]; assert r["tool"]=="inf" and r["model"]=="-inf", r' || fail "inf not shown as a string"
 o=$(json_ok env AGENTBUS_DB="$D1" "${AB[@]}" --json read)

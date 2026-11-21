@@ -103,6 +103,8 @@ echo
 echo "TEST 33: a changed index is read again; an unchanged one is not (cache keyed on the file's identity)"
 newbus p33; mkgenindex "$P/.git/index" 2000
 SS; [ -n "$OUT" ] || fail "an untracked bus with a generated index was refused: rc $RC err $ERR"
+# newmsg: a new direct message, planted without the CLI (it must not touch the index): UserPromptSubmit says only new ones.
+newmsg() { sql "$P/.agentbus/bus.db" "INSERT INTO messages(ts,sender,recipient,kind,body) VALUES('2026-11-02T00:00:00Z','peer','$(dname "$SID1")','note','n')"; }
 UPS; ab --as peer join --tool t >/dev/null; ab --as peer post "x" --to "$(dname "$SID1")" --kind note >/dev/null 2>&1; UPS
 [ -n "$OUT" ] || fail "an unchanged index: UserPromptSubmit said nothing"
 # Only a cache hit can answer now: the index file is overwritten in place with bytes that are not an index, and given
@@ -116,7 +118,7 @@ os.utime(sys.argv[1], ns=(st.st_atime_ns, st.st_mtime_ns))
 after = os.stat(sys.argv[1])
 assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
 PY
-UPS; [ -n "$OUT" ] || fail "a cached answer was not used: an unchanged-identity index was read again"
+newmsg; UPS; [ -n "$OUT" ] || fail "a cached answer was not used: an unchanged-identity index was read again"
 mkgenindex "$P/.git/index" 2000 .agentbus/bus.db      # the same file (opened for writing, so the same inode), now longer: a new size and time
 UPS
 # The silence must be the tracked answer, not just silence: the stored candidates for this index now hold the bus folder, under the new stamp.
@@ -128,9 +130,9 @@ assert any(a["stamp"] == stamp and b".agentbus".hex() in a["cands"] for a in ans
 PY
 [ -z "$OUT" ] || fail "a changed index that now tracks the bus was served from the cache: out $OUT"
 mkgenindex "$P/.git/index" 2000
-UPS; [ -n "$OUT" ] || fail "an index that no longer tracks the bus was served from the cache"
+newmsg; UPS; [ -n "$OUT" ] || fail "an index that no longer tracks the bus was served from the cache"
 mkgenindex "$P/.git/index" 0
-UPS; [ -n "$OUT" ] || fail "an index with no entries was taken for a damaged one"
+newmsg; UPS; [ -n "$OUT" ] || fail "an index with no entries was taken for a damaged one"
 STATE="${TMPDIR:-/tmp}/agentbus-hooks-$(id -u)"; ls "$STATE"/idx-*.json >/dev/null 2>&1 || fail "no index answer was remembered"
 ok "tracked flips are seen; the answer is remembered while the index file is unchanged"
 
@@ -203,6 +205,7 @@ set -- $(timed1 SessionStart session_start_startup_print 3)
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 4.5 else 1)' "$1" || fail "SessionStart with a 1M-entry index used $1 s of CPU, past its 4.5 s budget"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 3 else 1)' "$5" || fail "SessionStart with a 1M-entry index took $5 s of wall time at best of 3 (CPU $1 s): it waits on something"
 [[ " $(roster) " == *" $N "* ]] || fail "SessionStart with a 1M-entry index did not put $N on the roster: $(roster)"
+newmsg   # SessionStart said what was there: the prompt note needs a new direct message to speak
 set -- $(timed1 UserPromptSubmit user_prompt_submit 1.5)
 [ "$2" = 0 ] && [ "$4" = 1 ] || fail "UserPromptSubmit with an unchanged 1M-entry index: exit $2, $3 bytes, hook JSON valid=$4 (1 wanted)"
 "$PY" -c 'import sys; sys.exit(0 if float(sys.argv[1]) < 1.0 else 1)' "$1" || fail "UserPromptSubmit re-read an unchanged 1M-entry index (used $1 s of CPU, past its 1 s budget)"

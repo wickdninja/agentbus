@@ -72,7 +72,7 @@ echo "TEST 3: every command in hooks.json runs the plugin's own launcher and end
 import json, re, sys
 doc = json.load(open(sys.argv[1] + "/hooks/hooks.json"))
 hooks = doc["hooks"]
-assert set(hooks) == {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "SessionEnd"}, sorted(hooks)
+assert set(hooks) == {"SessionStart", "UserPromptSubmit", "PreToolUse", "SessionEnd"}, sorted(hooks)  # no Stop (issue #86 T4)
 for event, groups in hooks.items():
     assert len(groups) == 1 and len(groups[0]["hooks"]) == 1, event
     h = groups[0]["hooks"][0]
@@ -82,9 +82,9 @@ for event, groups in hooks.items():
     assert h["command"] == want, (event, h["command"])
 assert hooks["SessionStart"][0]["matcher"] == "startup|resume|clear|compact|fork"  # the matcher values the contract lists
 assert hooks["PreToolUse"][0]["matcher"] == "Edit|Write|MultiEdit|NotebookEdit"
-assert all("matcher" not in hooks[e][0] for e in ("UserPromptSubmit", "Stop", "SessionEnd"))
+assert all("matcher" not in hooks[e][0] for e in ("UserPromptSubmit", "SessionEnd"))
 PY
-ok "five events, each: python3 \"\${CLAUDE_PLUGIN_ROOT}/hooks/launch.py\" hook claude EVENT 2>/dev/null || true"
+ok "four events, each: python3 \"\${CLAUDE_PLUGIN_ROOT}/hooks/launch.py\" hook claude EVENT 2>/dev/null || true"
 
 echo
 echo "TEST 4: the hooks.json event names are in the verified list of the contract document, and no subagent event is registered"
@@ -101,7 +101,7 @@ events = set(json.load(open(root + "/hooks/hooks.json"))["hooks"])
 assert events <= verified, sorted(events - verified)
 assert not any(e.startswith("Subagent") for e in events), events
 PY
-ok "SessionStart, UserPromptSubmit, PreToolUse, Stop and SessionEnd are VERIFIED-BY-RUN; no SubagentStart or SubagentStop"
+ok "SessionStart, UserPromptSubmit, PreToolUse and SessionEnd are VERIFIED-BY-RUN; no SubagentStart or SubagentStop"
 
 echo
 echo "TEST 5: the skill is in the plugin root, and the package ships the plugin files"

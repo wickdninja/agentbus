@@ -74,7 +74,7 @@ O="$T/no-bus"; mkrepo "$O"
 (cd "$O" && expect_fail "no bus here or in any parent folder" agentbus status)
 rc=0; (cd "$O" && agentbus who) >"$T/no-out" 2>"$T/no-err" || rc=$?
 [ "$rc" != 0 ] && [ ! -s "$T/no-out" ] || fail "missing bus did not fail"
-[ "$(cat "$T/no-err")" = "agentbus: no bus here or in any parent folder. Run: agentbus init <dir>" ] || fail "wrong missing bus error"
+[ "$(cat "$T/no-err")" = "agentbus: error: no bus here or in any parent folder. Run: agentbus init <dir>" ] || fail "wrong missing bus error"
 [ ! -e "$O/.agentbus" ] || fail "missing bus created implicitly"
 mkdir -p "$HOME/.agentbus" "$HOME/sub"
 (cd "$HOME/sub" && expect_fail "no bus here or in any parent folder" agentbus who)

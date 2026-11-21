@@ -1,6 +1,7 @@
 usage: agentbus claims [--stale] [--limit N]
 
-List claims
+List live claims. An expired claim is not shown; brief names the expired
+claims of agents still on the roster.
 
 FLAGS
   -h, --help  Show this help message and exit.

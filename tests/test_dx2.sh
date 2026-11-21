@@ -184,7 +184,7 @@ assert set(d["errors"]) == {"no_message", "not_on_roster", "request_id_reused"},
 assert "bad_input" in d["common_errors"] and "internal" in d["common_errors"], d["common_errors"]
 for k in ("global_args", "env", "exit_codes"):
     assert k not in d, k
-assert list(d["warnings"]) == ["recipient_not_on_roster"], list(d["warnings"])' "schema post carries more than its own" <"$T/s"
+assert list(d["warnings"]) == ["recipient_not_on_roster", "unknown_kind"], list(d["warnings"])' "schema post carries more than its own" <"$T/s"
 n=$(wc -c <"$T/s" | tr -d " "); [ "$n" -lt 6000 ] || fail "schema post is $n bytes without --full; it was 8,564"
 agentbus --json schema post --full >"$T/sf"
 pyj '

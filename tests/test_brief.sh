@@ -292,6 +292,56 @@ b = jok(db, "--as", "worker", "brief", "--limit", "-1")
 check(len(b["questions"]["items"]) == 8 and b["omitted"]["questions"] == 0, "--limit -1: %s" % b["omitted"])
 print("PASS: --limit bounds every section, the text names the next command, -1 shows everything")
 
+# ---- rulings: the live decisions, so a lane reads brief instead of read --topic ruling --limit 50 (issue 86 T1) ----
+# Bug it catches: brief showed no decision at all, so every Codex lane also ran read --topic ruling --limit 50 (most of
+# its agentbus tokens). A ruling is a decision, or a message on topic ruling that is not a question or an answer. A later
+# decision on the same named topic, or one replying to it, replaces it; topics decision and ruling name no subject.
+db = bus("rulings")
+join(db, "lead", "lane")
+d1 = post(db, "lead", "gate on the unit suite", kind="decision")
+sql(db, "UPDATE messages SET topic='test-gate' WHERE id=?", d1)
+d2 = json.loads(ok(db, "--as", "lead", "--json", "post", "gate on the full suite", "--kind", "decision", "--topic", "test-gate"))["id"]
+d3 = json.loads(ok(db, "--as", "lead", "--json", "post", "use sqlite", "--kind", "decision", "--topic", "decision"))["id"]
+d4 = post(db, "lead", "ship on friday", kind="decision")
+r1 = json.loads(ok(db, "--as", "lead", "--json", "post", "no force pushes to main", "--topic", "ruling"))["id"]
+q1 = json.loads(ok(db, "--as", "lane", "--json", "post", "may I rebase?", "--kind", "question", "--topic", "ruling"))["id"]
+d5 = post(db, "lead", "use postgres, not sqlite", kind="decision", reply=d3)
+post(db, "lead", "unrelated chatter")
+b = jok(db, "--as", "lane", "brief")
+ids = [m["id"] for m in b["rulings"]["items"]]
+check(ids == [d5, r1, d4, d2], "brief rulings are %s, want the live ones newest first %s" % (ids, [d5, r1, d4, d2]))
+check(b["omitted"]["rulings"] == 0, "omitted rulings: %s" % b["omitted"])
+check(not validate(b, res, objs), "brief --json with rulings does not match its schema: %s" % validate(b, res, objs))
+out = ok(db, "--as", "lane", "brief")
+for part in ("rulings, newest first (4):", "#%d lead (test-gate): gate on the full suite" % d2, "#%d lead (ruling): no force pushes" % r1):
+    check(part in out, "brief text lost %r:\n%s" % (part, out))
+section = out.split("rulings, newest first", 1)[1].split("\nhere", 1)[0]
+for gone in ("gate on the unit suite", "use sqlite\n", "may I rebase"):
+    check(gone not in section, "brief text lists a replaced ruling or a question %r as a ruling:\n%s" % (gone, out))
+b = jok(db, "--as", "lane", "brief", "--limit", "2")
+check([m["id"] for m in b["rulings"]["items"]] == [d5, r1] and b["omitted"]["rulings"] == 2, "--limit 2 rulings: %s" % b["rulings"])
+out = ok(db, "--as", "lane", "brief", "--limit", "2")
+check("... 2 more" in out, "--limit 2 does not say 2 more rulings exist:\n%s" % out)
+empty = bus("no-rulings")
+join(empty, "lead")
+check("rulings: none" in ok(empty, "--as", "lead", "brief"), "a bus with no decision does not say rulings: none")
+print("PASS: brief lists the live rulings, newest first; a replaced decision and a question on topic ruling are not rulings")
+
+# ---- claims held by others are never hidden behind recency (issue 86 T1) ----
+# Bug it catches: here listed the 5 most recently seen agents, so a holder seen earlier dropped out with its claims and a
+# lane still had to run claims.
+db = bus("holders")
+join(db, "holder")
+ok(db, "--as", "holder", "claim", "src/core/", "--purpose", "core rewrite")
+sql(db, "UPDATE agents SET last_seen='2020-01-01T00:00:00Z' WHERE name='holder'")
+join(db, "a1", "a2", "a3", "a4", "a5", "me")
+b = jok(db, "--as", "me", "brief")
+held = {c["resource"]: ag["name"] for ag in b["agents"]["items"] for c in ag["claims"]}
+check(held == {"src/core/": "holder"}, "brief hid a live claim behind 5 newer agents: %s" % held)
+out = ok(db, "--as", "me", "brief")
+check("holds src/core/ [core rewrite]" in out, "brief text lost the held claim:\n%s" % out)
+print("PASS: agents holding live claims are listed before the rest, so their claims always show")
+
 # ---- size: under 400 tokens (about 1,600 characters) for a realistic bus ----
 db = bus("big")
 for n, role, tool in (("lead", "planner", "claude"), ("api", "implementer", "codex"), ("web", "implementer", "claude"), ("tests", "reviewer", "codex")):
@@ -310,11 +360,13 @@ post(db, "lead", "Standup moved to 10", to="api", kind="note")
 ok(db, "--as", "lead", "ctx", "set", "token_ttl", "3600 seconds")
 ok(db, "--as", "web", "ctx", "set", "login_flag", "auth.newTokens, default off")
 ok(db, "--as", "tests", "ctx", "set", "fixtures", "tests/auth/fixtures.json is frozen until Friday")
+ok(db, "--as", "lead", "post", "Tokens expire after one hour", "--kind", "decision", "--topic", "token-ttl")
+ok(db, "--as", "lead", "post", "No force pushes to main", "--kind", "decision")
 out = ok(db, "--as", "api", "brief")
 check(len(out) < 1600, "brief is %d characters, over the 400-token budget (1,600):\n%s" % (len(out), out))
 for part in ("goal (lead,", "lead", "tests", "token refactor", "next:"):
     check(part in out, "a realistic brief lost %r:\n%s" % (part, out))
-print("PASS: a realistic bus briefs in %d characters (budget 1,600)" % len(out))
+print("PASS: a realistic bus briefs in %d characters, %d bytes (budget 1,600 characters)" % (len(out), len(out.encode("utf-8"))))
 
 # a fuller bus: 6 agents and 8 open questions (more than the default 5 rows show) with every section populated stays bounded at
 # this size. It is a check on this bus, not a bound on every bus (7 agents with long claims measure over it), so the CHANGELOG

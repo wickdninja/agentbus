@@ -29,7 +29,7 @@ agentbus setup claude --dry-run
 ```
 agentbus setup claude (user)
   + would install ~/.claude/skills/agentbus/SKILL.md (N bytes)
-  + would add 5 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop, SessionEnd) to ~/.claude/settings.json
+  + would add 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, SessionEnd) to ~/.claude/settings.json
 dry run: nothing was written.
 ```
 
@@ -40,7 +40,7 @@ dry run: nothing was written.
 | `setup claude` | `~/.claude/skills/agentbus/SKILL.md` and the `hooks` of `~/.claude/settings.json` (or under `CLAUDE_CONFIG_DIR`) | `./.claude/skills/agentbus/SKILL.md` and `./.claude/settings.json` |
 | `setup codex` | `~/.codex/AGENTS.md` and `~/.codex/hooks.json` (or under `CODEX_HOME`) | `./AGENTS.md` and `./.codex/hooks.json` |
 
-The hooks are five entries, each ending in `# agentbus:managed`; your other hooks and settings stay. If the agentbus plugin is already installed and enabled (setup asks `claude plugin list --json`, and reads Claude Code's plugin files only when there is no `claude` to ask) it provides the hooks, so setup adds only the skill and says `provided by the agentbus plugin; not added`. [Claude Code](claude-code.md) describes what the hooks do. Codex gets four hooks and one step of yours, approving them on its "Hooks need review" screen (or with `/hooks`); [Codex](codex.md) has the details.
+The hooks are four entries, each ending in `# agentbus:managed`; your other hooks and settings stay. If the agentbus plugin is already installed and enabled (setup asks `claude plugin list --json`, and reads Claude Code's plugin files only when there is no `claude` to ask) it provides the hooks, so setup adds only the skill and says `provided by the agentbus plugin; not added`. [Claude Code](claude-code.md) describes what the hooks do. Codex gets three hooks and one step of yours, approving them on its "Hooks need review" screen (or with `/hooks`); [Codex](codex.md) has the details.
 
 Nothing else is written. New folders are private (0700) and new files owner-only (0600).
 

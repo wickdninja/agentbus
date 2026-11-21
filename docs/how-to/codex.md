@@ -9,9 +9,9 @@ agentbus setup codex
 ```
 agentbus setup codex (user)
   + ~/.codex/AGENTS.md   added the agentbus block (4 lines)
-  + ~/.codex/hooks.json   added 4 hooks (SessionStart, UserPromptSubmit, PreToolUse, Stop)
+  + ~/.codex/hooks.json   added 3 hooks (SessionStart, UserPromptSubmit, PreToolUse)
   = /bin/zsh   prints nothing at startup (started once as $SHELL -lc)
-done. Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 4 entries whose command starts '/usr/bin/python3' '/path/to/agentbus' hook codex and ends # agentbus:managed.
+done. Codex ignores hooks until you trust them: start codex, open its Hooks need review screen (or type /hooks), and approve the 3 entries whose command starts '/usr/bin/python3' '/path/to/agentbus' hook codex and ends # agentbus:managed.
 next: cd your-repo && agentbus init .
 ```
 
@@ -19,7 +19,7 @@ Two steps are yours: run `agentbus init .` in each repo, and approve the hooks i
 
 ## Trust the hooks
 
-Codex runs no hook until you approve it. Start `codex`: on Codex 0.166.0 it opens with "Hooks need review" (or type `/hooks`). Choose "Review hooks", open each of the four entries agentbus added and press `t`, or press `t` on the list to trust all four. Installing never trusts them for you, and `codex exec` skips untrusted hooks without a word.
+Codex runs no hook until you approve it. Start `codex`: on Codex 0.166.0 it opens with "Hooks need review" (or type `/hooks`). Choose "Review hooks", open each of the three entries agentbus added and press `t`, or press `t` on the list to trust all three. Installing never trusts them for you, and `codex exec` skips untrusted hooks without a word.
 
 To recognise them: the command starts with the installed `agentbus` (the exact words setup printed) followed by `hook codex EVENT`, and ends with `# agentbus:managed`. Approve only those; an entry that runs something else is not ours. Running `agentbus setup codex` again changes nothing and prints the same reminder while the hooks are in place.
 
@@ -52,8 +52,8 @@ When a session starts, the hook joins the bus under a name made from the session
 
 The `AGENTS.md` block shows `--as NAME`: any name works if you run commands yourself. The difference is who recognises it.
 
-- The derived name is the one the hooks act for: the unread count, the claim note and the end-of-turn reminder all look at it.
-- A name the agent picked itself is a second agent as far as the hooks are concerned. A claim made under it is not the session's own, so the claim note for that file says `a claim under a different name covers this file` (once per file per session) even though the same agent made it, the unread note does not count messages sent to it, and the end-of-turn reminder does not count it. When SessionStart gives a name, use it.
+- The derived name is the one the hooks act for: the unread count and the claim note look at it.
+- A name the agent picked itself is a second agent as far as the hooks are concerned. A claim made under it is not the session's own, so the claim note for that file says `a claim under a different name covers this file` (once per file per session) even though the same agent made it, and the unread note does not count messages sent to it. When SessionStart gives a name, use it.
 - If `AGENTBUS_AGENT` is set in the environment Codex runs in (a dispatcher naming its lane), the hooks use that name as given, if it is a plain name (letters, digits, `.`, `_`, `-`, up to 40), and never take it over from a live agent.
 
 ## What the hooks do
@@ -61,9 +61,11 @@ The `AGENTS.md` block shows `--as NAME`: any name works if you run commands your
 | Event | Shown to | What it says |
 | --- | --- | --- |
 | `SessionStart` | the agent | it joined the bus; its name, how many agents are on it, unread counts, and the commands to read, each with `--as` and its name |
-| `UserPromptSubmit` | the agent | the unread count and `agentbus --as NAME inbox`, only when something is unread |
-| `PreToolUse` (matcher `apply_patch\|Edit\|Write`) | the agent | a note when another name holds a claim on a file the patch touches, once per file per session; or, when another agent is on the bus, which file has no claim and the exact command to claim it; and, once for each message not already announced, how many messages sent to its name, broadcast decisions and alerts are unread |
-| `Stop` | you | `codex-xxxxxxxx still holds 1 claim and has not posted a handoff or a done that is not a reply.`, once for each set of claims |
+| `SessionStart` after a resume | the agent | one line: its name and how many messages sent to it are unread |
+| `UserPromptSubmit` | the agent | how many messages sent to its name are unread and `agentbus --as NAME inbox`, only when one of them is new since it was last said (broadcasts are not counted) |
+| `PreToolUse` (matcher `apply_patch\|Edit\|Write`) | the agent | a note when another name holds a claim on a file the patch touches, once per file per session; and, once for each message not already announced, how many messages sent to its name, broadcast decisions and alerts are unread |
+
+There is no `Stop` hook and no note for a file nobody holds: both were measured as noise (issue #86). An older setup's `Stop` entry does nothing; `agentbus setup codex` removes it.
 
 Messages, goals and names other agents wrote are never put in a hook message, only counts and the tool's own text. A file name is printed only when it is plain (letters, digits, `. _ / @ + -`). Edits made through the shell (`sed -i`, redirects) are invisible to the claim note.
 

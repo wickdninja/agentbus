@@ -21,11 +21,12 @@ KINDS (--kind)
 
 FLAGS
   -h, --help          Show this help message and exit.
-  --to NAME           Deliver to this one agent name; omitted means broadcast.
-                      A name not on the roster still gets the message, with a
-                      warning.
+  --to NAME           Deliver to this one agent name; omitted, all or everyone
+                      means broadcast. A name not on the roster still gets the
+                      message, with a warning.
   --kind KIND         Message kind: note, question, answer, handoff, decision,
-                      alert, done, todo, dropped. Default: note.
+                      alert, done, todo, dropped. Default: note. Another word
+                      posts a note, with a warning.
   --topic TOPIC       Optional topic label, filterable with read --topic.
   --reply-to ID       Link to an earlier message; does not choose the
                       recipient.

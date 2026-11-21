@@ -270,7 +270,7 @@ assert e["agent"] == "a" and isinstance(e["last_seen_min"], int) and e["suggeste
 first = ok("--as", "a", "post", "one", "--request-id", "tok", db=db)
 e = expect("request_id_reused", "--as", "a", "post", "two", "--request-id", "tok", db=db)
 assert e["original_id"] == first["id"] and "Original: #%d" % first["id"] in e["message"], e
-expect("bad_input", "--as", "a", "post", "hi", "--kind", "fyi", db=db)
+expect("bad_input", "--as", "a", "post", "hi", "--kind", "dropped", db=db)  # an invented kind posts a note (issue 86)
 expect("no_bus", "who")
 expect("internal", "who", db=db, env={"AGENTBUS_TEST_FAIL": "internal"})
 ok("--as", "a", "post", "unread", "--to", "b", db=db)

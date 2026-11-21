@@ -39,7 +39,7 @@ for w in want:
 if "--kind handoff" not in next(c for c in cmds if c.startswith("agentbus --as worker post")):
     print("FAIL: the worker's post is not a handoff: %s" % cmds)
     sys.exit(1)
-if not re.search(r"^agentbus: src/auth/login\.py overlaps src/auth/, claimed by worker", text, re.M):
+if not re.search(r"^agentbus: refused: src/auth/login\.py overlaps src/auth/, claimed by worker", text, re.M):
     print("FAIL: the conflicting claim's refusal is not shown:\n" + text)
     sys.exit(1)
 if not re.search(r"^# .*refused", text, re.M | re.I):

@@ -66,7 +66,7 @@ complete -c agentbus -n '__fish_seen_subcommand_from join' -l takeover -d 'Rejoi
 complete -c agentbus -n '__fish_seen_subcommand_from join' -l request-id -x -d 'Retry safely: the same token and flags replay the first result, flagged duplicate'
 complete -c agentbus -n '__fish_seen_subcommand_from leave' -l request-id -x -d 'Accepted and ignored: the bus does not store it'
 complete -c agentbus -n '__fish_seen_subcommand_from who' -l limit -x -d 'At most this many agents (default 50)'
-complete -c agentbus -n '__fish_seen_subcommand_from post' -l to -x -d 'Deliver to this one agent name; omitted means broadcast'
+complete -c agentbus -n '__fish_seen_subcommand_from post' -l to -x -d 'Deliver to this one agent name; omitted, all or everyone means broadcast'
 complete -c agentbus -n '__fish_seen_subcommand_from post' -l kind -x -a 'note question answer handoff decision alert done todo dropped' -d 'Message kind: note, question, answer, handoff, decision, alert, done, todo, dropped'
 complete -c agentbus -n '__fish_seen_subcommand_from post' -l topic -x -d 'Optional topic label, filterable with read --topic'
 complete -c agentbus -n '__fish_seen_subcommand_from post' -l reply-to -x -d 'Link to an earlier message; does not choose the recipient'
