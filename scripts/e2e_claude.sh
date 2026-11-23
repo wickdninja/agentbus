@@ -50,7 +50,8 @@ print(f"SessionStart named {name}; `who` listed it")
 open(sys.argv[1] + ".name", "w").write(name)
 PY
 NAME=$(cat "$STREAM.name")
-LOG=$(cd "$P" && python3 "$ROOT/bin/agentbus" --json log show --limit 50)
+# log is not a command (#89 K4): read the bus's log table, opened read-only
+LOG=$(python3 -I -c 'import json,sqlite3,sys; c=sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True); print(json.dumps({"items": [{"agent": a, "action": x} for a, x in c.execute("SELECT agent, action FROM log ORDER BY id DESC LIMIT 50")][::-1]}))' "$P/.agentbus/bus.db")
 python3 -I - "$NAME" "$LOG" <<'PY' || exit 1
 import json, sys
 name, log = sys.argv[1], json.loads(sys.argv[2])

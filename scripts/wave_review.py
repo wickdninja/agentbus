@@ -4,10 +4,10 @@
   wave_review.py --coordinator NAME[,NAME] [--since ID] [--append FILE]
                  [--json EXPORT.json] [--cli "python3 bin/agentbus"]
 
-Reads `read`, `log show`, `who` and `status` (all --json, none with --as, AGENTBUS_AGENT dropped: each opens the bus
-read-only) from the bus the environment names (AGENTBUS_DB or the nearest bus), or one `read --json` export given with
---json (no log, no roster). No command reads another agent's cursor without acting as it, so a coordinator's unread
-count is read from the bus file itself, opened read-only, by inbox's rule. Friction posts are `[key] text` or
+Reads `read` and `status` (both --json, neither with --as, AGENTBUS_AGENT dropped: each opens the bus read-only) from
+the bus the environment names (AGENTBUS_DB or the nearest bus), or one `read --json` export given with --json (no log,
+no roster). No command reads another agent's cursor without acting as it, and log is not a command, so the log rows,
+the roster and a coordinator's unread count (by inbox's rule) are read from the bus file itself, opened read-only. Friction posts are `[key] text` or
 `+1 [key]`; a key at 3 or more gets an issue.
 """
 import argparse, collections, datetime, json, os, re, shlex, sqlite3, subprocess, sys, urllib.parse
@@ -21,24 +21,29 @@ def run(cli, *args):
     return json.loads(p.stdout)
 
 
-def unread_counts(db, names):
-    """{name: unread} for the names that have a cursor, by inbox's rule (direct after the cursor, broadcasts after the
-    cursor and since the name first joined, not its own), from the bus file opened the way the CLI's read-only commands
-    open it: never created (mode=rw), exclusive locking (the WAL index stays in memory, no -shm), and query_only."""
+def from_bus_file(db, names, cut):
+    """The log rows from time `cut` on, and {name: unread} for the names on the roster that have a cursor, by inbox's
+    rule (direct after the cursor, broadcasts after the cursor and since the name first joined, not its own), from the
+    bus file opened the way the CLI's read-only commands open it: never created (mode=rw), exclusive locking (the WAL
+    index stays in memory, no -shm), and query_only. The roster is the agents table: who lists only the names that
+    acted, and a coordinator that has only joined still has an unread count."""
     con = sqlite3.connect("file:%s?mode=rw" % urllib.parse.quote(db), uri=True, timeout=5)
     try:
         con.execute("PRAGMA trusted_schema=OFF")
         con.execute("PRAGMA locking_mode=EXCLUSIVE")
         con.execute("PRAGMA query_only=ON")
+        log = [{"ts": r[0], "agent": r[1], "action": r[2]} for r in
+               con.execute("SELECT ts, agent, action FROM log WHERE ts >= ? ORDER BY id", (cut,))]
+        roster = {r[0] for r in con.execute("SELECT name FROM agents")}
         out = {}
-        for name in names:
+        for name in (n for n in names if n in roster):
             row = con.execute("SELECT last_read_id, bcast_from FROM cursors WHERE agent=?", (name,)).fetchone()
             if row:
                 out[name] = con.execute(
                     "SELECT (SELECT COUNT(*) FROM messages WHERE recipient=? AND id>? AND sender<>?)"
                     " + (SELECT COUNT(*) FROM messages WHERE recipient='*' AND id>? AND sender<>?)",
                     (name, row[0], name, max(row[0], row[1]), name)).fetchone()[0]
-        return out
+        return log, out
     finally:
         con.close()
 
@@ -60,10 +65,7 @@ def main():
     else:
         msgs = run(a.cli, "read", "--since", str(a.since), "--limit", "-1")["items"]
         cut = run(a.cli, "read", "--id", str(a.since))["ts"] if a.since else ""
-        log = [r for r in run(a.cli, "log", "show", "--limit", "-1")["items"] if r["ts"] >= cut]
-        roster = {r["name"] for r in run(a.cli, "who", "--limit", "-1")["items"]}
-        counts = unread_counts(run(a.cli, "status", "--limit", "1")["bus"], [c for c in names if c in roster])
-        waiting = counts
+        log, waiting = from_bus_file(run(a.cli, "status", "--limit", "1")["bus"], names, cut)
     unread = [(c, waiting.get(c, "n/a") if waiting is not None else "n/a") for c in names]
     def where(m):
         if m["sender"] in coord: return "from brain"

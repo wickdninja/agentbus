@@ -4,7 +4,7 @@ set -euo pipefail
 # scripts/wave_review.py on a fixture bus built with the real CLI, and on a JSON export.
 # Bugs it catches: the review moved the coordinator's last-seen (it ran a command as it), a question that replied to a
 # question counted as answered, a coordinator past the first 50 agents (or past watch's 200) was missed, refused claims
-# went uncounted, and `log show` normalised a planted claim and logged it (an ordinary open writes).
+# went uncounted, and a read normalised a planted claim and logged it (an ordinary open writes).
 
 . "$(dirname "$0")/lib.sh"
 TMP=$(mktemp -d)
