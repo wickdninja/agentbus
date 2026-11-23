@@ -4354,13 +4354,15 @@ def cmd_leave(con, a):
 
 
 def q_who(con, limit=LISTING_LIMIT):
-    return capped(con, "SELECT * FROM agents ORDER BY last_seen DESC", (), limit)
+    return capped(con, "SELECT * FROM agents ORDER BY last_seen DESC, rowid", (), limit)
 
 
-# The names that acted in the bus's life: posted, claimed (a claim held, or any log row but join and leave: claim,
-# claim_taken, release, goal), read (an inbox moved the cursor) or set a fact. who and brief list only these; the rest of
-# the roster, mostly names a hook joined for a session that never used the bus, is one counted line (#89 E2).
-ACTIVE_NAMES = ("(SELECT sender FROM messages UNION SELECT agent FROM claims "
+# The names that acted in the bus's life: posted, claimed (any log row but join and leave: claim, claim_taken, release,
+# goal), read (an inbox moved the cursor) or set a fact. who and brief list only these; the rest of the roster, mostly
+# names a hook joined for a session that never used the bus, is one counted line (#89 E2). A claim is found by its log
+# row (every claim writes one, P-LOG-1), never by the claims table: claims.agent is stored after the resource, so reading
+# it reads every whole resource, and who must not read a planted name (tests/test_planted.sh TEST 1).
+ACTIVE_NAMES = ("(SELECT sender FROM messages "
                 "UNION SELECT agent FROM log WHERE action NOT IN ('join', 'leave') "
                 "UNION SELECT agent FROM cursors WHERE last_read_id > 0 UNION SELECT updated_by FROM context_history)")
 
@@ -4419,7 +4421,8 @@ def table_formatter(rows, fmt):
 
 
 def cmd_who(con, a):
-    rows, more = capped(con, f"SELECT * FROM agents WHERE name IN {ACTIVE_NAMES} ORDER BY last_seen DESC", (), a.limit)
+    # rowid breaks a tie in last_seen, so who lists in the order status does (the IN filter may scan by name)
+    rows, more = capped(con, f"SELECT * FROM agents WHERE name IN {ACTIVE_NAMES} ORDER BY last_seen DESC, rowid", (), a.limit)
     inactive = inactive_count(con)
     if a.json:
         print_json({**envelope([dict(r) for r in rows], more), "inactive": inactive})
