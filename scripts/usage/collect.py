@@ -6,6 +6,10 @@ Every root flag is repeatable and REPLACES that source's defaults. Missing roots
 are empty populations. --work-pattern is a case-sensitive fnmatch rule on cwd
 (or the encoded Claude project directory when cwd is absent); all else is personal.
 --brain-name explicitly identifies coordinators, and is never exported.
+--owner-name explicitly identifies owners (repeatable, never exported); owner
+requests are directed questions or handoffs. Any later owner post replying to
+the request or addressed to its sender answers it. Unanswered requests aged at
+least one hour at window end count in unanswered_after_1h.
 --exclude-pattern (fnmatch on a transcript's file path or any cwd it records) and
 --exclude-entrypoint (Claude entrypoint) drop scripted sessions from every metric;
 sources.excluded_sessions counts them. Cycle 0 used two populations:
@@ -73,6 +77,7 @@ VERBS = KNOWN + ("help_flag", "version_flag", "no_verb", "dynamic", "unknown")
 EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "other")
 KINDS = ("orientation", "unread", "no_claim", "held_claim", "other")
 RULES = (
+    ("log_verb", r"(?:unknown command|invalid choice:)\s*['\"]?log\b", "log"),
     ("claim_conflict", r"is claimed by|already claimed|held by \S+ until", "claim"),
     ("name_active", r"may be another live session|is in use by a live session|looks live", "join"),
     ("wait_timeout", r"no unread messages for \S+ after", "wait"),
@@ -127,7 +132,8 @@ def schema():
                   "wall_ms": zeros(EVENTS), "compact_orientations": 0, "own_claim_warnings": 0},
         "claims": zeros(("claims", "refusals", "transcript_refusals", "cross_worktree_refusals", "worktree_classified_refusals", "cross_worktree_share", "snapshot_claims", "expired_at_end", "claims_output_rows", "expired_output_rows", "expired_output_share", "edits_after_refusal", "refusals_with_observed_followup")),
         "identity": zeros(("sessions_with_names", "names_per_session_p50", "names_per_session_p90", "multiple_names_sessions", "distinct_names", "reused_names", "sessions_with_reused_names")),
-        "peer": zeros(("messages", "directed_asks", "answered_asks", "answer_rate", "answer_minutes_samples", "answer_minutes_p50", "handoffs", "picked_up_handoffs", "handoff_pickup_rate", "handoffs_cursor_covered", "broadcasts", "rulings", "broadcasts_per_ruling", "handoffs_to_brains", "brain_handoffs_answered", "brain_handoff_answer_rate", "recipients_absent_from_current_roster")),
+        "peer": zeros(("messages", "directed_asks", "answered_asks", "answer_rate", "answer_minutes_samples", "answer_minutes_p50", "handoffs", "picked_up_handoffs", "handoff_pickup_rate", "handoffs_cursor_covered", "broadcasts", "rulings", "broadcasts_per_ruling", "handoffs_to_brains", "brain_handoffs_answered", "brain_handoff_answer_rate", "recipients_absent_from_current_roster", "ghost_roster_rows")),
+        "owner": zeros(("questions_to_owner", "answered", "answer_minutes_p50", "unanswered_after_1h")),
         "adoption": {s: zeros(("sessions", "using_bus", "not_using_bus", "subagent_sessions", "subagents_using_bus")) for s in ("claude", "codex")},
         "buses": 0,
     }
@@ -723,12 +729,25 @@ class Collector:
         for bus in self.buses:
             bucket = self.result["workspaces"][bus["bucket"]]
             bucket["buses"] += 1
-            peer, claims = bucket["peer"], bucket["claims"]
+            peer, claims, owner = bucket["peer"], bucket["claims"], bucket["owner"]
             msgs = [m for m in bus["messages"] if self.within(m.get("ts"))]
             roster = {a.get("name") for a in bus["agents"]}
             cursors = {c.get("agent"): c.get("last_read_id", 0) for c in bus["cursors"]}
+            # Ghosts are current roster rows without a post, claim or read in
+            # the window. Claims use claimed_at or a claim log event; reads use
+            # a read log event, when present, or a cursor advanced above zero
+            # to an in-window message. Cursors have no movement timestamp, so
+            # the pointed-to message is snapshot evidence, not a read-time
+            # reconstruction. Joining/last_seen alone is not activity.
+            active = {m.get("sender") for m in msgs}
+            active.update(c.get("agent") for c in bus["claims"] if self.within(c.get("claimed_at")))
+            active.update(r.get("agent") for r in bus["log"] if r.get("action") in ("claim", "read") and self.within(r.get("ts")))
+            message_ids = {m.get("id") for m in msgs}
+            active.update(name for name, cursor in cursors.items() if cursor and cursor > 0 and cursor in message_ids)
+            peer["ghost_roster_rows"] += sum(a.get("name") not in active for a in bus["agents"])
             peer["messages"] += len(msgs)
             latencies = []
+            owner_latencies = []
             by_parent = {}
             for msg in msgs:
                 if msg.get("reply_to") is not None:
@@ -741,6 +760,18 @@ class Collector:
                 peer["recipients_absent_from_current_roster"] += int(not broadcast and recipient not in roster)
                 if broadcast:
                     continue
+                if recipient in self.args.owner_name and msg.get("kind") in ("question", "handoff"):
+                    owner["questions_to_owner"] += 1
+                    answers = [r for r in msgs if r.get("sender") == recipient and r.get("id", 0) > msg.get("id", 0)
+                               and (r.get("reply_to") == msg.get("id") or r.get("recipient") == msg.get("sender"))]
+                    owner["answered"] += bool(answers)
+                    start = timestamp(msg.get("ts"))
+                    times = [timestamp(r.get("ts")) for r in answers]
+                    times = [t for t in times if t is not None and start is not None and t >= start]
+                    if times:
+                        owner_latencies.append((min(times) - start) / 60)
+                    if not answers and start is not None and end - start >= 3600:
+                        owner["unanswered_after_1h"] += 1
                 replies = [r for r in by_parent.get(msg.get("id"), []) if r.get("sender") == recipient and r.get("kind") != "question" and r.get("id", 0) > msg.get("id", 0)]
                 if msg.get("kind") == "question":
                     answers = [r for r in replies if r.get("kind") == "answer"]
@@ -759,6 +790,7 @@ class Collector:
                         peer["handoffs_to_brains"] += 1
                         peer["brain_handoffs_answered"] += bool(replies)
             bus["latencies"] = latencies
+            bus["owner_latencies"] = owner_latencies
             for claim in bus["claims"]:
                 claims["snapshot_claims"] += 1
                 expiry = timestamp(claim.get("expires_at"))
@@ -795,6 +827,8 @@ class Collector:
             latencies = [t for b in self.buses if b["bucket"] == name for t in b["latencies"]]
             p["answer_minutes_samples"] = len(latencies)
             p["answer_minutes_p50"] = quantile(latencies, .5)
+            owner_latencies = [t for b in self.buses if b["bucket"] == name for t in b["owner_latencies"]]
+            bucket["owner"]["answer_minutes_p50"] = quantile(owner_latencies, .5)
             c["cross_worktree_share"] = share(c["cross_worktree_refusals"], c["worktree_classified_refusals"])
 
     def excluded(self, session):
@@ -1004,6 +1038,7 @@ def arguments(argv=None):
     parser.add_argument("--exclude-entrypoint", action="append", default=[], help="Claude entrypoint (e.g. sdk-cli) whose sessions leave every metric")
     parser.add_argument("--history-workspace", default="", help="workspace used to bucket human commands (history has no cwd)")
     parser.add_argument("--brain-name", action="append", default=[])
+    parser.add_argument("--owner-name", action="append", default=[], help="repeatable owner name for directed question/handoff response metrics; never exported")
     parser.add_argument("--start", type=time_arg)
     parser.add_argument("--end", type=time_arg)
     args = parser.parse_args(argv)
