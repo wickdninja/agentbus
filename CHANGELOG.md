@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-11-21
 
-Which of the [six versioned things](docs/explanation/versions.md) change: the protocol is new, at 1.0 (`"protocol": "1.0"` in `schema --json`); the tool changes (the claims listing) and the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill's last link points at the protocol; the hooks say less (below).
+Which of the [six versioned things](docs/explanation/versions.md) change: the tool is 0.5.0 (the claims listing changes, `who` and `brief` list only agents that acted, and `demo`, `completion` and the `log` command are gone); the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill changes (a holder in another worktree only warns, `claim area:NAME` locks a simulator or device, and the last link points at the protocol); the hooks change (the Stop hook is removed, and the prompt note counts only messages sent to the agent's own name); plugin users update the plugin; the protocol is new in this release, at 1.0 (`"protocol": "1.0"` in `schema --json`), the first release to carry it.
 
 ### Added
 
-- [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.4.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` is unchanged.
+- [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.5.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` is unchanged.
 
 ### Changed (learning cycle 0, [#86](https://github.com/wickdninja/agentbus/issues/86))
 
@@ -23,7 +23,7 @@ Which of the [six versioned things](docs/explanation/versions.md) change: the pr
 ### Removed (learning cycle 1, [#89](https://github.com/wickdninja/agentbus/issues/89))
 
 - `agentbus demo` and `agentbus completion` are gone: no help line, no schema entry, and running either gets the ordinary unknown-command error. To see two agents hand off work on a temporary bus, run `examples/two-agent-handoff.sh` (README).
-- `log` is no longer a command. Any `agentbus log ...` refuses with one line: rulings are in `agentbus brief`, messages by topic in `agentbus read --topic T`. The log table still gets its rows (join, leave, claim, release, goal, `claim_refused`, `claim_taken`), and `scripts/wave_review.py` and the usage collector read it from the bus file. Protocol: P-LOG-2 (`log add`) is gone, and `log` leaves the operations table.
+- `log` is no longer a command. Any `agentbus log ...` refuses with one line: rulings are in `agentbus brief`, messages by topic in `agentbus read --topic T`. The log table still gets its rows (join, leave, claim, release, goal, `claim_refused`, `claim_taken`), and `scripts/wave_review.py` and the usage collector read it from the bus file. Protocol 1.0 ships without P-LOG-2 (`log add`) and without `log` in its operations table.
 
 ### Changed (learning cycle 1, [#89](https://github.com/wickdninja/agentbus/issues/89))
 
