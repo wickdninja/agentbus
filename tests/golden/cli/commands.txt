@@ -12,9 +12,6 @@ ctx history
 claim
 release
 claims
-log
-log add
-log show
 status
 goal
 watch
@@ -23,7 +20,6 @@ init
 upgrade
 schema
 help
-completion
 skill
 setup
 update
@@ -31,4 +27,3 @@ hook
 hooks
 doctor
 brief
-demo

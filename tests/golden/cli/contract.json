@@ -287,36 +287,6 @@
     }
    }
   },
-  "LogEntry": {
-   "type": "object",
-   "required": [
-    "id",
-    "ts",
-    "agent",
-    "action",
-    "detail"
-   ],
-   "properties": {
-    "id": {
-     "type": "integer"
-    },
-    "ts": {
-     "type": "string"
-    },
-    "agent": {
-     "type": "string"
-    },
-    "action": {
-     "type": "string"
-    },
-    "detail": {
-     "type": [
-      "string",
-      "null"
-     ]
-    }
-   }
-  },
   "Goal": {
    "type": "object",
    "required": [
@@ -1382,11 +1352,6 @@
    "value": {
     "required": true
    }
-  },
-  "log add": {
-   "detail": {
-    "required": true
-   }
   }
  },
  "commands": {
@@ -1512,14 +1477,15 @@
    ]
   },
   "who": {
-   "summary": "List agents, most recently seen first",
+   "summary": "List the agents that posted, claimed or read, most recently seen first; inactive counts the rest",
    "result": {
     "type": "object",
     "required": [
      "contract",
      "items",
      "has_more",
-     "next"
+     "next",
+     "inactive"
     ],
     "properties": {
      "contract": {
@@ -1539,6 +1505,9 @@
        "string",
        "null"
       ]
+     },
+     "inactive": {
+      "type": "integer"
      }
     }
    },
@@ -2056,113 +2025,6 @@
       "type": "array",
       "items": {
        "$ref": "#/objects/Claim"
-      }
-     },
-     "has_more": {
-      "type": "boolean"
-     },
-     "next": {
-      "type": [
-       "string",
-       "null"
-      ]
-     }
-    }
-   },
-   "retry": {
-    "class": "safe",
-    "how": "repeat freely",
-    "short": "safe to repeat"
-   },
-   "text": null,
-   "errors": [
-    "bad_input",
-    "no_bus",
-    "busy",
-    "schema_refused",
-    "schema_older",
-    "schema_newer",
-    "schema_corrupt",
-    "backup_failed",
-    "bus_unavailable",
-    "output_failed",
-    "interrupted",
-    "internal"
-   ]
-  },
-  "log add": {
-   "summary": "Append an activity log entry",
-   "result": {
-    "type": "object",
-    "required": [
-     "contract",
-     "id",
-     "logged",
-     "agent",
-     "action",
-     "detail"
-    ],
-    "properties": {
-     "contract": {
-      "type": "integer"
-     },
-     "id": {
-      "type": "integer"
-     },
-     "logged": {
-      "type": "boolean"
-     },
-     "agent": {
-      "type": "string"
-     },
-     "action": {
-      "type": "string"
-     },
-     "detail": {
-      "type": "string"
-     }
-    }
-   },
-   "retry": {
-    "class": "unsafe",
-    "short": "appends each time",
-    "how": "each call appends a row; check log show --limit 1 before retrying"
-   },
-   "text": null,
-   "errors": [
-    "not_on_roster",
-    "bad_input",
-    "no_bus",
-    "busy",
-    "schema_refused",
-    "schema_older",
-    "schema_newer",
-    "schema_corrupt",
-    "backup_failed",
-    "bus_unavailable",
-    "output_failed",
-    "interrupted",
-    "internal"
-   ]
-  },
-  "log show": {
-   "summary": "Show recent activity log entries",
-   "result": {
-    "type": "object",
-    "required": [
-     "contract",
-     "items",
-     "has_more",
-     "next"
-    ],
-    "properties": {
-     "contract": {
-      "type": "integer"
-     },
-     "items": {
-      "type": "array",
-      "items": {
-       "$ref": "#/objects/LogEntry"
       }
      },
      "has_more": {
@@ -3353,40 +3215,6 @@
     "internal"
    ]
   },
-  "completion": {
-   "summary": "Print a tab-completion script for bash, zsh or fish",
-   "result": {
-    "type": "object",
-    "required": [
-     "contract",
-     "shell",
-     "text"
-    ],
-    "properties": {
-     "contract": {
-      "type": "integer"
-     },
-     "shell": {
-      "type": "string"
-     },
-     "text": {
-      "type": "string"
-     }
-    }
-   },
-   "retry": {
-    "class": "safe",
-    "how": "repeat freely",
-    "short": "safe to repeat"
-   },
-   "text": null,
-   "errors": [
-    "bad_input",
-    "output_failed",
-    "interrupted",
-    "internal"
-   ]
-  },
   "setup": {
    "summary": "Install the skill and hooks for Claude Code, or the AGENTS.md block and hooks for Codex",
    "result": {
@@ -3590,7 +3418,8 @@
      "agents": {
       "type": "object",
       "required": [
-       "items"
+       "items",
+       "inactive"
       ],
       "properties": {
        "items": {
@@ -3598,6 +3427,9 @@
         "items": {
          "$ref": "#/objects/BriefAgent"
         }
+       },
+       "inactive": {
+        "type": "integer"
        }
       }
      },
@@ -3828,55 +3660,6 @@
     "schema_corrupt",
     "backup_failed",
     "bus_unavailable",
-    "output_failed",
-    "interrupted",
-    "internal"
-   ]
-  },
-  "demo": {
-   "summary": "A hands-off 30-second tour on a temporary bus; with --json the same tour without pauses",
-   "result": {
-    "type": "object",
-    "required": [
-     "contract",
-     "steps",
-     "cleaned"
-    ],
-    "properties": {
-     "contract": {
-      "type": "integer"
-     },
-     "steps": {
-      "type": "array",
-      "items": {
-       "type": "object",
-       "required": [
-        "command",
-        "exit"
-       ],
-       "properties": {
-        "command": {
-         "type": "string"
-        },
-        "exit": {
-         "type": "integer"
-        }
-       }
-      }
-     },
-     "cleaned": {
-      "type": "boolean"
-     }
-    }
-   },
-   "retry": {
-    "class": "safe",
-    "how": "repeat freely",
-    "short": "safe to repeat"
-   },
-   "text": null,
-   "errors": [
-    "bad_input",
     "output_failed",
     "interrupted",
     "internal"

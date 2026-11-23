@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The CLI's discoverable surface, pinned byte for byte: `--help`, every `<cmd> --help` (hidden commands and
-# subcommands too), `schema --json`, the bash, zsh and fish completion scripts, the command list in the order the
-# parser registers it, and the final CONTRACT table. The goldens are tests/golden/cli/; any byte change fails with a diff.
+# subcommands too), `schema --json`, the command list in the order the parser registers it, and the final CONTRACT
+# table. The goldens are tests/golden/cli/; any byte change fails with a diff.
 # A deliberate change: `bash tests/test_cli_surface.sh --update` rewrites the goldens (under Python 3.9 to 3.11, then
 # again under 3.12 or later, see below), then review `git diff`.
 # The version is written as @VERSION@, so a release bump changes no golden.
@@ -57,7 +57,6 @@ while IFS= read -r words; do
   cli "${w[@]}" --help >"$T/out/help-$(printf '%s' "$words" | tr ' ' '-').txt"
 done <"$T/out/commands.txt"
 cli schema --json >"$T/out/schema.json"
-for s in bash zsh fish; do cli completion "$s" >"$T/out/completion-$s.txt"; done
 # The version, wherever it shows, as @VERSION@ (written with python: sed -i differs between BSD and GNU).
 "$PY" - "$T/out" "$version" <<'PY'
 import pathlib, sys
