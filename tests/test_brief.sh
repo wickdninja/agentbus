@@ -416,6 +416,8 @@ for i in range(60):
         "agent-%02d-%s" % (i, "n" * 500), "t" * 400, None, None, None, "r" * 400, "2026-01-01T00:00:00Z", "2026-01-01T00:00:%02dZ" % i)
     sql(db, "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)",
         "res/%02d/%s" % (i, "x" * 3000), "agent-%02d-%s" % (i, "n" * 500), "p" * 5000, "2026-01-01T00:00:00Z", "2999-01-01T00:00:00Z")
+    # its claim row, as a real claim writes one: brief lists only agents that acted (#89 E2)
+    sql(db, "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", "2026-01-01T00:00:00Z", "agent-%02d-%s" % (i, "n" * 500), "claim", "res/%02d" % i)
     sql(db, "INSERT INTO messages(ts,sender,recipient,kind,topic,body) VALUES('2026-01-01T00:00:00Z','lead','*','question',NULL,?)", "Q" * 200000)
     sql(db, "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?)", "k%02d" % i, "v" * 200000, "lead", "2026-01-02T00:00:00Z")
 out = ok(db, "--as", "lead", "brief")

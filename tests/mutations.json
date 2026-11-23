@@ -3408,7 +3408,7 @@
     "replace": "LISTING_LIMIT = 500\n",
     "count": 1,
     "run": "tests/test_output.sh",
-    "expect": "returned 71 rows (wanted 50"
+    "expect": "returned 70 rows (wanted 50"
   },
   {
     "name": "output: a body over 64 KB is stored",
@@ -5652,13 +5652,13 @@
     "expect": "a todo cut by the 200-character read says nothing"
   },
   {
-    "name": "brief --limit 0 says nobody has joined",
+    "name": "brief --limit 0 says nobody acted",
     "file": "bin/agentbus",
     "find": "if\\ agents\\ or\\ omitted\\[\"agents\"\\]:",
     "replace": "if agents:",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
-    "expect": "nobody has joined"
+    "expect": "--limit 0 says"
   },
   {
     "name": "brief --limit 0 says open questions none",
