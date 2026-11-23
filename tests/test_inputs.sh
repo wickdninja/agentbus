@@ -80,8 +80,6 @@ expect_fail "--topic is not valid UTF-8" agentbus read --topic "t$X"
 expect_fail "--to is not valid UTF-8" agentbus --as a post hi --to "b$X"
 expect_fail "--role is not valid UTF-8" agentbus --as b join --tool t --role "r$X"
 expect_fail "--purpose is not valid UTF-8" agentbus --as a claim x --purpose "p$X"
-expect_fail "what is not valid UTF-8" agentbus --as a log add "w$X" detail
-expect_fail "detail is not valid UTF-8" agentbus --as a log add w "d$X"
 expect_fail "AGENTBUS_DB is not valid UTF-8" env AGENTBUS_DB="$T/b$X.db" "${AB[@]}" who
 [ "$(count 'select count(*) from messages')" = 0 ] || fail "a refused input still wrote a message"
 ok "every argument and environment value that is not UTF-8 refused cleanly"
@@ -90,7 +88,6 @@ echo "TEST 2: a stdin body with bytes that are not UTF-8 is stored with U+FFFD"
 # Bug it catches: sys.stdin.read() raised UnicodeDecodeError on a \xff byte.
 printf 'caf\xff ok' | agentbus --as a post - >/dev/null || fail "stdin body with a \\xff byte refused"
 printf 'v\xff' | agentbus --as a ctx set sk - >/dev/null || fail "ctx set from stdin with a \\xff byte"
-printf 'd\xff' | agentbus --as a log add w - >/dev/null || fail "log add from stdin with a \\xff byte"
 outof agentbus --json read | python3 -c 'import json,sys; assert any(m["body"] == "caf� ok" for m in json.load(sys.stdin)["items"])' || fail "body not stored with U+FFFD"
 # ctx get KEY prints the value as a row, indented like every row that starts with bus text.
 [ "$(outof agentbus ctx get sk)" = "  v�" ] || fail "ctx value not stored with U+FFFD"
@@ -99,20 +96,18 @@ ok "stdin read as bytes, decoded with replacement"
 echo "TEST 3: an empty body never reads stdin"
 # Bug it catches: post "" (an agent passing an empty variable) read stdin instead, so it hung on a
 # terminal or posted whatever stdin held.
-for args in 'post ""' 'post' 'ctx set ek ""' 'log add w ""' 'post "   "'; do
+for args in 'post ""' 'post' 'ctx set ek ""' 'post "   "'; do
   eval "set -- $args"
   echo "from stdin" > "$T/in"
   case "$1" in
     post) usage='post "text", or pipe text to post -.' ;;
     ctx) usage='ctx set KEY needs a value. Use: agentbus --as NAME ctx set KEY "VALUE", or pipe text to ctx set KEY -.' ;;
-    log) usage='log add ACTION needs a detail. Use: agentbus --as NAME log add ACTION "DETAIL", or pipe text to log add ACTION -.' ;;
   esac
   case "$1" in post) usage="empty message. Use $usage" ;; esac
   expect_fail "$usage" agentbus --as a "$@" < "$T/in"
 done
 [ "$(count "select count(*) from messages where body like '%from stdin%'")" = 0 ] || fail "an empty body posted stdin"
 [ "$(count "select count(*) from context where key='ek'")" = 0 ] || fail "an empty ctx value read stdin"
-[ "$(count "select count(*) from log where detail like '%from stdin%'")" = 0 ] || fail "an empty log detail read stdin"
 echo "piped" | agentbus --as a post - >/dev/null || fail "post - no longer reads stdin"
 [ "$(count "select count(*) from messages where body='piped'")" = 1 ] || fail "post - did not store stdin"
 ok "only - reads stdin; empty bodies fail with usage"

@@ -60,7 +60,7 @@ def tree(*roots):
     return h.hexdigest()
 
 HUMAN = {"init", "upgrade", "setup", "doctor", "skill", "watch", "schema"}   # the installed tool's own (epic, version policy rule 1)
-AGENT = {"join", "leave", "who", "post", "inbox", "read", "ctx", "claim", "release", "claims", "log", "status", "goal", "buses"}
+AGENT = {"join", "leave", "who", "post", "inbox", "read", "ctx", "claim", "release", "claims", "status", "goal", "buses"}
 
 def agent_text_problems(text):
     """Commands in agent-facing text that run something other than the installed `agentbus` (a hostile clone can ship
@@ -238,7 +238,8 @@ row_5() {
   run "$W/r5" "$PY" .agentbus/bin/agentbus --json --as o2 join
   json_is "row 5: join --json from the 0.1.0 copy has no contract and no agentbus" '"contract" not in r and "agentbus" not in r' "$OUT"
   run "$W/r5" "${NEW[@]}" --json who
-  json_is "row 5: the same listing from the new tool is the envelope" 'isinstance(r, dict) and r["contract"] == 1 and {a["name"] for a in r["items"]} == {"old", "o2"}' "$OUT"
+  # old and o2 have only joined: who lists the agents that acted and counts the rest (#89 E2)
+  json_is "row 5: the same listing from the new tool is the envelope" 'isinstance(r, dict) and r["contract"] == 1 and r["items"] == [] and r["inactive"] == 2' "$OUT"
   # the shipped skill: byte-equal to the file in the repo, and it carries the sentences an agent needs here
   "${NEW[@]}" skill > "$T/skill.out"
   cmp -s "$T/skill.out" "$ROOT/skills/agentbus/SKILL.md" || fail "row 5: agentbus skill differs from skills/agentbus/SKILL.md"

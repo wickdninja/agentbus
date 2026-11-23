@@ -83,7 +83,7 @@ agentbus --as claude inbox
 agentbus watch      # live view of agents, claims, facts and messages; q quits
 ```
 
-Without touching a repo, `agentbus demo` is a 30-second tour on a temporary bus. From a clone, with no install:
+To see two agents hand off work on a temporary bus, from a clone, with no install:
 
 ```bash
 AGENTBUS="python3 bin/agentbus" bash examples/two-agent-handoff.sh

@@ -89,7 +89,8 @@ import sqlite3, sys
 con = sqlite3.connect(sys.argv[1]); con.execute(sys.argv[2], sys.argv[3:]); con.commit(); con.close()
 PY
 }
-roster() { ab --json who | "$PY" -c 'import json,sys; print(" ".join(sorted(r["name"] for r in json.load(sys.stdin)["items"])))'; }
+# The whole roster: status lists every name on it (who lists only the names that acted, #89 E2).
+roster() { ab --json status --limit -1 | "$PY" -c 'import json,sys; print(" ".join(sorted(r["name"] for r in json.load(sys.stdin)["agents"])))'; }
 unread() { ab --json --as "$1" inbox --peek --limit -1 | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))'; }
 SS() { hook SessionStart "$(payload session_start session_id="\"${1:-$SID1}\"")"; }
 UPS() { hook UserPromptSubmit "$(payload user_prompt_submit session_id="\"${1:-$SID1}\"")"; }
@@ -298,7 +299,7 @@ got=$(text_of)
 [ "$got" = "$want" ] || fail "SessionStart text differs. got: $got"
 "$PY" -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["hookSpecificOutput"]["hookEventName"]=="SessionStart" and list(d)==["hookSpecificOutput"], d' "$OUT" || fail "SessionStart JSON shape: $OUT"
 [[ " $(roster) " == *" $N "* ]] || fail "SessionStart did not join $N: $(roster)"
-[ "$(ab --json who | "$PY" -c 'import json,sys; print([r["tool"] for r in json.load(sys.stdin)["items"] if r["name"]=="'"$N"'"][0])')" = codex ] || fail "the roster shows the wrong tool for a Codex session"
+[ "$(ab --json status --limit -1 | "$PY" -c 'import json,sys; print([r["tool"] for r in json.load(sys.stdin)["agents"] if r["name"]=="'"$N"'"][0])')" = codex ] || fail "the roster shows the wrong tool for a Codex session"
 [ ! -e "$T/env10" ] || fail "a Codex hook wrote CLAUDE_ENV_FILE"
 [ "$(unread "$N")" = 2 ] || fail "SessionStart marked messages read"
 unset CLAUDE_ENV_FILE
@@ -473,7 +474,7 @@ newbus p15
 ab --as lane-a join --tool dispatcher >/dev/null; ab --as lane-a claim keep.txt >/dev/null
 AGENTBUS_AGENT=lane-a SS
 grep -qF "as lane-a. " <<<"$(text_of)" || fail "AGENTBUS_AGENT name not used: rc $RC out $OUT err $ERR"
-[ "$(ab --json who | "$PY" -c 'import json,sys; print([r["tool"] for r in json.load(sys.stdin)["items"] if r["name"]=="lane-a"][0])')" = dispatcher ] || fail "SessionStart took over a live name"
+[ "$(ab --json status --limit -1 | "$PY" -c 'import json,sys; print([r["tool"] for r in json.load(sys.stdin)["agents"] if r["name"]=="lane-a"][0])')" = dispatcher ] || fail "SessionStart took over a live name"
 newbus p15b; N=$(dname "$SID1"); SS; ab --as "$N" claim keep.txt >/dev/null
 hook SessionStart "$(payload session_start session_id="\"$SID1\"" source='"resume"')"
 [ "$RC" = 0 ] && [ "$(text_of)" = "agentbus: you are $N on this folder's bus (--as $N), no unread direct messages." ] || fail "resume: rc $RC out $OUT err $ERR"

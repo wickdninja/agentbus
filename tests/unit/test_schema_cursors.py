@@ -150,15 +150,15 @@ class ShapeDifference(unittest.TestCase):
 class Cursors(unittest.TestCase):
     def test_round_trip_for_each_walk(self):
         """Bug: a cursor made for one id walk decodes to another row, or the row id is lost."""
-        for a in (args("read", topic="t"), args("inbox", as_="bob"), args("ctx", "history", key="k"), args("log", "show")):
+        for a in (args("read", topic="t"), args("inbox", as_="bob"), args("ctx", "history", key="k")):
             text = ab.make_cursor(a, 4021)
-            self.assertRegex(text, r"^v1\.[rihl]\.[0-9a-f]{6}\.4021$")
+            self.assertRegex(text, r"^v1\.[rih]\.[0-9a-f]{6}\.4021$")
             self.assertEqual(ab.read_cursor(a, text, "--before"), 4021)
 
     def test_the_format_is_pinned(self):
         """Bug: the format changes silently, and cursors saved by a script from the last release stop working."""
         self.assertEqual(ab.make_cursor_text({"c": "read", "f": "3fa9c1", "id": 7}), "v1.r.3fa9c1.7")
-        self.assertEqual(ab.CURSOR_CODES, {"read": "r", "inbox": "i", "ctx history": "h", "log show": "l"})
+        self.assertEqual(ab.CURSOR_CODES, {"read": "r", "inbox": "i", "ctx history": "h"})
         self.assertEqual(ab.read_cursor(args("read", topic=None), ab.make_cursor_text({"c": "read", "f": ab._filter_hash({"topic": None}), "id": 7}), "--before"), 7)
 
     def refused(self, a, text):
@@ -170,7 +170,7 @@ class Cursors(unittest.TestCase):
         """Bug: a read cursor is accepted by inbox and walks the wrong table."""
         text = ab.make_cursor(args("read"), 5)
         self.assertIn("another command", self.refused(args("inbox", as_="bob"), text).msg)
-        self.assertIn("another command", self.refused(args("log", "show"), text).msg)
+        self.assertIn("another command", self.refused(args("ctx", "history", key="k"), text).msg)
 
     def test_other_filters_are_refused(self):
         """Bug: a cursor for topic a pages through topic b, skipping or repeating rows."""

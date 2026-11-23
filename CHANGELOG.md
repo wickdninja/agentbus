@@ -20,6 +20,15 @@ Which of the [six versioned things](docs/explanation/versions.md) change: the pr
 - The PreToolUse hook's held-file warning follows the same worktree rule: for a path held by an agent that joined in another git checkout it says so and to post what you are touching, as `claim` does, instead of telling the agent to wait for the holder (a scheme name, and a holder in the same checkout, get the held warning as before). `join` refuses the names `all` and `everyone` (any case), since a post to them broadcasts.
 - The skill teaches `claim area:NAME --ttl-min N` to lock a simulator, build slot, device or database.
 
+### Removed (learning cycle 1, [#89](https://github.com/wickdninja/agentbus/issues/89))
+
+- `agentbus demo` and `agentbus completion` are gone: no help line, no schema entry, and running either gets the ordinary unknown-command error. To see two agents hand off work on a temporary bus, run `examples/two-agent-handoff.sh` (README).
+- `log` is no longer a command. Any `agentbus log ...` refuses with one line: rulings are in `agentbus brief`, messages by topic in `agentbus read --topic T`. The log table still gets its rows (join, leave, claim, release, goal, `claim_refused`, `claim_taken`), and `scripts/wave_review.py` and the usage collector read it from the bus file. Protocol: P-LOG-2 (`log add`) is gone, and `log` leaves the operations table.
+
+### Changed (learning cycle 1, [#89](https://github.com/wickdninja/agentbus/issues/89))
+
+- `who` and `brief` list only the agents that acted (posted, claimed, read with `inbox` or set a fact) and count the rest of the roster in one line, so names a hook joined for a session that never used the bus no longer bury the agents that did. Under `--json`, `who` has `inactive` beside `items`, and `brief` has `agents.inactive`. Protocol: P-ID-11.
+
 ### Fixed
 
 - `claims` showed a claim as `held` in the second it expired, while `claim` already let another agent take it and `brief` listed it as expired. A claim is now expired from `expires_at <= now` everywhere.

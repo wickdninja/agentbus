@@ -3,7 +3,7 @@
 # Needs the claude CLI, signed in, and a supported Claude Code version; it makes one short model call. Not part of
 # tests/run_all.sh (no model calls in the suite). Ends with `claude e2e passed` or a failure line.
 # It shows, on a real run, that: the SessionStart hook fired and its text names the session's agent; the agent is on
-# the bus roster after the first prompt (the agent runs `who` itself); the session's end left the bus again.
+# the bus roster after the first prompt (the agent runs `status` itself); the session's end left the bus again.
 # E2E_TRANSCRIPT=FILE keeps the stream-json transcript (for the issue).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +21,7 @@ STREAM="$T/stream.jsonl"
 echo "claude $(claude --version 2>&1 | head -n 1), plugin from $ROOT, scratch project $P"
 (
   cd "$P"
-  claude -p "Run exactly this command with the Bash tool and then reply with the single word done: .agentbus/bin/agentbus who" \
+  claude -p "Run exactly this command with the Bash tool and then reply with the single word done: .agentbus/bin/agentbus status --limit -1" \
     --model haiku --plugin-dir "$ROOT" --setting-sources project --strict-mcp-config \
     --permission-mode acceptEdits --allowedTools "Bash(.agentbus/bin/agentbus:*)" \
     --output-format stream-json --verbose --include-hook-events </dev/null >"$STREAM" 2>"$T/claude.err"
@@ -42,15 +42,16 @@ m = re.search(r"agentbus: you are on this folder's bus as (claude-[0-9a-f]{8})\.
 if not m:
     sys.exit("FAIL: the SessionStart text is not in the transcript (did the hook fire?)")
 name = m.group(1)
-# the agent's own `who` ran as that name's bus: the tool result lists it
+# the agent's own `status` ran on that name's bus: the tool result lists it (who lists only agents that acted, #89 E2)
 results = [b.get("content") for e in events if e.get("type") == "user" for b in (e.get("message", {}).get("content") or []) if isinstance(b, dict) and b.get("type") == "tool_result"]
 if not any(name in json.dumps(r) for r in results):
     sys.exit(f"FAIL: no tool result lists {name} on the roster; results: {json.dumps(results)[:400]}")
-print(f"SessionStart named {name}; `who` listed it")
+print(f"SessionStart named {name}; `status` listed it")
 open(sys.argv[1] + ".name", "w").write(name)
 PY
 NAME=$(cat "$STREAM.name")
-LOG=$(cd "$P" && python3 "$ROOT/bin/agentbus" --json log show --limit 50)
+# log is not a command (#89 K4): read the bus's log table, opened read-only
+LOG=$(python3 -I -c 'import json,sqlite3,sys; c=sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True); print(json.dumps({"items": [{"agent": a, "action": x} for a, x in c.execute("SELECT agent, action FROM log ORDER BY id DESC LIMIT 50")][::-1]}))' "$P/.agentbus/bus.db")
 python3 -I - "$NAME" "$LOG" <<'PY' || exit 1
 import json, sys
 name, log = sys.argv[1], json.loads(sys.argv[2])
@@ -59,10 +60,10 @@ if actions[:1] != ["join"] or "leave" not in actions:
     sys.exit(f"FAIL: expected join then leave for {name} in the bus log, got {actions}")
 print(f"the bus log shows {name}: {actions}")
 PY
-WHO=$(cd "$P" && python3 "$ROOT/bin/agentbus" --json who)
+WHO=$(cd "$P" && python3 "$ROOT/bin/agentbus" --json status --limit -1)
 python3 -I - "$NAME" "$WHO" <<'PY' || exit 1
 import json, sys
-if any(r["name"] == sys.argv[1] for r in json.loads(sys.argv[2])["items"]):
+if any(r["name"] == sys.argv[1] for r in json.loads(sys.argv[2])["agents"]):
     sys.exit(f"FAIL: {sys.argv[1]} is still on the roster after the session ended")
 PY
 echo "claude e2e passed"

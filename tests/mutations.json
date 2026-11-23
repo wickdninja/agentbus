@@ -207,15 +207,6 @@
     "expect": "a claimed_at that is not text broke the refusal"
   },
   {
-    "name": "log show prints a claim_refused row as raw JSON",
-    "file": "bin/agentbus",
-    "find": "    if action == \\\"claim_refused\\\":",
-    "replace": "    if action == \"claim_refused_\":",
-    "count": 1,
-    "run": "tests/test_claim_refusal.sh",
-    "expect": "log show does not read a claim_refused row as a sentence"
-  },
-  {
     "name": "claim of one resource returns the list shape",
     "file": "bin/agentbus",
     "find": "    if len\\(a\\.resource\\) == 1:\\n        result = done\\[0\\]",
@@ -936,22 +927,13 @@
     "expect": "held path src/app.py"
   },
   {
-    "name": "log show opens the bus for writing",
-    "file": "bin/agentbus",
-    "find": "\\(a\\.cmd in READ_ONLY_COMMANDS or \\(a\\.cmd == \"log\" and a\\.action == \"show\"\\)\\)",
-    "replace": "a.cmd in READ_ONLY_COMMANDS",
-    "count": 1,
-    "run": "tests/test_wave_review.sh",
-    "expect": "the review changed the bus"
-  },
-  {
-    "name": "wave_review takes coordinator unread from watch's 200 agents",
+    "name": "wave_review reads no log rows",
     "file": "scripts/wave_review.py",
-    "find": "counts = unread_counts\\(run\\(a\\.cli, \"status\", \"--limit\", \"1\"\\)\\[\"bus\"\\], \\[c for c in names if c in roster\\]\\)",
-    "replace": "counts = run(a.cli, \"watch\")[\"unread\"]",
+    "find": "log = \\[\\{\"ts\": r\\[0\\], \"agent\": r\\[1\\], \"action\": r\\[2\\]\\} for r in",
+    "replace": "log = [] and [0 for r in",
     "count": 1,
     "run": "tests/test_wave_review.sh",
-    "expect": "coordinator unread: claude-brain 5, late-brain 1"
+    "expect": "claim refusals logged: 1"
   },
   {
     "name": "wave_review runs as the agent AGENTBUS_AGENT names",
@@ -972,10 +954,10 @@
     "expect": "questions: 3, answered with reply_to 1"
   },
   {
-    "name": "wave_review reads only who's first page",
+    "name": "wave_review takes the roster from who (only the names that acted)",
     "file": "scripts/wave_review.py",
-    "find": "\"who\", \"--limit\", \"-1\"",
-    "replace": "\"who\"",
+    "find": "roster = \\{r\\[0\\] for r in con\\.execute\\(\"SELECT name FROM agents\"\\)\\}",
+    "replace": "roster = {r[0] for r in con.execute(\"SELECT name FROM agents WHERE name IN (SELECT sender FROM messages)\")}",
     "count": 1,
     "run": "tests/test_wave_review.sh",
     "expect": "coordinator unread: claude-brain 5, late-brain 1"
@@ -2358,15 +2340,6 @@
     "expect": "unjoined write was not refused: goal ship"
   },
   {
-    "name": "identity: log add allowed without joining",
-    "file": "bin/agentbus",
-    "find": "            require_joined\\(con, name, a\\)\\n            row_id = log",
-    "replace": "            row_id = log",
-    "count": 1,
-    "run": "tests/test_identity.sh",
-    "expect": "unjoined write was not refused: log add note detail"
-  },
-  {
     "name": "identity: unknown recipient gets no warning",
     "file": "bin/agentbus",
     "find": "    close, shown, total = roster_view\\(con, to\\)\\n    return \\[\\{\"code\": \"recipient_not_on_roster\"",
@@ -2781,15 +2754,6 @@
     "expect": "the docs still teach --as HOLDER leave"
   },
   {
-    "name": "log show prints a claim_taken row as raw JSON",
-    "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ if\\ action\\ ==\\ \"claim_taken\":\\\n",
-    "replace": "    if action == \"claim_taken_\":\n",
-    "count": 1,
-    "run": "tests/test_claim_refusal.sh",
-    "expect": "log show does not read a claim_taken row as a sentence"
-  },
-  {
     "name": "the hook held note leaves out claim --from",
     "file": "bin/agentbus",
     "find": "if\\ your\\ user\\ or\\ a\\ handoff\\ gave\\ you\\ its\\ work,\\ \"\\\n\\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ \\ f\"\\{copy\\}\\ \\-\\-as\\ \\{name\\}\\ claim\\ PATH\\ \\-\\-from\\ HOLDER\\.\\ On\\ a\\ separate\\ branch",
@@ -3186,42 +3150,6 @@
     "expect": "a hostile bus makes brief"
   },
   {
-    "name": "demo does not remove its directory",
-    "file": "bin/agentbus",
-    "find": "        shutil\\.rmtree\\(folder, ignore_errors=True\\)\\n",
-    "replace": "        pass\n",
-    "count": 1,
-    "run": "tests/test_demo.sh",
-    "expect": "the demo left files behind"
-  },
-  {
-    "name": "demo passes the caller's environment to its steps",
-    "file": "bin/agentbus",
-    "find": " if not k\\.startswith\\(\"AGENTBUS_\"\\)\\}\\n    home = ",
-    "replace": "}\n    home = ",
-    "count": 1,
-    "run": "tests/test_demo.sh",
-    "expect": "a test hook or the inherited bus reached the demo's steps"
-  },
-  {
-    "name": "demo does not clean up on SIGTERM",
-    "file": "bin/agentbus",
-    "find": "        old\\[sig\\] = signal\\.signal\\(sig, stop\\)",
-    "replace": "        old[sig] = signal.getsignal(sig)",
-    "count": 1,
-    "run": "tests/test_demo.sh",
-    "expect": "SIGTERM: exit"
-  },
-  {
-    "name": "demo ignores a step that fails",
-    "file": "bin/agentbus",
-    "find": "        if rc != want:\\n",
-    "replace": "        if False:\n",
-    "count": 1,
-    "run": "tests/test_demo.sh",
-    "expect": "an injected failure exited 0, not 4"
-  },
-  {
     "name": "example drops the resolved relative AGENTBUS",
     "file": "examples/two-agent-handoff.sh",
     "find": "  if \\[\\[ \\$word == \\*/\\* && \\$word != /\\* && -e \\$word \\]\\]; then installed_bus\\[\\$i\\]=\\$PWD/\\$word; fi\\n",
@@ -3267,15 +3195,6 @@
     "expect": "an unknown command suggests hook"
   },
   {
-    "name": "completion drops the fixed values of a flag (the kinds)",
-    "file": "bin/agentbus",
-    "find": "return\\ list\\(action\\.choices\\ or\\ notes\\.get\\(\"choices\"\\)\\ or\\ \\[\\]\\)\\ or\\ None",
-    "replace": "return list(action.choices or []) or None",
-    "count": 1,
-    "run": "tests/test_help.sh",
-    "expect": "lacks the kind"
-  },
-  {
     "name": "bare agentbus is an error, not the guide",
     "file": "bin/agentbus",
     "find": "\\ \\ \\ \\ \\ \\ \\ \\ return\\ GUIDE\\ \\+\\ \"\\\\n\\\\nSee:\\ agentbus\\ \\-\\-help\\\\n\",\\ None",
@@ -3285,7 +3204,7 @@
     "expect": "bare agentbus: rc"
   },
   {
-    "name": "bare ctx and log print nothing",
+    "name": "bare ctx prints nothing",
     "file": "bin/agentbus",
     "find": "if\\ subparsers_of\\(group\\)\\ is\\ not\\ None\\ and\\ getattr\\(a,\\ \"action\",\\ None\\)\\ is\\ None:",
     "replace": "if False:",
@@ -3303,31 +3222,13 @@
     "expect": "release --all with one claim"
   },
   {
-    "name": "log show prints a join as its stored JSON",
-    "file": "bin/agentbus",
-    "find": "return\\ \"\\ \"\\.join\\(f\"\\{k\\}=\\{v\\}\"\\ for\\ k,\\ v\\ in\\ fields\\.items\\(\\)\\ if\\ v\\ not\\ in\\ \\(None,\\ \"\"\\)\\)\\ or\\ \"\\(no\\ details\\)\"",
-    "replace": "return text",
-    "count": 1,
-    "run": "tests/test_help.sh",
-    "expect": "log show: join is not readable"
-  },
-  {
-    "name": "log show keeps a dangling colon",
-    "file": "bin/agentbus",
-    "find": "\\ \\ \\ \\ if\\ text\\.endswith\\(\":\"\\):\\\n\\ \\ \\ \\ \\ \\ \\ \\ text\\ =\\ text\\[:\\-1\\]\\.rstrip\\(\\)\\\n",
-    "replace": "    pass\n",
-    "count": 1,
-    "run": "tests/test_help.sh",
-    "expect": "dangling colon"
-  },
-  {
     "name": "a claim without a purpose is logged with a trailing colon",
     "file": "bin/agentbus",
     "find": "log\\(con,\\ name,\\ \"claim\",\\ f\"\\{res\\}\\ until\\ \\{exp\\}\"\\ \\+\\ \\(f\":\\ \\{purpose\\}\"\\ if\\ purpose\\ else\\ \"\"\\)\\)",
     "replace": "log(con, name, \"claim\", f\"{res} until {exp}: {purpose or ''}\")",
     "count": 1,
     "run": "tests/test_help.sh",
-    "expect": "stores a dangling colon"
+    "expect": "is not stored bare"
   },
   {
     "name": "the identity error has no example",
@@ -3507,7 +3408,7 @@
     "replace": "LISTING_LIMIT = 500\n",
     "count": 1,
     "run": "tests/test_output.sh",
-    "expect": "returned 71 rows (wanted 50"
+    "expect": "returned 70 rows (wanted 50"
   },
   {
     "name": "output: a body over 64 KB is stored",
@@ -5051,8 +4952,8 @@
   {
     "name": "who's empty hint loses --up",
     "file": "bin/agentbus",
-    "find": "out\\(a, rows, fmt_who, more, empty=f\"no agents\\. Join with: \\{next_command\\(a, '--as', 'NAME', 'join', as_=False\\)\\}\"",
-    "replace": "out(a, rows, fmt_who, more, empty=\"no agents. Join with: agentbus --as NAME join\"",
+    "find": "out\\(a, rows, fmt_who, more, empty=None if inactive else f\"no agents\\. Join with: \\{next_command\\(a, '--as', 'NAME', 'join', as_=False\\)\\}\\\"",
+    "replace": "out(a, rows, fmt_who, more, empty=None if inactive else \"no agents. Join with: agentbus --as NAME join\"",
     "count": 1,
     "run": "tests/test_discovery.sh",
     "expect": "who's empty hint lost --up"
@@ -5751,13 +5652,13 @@
     "expect": "a todo cut by the 200-character read says nothing"
   },
   {
-    "name": "brief --limit 0 says nobody has joined",
+    "name": "brief --limit 0 says nobody acted",
     "file": "bin/agentbus",
     "find": "if\\ agents\\ or\\ omitted\\[\"agents\"\\]:",
     "replace": "if agents:",
     "count": 1,
     "run": "tests/test_agent_dx.sh",
-    "expect": "nobody has joined"
+    "expect": "--limit 0 says"
   },
   {
     "name": "brief --limit 0 says open questions none",

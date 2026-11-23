@@ -88,6 +88,10 @@ mode() { python3 -c 'import os,sys; print(oct(os.lstat(sys.argv[1]).st_mode & 0o
 # njson cmd...: the length of the JSON array (or the items of the listing envelope) cmd prints; cmd's own failure fails the caller.
 njson() { local o; o=$("$@") || fail "command failed: $*"; printf '%s' "$o" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["items"] if isinstance(d, dict) and "items" in d else d))'; }
 # outof cmd...: cmd's stdout, failing the test if cmd fails (so a grep on it never runs on nothing).
+# log_json [N]: the last N rows (default 50) of the log table of $AGENTBUS_DB, oldest first, as {"items": [...]} with
+# id, ts, agent, action and detail: what `log show --json` printed before log stopped being a verb (#89 K4). The table
+# still gets its rows (the usage collector reads them), so tests that check a row read it here.
+log_json() { "$PY" -c 'import json,sqlite3,sys; c=sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True); c.row_factory=sqlite3.Row; rows=[dict(r) for r in c.execute("SELECT id, ts, agent, action, detail FROM log ORDER BY id DESC LIMIT ?", (int(sys.argv[2]),))]; print(json.dumps({"items": rows[::-1]}))' "${AGENTBUS_DB:?log_json reads the bus at AGENTBUS_DB}" "${1:-50}"; }
 outof() { local o; o=$("$@") || fail "command failed: $*"; printf '%s\n' "$o"; }
 # wait_for FILE: until FILE exists (a test pause point was reached), at most 20 s.
 wait_for() { local w=0; while [ ! -e "$1" ]; do sleep 0.05; w=$((w+1)); [ $w -lt 400 ] || fail "never reached: $1"; done; }

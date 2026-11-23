@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 # Discoverability: `help CMD`, per-command help (usage, flags with text, EXAMPLES, INHERITED FLAGS once), usage errors
-# scoped to the command, `hook` hidden, completion scripts that load in their shells, the bare-command guides, every
-# error naming its next command, the fact/decision vocabulary, readable log lines, init's next step and plurals.
+# scoped to the command, `hook` hidden, the bare-command guides, every error naming its next command, the
+# fact/decision vocabulary, the stored log rows, init's next step and plurals.
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; export T
 export HOME="$T/home"; mkdir -p "$HOME"
@@ -28,9 +28,9 @@ def fail(msg):
     print("FAIL: " + msg); sys.exit(1)
 # Every command a person can type: the leaves and the groups, not the hidden ones.
 LEAVES = [("join",), ("leave",), ("who",), ("post",), ("inbox",), ("read",), ("ctx", "set"), ("ctx", "get"), ("ctx", "history"),
-          ("claim",), ("release",), ("claims",), ("log", "add"), ("log", "show"), ("status",), ("goal",), ("watch",), ("buses",),
-          ("init",), ("upgrade",), ("schema",), ("help",), ("completion",), ("skill",), ("setup",), ("doctor",)]
-GROUPS = [("ctx",), ("log",)]
+          ("claim",), ("release",), ("claims",), ("status",), ("goal",), ("watch",), ("buses",),
+          ("init",), ("upgrade",), ("schema",), ("help",), ("skill",), ("setup",), ("doctor",)]
+GROUPS = [("ctx",)]
 PY
 
 echo "TEST 1: agentbus help CMD prints the text CMD --help prints, for every command and subcommand"
@@ -61,7 +61,7 @@ cases = [
     (["post", "x", "--to", "a", "--to", "b"], "agentbus post", "post", "leave --to off to tell everyone. Usage: agentbus post"),
     (["inbox", "--before", "x"], "agentbus inbox", "inbox", "unrecognized arguments: --before x"),
     (["read", "--since", "x"], "agentbus read", "read", "not an integer"),
-    (["log", "show", "--bogus"], "agentbus log show", "log show", "unrecognized arguments: --bogus"),
+    (["ctx", "history", "k", "--bogus"], "agentbus ctx history KEY", "ctx history", "unrecognized arguments: --bogus"),
 ]
 for args, usage, cmd, more in cases:
     p = run(*args)
@@ -76,8 +76,6 @@ e = json.loads(p.stderr)["error"]
 if p.returncode != 2 or e["code"] != "bad_input" or "See: agentbus post --help" not in e["message"]: fail("--json usage error: " + p.stderr)
 p = run("--project", "who")
 if p.returncode != 2 or "unrecognized arguments: --project" not in p.stderr or "See: agentbus --help" not in p.stderr: fail("top-level usage error: " + p.stderr)
-p = run("completion")
-if p.returncode != 2 or "Usage: agentbus completion {bash,zsh,fish}" not in " ".join(p.stderr.split()): fail("completion without a shell: " + p.stderr)
 # `join NAME` is the likeliest first guess and joins as NAME; a different --as is a usage error naming both names.
 jdb = {"AGENTBUS_DB": os.path.join(os.environ["T"], "join-name.db")}
 p = run("join", "rel-prep", env=jdb)
@@ -138,13 +136,13 @@ ok "per-command help is complete"
 echo "TEST 4: flags that do nothing are gone; argument text fills the gaps"
 "$PY" - <<'PY'
 import os; exec(open(os.path.join(os.environ["T"], "h.py")).read())
-for args in (["--as", "a", "ctx", "set", "--limit", "3", "k", "v"], ["--as", "a", "log", "add", "--limit", "3", "w", "d"]):
+for args in (["--as", "a", "ctx", "set", "--limit", "3", "k", "v"],):
     p = run(*args)
     if p.returncode != 2 or "unrecognized arguments: --limit" not in p.stderr: fail("%s still takes --limit: rc %s %s" % (args[2:4], p.returncode, p.stderr))
-for cmd, flag in (("ctx get", "--limit"), ("ctx history", "--limit"), ("log show", "--limit")):
+for cmd, flag in (("ctx get", "--limit"), ("ctx history", "--limit")):
     if flag not in help_(*cmd.split()): fail("%s lost its %s" % (cmd, flag))
 want = {("post",): "The message", ("claim",): "path relative to the bus folder", ("read",): "Only messages with this topic label",
-        ("upgrade",): "The folder whose bus to upgrade", ("ctx", "set"): "The fact's value", ("log", "add"): "What happened", ("claim", "--purpose"): "Why you hold it"}
+        ("upgrade",): "The folder whose bus to upgrade", ("ctx", "set"): "The fact's value", ("claim", "--purpose"): "Why you hold it"}
 for path, text in want.items():
     h = " ".join(help_(*[w for w in path if not w.startswith("--")]).split())
     if text not in h: fail("%s help lacks %r" % (path, text))
@@ -176,82 +174,11 @@ p = run("hoo")   # matched as a word: the public command hooks is not the hidden
 if re.search(r"\bhook\b", p.stderr) or p.returncode != 2: fail("an unknown command suggests hook: " + p.stderr)
 p = run("--as", "a", "hook", "SessionStart")   # still answers, silently
 if p.returncode != 0: fail("hook stopped answering: rc %s %s" % (p.returncode, p.stderr))
-for sh in ("bash", "zsh", "fish"):
-    if re.search(r"\bhook\b", run("completion", sh).stdout): fail("%s completion offers hook" % sh)
 print("PASS")
 PY
 ok "hook is hidden everywhere a person looks"
 
-echo "TEST 7: the completion scripts name every command and flag, come from the parser, and load in their shells"
-"$PY" - <<'PY'
-import os; exec(open(os.path.join(os.environ["T"], "h.py")).read())
-if run("completion", "bash").returncode != 0: fail("agentbus completion bash does not exist: " + run("completion", "bash").stderr.strip())
-parser = MOD["build_parser"]()
-names = MOD["visible_choices"](parser)
-for sh in ("bash", "zsh", "fish"):
-    p = run("completion", sh)
-    if p.returncode != 0 or not p.stdout.strip() or p.stderr: fail("completion %s: rc %s %s" % (sh, p.returncode, p.stderr))
-    text = p.stdout
-    for n in names:
-        if not re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(n), text): fail("%s completion lacks command %s" % (sh, n))
-    for flag in ("--request-id", "--takeover", "--ttl-min", "--if-held", "--dry-run", "--agents-md", "--peek"):
-        if flag not in text and not (sh == "fish" and flag[2:] in text): fail("%s completion lacks %s" % (sh, flag))
-    for kind in KINDS:
-        if kind not in text: fail("%s completion lacks the kind %s" % (sh, kind))
-bad = run("completion", "powershell")
-if bad.returncode != 2 or "bash, zsh, fish" not in bad.stderr.replace("'", "").replace("{", "").replace("}", "") and "bash,zsh,fish" not in bad.stderr and "bash|zsh|fish" not in bad.stderr: fail("an unknown shell: " + bad.stderr)
-print("PASS")
-PY
-for sh in bash zsh fish; do "${AB[@]}" completion "$sh" > "$T/comp.$sh"; done
-if command -v bash >/dev/null; then
-  bash -n "$T/comp.bash" || fail "bash completion: syntax error"
-  # Load it the way the help says, then ask it: it must offer the commands, the flags of the command typed, and the kinds.
-  cat > "$T/bash_probe.sh" <<'SH'
-eval "$(cat "$1")"
-complete -p agentbus | grep -q '_agentbus' || { echo "FAIL: complete -p agentbus did not name _agentbus"; exit 1; }
-try() { COMP_WORDS=("$@"); COMP_CWORD=$(($# - 1)); COMPREPLY=(); _agentbus; echo "${COMPREPLY[*]}"; }
-has() { case " $1 " in *" $2 "*) ;; *) echo "FAIL: bash completion for [$3] lacks $2: got [$1]"; exit 1 ;; esac; }
-has "$(try agentbus '')" post "agentbus <TAB>"
-has "$(try agentbus '')" completion "agentbus <TAB>"
-has "$(try agentbus po)" post "agentbus po<TAB>"
-has "$(try agentbus post --)" --kind "agentbus post --<TAB>"
-has "$(try agentbus post --)" --request-id "agentbus post --<TAB>"
-has "$(try agentbus post --kind '')" handoff "agentbus post --kind <TAB>"
-has "$(try agentbus --as alice post --)" --reply-to "agentbus --as alice post --<TAB>"
-has "$(try agentbus ctx '')" history "agentbus ctx <TAB>"
-has "$(try agentbus ctx set --)" --json "agentbus ctx set --<TAB>"
-has "$(try agentbus log '')" show "agentbus log <TAB>"
-has "$(try agentbus setup '')" codex "agentbus setup <TAB>"
-has "$(try agentbus completion '')" fish "agentbus completion <TAB>"
-has "$(try agentbus help ctx '')" history "agentbus help ctx <TAB>"
-case " $(try agentbus '') " in *" hook "*) echo "FAIL: bash completion offers hook"; exit 1 ;; esac
-echo "bash completion answers"
-SH
-  bash "$T/bash_probe.sh" "$T/comp.bash" || fail "bash completion did not load or answer (above)"
-else
-  echo "NOTE: bash is not installed; the bash script was not loaded"
-fi
-if command -v zsh >/dev/null; then
-  zsh -n "$T/comp.zsh" || fail "zsh completion: syntax error"
-  # Load it the way the help says (after compinit) and see that zsh registered the function for agentbus.
-  got=$(zsh -f -c 'autoload -Uz compinit && compinit -u -d "$1/zcompdump" && source <(cat "$2") && print -r -- "${_comps[agentbus]}" && whence -w _agentbus' _ "$T" "$T/comp.zsh" 2>&1) \
-    || fail "zsh completion did not load: $got"
-  grep -q '^_agentbus$' <<<"$got" && grep -q '_agentbus: function' <<<"$got" || fail "zsh did not register _agentbus for agentbus: $got"
-else
-  echo "NOTE: zsh is not installed; the zsh script was not loaded"
-fi
-if command -v fish >/dev/null; then
-  fish -n "$T/comp.fish" || fail "fish completion: syntax error"
-  fish -c "source $T/comp.fish; complete -c agentbus | grep -q post" || fail "fish did not register the completions"
-else
-  echo "NOTE: fish is not installed; its script was checked for text only"
-  grep -q "^complete -c agentbus" "$T/comp.fish" || fail "fish completion has no complete lines"
-  grep -q "^function __agentbus_word" "$T/comp.fish" || fail "fish completion lost its helper"
-  [ "$(grep -c '^function ' "$T/comp.fish")" = "$(grep -c '^end$' "$T/comp.fish")" ] || [ "$(grep -c '^end$' "$T/comp.fish")" -ge 1 ] || fail "fish completion: unbalanced function"
-fi
-ok "completion scripts for bash, zsh and fish are written from the parser and load (where the shell is installed)"
-
-echo "TEST 8: bare agentbus prints the short guide and exits 0; bare ctx and log print their actions"
+echo "TEST 7: bare agentbus prints the short guide and exits 0; bare ctx prints its actions"
 "$PY" - <<'PY'
 import os; exec(open(os.path.join(os.environ["T"], "h.py")).read())
 p = run()
@@ -259,7 +186,7 @@ if p.returncode != 0 or p.stderr: fail("bare agentbus: rc %s %r" % (p.returncode
 for want in ("Start:", "Loop:", "Finish:", "See: agentbus --help"):
     if want not in p.stdout: fail("bare agentbus lacks %r: %s" % (want, p.stdout))
 if len(p.stdout.splitlines()) > 12: fail("the bare guide is not short")
-for group, actions in (("ctx", ("set", "get", "history")), ("log", ("add", "show"))):
+for group, actions in (("ctx", ("set", "get", "history")),):
     q = run(group)
     if q.returncode != 0 or q.stderr: fail("bare %s: rc %s %r" % (group, q.returncode, q.stderr))
     for act in actions:
@@ -271,7 +198,7 @@ print("PASS")
 PY
 ok "bare commands guide instead of failing"
 
-echo "TEST 9: every audited error names its exact next command"
+echo "TEST 8: every audited error names its exact next command"
 "$PY" - <<'PY'
 import os; exec(open(os.path.join(os.environ["T"], "h.py")).read())
 db = os.environ["AGENTBUS_DB"]
@@ -289,7 +216,6 @@ want = [
     (["post", "hi"], 'say who you are with --as NAME or AGENTBUS_AGENT=NAME. For example: agentbus --as alice post "schema is ready; tests pass" --to bob --kind handoff'),
     (["claim", "x"], "For example: agentbus --as alice claim src/api/ --purpose"),
     (["ctx", "set", "k", "v"], 'For example: agentbus --as alice ctx set test-command "npm test"'),
-    (["--as", "a", "log", "add", "test"], 'log add ACTION needs a detail. Use: agentbus --as NAME log add ACTION "DETAIL"'),
     (["--as", "a", "ctx", "set", "k"], 'ctx set KEY needs a value. Use: agentbus --as NAME ctx set KEY "VALUE"'),
     (["--as", "a", "goal", ""], 'the goal is empty. Use: agentbus --as NAME goal "TEXT"'),
     (["--as", "a", "ctx", "get", "nope"], "no fact named nope. List facts with: agentbus ctx get"),
@@ -302,8 +228,6 @@ want = [
 for args, text in want:
     got = err(*args)
     if text not in got: fail("%s: the error lacks its next step %r: %s" % (args, text, got))
-if "log add" in err("--as", "a", "log", "add", "test") and "empty message" in err("--as", "a", "log", "add", "test"):
-    fail("log add with no detail still says 'empty message'")
 up = os.path.join(os.environ["T"], "upbus"); os.makedirs(up)
 assert run("init", up).returncode == 0
 p = run("--up", "4", "who", cwd=up, env={"AGENTBUS_DB": ""})
@@ -321,7 +245,7 @@ print("PASS")
 PY
 ok "audited errors name their next command"
 
-echo "TEST 10: vocabulary: fact and decision, never ruling, context or lane in help, the skill or the AGENTS.md block"
+echo "TEST 9: vocabulary: fact and decision, never ruling, context or lane in help, the skill or the AGENTS.md block"
 "$PY" - <<'PY'
 import os; exec(open(os.path.join(os.environ["T"], "h.py")).read())
 skill = run("skill").stdout
@@ -347,25 +271,17 @@ PY
 ok "vocabulary is fact and decision; agent, not lane"
 
 export AGENTBUS_DB="$T/bus11.db"
-echo "TEST 11: log show prints readable lines (no JSON blobs, no dangling colon) and counts read right"
+echo "TEST 10: the log table stores readable rows (no dangling colon, the purpose kept) and counts read right"
 agentbus --as a join --tool claude --branch feat/api >/dev/null
 agentbus --as b join >/dev/null
 agentbus --as a claim lib/ >/dev/null
 agentbus --as a claim src/ --purpose "rate limit" >/dev/null
-o=$(outof agentbus log show)
-grep -q 'join .*tool=claude branch=feat/api' <<<"$o" || fail "log show: join is not readable: $o"
-grep -q '[{}"]' <<<"$(grep ' join ' <<<"$o")" && fail "log show: a join line still holds a JSON blob: $o"
-grep -q 'join .*(no details)$' <<<"$o" || fail "log show: a join with no details reads '(no details)': $o"
-grep -E ': *$' <<<"$o" && fail "log show: a line ends in a dangling colon: $o"
-grep -q 'lib/ until ' <<<"$o" || fail "log show: the claim line: $o"
-grep -q 'src/ until .*: rate limit' <<<"$o" || fail "log show: a claim purpose is kept: $o"
-outof agentbus --json log show | "$PY" -c 'import json,sys; sys.exit(1 if any(r["action"]=="claim" and r["detail"].rstrip().endswith(":") for r in json.load(sys.stdin)["items"]) else 0)' || fail "log stores a dangling colon for a claim without a purpose"
-# rows an older copy wrote: a bare ": " and "1 claims" read right too (the stored text is not touched)
-"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", ("2026-01-01T00:00:00Z","old","claim","old.txt until 2026-01-01T02:00:00Z: ")); c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", ("2026-01-01T00:00:01Z","old","leave","released 1 claims: old.txt")); c.commit()' "$AGENTBUS_DB"
-o=$(outof agentbus log show --limit 50)
-grep -q 'old.txt until 2026-01-01T02:00:00Z$' <<<"$o" || fail "log show: an old row keeps its dangling colon: $o"
-grep -q 'released 1 claim: old.txt' <<<"$o" || fail "log show: an old row says 1 claims: $o"
-[ "$(outof agentbus --json log show --limit 50 | "$PY" -c 'import json,sys; print([r["detail"] for r in json.load(sys.stdin)["items"] if r["action"]=="join"][0])')" = '{"tool": "claude", "model": null, "branch": "feat/api", "role": null}' ] || fail "log show --json changed the stored join detail"
+# log is no longer a verb (#89 K4): the rows are read from the table, which the usage collector reads too.
+logrows() { "$PY" -c 'import sqlite3,sys; c=sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True); print("\n".join("%s %s" % r for r in c.execute("SELECT action, detail FROM log WHERE agent=? ORDER BY id", (sys.argv[2],))))' "$AGENTBUS_DB" "$1"; }
+o=$(logrows a)
+grep -q '^claim lib/ until [^ ]*$' <<<"$o" || fail "log: a claim without a purpose is not stored bare (dangling colon?): $o"
+grep -q '^claim src/ until .*: rate limit$' <<<"$o" || fail "log: a claim purpose is not kept: $o"
+[ "$(grep '^join ' <<<"$o")" = 'join {"tool": "claude", "model": null, "branch": "feat/api", "role": null}' ] || fail "log: the stored join detail changed: $o"
 o=$(outof agentbus --as a release lib/); [ "$o" = "released lib/" ] || fail "release one: $o"
 agentbus --as a claim lib/ >/dev/null
 o=$(outof agentbus --as a release --all); [ "$o" = "$(printf 'released 2 claims\n  lib/\n  src/')" ] || [ "$(head -1 <<<"$o")" = "released 2 claims" ] || fail "release --all: $o"
@@ -374,10 +290,10 @@ o=$(outof agentbus --as a release --all); [ "$(head -1 <<<"$o")" = "released 1 c
 o=$(outof agentbus --as a release --all); [ "$o" = "released 0 claims" ] || fail "release --all with none: $o"
 agentbus --as a claim lib/ >/dev/null
 o=$(outof agentbus --as a leave); [ "$(head -1 <<<"$o")" = "left as a, released 1 claim" ] || fail "leave with one claim: $o"
-grep -q 'released 1 claim:' <<<"$(outof agentbus log show)" || fail "the log records 'released 1 claim'"
-ok "log show is readable and the counts read right"
+grep -q '^leave released 1 claim: ' <<<"$(logrows a)" || fail "the log records 'released 1 claim': $(logrows a)"
+ok "the log rows are readable and the counts read right"
 
-echo "TEST 12: init prints the next step, and the setup commands when nothing is set up"
+echo "TEST 11: init prints the next step, and the setup commands when nothing is set up"
 mkdir "$T/p1" "$T/p2"
 o=$(outof agentbus init "$T/p1")
 grep -Eq '^next: (install agentbus so your agents have it on PATH \(see the README\), then )?agentbus --as YOUR_NAME join$' <<<"$o" || fail "init lacks the join step: $o"

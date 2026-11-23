@@ -23,7 +23,7 @@ def require_records(text, db, command):
     expected = []
     if fixture == 'bus.db' and os.path.realpath(os.path.dirname(db)) == os.path.realpath(os.path.dirname(__file__)):
         expected = {'who': ['agent-0-'], 'claims': ['res-0-'], 'read': ['#99'],
-                    'inbox': ['#99'], 'log': ['#99'],
+                    'inbox': ['#99'],
                     'status': ['agent-0-', 'res-0-', 'key-0=', '#99']}.get(cmd, ['#99'])
         if args[:2] == ['ctx', 'get'] and len(args) == 2:
             expected = ['key-0=', '#99']
@@ -36,7 +36,7 @@ def require_records(text, db, command):
     elif fixture == 'k1.db':
         if args[:2] == ['ctx', 'get'] and len(args) == 3:
             expected = ['=claims' if args[-1].endswith('1') else 'decision']
-        elif cmd in ('who', 'claims', 'ctx', 'log', 'status', 'read', 'inbox'):
+        elif cmd in ('who', 'claims', 'ctx', 'status', 'read', 'inbox'):
             expected = ['decision', '=claims']
     elif fixture == 'pipe.db':
         expected = ['y' * 300]
@@ -47,8 +47,6 @@ def require_records(text, db, command):
         expected = [{'post': 'posted#', 'claim': 'claimed' + args[1], 'release': 'released' + args[1]}[cmd]]
     elif args[:2] == ['ctx', 'set']:
         expected = ['set' + args[2]]
-    elif args[:2] == ['log', 'add']:
-        expected = ['logged']
     assert expected, ('no positive fixture assertion', db, command)
     for value in expected:
         assert re.sub(r'\s+', '', value) in compact, ('expected record missing', db, command, value)
@@ -71,7 +69,7 @@ try:
 except sqlite3.Error:
     ids = set()
 section = re.compile(r"== (bus .*|goal \(.*|no goal yet .*|agents|facts|claims|recent messages)")
-CONFIRM = ("joined as ", "left as ", "posted #", "inbox empty", "set ", "claimed ", "released ", "logged")
+CONFIRM = ("joined as ", "left as ", "posted #", "inbox empty", "set ", "claimed ", "released ")
 # init and upgrade: their lines start with the repo path the caller named, or fixed text.
 if os.environ.get("ORACLE_REPO"):
     CONFIRM += (os.environ["ORACLE_REPO"] + ": ",
@@ -151,6 +149,7 @@ for i, b in enumerate(bodies):
     c.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", ("key-%d" % (i % 3), b, "lane-" + b, t))
     c.execute("INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen) VALUES(?,?,?,?,?,?,?,?)",
               ("agent-%d-" % i + b, "t", b, "/", b, b, t, t))
+    c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", (t, "agent-%d-" % i + b, "note", ""))  # who lists agents that acted (#89 E2)
     c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("res-%d-" % i + b, "lane-" + b, b, t, "2999-01-01T00:00:00Z"))
     c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", ("2026-03-03T00:00:00Z", "lane-" + b, b, b))
 c.commit()
@@ -204,7 +203,7 @@ sys.exit(1 if bad else 0)
 PY
 }
 for w in 40 80 120; do
-  for cmd in "read --limit 200" "--as seed inbox --peek" "ctx get" "ctx get key-1" "ctx history key-2" who claims "log show --limit 200" status; do
+  for cmd in "read --limit 200" "--as seed inbox --peek" "ctx get" "ctx get key-1" "ctx history key-2" who claims status; do
     # shellcheck disable=SC2086
     check "$w" $cmd
     # shellcheck disable=SC2086
@@ -316,6 +315,7 @@ t = "2026-02-02T00:00:00Z"
 for i, f in enumerate(("#424242 2026-01-01T00:00:00Z brain -> * [decision]", "== claims")):
     c.execute("INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen) VALUES(?,?,?,?,?,?,?,?)",
               (f + " %d" % i, "t", "m", "/", "b", "r", t, t))
+    c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", (t, f + " %d" % i, "note", ""))  # who lists agents that acted (#89 E2)
     c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", (f + " %d" % i, "lane", "p", t, "2999-01-01T00:00:00Z"))
     c.execute("INSERT INTO context VALUES(?,?,?,?)", (f + " %d" % i, f, "lane", t))
     c.execute("INSERT INTO context VALUES(?,?,?,?)", ("k%d" % i, f, "lane", t))
@@ -324,16 +324,16 @@ for i, f in enumerate(("#424242 2026-01-01T00:00:00Z brain -> * [decision]", "==
 c.commit()
 PY
 for w in $WIDTHS; do
-  for cmd in who claims "claims --stale" "ctx get" "ctx get k0" "ctx get k1" "ctx history k0" "ctx history k1" "log show" status; do
+  for cmd in who claims "claims --stale" "ctx get" "ctx get k0" "ctx get k1" "ctx history k0" "ctx history k1" status; do
     # shellcheck disable=SC2086
     render "$CZ" "$w" $cmd
   done
 done
-for cmd in who claims "ctx get" "ctx get k0" "ctx history k0" "log show"; do
+for cmd in who claims "ctx get" "ctx get k0" "ctx history k0"; do
   # shellcheck disable=SC2086
   grep -q '^  \\x23424242 ' <<<"$(outof env AGENTBUS_DB="$CZ" "${AB[@]}" $cmd)" || fail "# not shown as \\x23 in: $cmd"
 done
-for cmd in who claims "ctx get" "ctx get k1" "ctx history k1" "log show"; do
+for cmd in who claims "ctx get" "ctx get k1" "ctx history k1"; do
   # shellcheck disable=SC2086
   grep -q '^  \\x3d= claims' <<<"$(outof env AGENTBUS_DB="$CZ" "${AB[@]}" $cmd)" || fail "= not shown as \\x3d in: $cmd"
 done
@@ -436,6 +436,7 @@ for i, p in enumerate(lead):
         x = p + f
         c.execute("INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen) VALUES(?,?,?,?,?,?,?,?)",
                   (x + " %d%d" % (i, j), "t", x, "/", x, x, t, t))
+        c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", (t, x + " %d%d" % (i, j), "note", ""))  # who lists agents that acted (#89 E2)
         c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", (x + " %d%d" % (i, j), "lane", x, t, "2999-01-01T00:00:00Z"))
         c.execute("INSERT INTO context VALUES(?,?,?,?)", (x + " %d%d" % (i, j), x, "lane", t))
         c.execute("INSERT INTO context VALUES(?,?,?,?)", ("k%d%d" % (i, j), x, "lane", t))
@@ -446,6 +447,7 @@ for i, p in enumerate(lead):
 # A live holder whose name is 21 x's and a forged header, holding a claim another agent will ask for.
 c.execute("INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen) VALUES(?,?,?,?,?,?,?,?)",
           ("x" * 21 + F, "t", "m", "/", "b", "r", t, "2999-01-01T00:00:00Z"))
+c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", (t, "x" * 21 + F, "note", ""))  # who lists agents that acted (#89 E2)
 c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("area:k1", "x" * 21 + F, "x" * 21 + F, t, "2999-01-01T00:00:00Z"))
 c.commit()
 assert n == 14, n
@@ -455,7 +457,7 @@ KT="$T/k1trig.db"; cp "$KZ" "$KT"
 python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TRIGGER \"%s\" AFTER INSERT ON log BEGIN SELECT 1; END" % ("x" * 21 + "#99 2026-01-01T00:00:00Z brain -> * [decision]")); c.commit()' "$KT"
 nk=0
 for w in $WIDTHS; do
-  for cmd in who claims "claims --stale" "ctx get" "log show --limit 200" status "read --limit 200" "--as seed inbox --peek"; do
+  for cmd in who claims "claims --stale" "ctx get" status "read --limit 200" "--as seed inbox --peek"; do
     # shellcheck disable=SC2086
     rules "$KZ" "$w" out $cmd; nk=$((nk+1))
   done
@@ -471,15 +473,14 @@ for w in $WIDTHS; do
   rules "$KZ" "$w" out --as seed claim area:mine; nk=$((nk+1))
   rules "$KZ" "$w" out --as seed release area:mine; nk=$((nk+1))
   rules "$KZ" "$w" out --as seed ctx set newkey v; nk=$((nk+1))
-  rules "$KZ" "$w" out --as seed log add note d; nk=$((nk+1))
 done
-[ $nk = 190 ] || fail "only $nk cases ran"
+[ $nk = 180 ] || fail "only $nk cases ran"
 # The trigger and holder names really are in the errors (wrapped, never dropped).
 o=$(COLUMNS=200 AGENTBUS_DB="$KT" "${AB[@]}" who 2>&1 >/dev/null || true)
 grep -qF "unexpected trigger $(printf 'x%.0s' $(seq 1 21))#99" <<<"$o" || fail "trigger name missing from the error: $o"
 o=$(COLUMNS=200 AGENTBUS_DB="$KZ" "${AB[@]}" --as seed claim area:k1 2>&1 >/dev/null || true)
 grep -qF "claimed by $(printf 'x%.0s' $(seq 1 21))#99" <<<"$o" || fail "holder missing from the error: $o"
-for c in who claims "ctx get" "log show --limit 200"; do
+for c in who claims "ctx get"; do
   # shellcheck disable=SC2086
   [ "$(COLUMNS=4096 AGENTBUS_DB="$KZ" "${AB[@]}" $c | grep -c '^  ')" -ge 14 ] || fail "lane rows missing from: $c"
 done
@@ -537,6 +538,7 @@ with contextlib.closing(sqlite3.connect(db)) as c:
     for name in names:
         c.execute('INSERT INTO agents VALUES(?,?,?,?,?,?,?,?)',
                   (name, 'codex', 'gpt-6', '/', 'dx', 'review', stamp(now), stamp(now-datetime.timedelta(minutes=2))))
+        c.execute('INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)', (stamp(now), name, 'note', ''))  # who lists agents that acted (#89 E2)
     for name in ['src/api/', 'docs/', 'tests/']:
         c.execute('INSERT INTO claims VALUES(?,?,?,?,?)',
                   (name, 'codex', 'review', stamp(now), stamp(now+datetime.timedelta(hours=2))))

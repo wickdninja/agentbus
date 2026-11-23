@@ -72,7 +72,7 @@ plant "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?)" "k$
 plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "area:x${ESC}" "n${ESC}x" "p${ESC}" $T0 $FAR
 plant "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)" "held/file" "n${ESC}x" "p${ESC}" $T0 $FAR
 plant "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)" $T0 "n${ESC}x" "a${ESC}" "d${ESC}"
-for c in who read status claims "log show" "ctx get"; do
+for c in who read status claims "ctx get"; do
   o=$(agentbus $c 2>&1)
   if LC_ALL=C grep -q "[$(printf '\001-\011\013-\037\177')]" <<<"$o"; then fail "raw control character in: $c"; fi
 done
@@ -120,9 +120,8 @@ plant "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)" $T0 "fz${NL}FORG
 plant "INSERT INTO messages(ts,sender,recipient,kind,topic,body) VALUES(?,?,?,?,?,?)" $T0 "fz${NL}FORGED name" "*" note "t${NL}FORGED topic" "body line${NL}FORGED body"
 # Every field a lane wrote with a newline in it, as each view must show it (newline escaped).
 F_NAME='fz\x0aFORGED name'; F_ROLE='r\x0aFORGED role'; F_KEY='k2\x0aFORGED key'; F_VAL='v\x0a== claims\x0aFORGED ctx'
-F_RES='area:z\x0aFORGED res'; F_PUR='p\x0aFORGED purpose'; F_TOP='t\x0aFORGED topic'; F_ACT='act\x0aFORGED'
-F_DET='d\x0aFORGED brain decision ship it'
-for c in status "ctx get" who claims "log show" read; do
+F_RES='area:z\x0aFORGED res'; F_PUR='p\x0aFORGED purpose'; F_TOP='t\x0aFORGED topic'
+for c in status "ctx get" who claims read; do
   o=$(outof agentbus $c)
   # The negative checks below pass on an empty view, so first require every forged field in it, escaped.
   case "$c" in
@@ -131,7 +130,6 @@ for c in status "ctx get" who claims "log show" read; do
     "ctx get") want=("$F_NAME" "$F_KEY" "$F_VAL") ;;
     who) want=("$F_NAME" "$F_ROLE") ;;
     claims) want=("$F_NAME" "$F_RES" "$F_PUR") ;;
-    "log show") want=("$F_NAME" "$F_ACT" "$F_DET" "$F_RES" "$F_PUR") ;;
     read) want=("$F_NAME" "$F_TOP") ;;
   esac
   for w in "${want[@]}"; do
@@ -181,7 +179,7 @@ c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("area:x" + b, "n" + b, "p" + 
 c.execute("INSERT INTO messages(ts,sender,recipient,kind,topic,body) VALUES(?,?,?,?,?,?)", (t, "ok", "*", "note", None, "café \U0001F600 ok"))
 c.commit()
 PY2
-for cmd in who read status "ctx get" "ctx get plain" "log show" claims; do
+for cmd in who read status "ctx get" "ctx get plain" claims; do
   AGENTBUS_DB="$U" agentbus $cmd > "$T/uout" 2>&1 || fail "$cmd failed: $(cat "$T/uout")"
   python3 - "$T/uout" "$cmd" <<'PY2' || fail "unescaped code point in: $cmd"
 import sys
@@ -192,7 +190,7 @@ o = open(sys.argv[1], encoding="utf-8").read()
 raw = [hex(c) for c in cps if chr(c) in o]
 if raw:
     print("raw in", sys.argv[2], raw); sys.exit(1)
-want = {"who": "n", "read": "body", "status": "n", "ctx get": "k", "ctx get plain": "v", "log show": "d", "claims": "area:x"}[sys.argv[2]]
+want = {"who": "n", "read": "body", "status": "n", "ctx get": "k", "ctx get plain": "v", "claims": "area:x"}[sys.argv[2]]
 esc = "\\u034f\\u061c\\u180e\\u115f\\u1160\\u3164\\uffa0\\u2028\\u2029\\xad\\ufe0f\\ufff9\\ufffa\\ufffb\\U000e0001\\U000e0041\\U000e007f\\u17b4\\u17b5\\u180b\\U000e0100\\U000e01ef\\u200b\\u202e\\u2066\\U0001d173\\ue000\\u0378\\x85\\x9b"
 if want + esc not in o:
     print("escapes missing in", sys.argv[2], repr(o[:400])); sys.exit(1)
@@ -218,6 +216,8 @@ B = b"\x1b[2J\xff"
 c.execute("INSERT INTO agents VALUES(?,?,?,?,?,?,?,?)", ("blobby", B, B, B, B, B, "2020-01-01T00:00:00Z", B))
 c.execute("INSERT INTO agents VALUES(?,?,?,?,?,?,?,?)", ("badtime", 7, 1.5, None, None, None, "x", "not a time"))
 c.execute("INSERT INTO agents VALUES(?,?,?,?,?,?,?,?)", ("numtime", None, None, None, None, None, "x", 12345))
+for n in ("blobby", "badtime", "numtime"):  # who lists agents that acted (#89 E2)
+    c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", ("2020-01-01T00:00:00Z", n, "note", ""))
 c.execute("INSERT INTO messages(ts,sender,recipient,kind,topic,body) VALUES(?,?,?,?,?,?)", (B, B, "*", "note", B, B))
 c.execute("INSERT INTO messages(ts,sender,recipient,kind,topic,body) VALUES(?,?,?,?,?,?)", (1, 2, "seed", "note", 3, 4))
 c.execute("INSERT INTO context VALUES(?,?,?,?)", ("bk", B, B, B))
@@ -227,7 +227,7 @@ c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", (B, "blobby", B, B, "2999-01-0
 c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", ("area:q", "seed", B, B, "2999-01-01T00:00:00Z"))
 c.commit()
 PY2
-for cmd in who read status "ctx get" "ctx get bk" "ctx history bk" "log show" claims "claims --stale" "--as seed inbox --peek"; do
+for cmd in who read status "ctx get" "ctx get bk" "ctx history bk" claims "claims --stale" "--as seed inbox --peek"; do
   for j in "" --json; do
     o=$(AGENTBUS_DB="$TB" agentbus $j $cmd 2>"$T/terr") || fail "$j $cmd failed: $(cat "$T/terr")"
     grep -q Traceback "$T/terr" && fail "traceback from $j $cmd"
@@ -355,8 +355,9 @@ BS="$T/bs.db"
 AGENTBUS_DB="$BS" agentbus --as seed join --tool t >/dev/null
 AGENTBUS_DB="$BS" agentbus --as seed post '\x23 not a hash' >/dev/null
 AGENTBUS_DB="$BS" agentbus --as seed ctx set bk '\x1b not an escape' >/dev/null
-# a name with a backslash can only come from an older bus (join no longer accepts it): plant it
-"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("INSERT INTO agents(name,tool,joined_at,last_seen) VALUES(?,?,?,?)", ("lane\\u202e","t","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z")); c.commit(); c.close()' "$BS"
+# a name with a backslash can only come from an older bus (join no longer accepts it): plant it, with a log row so who
+# lists it as an agent that acted (#89 E2)
+"$PY" -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("INSERT INTO agents(name,tool,joined_at,last_seen) VALUES(?,?,?,?)", ("lane\\u202e","t","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z")); c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", ("2026-01-01T00:00:00Z","lane\\u202e","note","")); c.commit(); c.close()' "$BS"
 for cmd in read "ctx get bk" "ctx get" who; do
   o=$(outof env AGENTBUS_DB="$BS" "${AB[@]}" $cmd)
   case $cmd in

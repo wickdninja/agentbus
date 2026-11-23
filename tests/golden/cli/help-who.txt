@@ -1,6 +1,8 @@
 usage: agentbus who [--limit N]
 
-List agents
+List the agents that posted, claimed, read with inbox or set a fact, most
+recently seen first. One line counts the rest of the roster: names that joined
+and never did any of these.
 
 FLAGS
   -h, --help  Show this help message and exit.
@@ -17,4 +19,4 @@ EXAMPLES
   # As JSON, five at most
   agentbus --json who --limit 5
 
-JSON result: {"items": [Agent], "has_more": boolean, "next": string or null}. Retry: safe to repeat.
+JSON result: {"items": [Agent], "has_more": boolean, "next": string or null, "inactive": integer}. Retry: safe to repeat.

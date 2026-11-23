@@ -51,7 +51,7 @@ Status: `ok` = source says it on the date checked. `cut` = unverified, stale or 
 | <!-- claim:33 --> 33 | Python 3.9+, macOS and Linux. | README badge; CI matrix per the runbook gates. | 2026-11-01 | ok |
 | <!-- claim:35 --> 35 | agentbus cannot start a turn in an idle session. An agent sees a message when it next checks. | The hooks add text at session start, prompt, edit and turn end, and "never" block: `docs/how-to/claude-code.md` "What the hooks do"; nothing in `bin/agentbus` signals a session. | 2026-11-04 | ok |
 | <!-- claim:36 --> 36 | agentbus has no MCP server; agents run a plain command from a shell. | `grep -i mcp bin/agentbus` finds nothing. | 2026-11-04 | ok |
-| <!-- claim:37 --> 37 | One bus per folder, buses nest, and the bus file stays after every session ends: unread messages, claims until they expire, facts and history. Local machine only. | `docs/reference.md` "Discovery and nesting"; `agentbus read`, `log show`, `ctx history`; `leave` releases that agent's claims only. | 2026-11-04 | ok |
+| <!-- claim:37 --> 37 | One bus per folder, buses nest, and the bus file stays after every session ends: unread messages, claims until they expire, facts and history. Local machine only. | `docs/reference.md` "Discovery and nesting"; `agentbus read`, `ctx history`, the log table; `leave` releases that agent's claims only. | 2026-11-04 | ok |
 
 ## Fair positioning
 

@@ -70,7 +70,9 @@ qid = shape(j('--as', 'a', 'post', 'q', '--to', 'b', '--kind', 'question'), id=i
 shape(j('--as', 'b', 'post', 'ans', '--to', 'a', '--reply-to', str(qid), '--kind', 'answer'), id=int, warnings=list)
 listing(j('--as', 'b', 'inbox'), **message)
 assert j('--as', 'b', 'inbox')['items'] == []
-listing(j('who'), **agent)
+who = j('who')  # who adds inactive to the envelope: the roster names that never acted (#89 E2)
+assert set(who) == {'items', 'has_more', 'next', 'inactive'} and who['has_more'] is False and who['next'] is None and type(who['inactive']) is int, who
+array(who['items'], **agent)
 listing(j('read'), **message)
 shape(j('--as', 'a', 'ctx', 'set', 'k', 'sha-old'), unchanged=bool, **fact)
 shape(j('--as', 'b', 'ctx', 'set', 'k', 'sha-new'), unchanged=bool, **fact)
@@ -96,10 +98,6 @@ array(status['claims'], **claim); array(status['messages'], **message)
 for args, expected in [(('src/a.py',), ['src/a.py']), (('--all',), ['issue:1']), (('--all',), [])]:
     released = shape(j('--as', 'a', 'release', *args), released=list, released_count=int)
     assert released == {'released': expected, 'released_count': len(expected)}, released
-entry = shape(j('--as', 'a', 'log', 'add', 'note', 'detail'), id=int, logged=bool, agent=str, action=str, detail=str)
-assert entry['logged'] is True and entry['id'] > 0
-logs = listing(j('log', 'show'), id=int, ts=str, agent=str, action=str, detail=(str, null))
-assert [(r['agent'], r['action'], r['detail']) for r in logs if r['id'] == entry['id']] == [('a', 'note', 'detail')]
 shape(j('--as', 'a', 'leave'), left=str, was_joined=bool, released=list, released_count=int)
 repo = pathlib.Path(tmp)/'install'; repo.mkdir()
 shape(j('init', str(repo)), directory=str, copy=str, old=str, new=str, exclude_added=bool, gitignore_rule=bool, outer=null)
@@ -123,8 +121,6 @@ assert shape(j('skill', '--agents-md'), text=str)['text'].startswith('## agentbu
 helped = shape(j('help', 'ctx', 'set'), command=str, text=str)
 assert helped['command'] == 'ctx set' and helped['text'].startswith('usage: agentbus ctx set KEY VALUE'), helped
 assert shape(j('help'), command=null, text=str)['command'] is None
-done = shape(j('completion', 'bash'), shell=str, text=str)
-assert done['shell'] == 'bash' and '_agentbus()' in done['text'], done
 setup = shape(j('setup', 'claude', '--dry-run'), target=str, scope=str, dry_run=bool, changes=list)
 array(setup['changes'], path=str, action=str, detail=str)
 assert set(shape(j('hooks', 'codex'), hooks=dict)['hooks']) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse'}
@@ -136,15 +132,12 @@ brief = shape(j('--as', 'b', 'brief'), bus=str, me=dict, goal=dict, rulings=dict
 shape(brief['pending_others'], items=list, next=(str, null))
 shape(brief['me'], name=str, joined=bool)
 shape(brief['goal'], goal=str, set_by=str, set_at=str, truncated=bool)
-shape(brief['agents'], items=list); shape(brief['questions'], items=list)
+shape(brief['agents'], items=list, inactive=int); shape(brief['questions'], items=list)
 shape(brief['unread'], total=int, items=list); shape(brief['facts'], since=(str, null), items=list)
 shape(brief['omitted'], rulings=int, agents=int, questions=int, todos=int, expired_claims=int, unread=int, pending_others=int, facts=int)
 array(brief['agents']['items'], name=str, role=(str, null), tool=(str, null), last_seen=str, claims=list, claims_omitted=int)
 for row in brief['questions']['items'] + brief['unread']['items']:
     shape(row, id=int, ts=str, sender=str, recipient=str, kind=str, topic=(str, null), body=str, reply_to=(int, null), body_truncated=bool)
-demo = shape(j('demo'), steps=list, cleaned=bool)
-array(demo['steps'], command=str, exit=int)
-assert demo['cleaned'] is True and sorted({s['exit'] for s in demo['steps']}) == [0, 1], demo
 j('--as', 'b', 'claim', 'watch-fixture')
 for after in (False, True):
     for once in ((), ('--once',)):
@@ -173,7 +166,7 @@ assert seen == visible, ('untested parser commands', visible - seen, 'extra', se
 print('PASS: every parser subcommand prints one JSON value with exact keys and types')
 # Both shared-option placements must work, including nested actions.
 shape(j('--as', 'a', 'join', after=True, keep=True), joined=str, bus=str, goal=dict, agentbus=str, contract=int)
-for args in [('who',), ('read',), ('status',), ('claims',), ('log', 'show'), ('ctx', 'get'), ('--as', 'a', 'inbox'),
+for args in [('who',), ('read',), ('status',), ('claims',), ('ctx', 'get'), ('--as', 'a', 'inbox'),
              ('--as', 'a', 'post', 'after'), ('--as', 'a', 'ctx', 'set', 'k2', 'v'), ('upgrade', str(repo)), ('buses',), ('schema',)]:
     j(*args, after=True)
 with tempfile.TemporaryDirectory() as cwd:

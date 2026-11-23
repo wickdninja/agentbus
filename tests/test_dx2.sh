@@ -50,11 +50,11 @@ agentbus --as gamma post hi --tpo alpha --kynd note >/dev/null 2>"$T/e" && fail 
 has "two unknown flags have no did-you-mean" "Did you mean --to (for --tpo), --kind (for --kynd)?" "$T/e"
 agentbus --as gamma --json post hi --kynd note >/dev/null 2>"$T/e" && fail "an unknown flag was accepted under --json" || true
 pyj 'assert "Did you mean --kind?" in d["error"]["message"] and d["error"]["next"] == "agentbus post --help", d' <"$T/e"
-agentbus lgo >/dev/null 2>"$T/e" && fail "an unknown command ran" || true
-has "unknown command has no did-you-mean" "Did you mean log?" "$T/e"
+agentbus brif >/dev/null 2>"$T/e" && fail "an unknown command ran" || true
+has "unknown command has no did-you-mean" "Did you mean brief?" "$T/e"
 has "unknown command lacks the command list" "Commands: join, leave, who, post," "$T/e"
-agentbus --json lgo >/dev/null 2>"$T/e" && fail "an unknown command ran under --json" || true
-pyj 'e = d["error"]; assert e["code"] == "bad_input" and "Did you mean log?" in e["message"] and "Commands: join," in e["message"] and e["next"] == "agentbus --help", d' <"$T/e"
+agentbus --json brif >/dev/null 2>"$T/e" && fail "an unknown command ran under --json" || true
+pyj 'e = d["error"]; assert e["code"] == "bad_input" and "Did you mean brief?" in e["message"] and "Commands: join," in e["message"] and e["next"] == "agentbus --help", d' <"$T/e"
 agentbus --as alpa post hi >/dev/null 2>"$T/e" && fail "post from a typo'd name was accepted" || true
 has "--as typo has no did-you-mean" "alpa is not on the roster. Did you mean alpha? On the roster: alpha, beta, gamma. To join as alpa: agentbus --as alpa join" "$T/e"
 agentbus --as alpa --json post hi >/dev/null 2>"$T/e" && fail "post from a typo'd name was accepted under --json" || true
@@ -150,11 +150,11 @@ table = {
     "post": ["--as", "alpha", "post", "hello"], "inbox": ["--as", "beta", "inbox", "--peek"], "wait": ["--as", "beta", "wait", "--timeout", "1"], "read": ["read"],
     "ctx set": ["--as", "alpha", "ctx", "set", "k", "v"], "ctx get": ["ctx", "get", "k"], "ctx history": ["ctx", "history", "k"],
     "claim": ["--as", "alpha", "claim", "src/b.py"], "release": ["--as", "alpha", "release", "src/b.py"], "claims": ["claims"],
-    "log add": ["--as", "alpha", "log", "add", "act", "detail"], "log show": ["log", "show"], "status": ["status"],
+    "status": ["status"],
     "goal": ["goal"], "watch": ["watch", "--once"], "buses": ["buses"], "init": ["init", T + "/proj2"],
     "upgrade": ["upgrade", T + "/proj"], "update": ["update", "--check"], "schema": ["schema", "post"], "skill": ["skill"],
-    "help": ["help", "post"], "completion": ["completion", "bash"], "setup": ["setup", "claude", "--dry-run"],
-    "doctor": ["doctor"], "brief": ["--as", "alpha", "brief"], "demo": ["demo"], "hooks": ["hooks", "codex"],
+    "help": ["help", "post"], "setup": ["setup", "claude", "--dry-run"],
+    "doctor": ["doctor"], "brief": ["--as", "alpha", "brief"], "hooks": ["hooks", "codex"],
 }
 extra = [["read", "--id", "1"], ["ctx", "get"], ["goal"], ["--as", "alpha", "goal", "ship it"], ["goal"], ["schema", "--index"],
          ["schema"], ["help"], ["skill", "--agents-md"], ["upgrade", "--all", T + "/proj", "--dry-run"], ["--as", "alpha", "claim", "src/b.py"],

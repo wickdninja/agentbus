@@ -169,7 +169,7 @@ assert len(commands) >= 14, top
 helps = {(): top}
 for cmd in commands:
     helps[(cmd,)] = help_(cmd)
-for cmd in ('ctx', 'log'):
+for cmd in ('ctx',):
     actions = re.search(r'\{([^}]+)\}', helps[(cmd,)]).group(1).split(',')
     for action in actions:
         helps[(cmd, action)] = help_(cmd, action)
@@ -193,7 +193,7 @@ def check(tokens, source):
     cmd = tokens.pop(0)
     assert cmd in commands, (source, 'unknown command', cmd)
     key = (cmd,)
-    if cmd in ('ctx', 'log') and tokens:
+    if cmd == 'ctx' and tokens:
         action = tokens.pop(0)
         key += (action,)
         assert key in helps, (source, 'unknown action', key)

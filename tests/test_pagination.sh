@@ -33,8 +33,10 @@ def usage_error(db, *args):
     assert e["code"] == "bad_input", e
     return e
 
-def shape(r, items=None):
-    assert set(r) == {"contract", "items", "has_more", "next"} and r["contract"] == 1, r
+def shape(r, items=None, who=False):
+    # who's envelope adds inactive: how many roster names never acted (#89 E2)
+    assert set(r) == {"contract", "items", "has_more", "next"} | ({"inactive"} if who else set()) and r["contract"] == 1, r
+    assert not who or isinstance(r["inactive"], int), r
     assert isinstance(r["items"], list) and isinstance(r["has_more"], bool) and (r["next"] is None or isinstance(r["next"], str)), r
     return r
 
@@ -45,8 +47,8 @@ def ids(r):
 db = fresh("env")
 ok(db, "--as", "a", "join"); ok(db, "--as", "b", "join")
 ok(db, "--as", "a", "post", "hi", "--to", "b"); ok(db, "--as", "a", "ctx", "set", "k", "v"); ok(db, "--as", "a", "claim", "x")
-for args in (("who",), ("--as", "b", "inbox"), ("read",), ("claims",), ("ctx", "get"), ("ctx", "history", "k"), ("log", "show"), ("buses",)):
-    r = shape(ok(db, *args)); assert r["items"] and r["has_more"] is False and r["next"] is None, (args, r)
+for args in (("who",), ("--as", "b", "inbox"), ("read",), ("claims",), ("ctx", "get"), ("ctx", "history", "k"), ("buses",)):
+    r = shape(ok(db, *args), who=args == ("who",)); assert r["items"] and r["has_more"] is False and r["next"] is None, (args, r)
 assert shape(ok(db, "claims", "--stale"))["items"] == []
 single = ok(db, "ctx", "get", "k")
 assert single["key"] == "k" and "items" not in single, single
@@ -72,18 +74,18 @@ con = sqlite3.connect(db)
 for i in range(7):  # distinct last_seen, newest is n6
     con.execute("UPDATE agents SET last_seen=? WHERE name=?", ("2026-01-01T00:00:%02dZ" % i, "n%d" % i))
 con.commit(); con.close()
-r = shape(ok(db, "who", "--limit", "2"))
+r = shape(ok(db, "who", "--limit", "2"), who=True)
 assert [x["name"] for x in r["items"]] == ["n6", "n5"] and r["has_more"] is True and r["next"] is None, r
 r = shape(ok(db, "claims", "--limit", "2"))
 assert [x["resource"] for x in r["items"]] == ["res0", "res1"] and r["has_more"] is True and r["next"] is None, r
 r = shape(ok(db, "ctx", "get", "--limit", "2"))
 assert [x["key"] for x in r["items"]] == ["key0", "key1"] and r["has_more"] is True and r["next"] is None, r
 for args in (("who",), ("claims",), ("ctx", "get")):
-    assert shape(ok(db, *args, "--limit", "7"))["has_more"] is False, args
-    assert shape(ok(db, *args, "--limit", "-1"))["has_more"] is False, args
+    assert shape(ok(db, *args, "--limit", "7"), who=args == ("who",))["has_more"] is False, args
+    assert shape(ok(db, *args, "--limit", "-1"), who=args == ("who",))["has_more"] is False, args
 print("PASS: who, claims and ctx get with limit 2 over 7 rows report has_more true, next null, in the v0.1.0 order")
 
-# ---- read, log show, ctx history: --before walks back over every row exactly once ----
+# ---- read, ctx history: --before walks back over every row exactly once ----
 db = fresh("walk")
 ok(db, "--as", "a", "join")
 for i in range(10):
@@ -105,8 +107,7 @@ def walk(*cmd, limit=3, inject=None):
         assert ids(r) == sorted(ids(r)), ("each page is shown by id ascending", ids(r))
         cur = r["next"]
 for name, cmd, post in (("read", ("read",), lambda: ok(db, "--as", "a", "post", "late")),
-                        ("ctx history", ("ctx", "history", "k"), lambda: ok(db, "--as", "a", "ctx", "set", "k", "late")),
-                        ("log show", ("log", "show"), lambda: ok(db, "--as", "a", "log", "add", "late", "x"))):
+                        ("ctx history", ("ctx", "history", "k"), lambda: ok(db, "--as", "a", "ctx", "set", "k", "late"))):
     total = len(ids(shape(ok(db, *cmd, "--limit", "-1"))))
     pages, seen = walk(*cmd, inject=post)
     assert len(seen) == len(set(seen)), (name, "a row repeated", seen)
@@ -119,7 +120,7 @@ read_topic = shape(ok(db, "read", "--topic", "t", "--limit", "2"))
 assert read_topic["has_more"] is True
 topic_pages, topic_seen = walk("read", "--topic", "t", limit=2)
 assert len(topic_seen) == len(set(topic_seen)) == 5, topic_seen
-print("PASS: read, log show and ctx history --before walk back over every row exactly once; a row inserted between pages is neither skipped nor repeated")
+print("PASS: read and ctx history --before walk back over every row exactly once; a row inserted between pages is neither skipped nor repeated")
 
 # ---- inbox: consuming pages, and --peek --after walking forward ----
 db = fresh("inbox")
@@ -208,6 +209,8 @@ con.executemany("INSERT INTO agents(name,joined_at,last_seen) VALUES(?,?,?)", [(
 con.executemany("INSERT INTO claims(resource,agent,claimed_at,expires_at) VALUES(?,?,?,?)", [("r/%d" % i, "a", now, now) for i in range(205)])
 con.executemany("INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?)", [("f%d" % i, "v", "a", now) for i in range(205)])
 con.executemany("INSERT INTO messages(ts,sender,body) VALUES(?,?,?)", [(now, "a", "bulk") for i in range(205)])
+# a log row each, so who counts the planted names as agents that acted and lists them (#89 E2)
+con.executemany("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", [(now, "x%d" % i, "note", "") for i in range(205)])
 con.commit(); con.close()
 w = ok(db, "watch")
 shown = {k: len(w[k]) for k in ("agents", "claims", "context", "messages")}

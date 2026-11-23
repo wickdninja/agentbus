@@ -78,7 +78,8 @@ import sqlite3, sys
 con = sqlite3.connect(sys.argv[1]); con.execute(sys.argv[2], sys.argv[3:]); con.commit(); con.close()
 PY
 }
-roster() { ab --json who | "$PY" -c 'import json,sys; print(" ".join(sorted(r["name"] for r in json.load(sys.stdin)["items"])))'; }
+# The whole roster: status lists every name on it (who lists only the names that acted, #89 E2).
+roster() { ab --json status --limit -1 | "$PY" -c 'import json,sys; print(" ".join(sorted(r["name"] for r in json.load(sys.stdin)["agents"])))'; }
 unread() { ab --json --as "$1" inbox --peek --limit -1 | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)["items"]))'; }
 SS() { hook SessionStart "$(payload session_start_startup_print session_id="\"${1:-$SID1}\"")"; }
 UPS() { hook UserPromptSubmit "$(payload user_prompt_submit session_id="\"${1:-$SID1}\"")"; }
