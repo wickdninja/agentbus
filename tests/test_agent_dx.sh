@@ -260,7 +260,9 @@ ok(db, "--as", "bob", "ctx", "set", "k1", "v1")
 text = ok(db, "--as", "alice", "brief", "--limit", "0")
 for gone in ("nobody has joined", "open questions: none", "facts: none", "pending between others: none"):
     check(gone not in text, "--limit 0 says %r for items it only omitted: %r" % (gone, text))
-check("here (3):" in text and "... 3 more" in text, "no agents total or hint: %r" % text)
+# alice and dave have only joined: brief lists bob, the one that acted, and counts them (#89 E2)
+check("here (1):" in text and "... 1 more" in text and "2 more joined and never posted, claimed or read" in text,
+      "no agents total or hint: %r" % text)
 check("open questions (2):" in text and "... 2 more" in text, "no questions total or hint: %r" % text)
 check("pending between others (1):" in text, "no pending total: %r" % text)
 check("facts (1):" in text and "... 1 more" in text, "no facts total or hint: %r" % text)

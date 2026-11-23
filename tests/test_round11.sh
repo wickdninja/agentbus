@@ -76,6 +76,8 @@ def listings():
     with contextlib.closing(sqlite3.connect(db)) as c:
         for name, role in [('claude', 'planner'), ('codex', 'implementer'), ('reviewer-subagent-security', 'security'), ('nate', '')]:
             c.execute('INSERT INTO agents VALUES(?,?,?,?,?,?,?,?)', (name, 'codex', None, '/', None, role, stamp(now), stamp(now-datetime.timedelta(minutes=2))))
+            # a log row each: who lists only agents that acted (#89 E2)
+            c.execute('INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)', (stamp(now), name, 'note', ''))
         for i, resource in enumerate(['src/api/', 'tests/', 'docs/']):
             c.execute('INSERT INTO claims VALUES(?,?,?,?,?)', (resource, 'codex', 'review', stamp(now), stamp(now+datetime.timedelta(minutes=120) if i < 2 else now-datetime.timedelta(minutes=1))))
         c.commit()
@@ -96,9 +98,9 @@ check('2 compact roster and claims including status at 80 columns', listings)
 def empty():
     db = fresh('empty')
     for args, text in [(('who',), 'no agents. Join with: agentbus --as NAME join'), (('claims',), 'no claims'),
-                       (('claims','--stale'), 'no claims'), (('ctx','get'), 'no facts'), (('read',), 'no messages'), (('log','show'), 'log is empty')]:
+                       (('claims','--stale'), 'no claims'), (('ctx','get'), 'no facts'), (('read',), 'no messages')]:
         assert ok(*args, db=db) == '  '+text+'\n', args
-        assert json.loads(ok(*args, db=db, json_=True)) == {'contract': 1, 'items': [], 'has_more': False, 'next': None}, args
+        assert json.loads(ok(*args, db=db, json_=True)) == dict({'contract': 1, 'items': [], 'has_more': False, 'next': None}, **({'inactive': 0} if args == ('who',) else {})), args
     status = ok('status', db=db)
     for text in ['no agents. Join with: agentbus --as NAME join', 'no claims', 'no facts', 'no messages']:
         assert '\n  '+text+'\n' in status, status
@@ -116,8 +118,6 @@ def hints():
     assert re.match(r'  \.\.\. 2 earlier\n  next: agentbus read --before v1\.\S+ --limit 1\n#3 ', text), text
     text = ok('read','--since','0','--limit','1', db=db)
     assert text.startswith('#1 ') and text.endswith('  ... 2 more\n  next: agentbus read --since 1 --limit 1\n'), text
-    text = ok('log','show','--limit','1', db=db)
-    assert re.match(r'  \.\.\. 1 earlier\n  next: agentbus log show --before v1\.\S+ --limit 1\n', text), text
     text = ok('who','--limit','1', db=db)
     assert text.endswith('  ... 1 more\n  next: agentbus who --limit 2\n'), text
 check('4 more hints name unread or earlier rows and appear on the correct side', hints)

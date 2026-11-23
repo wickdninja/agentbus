@@ -148,7 +148,7 @@ def command_key(args):
     if not words:
         return None
     name = words[0]
-    if name in ("ctx", "log") and len(words) > 1:
+    if name == "ctx" and len(words) > 1:
         name += " " + words[1]
     return name
 checked = 0

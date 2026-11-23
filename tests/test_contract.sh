@@ -71,8 +71,8 @@ print("PASS: schema --json has an entry for every subcommand in the parser and n
 # Which arguments a caller must give is the same on every Python: argparse itself marks a bare nargs="*" positional
 # required below 3.12 (goal TEXT, update DIR, schema COMMAND), so the contract states it. Written out here, not read
 # from the registry; this file runs on whatever Python the suite uses, so each version is held to the same lists.
-REQUIRED = {"post body", "ctx set KEY", "ctx set VALUE", "ctx history KEY", "claim RESOURCE", "log add ACTION", "log add DETAIL",
-            "completion shell", "setup target", "hooks target"}
+REQUIRED = {"post body", "ctx set KEY", "ctx set VALUE", "ctx history KEY", "claim RESOURCE",
+            "setup target", "hooks target"}
 OPTIONAL_POSITIONAL = {"join NAME", "ctx get KEY", "release RESOURCE", "goal text", "init DIR", "upgrade DIR", "schema COMMAND", "help COMMAND", "update DIR"}
 got_required = {c + " " + a["name"] for c, v in commands.items() for a in v["args"] if a.get("required")}
 got_optional = {c + " " + a["name"] for c, v in commands.items() for a in v["args"] if a.get("positional") and not a.get("required")}
@@ -182,7 +182,7 @@ print("PASS: schema COMMAND prints one command's entry, with arguments read from
 p = run("schema")
 assert p.returncode == 0 and p.stdout, p
 assert re.search(r"^  post +\{id, warnings\} +retry: only with --request-id$", p.stdout, re.M), p.stdout
-assert len(p.stdout.splitlines()) <= 34, "one screen"   # 29 commands plus the header and the details line; was 30 before help, completion, brief, demo, update and doctor joined the table
+assert len(p.stdout.splitlines()) <= 34, "one screen"   # 27 commands plus the header and the details line; was 30 before help, completion, brief, demo, update and doctor joined the table, and log add, log show, completion and demo left it (#89)
 for name in commands:
     assert re.search(r"^  " + re.escape(name) + r"  ", p.stdout, re.M), (name, p.stdout)
 print("PASS: schema prints a one-screen table: command, result, retry")
@@ -226,7 +226,7 @@ def command_of(args):
     while rest and rest[0] in ("--json", "--as", "--up"):
         rest = rest[2:] if rest[0] != "--json" else rest[1:]
     name = rest[0]
-    if name in ("ctx", "log") and len(rest) > 1:
+    if name == "ctx" and len(rest) > 1:
         name += " " + rest[1]
     return name
 def declared(code, args):
@@ -454,7 +454,6 @@ step("claim", "--as", "a", "claim", "src/m1.py", "src/m2.py")   # several: the s
 step("release", "--as", "a", "release", "src/m1.py", "src/m2.py")
 ok("--as", "a", "post", "for wait", "--to", "b", db=wf)
 step("wait", "--as", "b", "wait", "--timeout", "5")
-step("log add", "--as", "a", "log", "add", "note", "detail")
 step("status", "status")
 step("watch", "watch")
 step("watch", "watch", "--once")
@@ -479,11 +478,9 @@ step("init", "init", repo)
 step("upgrade", "upgrade", repo)
 step("upgrade", "upgrade", "--all", repo)
 step("upgrade", "upgrade", "--dry-run", repo)
-step("demo", "demo")
 step("skill", "skill")
 step("skill", "skill", "--agents-md")
 step("help", "help", "ctx", "set")
-step("completion", "completion", "bash")
 # a dry run writes nothing; the config folders point into this test's own temp folder all the same
 step("setup", "setup", "claude", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("setup", "setup", "codex", "--dry-run", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
@@ -491,7 +488,7 @@ step("hooks", "hooks", "codex")
 # doctor reads only; its config folders point into this test's own temp folder too
 step("doctor", "doctor", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
 step("doctor", "doctor", "--scope", "project", env={"CLAUDE_CONFIG_DIR": os.path.join(tmp, "cc"), "CODEX_HOME": os.path.join(tmp, "cx")})
-LISTINGS = ["who", "inbox", "read", "claims", "ctx get", "ctx history", "log show", "buses"]
+LISTINGS = ["who", "inbox", "read", "claims", "ctx get", "ctx history", "buses"]
 if NEEDS_ENVELOPE:
     step("who", "who")
     step("inbox", "--as", "b", "inbox")
@@ -503,7 +500,6 @@ if NEEDS_ENVELOPE:
     step("claims", "claims")
     step("ctx get", "ctx", "get")
     step("ctx history", "ctx", "history", "k")
-    step("log show", "log", "show")
     step("buses", "buses")
     # a listing's rows carry exactly the fields its object declares: none undeclared (copy_version and stale on buses)
     for name in LISTINGS:

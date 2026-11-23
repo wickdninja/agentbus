@@ -37,22 +37,21 @@ must() { "$@" >/dev/null || fail "refused: $*"; }
 
 echo "TEST 1: every write needs a joined name; nothing is written when it is refused"
 agentbus --as alpha join >/dev/null
-for w in "post hello" "ctx set k v" "goal ship" "log add note detail"; do
+for w in "post hello" "ctx set k v" "goal ship"; do
   # shellcheck disable=SC2086
   e=$(jfail not_on_roster "${AB[@]}" --json --as zed $w) || fail "unjoined write was not refused: $w"
   grep -qF "zed is not on the roster. Run: agentbus --as zed join" <<<"$e" || fail "message for '$w': $e"
 done
 [ "$(rows 'SELECT COUNT(*) FROM messages')" = 0 ] || fail "a refused post left a message"
 [ "$(rows 'SELECT COUNT(*) FROM context')" = 0 ] || fail "a refused ctx set or goal left a fact"
-[ "$(rows "SELECT COUNT(*) FROM log WHERE action IN ('note','goal')")" = 0 ] || fail "a refused write logged"
+[ "$(rows "SELECT COUNT(*) FROM log WHERE action = 'goal'")" = 0 ] || fail "a refused write logged"
 set +e; "${AB[@]}" --as zed post hello >/dev/null 2>&1; rc=$?; set -e
 [ "$rc" = 1 ] || fail "unjoined post exits $rc, claim's not_on_roster exits 1"
 agentbus --as alpha post hello >/dev/null; agentbus --as alpha ctx set k v >/dev/null; agentbus --as alpha goal ship >/dev/null
-agentbus --as alpha log add note detail >/dev/null
 agentbus --as alpha leave >/dev/null
 expect_fail "alpha is not on the roster" agentbus --as alpha post "after leaving"
 agentbus --as alpha join >/dev/null
-ok "post, ctx set, goal and log add refuse a name that has not joined (or has left), like claim"
+ok "post, ctx set and goal refuse a name that has not joined (or has left), like claim"
 
 echo "TEST 2: an unknown --to is delivered, with a warning and a did-you-mean"
 agentbus --as beta join >/dev/null
@@ -134,11 +133,12 @@ ok "join, claim, release, ctx set, goal and leave take --request-id; the repeats
 echo "TEST 7: join --takeover keeps role, tool and model that it does not repeat"
 agentbus --as delta join --role reviewer --tool codex --model gpt >/dev/null
 agentbus --as delta join --takeover >/dev/null
-j=$(json_ok agentbus --json who)
-pyj 'a = {x["name"]: x for x in d["items"]}["delta"]; assert (a["role"], a["tool"], a["model"]) == ("reviewer", "codex", "gpt"), a' <<<"$j"
+# status lists the whole roster; who lists only the agents that acted (#89 E2), and delta has only joined
+j=$(json_ok agentbus --json status --limit -1)
+pyj 'a = {x["name"]: x for x in d["agents"]}["delta"]; assert (a["role"], a["tool"], a["model"]) == ("reviewer", "codex", "gpt"), a' <<<"$j"
 agentbus --as delta join --takeover --role tester >/dev/null
-j=$(json_ok agentbus --json who)
-pyj 'a = {x["name"]: x for x in d["items"]}["delta"]; assert (a["role"], a["tool"], a["model"]) == ("tester", "codex", "gpt"), a' <<<"$j"
+j=$(json_ok agentbus --json status --limit -1)
+pyj 'a = {x["name"]: x for x in d["agents"]}["delta"]; assert (a["role"], a["tool"], a["model"]) == ("tester", "codex", "gpt"), a' <<<"$j"
 ok "takeover fills only what it is told"
 
 echo "TEST 8: goal is a reserved fact key"
@@ -179,6 +179,7 @@ python3 - "$AGENTBUS_DB" <<'PY'
 import sqlite3, sys
 con = sqlite3.connect(sys.argv[1])
 con.execute("INSERT INTO agents(name,joined_at,last_seen) VALUES('old name','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')")
+con.execute("INSERT INTO log(ts,agent,action,detail) VALUES('2026-01-01T00:00:00Z','old name','note','')")  # who lists agents that acted (#89 E2)
 con.commit()
 PY
 agentbus who | grep -qF "old name" || fail "an old bus's odd name no longer lists"
@@ -186,7 +187,7 @@ agentbus status >/dev/null || fail "status on a bus with an odd name"
 agentbus --as "old name" post "still here" >/dev/null || fail "an odd name already on the roster cannot post"
 expect_fail "is not a valid name" agentbus --as "old name" join
 # a name that could never join is refused up front by every write, with the rule and a join that would work
-for w in "post hi" "ctx set k v" "claim some/file" "goal x" "log add a b"; do
+for w in "post hi" "ctx set k v" "claim some/file" "goal x"; do
   rc=0; agentbus --json --as "bad name" $w >/dev/null 2>"$T/bn" || rc=$?
   [ "$rc" = 2 ] || fail "'$w' as 'bad name': exit $rc, want 2 (bad_input, not not_on_roster)"
   pyj 'e = d["error"]; assert e["code"] == "bad_input" and e["field"] == "name" and e["next"] == "agentbus --as NAME join" and "is not a valid name" in e["message"] and "--as '"'"'bad name'"'"' join" not in e["message"], e' <"$T/bn"
@@ -223,7 +224,8 @@ ok "the text output shows what changed"
 echo "TEST 13: --limit below -1 is refused"
 expect_fail "must be 0 or more, or -1 for all" agentbus who --limit -2
 expect_fail "must be 0 or more, or -1 for all" agentbus claims --limit -5
-[ "$(njson agentbus --json who --limit -1)" -ge 3 ] || fail "--limit -1 no longer lists all"
+# who lists the agents that acted (#89 E2); --limit -1 leaves none of them out
+outof agentbus --json who --limit -1 | pyj 'assert d["items"] and d["has_more"] is False, d' || fail "--limit -1 no longer lists all"
 [ "$(njson agentbus --json who --limit 0)" = 0 ] || fail "--limit 0 changed"
 ok "who --limit -2 is a usage error; -1 still means all"
 

@@ -24,6 +24,7 @@ agentbus init "$T" >/dev/null
 mkdir "$T/inner"; agentbus init "$T/inner" >/dev/null
 cd "$T/inner"
 agentbus --up 1 --as worker join >/dev/null
+agentbus --up 1 --as worker post "here" >/dev/null   # who lists only agents that acted (#89 E2)
 before=$(agentbus --up 1 --as worker --json who)
 after=$(agentbus who --up 1 --as worker --json)
 # last_seen can tick between calls, so compare stable roster fields.
@@ -40,9 +41,7 @@ assert (pathlib.Path(sys.argv[2])/'.agentbus/bus.db').is_file()
 PY
 agentbus ctx --up 1 --as worker set k value >/dev/null
 [ "$(agentbus ctx get k --up 1 --as worker)" = '  value' ] || fail "nested flags overwrite globals"
-agentbus log --up 1 --as worker add check detail >/dev/null
-outof agentbus log show --up 1 --json | "$PY" -c 'import json,sys; assert any(r["detail"]=="detail" for r in json.load(sys.stdin)["items"])' || fail "nested log flags"
-ok "identity and bus level before and after commands, including ctx/log actions"
+ok "identity and bus level before and after commands, including ctx actions"
 
 export AGENTBUS_DB="$T/bus.db"
 agentbus --as claude claim src/api/ --purpose review >/dev/null
@@ -81,8 +80,6 @@ checks = {
     ('ctx','set'): ['Set a shared fact and record its history.'],
     ('ctx','get'): ['Get a fact, or list all facts.'],
     ('ctx','history'): ['Show the history of a fact.'],
-    ('log','add'): ['Append an activity log entry.'],
-    ('log','show'): ['Show recent activity log entries.'],
     ('claim',): ['Claim lifetime in minutes: 1-10080; default 120. Claim again to renew.'],
     ('read',): ['Maximum messages; default 50. Use -1 for all.', 'Show this one message, whole (a listing cuts a body at 2 KB).'],
     ('status',): ['At most this many rows in each section (agents, facts, claims, the latest messages); default 20. Use -1 for all.'],
@@ -91,15 +88,15 @@ checks = {
 for args, expected in checks.items():
     text = help_(*args)
     for phrase in expected: assert phrase in text, (args, phrase, text)
-for args in [('who',), ('inbox',), ('claims',), ('ctx', 'get'), ('ctx', 'history'), ('log', 'show'), ('status',)]:
+for args in [('who',), ('inbox',), ('claims',), ('ctx', 'get'), ('ctx', 'history'), ('status',)]:
     assert 'Use -1 for all.' in help_(*args), args
-for args, usage in [(('ctx','set'),'KEY VALUE'), (('ctx','get'),'[KEY]'), (('ctx','history'),'KEY'), (('log','add'),'ACTION DETAIL'), (('log','show'),'')]:
+for args, usage in [(('ctx','set'),'KEY VALUE'), (('ctx','get'),'[KEY]'), (('ctx','history'),'KEY')]:
     assert ('usage: agentbus ' + ' '.join(args) + ' ' + usage).strip() in help_(*args), args
 PY
 ok "help describes routing, limits, identity, installation, and action-specific usage"
 
-out=$(agentbus lgo 2>&1 >/dev/null || true)
-case "$out" in "agentbus: error: unknown command 'lgo'. Did you mean log? Commands: join, leave, who, "*", brief, demo. See: agentbus --help") ;; *) fail "unknown command hint: $out" ;; esac
+out=$(agentbus brif 2>&1 >/dev/null || true)
+case "$out" in "agentbus: error: unknown command 'brif'. Did you mean brief? Commands: join, leave, who, "*", doctor, brief. See: agentbus --help") ;; *) fail "unknown command hint: $out" ;; esac
 agentbus --as claude post hi --kind fyi 2>&1 >/dev/null | grep -qF "unknown kind 'fyi': posted as a note. Kinds: note, question, answer, handoff, decision, alert, done, todo, dropped" \
   || fail "an invented kind does not post as a note with the kinds named"
 expect_fail "claude was active less than a minute ago" agentbus --as claude join

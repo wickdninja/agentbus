@@ -137,7 +137,8 @@ RC="$T/conc"; mkrepo "$RC"; agentbus init "$RC" >/dev/null
 pids=""; for i in $(seq 1 10); do (cd "$RC" && agentbus --as c$i join >/dev/null 2>"$T/c$i.err") & pids="$pids $!"; done
 fails=0; for p in $pids; do wait $p || fails=$((fails+1)); done
 [ "$fails" = 0 ] || fail "$fails concurrent first uses failed: $(cat "$T"/c*.err)"
-[ "$(cd "$RC" && njson agentbus --json who)" = 10 ] || fail "not all 10 joined"
+# who lists the agents that acted and counts the rest (#89 E2): ten that only joined are ten inactive
+[ "$(cd "$RC" && outof agentbus --json who | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d["items"]) + d["inactive"])')" = 10 ] || fail "not all 10 joined"
 [ "$(mode "$RC/.agentbus")" = 700 ] || fail "bus directory mode"
 ok "concurrent first use creates one bus with all ten agents"
 

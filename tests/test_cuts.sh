@@ -161,5 +161,5 @@ text = ok(DB, "who")
 if text.strip() != "no agents. Join with: agentbus --as NAME join":
     fail("an empty roster, who: %r" % text)
 print("PASS: facts count as acting; an all-ghost bus and an empty bus each read right")
-print("All cut tests passed")
 PY
+all_passed "All cut tests passed"

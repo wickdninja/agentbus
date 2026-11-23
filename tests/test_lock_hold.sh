@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 # The bus is exclusively locked while a command has it open, so a command must never wait on
-# anything outside the bus while it holds it. Bug it catches: stdin read (post -, ctx set, log add)
+# anything outside the bus while it holds it. Bug it catches: stdin read (post -, ctx set)
 # and stdout written with the lock held, so one slow pipe made every other agent fail "busy".
 . "$(dirname "$0")/lib.sh"
 T=$(mktemp -d); export HOME="$T/home"; mkdir -p "$HOME"
@@ -29,7 +29,7 @@ other_post_while() {
 
 echo "TEST 1: post - reading a stalled FIFO does not hold the bus"
 n=0
-for cmd in "post -" "ctx set k -" "log add note -"; do
+for cmd in "post -" "ctx set k -"; do
   rm -f "$T/in"; mkfifo "$T/in"
   n=$((n+1)); P="$T/pause1-$n"; mkdir -p "$P"; touch "$P/before-stdin-read.go"   # mark, never stop
   AGENTBUS_TEST_PAUSE="before-stdin-read=$P" agentbus --as a $cmd <"$T/in" >"$T/o1" 2>"$T/e1" & P1=$!
@@ -97,6 +97,8 @@ c = sqlite3.connect(sys.argv[1])
 t = "2026-01-01T00:00:00Z"
 c.executemany("INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen) VALUES(?,?,?,?,?,?,?,?)",
               [("lane-%06d" % i, "t", "m" * 40, "/", "b" * 40, "r" * 60, t, t) for i in range(200000)])
+# a log row each, so who lists them as agents that acted and has all 200k to format (#89 E2)
+c.executemany("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", [(t, "lane-%06d" % i, "note", "") for i in range(200000)])
 c.commit()
 PY
 total=$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("SELECT COUNT(*) FROM agents").fetchone()[0])' "$AGENTBUS_DB")
@@ -277,7 +279,7 @@ for args in (["--json", "who"], ["who"], ["--json", "status"], ["status"], ["--a
              ["ctx", "get", "k"], ["ctx", "get"], ["--json", "ctx", "history", "k"], ["--as", "a", "inbox"],
              ["--json", "--as", "a", "inbox"], ["--as", "b", "claim", "x", "--purpose", big],
              ["--as", "a", "claim", "x"], ["--as", "a", "post", "--reply-to", "999999", "hi"],
-             ["claims"], ["--json", "claims"], ["log", "show"], ["read"], ["--as", "a", "post", big],
+             ["claims"], ["--json", "claims"], ["read"], ["--as", "a", "post", big],
              ["--as", "b", "release", "--all"], ["--as", "b", "leave"], ["ctx", "get", "missing"]):
     o, e = run(*args)
     if "Traceback" in e:

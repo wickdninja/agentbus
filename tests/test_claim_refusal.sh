@@ -80,7 +80,7 @@ PY
 agentbus --json --as rw claim r/blob.py 2>"$err" && fail "claim over a holder with a blob claimed_at succeeded"
 "$PY" -c 'import json,sys; e=json.load(open(sys.argv[1]))["error"]; assert e["code"]=="claim_conflict" and e["holder"]=="rb", e' "$err" || { cat "$err"; fail "a claimed_at that is not text broke the refusal"; }
 # the log: one claim_refused row per refusal, structured, and none for a claim that worked
-rows() { agentbus --json log show --limit 200 | "$PY" -c 'import json,sys; print(json.dumps([r for r in json.load(sys.stdin)["items"] if r["action"]=="claim_refused"]))'; }
+rows() { log_json 200 | "$PY" -c 'import json,sys; print(json.dumps([r for r in json.load(sys.stdin)["items"] if r["action"]=="claim_refused"]))'; }
 "$PY" - "$(rows)" <<'PY' || fail "claim_refused rows"
 import json, sys
 rows = json.loads(sys.argv[1])
@@ -93,7 +93,6 @@ assert [(c["resource"], c["holder"]) for c in d["conflicts"]] == [("r/a.py", "rh
 PY
 agentbus --as rw claim r/free.py >/dev/null
 [ "$(rows | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')" = 8 ] || fail "a claim that worked logged a refusal"
-agentbus log show --limit 200 | grep -F "claim_refused" | grep -qF "r/a.py held by rh1" || fail "log show does not read a claim_refused row as a sentence"
 # the log write never changes the refusal: a busy bus, a database error and a full log all still give claim_conflict
 before=$(rows | "$PY" -c 'import json,sys; print(len(json.load(sys.stdin)))')
 AGENTBUS_TEST_FAIL=refusal-log agentbus --json --as rw claim r/a.py 2>"$err" && fail "claim succeeded with the log write failing"
@@ -187,7 +186,7 @@ agentbus --as fa claim f/keep.py >/dev/null
 agentbus --as fb claim f/src/ f/lib/ --from fa --from fc --purpose "finish the port" >"$TMP/out" 2>"$err" || { cat "$err"; fail "--from both holders refused"; }
 grep -qF "taken from fa (f/src/), fc (f/lib/x.py); each is told" "$TMP/out" || { cat "$TMP/out"; fail "the success text does not say what was taken"; }
 [ "$(holder)" = "f/keep.py=fa f/lib/=fb f/src/=fb" ] || fail "--from did not move the claims, or took one outside what was asked: $(holder)"
-agentbus --json log show --limit 500 | "$PY" -c '
+log_json 500 | "$PY" -c '
 import json, sys
 rows = [r for r in json.load(sys.stdin)["items"] if r["action"] == "claim_taken"]
 by = {json.loads(r["detail"])["from"]: json.loads(r["detail"]) for r in rows}
@@ -195,7 +194,6 @@ assert [r["agent"] for r in rows] == ["fb", "fb"], rows
 assert by["fa"] == {"from": "fa", "resources": ["f/src/"], "count": 1, "claimed": ["f/src/", "f/lib/"], "purpose": "finish the port"}, by
 assert by["fc"]["resources"] == ["f/lib/x.py"] and by["fc"]["count"] == 1, by
 ' || fail "claim_taken rows"
-agentbus log show --limit 500 | grep -F claim_taken | grep -qF "f/src/ taken from fa" || fail "log show does not read a claim_taken row as a sentence"
 for h in fa fc; do
   agentbus --json --as $h inbox | "$PY" -c '
 import json, sys
@@ -209,7 +207,7 @@ done
 # a repeat of your own --from renews and takes nothing again
 agentbus --json --as fb claim f/src/ f/lib/ --from fa --from fc >"$TMP/out" 2>"$err" || { cat "$err"; fail "a repeat of --from refused"; }
 "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1])); assert all(c["renewed"] and c["taken_from"] == [] for c in d["claims"]), d' "$TMP/out" || fail "a repeat of --from did not renew"
-[ "$(agentbus --json log show --limit 500 | "$PY" -c 'import json,sys; print(sum(r["action"]=="claim_taken" for r in json.load(sys.stdin)["items"]))')" = 2 ] || fail "a repeat logged another claim_taken"
+[ "$(log_json 500 | "$PY" -c 'import json,sys; print(sum(r["action"]=="claim_taken" for r in json.load(sys.stdin)["items"]))')" = 2 ] || fail "a repeat logged another claim_taken"
 # paths inside the resource move too, and the JSON says what each resource took
 agentbus --as fa claim f/in/a.py f/in/b.py >/dev/null
 agentbus --json --as fc claim f/in/ --from fa >"$TMP/out" 2>"$err" || { cat "$err"; fail "--from over paths inside refused"; }
@@ -218,7 +216,7 @@ agentbus --json --as fc claim f/in/ --from fa >"$TMP/out" 2>"$err" || { cat "$er
 # a request that names a claim twice (src and src/a.py) takes and counts it once
 agentbus --as fa claim f/o/a.py >/dev/null
 agentbus --as fb claim f/o f/o/a.py --from fa >/dev/null 2>"$err" || { cat "$err"; fail "--from over overlapping resources refused"; }
-agentbus --json log show --limit 500 | "$PY" -c '
+log_json 500 | "$PY" -c '
 import json, sys
 d = [json.loads(r["detail"]) for r in json.load(sys.stdin)["items"] if r["action"] == "claim_taken"][-1]
 assert d["resources"] == ["f/o/a.py"] and d["count"] == 1, d
@@ -262,7 +260,7 @@ agentbus --json --as ub claim $'u/q\xef\xbf\xbd/a.py' --from ua 2>"$err" && fail
 [ "$(raw)" = "ua=752F71FF" ] || fail "a refused --from changed an undecoded folder: $(raw)"
 agentbus --as ub claim $'u/q\xef\xbf\xbd' --from ua >/dev/null 2>"$err" || { cat "$err"; fail "--from of the undecoded folder itself refused"; }
 [ "$(raw)" = "ub=752F71EFBFBD" ] || fail "the undecoded folder did not move: $(raw)"
-agentbus --json log show --limit 100 | "$PY" -c '
+log_json 100 | "$PY" -c '
 import json, sys
 rows = json.load(sys.stdin)["items"]
 t = [json.loads(r["detail"]) for r in rows if r["action"] == "claim_taken"]

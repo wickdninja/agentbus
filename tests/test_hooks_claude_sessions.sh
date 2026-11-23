@@ -21,7 +21,7 @@ newbus p15; export CLAUDE_ENV_FILE="$T/env15"
 ab --as lane-a join --tool dispatcher >/dev/null; ab --as lane-a claim keep.txt >/dev/null
 AGENTBUS_AGENT=lane-a SS
 grep -qF "as lane-a. " <<<"$(text_of)" || fail "AGENTBUS_AGENT name not used: rc $RC out $OUT err $ERR"
-[ "$(ab --json who | "$PY" -c 'import json,sys; print([r["tool"] for r in json.load(sys.stdin)["items"] if r["name"]=="lane-a"][0])')" = dispatcher ] || fail "SessionStart took over a live name"
+[ "$(ab --json status --limit -1 | "$PY" -c 'import json,sys; print([r["tool"] for r in json.load(sys.stdin)["agents"] if r["name"]=="lane-a"][0])')" = dispatcher ] || fail "SessionStart took over a live name"
 [ ! -e "$T/env15" ] || fail "the hook wrote CLAUDE_ENV_FILE although AGENTBUS_AGENT was set"
 AGENTBUS_AGENT=lane-a END
 [[ " $(roster) " == *" lane-a "* ]] || fail "SessionEnd left a name set by AGENTBUS_AGENT"
@@ -92,7 +92,7 @@ export AGENTBUS_DB="$T/elsewhere/.agentbus/bus.db"; N=$(dname "$SID1"); RT=$(cd 
 SS
 unset AGENTBUS_DB
 [ -n "$OUT" ] && grep -qF "Read with: agentbus --as $N brief ; agentbus --as $N inbox." <<<"$OUT" && ! grep -qF elsewhere <<<"$OUT" || fail "AGENTBUS_DB: the text names the dispatcher's copy or says nothing: rc $RC out $OUT err $ERR"
-[ "$(AGENTBUS_DB="$T/elsewhere/.agentbus/bus.db" ab --json who | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["items"][0]["name"])')" = "$N" ] || fail "AGENTBUS_DB: the name did not join that bus"
+[ "$(AGENTBUS_DB="$T/elsewhere/.agentbus/bus.db" ab --json status --limit -1 | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["agents"][0]["name"])')" = "$N" ] || fail "AGENTBUS_DB: the name did not join that bus"
 ok "an explicit database wins over discovery"
 
 echo

@@ -88,12 +88,14 @@ ok "leave left zero claims"
 # Test: a name active in the last 30 minutes cannot be joined by another session
 echo
 echo "TEST: join refuses a recently active name without --takeover"
+# The roster row itself: who lists only agents that acted (#89 E2), and agent9 has only joined.
+roster_role() { python3 -c 'import sqlite3,sys; print(sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True).execute("SELECT role FROM agents WHERE name=?", (sys.argv[2],)).fetchone()[0])' "$AGENTBUS_DB" "$1"; }
 agentbus --as agent9 join --tool test --role "first session"
 expect_fail "may be another live session" agentbus --as agent9 join --tool test --role "second session"
-role=$(agentbus --json who | python3 -c 'import json,sys; print([r["role"] for r in json.load(sys.stdin)["items"] if r["name"]=="agent9"][0])')
+role=$(roster_role agent9)
 [ "$role" = "first session" ] || { echo "FAIL: roster entry was overwritten ($role)"; exit 1; }
 agentbus --as agent9 join --tool test --role "same session" --takeover
-role=$(agentbus --json who | python3 -c 'import json,sys; print([r["role"] for r in json.load(sys.stdin)["items"] if r["name"]=="agent9"][0])')
+role=$(roster_role agent9)
 [ "$role" = "same session" ] || { echo "FAIL: --takeover did not rejoin"; exit 1; }
 echo "PASS: live-name guard"
 
@@ -262,8 +264,8 @@ c.execute("INSERT INTO claims VALUES('dd.py','dx','',?,'2999-01-01T00:00:00Z')",
 c.execute("INSERT INTO claims VALUES('./dd.py','dy','',?,'2998-01-01T00:00:00Z')", (t,))
 c.commit()
 PY
-outof agentbus claims >/dev/null   # an ordinary open normalises them (log show only reads)
-logs=$(outof agentbus --json log show --limit 200)
+outof agentbus claims >/dev/null   # an ordinary open normalises them (log_json only reads the table)
+logs=$(outof log_json 200)
 for pair in "cc.py held by cy" "./dd.py held by dy"; do
   printf '%s' "$logs" | python3 -c 'import json,sys; w=sys.argv[1]; sys.exit(0 if any(w in (r["detail"] or "") and "dropped" in r["detail"] for r in json.load(sys.stdin)["items"]) else 1)' "$pair" \
     || fail "no log entry for the dropped claim: $pair"
@@ -368,7 +370,7 @@ grep -q "^claimed 3 resources for 2h" <<<"$out" || fail "claim of 3 said: $out"
 for f in m/a.py m/b.py m/c.py; do grep -qF "$f" <<<"$out" || fail "claim of 3 did not list $f: $out"; done
 held=$(agentbus --json claims | "$PY" -c 'import json,sys; print(" ".join(sorted(r["resource"] for r in json.load(sys.stdin)["items"] if r["agent"]=="ma" and r["resource"].startswith("m/"))))')
 [ "$held" = "m/a.py m/b.py m/c.py" ] || fail "three claimed, held: $held"
-rows=$(agentbus --json log show --limit 200 | "$PY" -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin)["items"] if r["agent"]=="ma" and r["action"]=="claim" and r["detail"].startswith("m/")))')
+rows=$(log_json 200 | "$PY" -c 'import json,sys; print(sum(1 for r in json.load(sys.stdin)["items"] if r["agent"]=="ma" and r["action"]=="claim" and r["detail"].startswith("m/")))')
 [ "$rows" = 3 ] || fail "expected one log row per resource, got $rows"
 o=$(json_ok agentbus --json --as ma claim m/a.py m/d.py)
 "$PY" - "$o" <<'PY' || fail "JSON shape for two resources"

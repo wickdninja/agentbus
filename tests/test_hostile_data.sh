@@ -6,7 +6,8 @@ set -euo pipefail
 T=$(mktemp -d); export HOME="$T/home"; mkdir -p "$HOME"; trap 'rm -rf "$T"' EXIT
 
 # sweep DB: every read command, human and --json, must succeed with no traceback; --json strict.
-READS=(who read status "ctx get" "ctx get k" "ctx history k" "log show" claims "claims --stale" "--as seed inbox --peek")
+# brief and who read the log table (which names acted, #89 E2), so a hostile log row reaches them.
+READS=(who read status brief "ctx get" "ctx get k" "ctx history k" claims "claims --stale" "--as seed inbox --peek")
 sweep() {
   local db=$1 cmd o
   for cmd in "${READS[@]}"; do
@@ -20,7 +21,7 @@ writes() {
   local db=$1 j
   for j in "" --json; do
     for cmd in "--as w$j join --tool t" "--as w$j post hi" "--as w$j post re --reply-to 1" "--as w$j ctx set k v2" \
-               "--as w$j log add note d" "--as w$j claim area:w" "--as w$j release area:w" \
+               "--as w$j claim area:w" "--as w$j release area:w" \
                "--as w$j inbox" "--as w$j release --all" "--as w$j leave"; do
       AGENTBUS_DB="$db" agentbus $j $cmd >"$T/out" 2>"$T/err" || fail "$j $cmd failed: $(cat "$T/err")"
       grep -q Traceback "$T/err" && fail "traceback from: $j $cmd"
@@ -115,6 +116,8 @@ c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", (ninf, inf,
 c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", (ninf, inf, ninf, inf, ninf))
 # expires_at is a live time: claims lists live claims only (issue 86 T2), and a row with expires_at 0 has expired.
 c.execute("INSERT INTO claims VALUES(?,?,?,?,?)", (0, 0, 0, 0, "2999-01-01T00:00:00Z"))
+# its claim row, as a real claim writes one: who lists only agents that acted (#89 E2)
+c.execute("INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", (0, 0, "claim", 0))
 c.commit()
 PY
 # Loosened, the bus is refused (its shape is not agentbus's); with agentbus's definitions back, every
@@ -128,8 +131,9 @@ outof env AGENTBUS_DB="$D1" "${AB[@]}" who > "$T/zero.who"
 python3 -c 'import sys; assert any(r.split()==["0","0","0","0","0","seen","?","ago"] for r in open(sys.argv[1]))' "$T/zero.who" || fail "who hid numeric zero fields"
 outof env AGENTBUS_DB="$D1" "${AB[@]}" claims > "$T/zero.claims"
 python3 -c 'import sys; assert any(r.split()[:2]==["0","0"] and r.split()[-1]=="0" and r.split()[2]=="for" for r in open(sys.argv[1]))' "$T/zero.claims" || fail "claims hid numeric zero fields: $(cat "$T/zero.claims")"
-o=$(json_ok env AGENTBUS_DB="$D1" "${AB[@]}" --json who)
-printf '%s' "$o" | python3 -c 'import json,sys; r=[a for a in json.load(sys.stdin)["items"] if a["name"]=="infy2"][0]; assert r["tool"]=="inf" and r["model"]=="-inf", r' || fail "inf not shown as a string"
+# status lists the whole roster (who lists only the names that acted, #89 E2; infy2 is a planted row that never did)
+o=$(json_ok env AGENTBUS_DB="$D1" "${AB[@]}" --json status --limit -1)
+printf '%s' "$o" | python3 -c 'import json,sys; r=[a for a in json.load(sys.stdin)["agents"] if a["name"]=="infy2"][0]; assert r["tool"]=="inf" and r["model"]=="-inf", r' || fail "inf not shown as a string"
 o=$(json_ok env AGENTBUS_DB="$D1" "${AB[@]}" --json read)
 printf '%s' "$o" | python3 -c 'import json,sys; assert sorted(str(m["reply_to"]) for m in json.load(sys.stdin)["items"] if m["reply_to"] is not None)==["-inf","inf"]' || fail "reply_to inf not shown as a string"
 ok "non-finite floats shown as strings under --json"
@@ -273,7 +277,7 @@ echo "TEST 6: integer options outside SQLite's 64-bit range are refused cleanly"
 D6="$T/ints.db"; seed "$D6"
 big=9223372036854775808; nbig=-9223372036854775809; huge=$(python3 -c 'print("9" * 5000)')
 for v in "$big" "$nbig" "$huge"; do
-  for cmd in "--as seed post x --reply-to" "read --since" "read --limit" "log show --limit" "--as seed claim area:i --ttl-min"; do
+  for cmd in "--as seed post x --reply-to" "read --since" "read --limit" "--as seed claim area:i --ttl-min"; do
     for j in "" --json; do
       expect_fail "must be between -2**63 and 2**63-1" env AGENTBUS_DB="$D6" "${AB[@]}" $j $cmd "$v"
     done

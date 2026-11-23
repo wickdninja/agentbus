@@ -118,7 +118,7 @@ if not all(("word%03d" % i) in out.replace("\n  ", " ") for i in range(40)):
 print("PASS: on a terminal, wrapped at its width, rows indented, no word cut")
 
 # ---------------------------------------------------------------- 2. compact JSON
-for args in (("status",), ("who",), ("read",), ("claims",), ("ctx", "get"), ("log", "show"), ("schema", "--index"), ("goal",)):
+for args in (("status",), ("who",), ("read",), ("claims",), ("ctx", "get"), ("schema", "--index"), ("goal",)):
     raw = ok(db, "--json", *args)
     if raw.count("\n") != 1 or raw != json.dumps(json.loads(raw), separators=(",", ":")) + "\n":
         fail("--json %s is not compact when piped: %r" % (" ".join(args), raw[:120]))
@@ -190,7 +190,6 @@ ok(db, "--as", "a", "join")
 ok(db, "--as", "b", "join")
 plant(db, "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?)", [("old", "v", "a", "2026-01-05T15:04:00Z")])
 plant(db, "INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", [("old", "v", "a", "2026-01-05T15:04:00Z")])
-plant(db, "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", [("2026-01-05T15:04:00Z", "a", "note", "planted")])
 plant(db, "INSERT INTO messages(ts,sender,recipient,kind,topic,body,reply_to) VALUES(?,?,?,?,?,?,?)",
       [("2026-01-05T15:04:00Z", "b", "a", "note", None, "old news", None)])
 ok(db, "--as", "a", "goal", "ship it")
@@ -198,7 +197,6 @@ plant(db, "UPDATE context SET updated_at=? WHERE key='goal'", [("2026-01-05T15:0
 checks = {
     "ctx get": (("ctx", "get"), r"old = v   \(a, Jan 5 10:04\)"),
     "ctx history": (("ctx", "history", "old"), r"^  Jan 5 10:04 a: v$"),
-    "log show": (("log", "show"), r"^  Jan 5 10:04 +a +note +planted$"),
     "read": (("read",), r"^#1 b -> a \[note\] · Jan 5 10:04$"),
     "goal": (("goal",), r"set by a at Jan 5 10:04"),
 }
@@ -206,7 +204,7 @@ for name, (args, pattern) in checks.items():
     out = ok(db, *args)
     if not re.search(pattern, out, re.M):
         fail("%s does not use `Mon D HH:MM` for another day (wanted %s): %r" % (name, pattern, out))
-if re.search(r"\d{4}-\d\d-\d\dT", ok(db, "ctx", "get") + ok(db, "log", "show", "--limit", "1") + ok(db, "goal")):
+if re.search(r"\d{4}-\d\d-\d\dT", ok(db, "ctx", "get") + ok(db, "goal")):
     fail("an ISO time is left in human output")
 claimed = ok(db, "--as", "a", "claim", "src/a.py", "--purpose", "edit")
 # AGENTBUS_TEST_NOW (a test-only hook) starts the tool's clock at a given UTC time, so this runs at any hour: "now" is
@@ -262,15 +260,16 @@ db = new_bus("limits")
 ok(db, "--as", "a", "join")
 plant(db, "INSERT INTO agents(name,tool,model,cwd,branch,role,joined_at,last_seen) VALUES(?,?,?,?,?,?,?,?)",
       [("lane%03d" % i, None, None, "/", None, None, "2026-01-05T15:04:00Z", "2026-01-05T15:04:00Z") for i in range(70)])
+# a log row each: who lists only agents that acted (#89 E2)
+plant(db, "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", [("2026-01-05T15:04:00Z", "lane%03d" % i, "note", "") for i in range(70)])
 plant(db, "INSERT INTO messages(ts,sender,recipient,kind,topic,body,reply_to) VALUES(?,?,?,?,?,?,?)",
       [("2026-01-05T15:%02d:00Z" % (i % 60), "lane001", "a" if i % 2 else "*", "note", "t" if i % 3 == 0 else None, "m%03d" % i, None)
        for i in range(1, 121)])
 plant(db, "INSERT INTO context(key,value,updated_by,updated_at) VALUES(?,?,?,?)",
       [("k%03d" % i, "v", "a", "2026-01-05T15:04:00Z") for i in range(60)])
-plant(db, "INSERT INTO log(ts,agent,action,detail) VALUES(?,?,?,?)", [("2026-01-05T15:04:00Z", "a", "note", "l%d" % i) for i in range(60)])
 plant(db, "INSERT INTO claims(resource,agent,purpose,claimed_at,expires_at) VALUES(?,?,?,?,?)",
       [("dir/f%02d" % i, "lane%03d" % i, None, "2026-01-05T15:04:00Z", "2099-01-05T15:04:00Z") for i in range(55)])
-for args, want, more in ((("who",), 50, True), (("claims",), 50, True), (("ctx", "get"), 50, True), (("log", "show"), 50, True),
+for args, want, more in ((("who",), 50, True), (("claims",), 50, True), (("ctx", "get"), 50, True),
                          (("read",), 50, True), (("--as", "a", "inbox", "--peek"), 20, True)):
     got = js(db, *args)
     if len(got["items"]) != want or got["has_more"] is not more:
@@ -322,11 +321,6 @@ for cmd, wantline in ((("who",), "agentbus who --limit "), (("claims",), "agentb
     line, more = follow(db, text)
     if not line.startswith("next: " + wantline) or len([l for l in more.splitlines() if l.startswith("  ")]) <= 50:
         fail("%s hint: %r" % (cmd, line))
-text = ok(db, "log", "show", "--limit", "5")
-line, nxt = follow(db, text)
-rows_a, rows_b = [l for l in text.splitlines() if " note " in l], [l for l in nxt.splitlines() if " note " in l]
-if "agentbus log show --before v1." not in line or len(rows_a) != 5 or len(rows_b) != 5 or set(rows_a) & set(rows_b):
-    fail("log show hint: %r" % line)
 plant(db, "INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", [("h", "v%d" % i, "a", "2026-01-05T15:04:00Z") for i in range(10)])
 first = ok(db, "ctx", "history", "h", "--limit", "3")
 line, nxt = follow(db, first)
@@ -366,7 +360,7 @@ if js(db, "read")["items"]:
 error, p = refused(db, "--as", "a", "post", big)
 if error.get("field") != "body":
     fail("a body over 64 KB on the command line was not refused: %r" % error)
-for args, field in ((("ctx", "set", "k", "-"), "value"), (("log", "add", "x", "-"), "detail"), (("goal", "-"), "text")):
+for args, field in ((("ctx", "set", "k", "-"), "value"), (("goal", "-"), "text")):
     error, p = refused(db, "--as", "a", *args, stdin=big)
     if error["code"] != "bad_input" or error.get("field") != field:
         fail("%s over 64 KB: %r" % (args[0], error))
