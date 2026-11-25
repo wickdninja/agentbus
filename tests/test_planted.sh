@@ -75,29 +75,42 @@ measured() {
 # finished: the checks that need ARGS to have finished run only when it did.
 finished() { [ "$STOPPED" = 0 ]; }
 
-# chains DB break|mend: break (or put back) the overflow chain of every planted claim name, in the table and in its
-# index, so any read of a whole planted name fails ("database disk image is malformed") while a read of its header
-# (typeof, octet_length) works. Budgets alone cannot prove "never reads a planted name": SQLite reads a cached name at
-# 2 to 4 GB/s (400 MB in 0.1 to 0.2 s, measured), so a name read once per open would need 30 to 60 GB planted to
-# outlast the 6 s query budget, 8 s hold or 15 s wait, more than a CI runner's disk. With the chains broken, one read
-# of one byte past the first page fails the command, whatever the size.
+# chains DB break|mend [TABLE.COLUMN ...]: break (or put back) the overflow chain of every planted value of each
+# TABLE.COLUMN (default claims.resource, the planted claim names), in the table and in every index that holds the column,
+# so any read of a whole planted value, or of a column stored after it, fails ("database disk image is malformed") while
+# a read of its header (typeof, octet_length) works. Budgets alone cannot prove "never reads a planted name": SQLite
+# reads a cached name at 2 to 4 GB/s (400 MB in 0.1 to 0.2 s, measured), so a name read once per open would need 30 to
+# 60 GB planted to outlast the 6 s query budget, 8 s hold or 15 s wait, more than a CI runner's disk. With the chains
+# broken, one read of one byte past the first page fails the command, whatever the size.
 chains() {
-  python3 - "$1" "$1.chains" "$2" <<'PY'
+  local db=$1 what=$2; shift 2
+  python3 - "$db" "$db.chains" "$what" "${@:-claims.resource}" <<'PY'
 import json, mmap, os, sqlite3, struct, sys
-db, saved, what = sys.argv[1:]
+db, saved, what, specs = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 # The overflow pages are found by walking the b-trees in the file itself (the file format, sqlite.org/fileformat.html),
 # not through dbstat, which some SQLite builds leave out (setup-python's 3.15 on macOS).
 c = sqlite3.connect(db)
-roots = dict(c.execute("SELECT name, rootpage FROM sqlite_master WHERE name IN ('claims', 'sqlite_autoindex_claims_1')"))
-planted, known = None, None
-if what == "break":  # read while the chains are whole
-    planted = c.execute("SELECT COUNT(*) FROM claims WHERE length(resource) > 1048576").fetchone()[0]
+trees = []  # (b-tree name, its root page, how many planted values it holds), for every TABLE.COLUMN
+planted, known = {}, None
+for spec in specs:
+    table, column = spec.split(".")
+    names = [table] + [i[1] for i in c.execute("SELECT * FROM pragma_index_list(?)", (table,))
+                       if column in [x[2] for x in c.execute("SELECT * FROM pragma_index_info(?)", (i[1],))]]
+    if what == "break":  # read while the chains are whole
+        planted[spec] = c.execute(f"SELECT COUNT(*) FROM {table} WHERE length({column}) > 1048576").fetchone()[0]
+        assert planted[spec] > 0, "%s: nothing planted" % spec
+    for name in names:
+        root = c.execute("SELECT rootpage FROM sqlite_master WHERE name=?", (name,)).fetchone()
+        assert root, "%s: no b-tree named %s" % (spec, name)
+        trees.append((name, root[0], planted.get(spec)))
+if what == "break":
+    if specs == ["claims.resource"]:
+        assert [t[0] for t in trees] == ["claims", "sqlite_autoindex_claims_1"], trees
     try:  # where the build has dbstat, a second opinion on which pages are overflow pages
-        known = {r[0] for r in c.execute("SELECT pageno FROM dbstat WHERE name IN ('claims', 'sqlite_autoindex_claims_1') "
-                                         "AND pagetype='overflow'")}
+        known = {r[0] for r in c.execute("SELECT pageno FROM dbstat WHERE name IN (%s) AND pagetype='overflow'"
+                                         % ",".join("?" * len(trees)), [t[0] for t in trees])}
     except sqlite3.OperationalError:
         pass
-    assert set(roots) == {"claims", "sqlite_autoindex_claims_1"} and planted > 0, (roots, planted)
 c.close()  # bus.db-wal is empty (plant checkpointed it); every byte below is in bus.db itself
 fd = open(db, "rb")
 data = mmap.mmap(fd.fileno(), 0, access=mmap.ACCESS_READ)  # shared: sees the writes below
@@ -156,10 +169,10 @@ def heads(root):
 with open(db, "r+b") as f:
     if what == "break":
         old = {}
-        for tree in ("claims", "sqlite_autoindex_claims_1"):
-            firsts = heads(roots[tree])
-            # Self-check: one chain per planted name in each b-tree, or the walk read the file wrong.
-            assert len(firsts) == planted, "%s: %d overflow chains found for %d planted names" % (tree, len(firsts), planted)
+        for tree, root, n in trees:
+            firsts = heads(root)
+            # Self-check: one chain per planted value in each b-tree, or the walk read the file wrong.
+            assert len(firsts) == n, "%s: %d overflow chains found for %d planted values" % (tree, len(firsts), n)
             for p in firsts:
                 while p:
                     assert p not in old and 0 < p <= len(data) // size, "overflow page %d: a bad chain" % p
@@ -169,7 +182,7 @@ with open(db, "r+b") as f:
                     p = struct.unpack(">I", nxt)[0]
         assert known is None or known == set(old), "the walk and dbstat disagree on the overflow pages"
         json.dump(old, open(saved, "w"))
-        print("broke %d overflow pages of %d planted names" % (len(old), planted), file=sys.stderr)
+        print("broke %d overflow pages of %d planted values" % (len(old), sum(planted.values())), file=sys.stderr)
     else:
         for p, b in json.load(open(saved)).items():
             f.seek((int(p) - 1) * size); f.write(bytes.fromhex(b))
@@ -308,4 +321,61 @@ tr -d '\n' < "$T/e5" | sed 's/  */ /g' | grep -q "held the bus for 8 s, the most
 under "$took" 12 || fail "the stalled command took ${took}s"
 [ ! -s "$T/o5" ] || fail "the stopped command printed output"
 ok "a command stalled with the bus held ended after ${took}s; another agent's post landed"
+
+rm -f "$D5" "$D5"-*
+echo "TEST 6: 20 planted facts of 20 MB each: who, brief and the fact listings skip them and list every honest setter"
+# Both fact tables store updated_by and updated_at after value, so a query that reads either column of a planted row reads
+# the whole planted value first (with its chain broken: "database disk image is malformed"). who (P-ID-11 lists a name
+# that set a fact, from context_history) and brief (changed facts, sorted on updated_at) did, and failed. ctx set and goal
+# refuse a value over 64 KB, so only planted rows are over it: every listing skips those by the value's header.
+D6="$T/b6.db"; AGENTBUS_DB="$D6" agentbus --as honest join --tool t >/dev/null
+for n in a b; do  # two names that did nothing but set a fact: only P-ID-11's fact arm lists them
+  AGENTBUS_DB="$D6" agentbus --as "setter-$n" join --tool t >/dev/null
+  AGENTBUS_DB="$D6" agentbus --as "setter-$n" ctx set "fact-$n" "honest $n" >/dev/null
+done
+# As ctx set writes a fact (the row and its history row, newer than the honest ones), plus one planted history row
+# under an honest key.
+plant "$D6" 'big = "v" * (20 << 20)
+for i in range(20):
+    for t in ("context", "context_history"):
+        c.execute("INSERT INTO %s(key,value,updated_by,updated_at) VALUES(?,?,?,?)" % t, ("big%02d" % i, big, "lane", "2099-01-01T00:00:%02dZ" % i))
+    step()
+c.execute("INSERT INTO context_history(key,value,updated_by,updated_at) VALUES(?,?,?,?)", ("fact-a", big, "lane", "2099-01-02T00:00:00Z"))'
+chains "$D6" break context.value context_history.value
+for t in context context_history; do
+  for col in value updated_by; do
+    python3 -c 'import sqlite3,sys; sqlite3.connect(sys.argv[1]).execute("SELECT max(length(%s)) FROM %s" % (sys.argv[3], sys.argv[2])).fetchone()' \
+      "$D6" "$t" "$col" 2>/dev/null \
+      && fail "$t.$col of a planted row can still be read with its chain broken: the checks below would prove nothing"
+  done
+done
+# jcheck FILE PYTHON: run PYTHON with j the JSON in FILE and want the two honest keys.
+jcheck() { python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); want=["fact-a", "fact-b"]; exec(sys.argv[2])' "$1" "$2"; }
+for cmd in "who" "brief" "--as honest brief" "ctx get" "status" "watch" "ctx history fact-a"; do
+  # shellcheck disable=SC2086
+  measured "$D6" 5 --json $cmd
+  finished || fail "'$cmd' beside 820 MB of planted facts was stopped $STOPPED; it must finish"
+  case $cmd in
+    who) jcheck "$T/mo" 'n = [r["name"] for r in j["items"]]; assert {"setter-a", "setter-b"} <= set(n), n' ;;
+    *brief) jcheck "$T/mo" 'n = [r["name"] for r in j["agents"]["items"]]; assert {"setter-a", "setter-b"} <= set(n), n
+k = sorted(r["key"] for r in j["facts"]["items"]); assert k == want and j["omitted"]["facts"] == 0, (k, j["omitted"])' ;;
+    "ctx get") jcheck "$T/mo" 'k = sorted(r["key"] for r in j["items"]); assert k == want and not j["has_more"], k' ;;
+    status|watch) jcheck "$T/mo" 'k = sorted(r["key"] for r in j["context"]); assert k == want and j["omitted"]["context"] == 0, (k, j["omitted"])' ;;
+    "ctx history"*) jcheck "$T/mo" 'r = [(x["updated_by"], x["value"]) for x in j["items"]]; assert r == [("setter-a", "honest a")] and not j["has_more"], r' ;;
+  esac 2>"$T/je" || fail "'$cmd' beside planted facts: $(tail -1 "$T/je")"
+done
+# The live view's detail of a fact lists and counts its history (no command prints it on its own).
+"$PY" - "$D6" "${AGENTBUS_BIN:-$BIN}" <<'PY' 2>"$T/je" || fail "watch's detail of a fact beside planted facts: $(tail -1 "$T/je")"
+import runpy, sqlite3, sys
+g = runpy.run_path(sys.argv[2], run_name="agentbus_planted")
+con = sqlite3.connect(sys.argv[1])
+con.row_factory = sqlite3.Row
+d = g["watch_detail_rows"](con, "context", "fact-a", 1 << 30)
+assert [(h["updated_by"], h["value"]) for h in d["history"]] == [("setter-a", "honest a")] and d["n_history"] == 1, d
+PY
+chains "$D6" mend context.value context_history.value
+[ "$(python3 -c 'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(sum(c.execute("SELECT COUNT(*) FROM %s WHERE length(value) > 1024" % t).fetchone()[0] for t in ("context", "context_history")))' "$D6")" = 41 ] \
+  || fail "the planted facts were changed"
+rm -f "$D6" "$D6"-* "$D6.chains"
+ok "who, brief (with and without --as), ctx get, status, watch and ctx history finished beside 820 MB of planted facts, listing both honest setters"
 echo "All planted-row tests passed"

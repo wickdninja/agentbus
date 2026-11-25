@@ -2,7 +2,7 @@
   {
     "name": "ctx history returns an empty list",
     "file": "bin/agentbus",
-    "find": "rows, more = capped\\(con, \"SELECT \\* FROM context_history WHERE key=\\? AND id<\\? ORDER BY id DESC\", \\(a\\.key, before\\), a\\.limit\\)",
+    "find": "rows, more = capped\\(con, f\\\"SELECT \\* FROM context_history WHERE \\{HONEST_FACT\\} AND key=\\? AND id<\\? ORDER BY id DESC\\\",\\n +\\(a\\.key, before\\), a\\.limit\\)",
     "replace": "rows, more = [], 0",
     "count": 1,
     "run": "tests/test_workflow_handoff.sh",
@@ -484,6 +484,87 @@
     "count": 1,
     "run": "tests/test_planted.sh",
     "expect": "database disk image is malformed"
+  },
+  {
+    "name": "who reads the setter of every planted fact",
+    "file": "bin/agentbus",
+    "find": "UNION SELECT updated_by FROM context_history WHERE \\{HONEST_FACT\\}\\)\\\"\\)",
+    "replace": "UNION SELECT updated_by FROM context_history)\")",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "'--json who' failed: {\"error\": {\"code\": \"bus_unavailable\", \"message\": \"database error: database disk image is malformed"
+  },
+  {
+    "name": "brief reads the setter and time of every planted fact",
+    "file": "bin/agentbus",
+    "find": "where, params = f\\\"\\{HONEST_FACT\\} AND key<>\\?\\\", \\[GOAL_KEY\\]",
+    "replace": "where, params = \"key<>?\", [GOAL_KEY]",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "'--json brief' failed: {\"error\": {\"code\": \"bus_unavailable\", \"message\": \"database error: database disk image is malformed"
+  },
+  {
+    "name": "brief tests a fact's setter before its size",
+    "file": "bin/agentbus",
+    "find": "        where \\+= \\\" AND updated_by<>\\?\\\"\\n",
+    "replace": "        where = \"key<>? AND updated_by<>? AND \" + HONEST_FACT\\n",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "'--json --as honest brief' failed: {\"error\": {\"code\": \"bus_unavailable\", \"message\": \"database error: database disk image is malformed"
+  },
+  {
+    "name": "ctx get reads every planted fact",
+    "file": "bin/agentbus",
+    "find": "\\\"SELECT \\* FROM context WHERE \\{HONEST_FACT\\} AND key<>\\? ORDER BY key\\\"",
+    "replace": "\"SELECT * FROM context WHERE key<>? ORDER BY key\"",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "'--json ctx get' failed: {\"error\": {\"code\": \"bus_unavailable\", \"message\": \"database error: database disk image is malformed"
+  },
+  {
+    "name": "ctx history reads every planted history row of the key",
+    "file": "bin/agentbus",
+    "find": "\\\"SELECT \\* FROM context_history WHERE \\{HONEST_FACT\\} AND key=\\? AND id<\\? ORDER BY id DESC\\\"",
+    "replace": "\"SELECT * FROM context_history WHERE key=? AND id<? ORDER BY id DESC\"",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "'--json ctx history fact-a' failed: {\"error\": {\"code\": \"bus_unavailable\", \"message\": \"database error: database disk image is malformed"
+  },
+  {
+    "name": "watch reads the time of every planted fact",
+    "file": "bin/agentbus",
+    "find": "\\\"SELECT key, value, updated_by, updated_at FROM context WHERE \\{HONEST_FACT\\} AND key<>\\? \\\"",
+    "replace": "\"SELECT key, value, updated_by, updated_at FROM context WHERE key<>? \"",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "'--json watch' failed: {\"error\": {\"code\": \"bus_unavailable\", \"message\": \"database error: database disk image is malformed"
+  },
+  {
+    "name": "watch counts planted facts as left out",
+    "file": "bin/agentbus",
+    "find": "\\\"SELECT COUNT\\(\\*\\) FROM context WHERE \\{HONEST_FACT\\} AND key<>\\?\\\"",
+    "replace": "\"SELECT COUNT(*) FROM context WHERE key<>?\"",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "'watch' beside planted facts: AssertionError"
+  },
+  {
+    "name": "watch's fact detail reads every planted history row of the key",
+    "file": "bin/agentbus",
+    "find": "\\\"SELECT value, updated_by, updated_at FROM context_history WHERE \\{HONEST_FACT\\} AND key=\\? \\\"",
+    "replace": "\"SELECT value, updated_by, updated_at FROM context_history WHERE key=? \"",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "watch's detail of a fact beside planted facts: sqlite3.DatabaseError: database disk image is malformed"
+  },
+  {
+    "name": "watch's fact detail counts planted history rows",
+    "file": "bin/agentbus",
+    "find": "\\\"SELECT COUNT\\(\\*\\) FROM context_history WHERE \\{HONEST_FACT\\} AND key=\\?\\\"",
+    "replace": "\"SELECT COUNT(*) FROM context_history WHERE key=?\"",
+    "count": 1,
+    "run": "tests/test_planted.sh",
+    "expect": "watch's detail of a fact beside planted facts: AssertionError"
   },
   {
     "name": "doctor opens the bus for writing",
@@ -2810,8 +2891,8 @@
   {
     "name": "identity: status lists the goal as a fact",
     "file": "bin/agentbus",
-    "find": "WHERE key<>\\? ORDER BY key\\\", \\(GOAL_KEY,\\), limit\\)",
-    "replace": "ORDER BY key\", (), limit)",
+    "find": "WHERE \\{HONEST_FACT\\} AND key<>\\? ORDER BY key\\\", \\(GOAL_KEY,\\), limit\\)",
+    "replace": "WHERE {HONEST_FACT} ORDER BY key\", (), limit)",
     "count": 1,
     "run": "tests/test_identity.sh",
     "expect": "!= \"goal\""

@@ -4015,6 +4015,13 @@ RELEASED_SHOWN = 500
 # A body over MAX_BODY bytes is refused when it is posted.
 LIST_BODY_MAX = 2048
 MAX_BODY = 64 * 1024
+# A fact row an honest command could have written: ctx set and goal refuse a value over MAX_BODY bytes, so a longer one
+# was planted. Both fact tables store updated_by and updated_at after value, so a read of either column of a row reads
+# its whole value first (20 MB per planted 20 MB fact, every time). Every query that lists fact rows, or reads their
+# setters or times, tests this first, before any other condition on the row: BYTE_LENGTH reads the size from the
+# record header, and a condition on updated_by placed ahead of it reads the whole value (tests/test_planted.sh TEST 6).
+# A direct read of one key (ctx get KEY, the goal) still reads it whole.
+HONEST_FACT = f"IFNULL({BYTE_LENGTH}(value), 0) <= {MAX_BODY}"
 
 
 def capped(con, sql, params, limit):
@@ -4361,10 +4368,12 @@ def q_who(con, limit=LISTING_LIMIT):
 # goal), read (an inbox moved the cursor) or set a fact. who and brief list only these; the rest of the roster, mostly
 # names a hook joined for a session that never used the bus, is one counted line (#89 E2). A claim is found by its log
 # row (every claim writes one, P-LOG-1), never by the claims table: claims.agent is stored after the resource, so reading
-# it reads every whole resource, and who must not read a planted name (tests/test_planted.sh TEST 1).
+# it reads every whole resource, and who must not read a planted name (tests/test_planted.sh TEST 1). A fact setter is
+# found by its history row, past every planted one (HONEST_FACT, TEST 6).
 ACTIVE_NAMES = ("(SELECT sender FROM messages "
                 "UNION SELECT agent FROM log WHERE action NOT IN ('join', 'leave') "
-                "UNION SELECT agent FROM cursors WHERE last_read_id > 0 UNION SELECT updated_by FROM context_history)")
+                "UNION SELECT agent FROM cursors WHERE last_read_id > 0 "
+                f"UNION SELECT updated_by FROM context_history WHERE {HONEST_FACT})")
 
 
 def inactive_count(con):
@@ -4668,7 +4677,7 @@ def glimpse(text, n=60):
 
 def q_ctx(con, limit=LISTING_LIMIT):
     # The goal is a fact under a reserved key; goal and status show it on their own.
-    return capped(con, "SELECT * FROM context WHERE key<>? ORDER BY key", (GOAL_KEY,), limit)
+    return capped(con, f"SELECT * FROM context WHERE {HONEST_FACT} AND key<>? ORDER BY key", (GOAL_KEY,), limit)
 
 
 def fmt_ctx(r):
@@ -4714,7 +4723,8 @@ def cmd_ctx(con, a):
     elif a.action == "history":
         # The newest `limit` values, oldest first; --before continues back from a previous page.
         before = MAX_ID if a._before_id is None else a._before_id
-        rows, more = capped(con, "SELECT * FROM context_history WHERE key=? AND id<? ORDER BY id DESC", (a.key, before), a.limit)
+        rows, more = capped(con, f"SELECT * FROM context_history WHERE {HONEST_FACT} AND key=? AND id<? ORDER BY id DESC",
+                            (a.key, before), a.limit)
         rows = list(reversed(rows))
         nxt = make_cursor(a, rows[0]["id"] if rows else before) if more else None
         out(a, rows, lambda r: INDENT + col0(f"{human_time(r['updated_at'])} {r['updated_by']}: {r['value']}"), more, cursor=nxt,
@@ -6266,8 +6276,8 @@ def watch_snapshot(path, strict, limit, read_only=True, busy_wait=BUSY_WAIT_S, o
             "claims": q("SELECT resource, agent, purpose, expires_at FROM claims WHERE expires_at > ? "
                         "ORDER BY expires_at LIMIT ?", now(), limit),
             "goal": current_goal(con),
-            "context": q("SELECT key, value, updated_by, updated_at FROM context WHERE key<>? ORDER BY updated_at DESC LIMIT ?",
-                         GOAL_KEY, limit),
+            "context": q(f"SELECT key, value, updated_by, updated_at FROM context WHERE {HONEST_FACT} AND key<>? "
+                         "ORDER BY updated_at DESC LIMIT ?", GOAL_KEY, limit),
             "messages": list(reversed(q("SELECT id, ts, sender, recipient, kind, topic, body, reply_to FROM messages "
                                         "ORDER BY id DESC LIMIT ?", limit) if body_head is None else
                                       _watch_messages(con, q, limit, body_head, bodies))),
@@ -6276,7 +6286,7 @@ def watch_snapshot(path, strict, limit, read_only=True, busy_wait=BUSY_WAIT_S, o
         snap["unread"] = watch_unread(con, [a["name"] for a in snap["agents"]])
         snap["open"] = watch_open(con)
         snap["counts"]["claims"] = con.execute("SELECT COUNT(*) FROM claims WHERE expires_at > ?", (now(),)).fetchone()[0]
-        facts = con.execute("SELECT COUNT(*) FROM context WHERE key<>?", (GOAL_KEY,)).fetchone()[0]
+        facts = con.execute(f"SELECT COUNT(*) FROM context WHERE {HONEST_FACT} AND key<>?", (GOAL_KEY,)).fetchone()[0]
         snap["omitted"] = {"agents": snap["counts"]["agents"] - len(snap["agents"]), "context": facts - len(snap["context"]),
                            "claims": snap["counts"]["claims"] - len(snap["claims"]),
                            "messages": snap["counts"]["messages"] - len(snap["messages"])}
@@ -6384,9 +6394,9 @@ def watch_detail_rows(con, section, key, top):
         match, params = "instr(body, ?) > 0", (key,)
     else:
         out["record"] = one("SELECT key, value, updated_by, updated_at FROM context WHERE key=?", key)
-        out["history"] = q("SELECT value, updated_by, updated_at FROM context_history WHERE key=? ORDER BY id DESC LIMIT ?",
-                           key, THREAD_MAX)
-        out["n_history"] = con.execute("SELECT COUNT(*) FROM context_history WHERE key=?", (key,)).fetchone()[0]
+        out["history"] = q(f"SELECT value, updated_by, updated_at FROM context_history WHERE {HONEST_FACT} AND key=? "
+                           "ORDER BY id DESC LIMIT ?", key, THREAD_MAX)
+        out["n_history"] = con.execute(f"SELECT COUNT(*) FROM context_history WHERE {HONEST_FACT} AND key=?", (key,)).fetchone()[0]
         return out
     n, first = con.execute(f"SELECT COUNT(*), MIN(id) FROM messages WHERE {window} AND {match}", (lo, top) + params).fetchone()
     out.update(n=n, first=first, list=list(reversed(q(DETAIL_ROW + f" WHERE {window} AND {match} ORDER BY id DESC LIMIT ?",
@@ -14308,7 +14318,7 @@ def cmd_brief(con, a):
     if last_read and not new:
         r = con.execute("SELECT ts FROM messages WHERE id=?", (last_read,)).fetchone()
         since = r[0] if r else None
-    where, params = "key<>?", [GOAL_KEY]
+    where, params = f"{HONEST_FACT} AND key<>?", [GOAL_KEY]
     if me_name:
         where += " AND updated_by<>?"
         params.append(me_name)
