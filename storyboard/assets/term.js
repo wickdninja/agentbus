@@ -47,19 +47,36 @@
 
   var terms = [];
 
+  // Under this width the terminal keeps its real size and scrolls sideways inside its card.
+  var PHONE = window.matchMedia ? window.matchMedia("(max-width: 700px)") : { matches: false };
+
+  function cue(t) {
+    var b = t.box, more = b.scrollWidth - b.clientWidth - b.scrollLeft > 2;
+    t.wrap.classList.toggle("more", b.classList.contains("scrolls") && more);
+  }
+
   function fit(t) {
-    var outer = t.box, inner = t.inner;
+    var outer = t.box, inner = t.inner, fig = t.fig;
     inner.style.marginRight = "0px";
-    outer.parentNode.style.maxWidth = "";
+    fig.style.maxWidth = "";
     var natural = inner.scrollWidth, h = inner.scrollHeight;
     if (!natural) return;
-    // Fit the width, but never below 60%: past that a phone scrolls the terminal sideways instead.
+    if (PHONE.matches) {
+      // Real column count, real font size: the card scrolls, nothing is shrunk or clipped.
+      outer.classList.toggle("scrolls", natural > outer.clientWidth + 1);
+      inner.style.transform = "";
+      outer.style.height = Math.ceil(h) + "px";
+      cue(t);
+      return;
+    }
+    // Fit the width, but never below 60%.
     var s = Math.max(0.6, Math.min(1, outer.clientWidth / natural));
     outer.classList.toggle("scrolls", s * natural > outer.clientWidth + 1);
     inner.style.transform = "scale(" + s + ")";
     inner.style.marginRight = Math.floor(natural * s - natural) + "px";  // the layout box shrinks with the picture
     outer.style.height = Math.ceil(h * s) + "px";
-    outer.parentNode.style.maxWidth = Math.ceil(natural * s) + 2 + "px";
+    fig.style.maxWidth = Math.ceil(natural * s) + 2 + "px";
+    cue(t);
   }
 
   function make(fig) {
@@ -93,8 +110,12 @@
     var inner = document.createElement("div");
     inner.className = "term-inner";
     box.appendChild(inner);
+    var wrap = document.createElement("div");
+    wrap.className = "term-wrap";
+    wrap.appendChild(box);
     fig.appendChild(bar);
-    fig.appendChild(box);
+    fig.appendChild(wrap);
+    box.addEventListener("scroll", function () { cue(t); }, { passive: true });
     if (compare) {
       var sw = document.createElement("div");
       sw.className = "switch";
@@ -145,7 +166,8 @@
     }
     term.open(inner);
     box.style.background = THEMES[theme(fig)].background;
-    var t = { term: term, fig: fig, box: box, inner: inner, steps: steps, set: set, stamp: stamp, timers: [] };
+    wrap.style.setProperty("--term-bg", THEMES[theme(fig)].background);
+    var t = { term: term, fig: fig, wrap: wrap, box: box, inner: inner, steps: steps, set: set, stamp: stamp, timers: [] };
     terms.push(t);
     show(t, 0);
     setTimeout(function () { fit(t); }, 30);
@@ -170,7 +192,7 @@
   }
 
   function retheme() {
-    terms.forEach(function (t) { var th = THEMES[theme(t.fig)]; t.term.options.theme = th; t.box.style.background = th.background; });
+    terms.forEach(function (t) { var th = THEMES[theme(t.fig)]; t.term.options.theme = th; t.box.style.background = th.background; t.wrap.style.setProperty("--term-bg", th.background); });
   }
 
   function start() {

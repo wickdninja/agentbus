@@ -110,6 +110,14 @@ figure.term { margin: 0; min-width: 0; }
   box-shadow: var(--shadow); background: var(--surface);
 }
 .term-box.scrolls { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
+.term-wrap { position: relative; }
+.term-wrap::after {
+  content: ""; position: absolute; top: 1px; right: 1px; bottom: 1px; width: 44px; pointer-events: none;
+  border-radius: 0 11px 11px 0; opacity: 0; transition: opacity .15s;
+  background: linear-gradient(to right, transparent, var(--term-bg, var(--surface)) 85%);
+}
+.term-wrap.more::after { opacity: 1; }
+.term-box.scrolls { overscroll-behavior-x: contain; touch-action: pan-x pan-y; }
 .term-inner { transform-origin: 0 0; width: max-content; padding: 12px 14px; }
 .term-inner .xterm { cursor: default; }
 .term-inner .xterm-viewport { overflow: hidden !important; }
