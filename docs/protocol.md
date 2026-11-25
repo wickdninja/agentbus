@@ -52,7 +52,7 @@ Terms:
 | post | append one message | P-MSG-1 to P-MSG-9 |
 | inbox | deliver unread messages to a name, then acknowledge them | P-DLV-1 to P-DLV-6 |
 | read | list messages by id, no cursor effect | P-DLV-7 |
-| ctx set, ctx get, ctx history | set a fact, read facts, list a fact's history | P-FACT-1 to P-FACT-6, P-FACT-9 |
+| ctx set, ctx get, ctx history | set a fact, read facts, list a fact's history | P-FACT-1 to P-FACT-6, P-FACT-9, P-FACT-10 |
 | goal | set or show the fact `goal` | P-FACT-7, P-FACT-8 |
 | claim | take or renew claims, all or none; `--from` takes named holders' claims | P-CLAIM-1 to P-CLAIM-16, P-CLAIM-19 to P-CLAIM-21, P-CLAIM-23 |
 | release | let go of own claims, all or none | P-CLAIM-17, P-CLAIM-18, P-CLAIM-22 |
@@ -180,8 +180,8 @@ section 11; the CLI's exit codes for them live in the binding.
 ### who
 
 - **P-ID-11** who MUST list every roster entry that acted: sent a message, holds a claim or has a log row other
-  than join and leave, moved its cursor through inbox, or set a fact. It MUST count the other entries in one
-  figure. Nothing removes an entry except leave (gap: roster never forgets, section 14).
+  than join and leave, moved its cursor through inbox, or set a fact (P-FACT-10). It MUST count the other entries
+  in one figure. Nothing removes an entry except leave (gap: roster never forgets, section 14).
 
 ### post
 
@@ -231,7 +231,12 @@ section 11; the CLI's exit codes for them live in the binding.
 - **P-FACT-4** ctx set on the key `goal` MUST be refused with `bad_input`.
 - **P-FACT-5** ctx get of a missing key MUST refuse with `no_context_key`.
 - **P-FACT-6** ctx history MUST list a key's values in the order they were written.
-- **P-FACT-9** ctx get with no key MUST list every fact except `goal`; `ctx get goal` and `ctx history goal` read it.
+- **P-FACT-9** ctx get with no key MUST list every fact except `goal` and the rows P-FACT-10 skips; `ctx get goal`
+  and `ctx history goal` read it.
+- **P-FACT-10** A listing of facts or their setters (ctx get with no key, ctx history, who, brief, status, watch)
+  MUST skip a fact or history row whose value is over 64 KB, testing the size before reading any other column. No
+  ctx set or goal writes such a value (both refuse it), so the row was planted, and reading it would hold the bus
+  for as long as the value is large. A read of one named key (`ctx get KEY`, the goal) may still read it.
 
 ### goal
 
