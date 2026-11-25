@@ -98,10 +98,35 @@ rc=0; bash "$ROOT/scripts/verify_dist.sh" --quick "$T/dist3" >"$T/vd3.out" 2>&1 
 [ "$rc" = 1 ] && grep -q 'agentbus.py differs from bin/agentbus' "$T/vd3.out" || fail "a tampered wheel: exit $rc: $(tail -n 5 "$T/vd3.out")"
 ok "verify_dist.sh: members, install, negative control, SHA256SUMS; a changed wheel fails"
 
+# copy_tree SRC DST: copy what git lists for SRC (tracked and not ignored) into DST. A tracked file deleted from
+# the work tree is listed but not there, so only paths that exist are copied (-L: a dangling symlink still is).
+# On failure it prints tar's own message and returns 1.
+copy_tree() {
+  local src=$1 dst=$2 all="$T/copy.all" list="$T/copy.list" err="$T/copy.err" p
+  git -C "$src" ls-files -z --cached --others --exclude-standard >"$all" 2>"$err" || { cat "$err"; return 1; }
+  : >"$list"
+  while IFS= read -r -d '' p; do
+    if [ -e "$src/$p" ] || [ -L "$src/$p" ]; then printf '%s\0' "$p" >>"$list"; fi
+  done <"$all"
+  tar -C "$src" --null -T "$list" -cf - 2>"$err" | tar -xf - -C "$dst" 2>>"$err" || { cat "$err"; return 1; }
+}
+
+echo
+echo "TEST: the tree copy skips a tracked file deleted from the work tree"
+G="$T/gitfx"; mkdir -p "$G/src" "$G/out"
+(cd "$G/src" && git init -q && printf 'one\n' >kept.txt && printf 'two\n' >gone.txt && git add kept.txt gone.txt \
+  && git -c user.name=t -c user.email=t@t commit -qm fx && rm gone.txt)
+rc=0; msg=$(copy_tree "$G/src" "$G/out" 2>&1) || rc=$?
+[ "$rc" = 0 ] || fail "copying a tree with a deleted tracked file failed (exit $rc): $msg"
+manifest=$(cd "$G/out" && find . -mindepth 1 | LC_ALL=C sort)
+[ "$manifest" = "./kept.txt" ] || fail "the copy must hold exactly kept.txt, got: $manifest"
+[ "$(cat "$G/out/kept.txt")" = "one" ] || fail "kept.txt was not copied whole"
+ok "the copy holds exactly the file that is still there"
+
 echo
 echo "TEST: a release candidate version builds as itself (0.2.0rc1), never as 0.2.0"
 RC="$T/rctree"; mkdir -p "$RC"
-(cd "$ROOT" && git ls-files -z --cached --others --exclude-standard | tar --null -T - -cf - 2>/dev/null) | tar -xf - -C "$RC"
+copy_tree "$ROOT" "$RC" >"$T/rccopy.out" 2>&1 || fail "copying the tree for the rc build failed: $(cat "$T/rccopy.out")"
 sed -i.b 's/^__version__ = "[^"]*"/__version__ = "0.2.0rc1"/' "$RC/bin/agentbus"
 uv build --wheel --out-dir "$T/rcdist" "$RC" >"$T/rcbuild.out" 2>&1 || { cat "$T/rcbuild.out" >&2; fail "building the rc tree failed"; }
 [ -f "$T/rcdist/agentbus-0.2.0rc1-py3-none-any.whl" ] || fail "an rc version must build agentbus-0.2.0rc1: $(ls "$T/rcdist")"
