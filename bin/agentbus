@@ -42,7 +42,7 @@ from functools import lru_cache  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from urllib.parse import quote  # noqa: E402
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 # The protocol this build implements (docs/protocol.md), MAJOR.MINOR; `schema --json` publishes it beside "contract".
 PROTOCOL = "1.0"
 MIN_GIT = (2, 31)
@@ -8771,6 +8771,7 @@ SKILL_SHA256_HISTORY = (
     "1ecb0d4d63f6d6a70b1b60b70bcbd44d011172773304ecec7e8ecf21b5b0a203",
     "fdbd741c71244b3958292f81b9f5d2319f6de81aead6f2fbdc64cb8ac1bef952",
     "38f509d0fb107d0520c354677b82c6099fd07ea26de40a7281b86658b833c4e6",
+    "7c2878e6d3283a60351481b8a5640f82bcb32fe86b5a35c73ad84fdb7ea3d38f",
 )
 AGENTS_SHA256_HISTORY = (
     "815c2ff5f71c6b01dbbc4563c8d6b16bcf3355866880642ee6b28b109fad7e5d",

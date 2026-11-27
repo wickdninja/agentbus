@@ -4,3 +4,4 @@ v0.1.0: join leave who post inbox read ctx claim release claims log status goal 
 v0.2.0: join leave who post inbox read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hook hooks doctor brief demo
 v0.3.0: join leave who post inbox wait read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hook hooks doctor brief demo
 v0.4.0: join leave who post inbox wait read ctx claim release claims log status goal watch buses init upgrade schema help completion skill setup update hook hooks doctor brief demo
+v0.5.0: join leave who post inbox wait read ctx claim release claims status goal watch buses init upgrade schema help skill setup update hook hooks doctor brief

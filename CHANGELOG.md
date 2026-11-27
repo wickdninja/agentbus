@@ -1,20 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 - 2026-11-21
 
-Which of the [six versioned things](docs/explanation/versions.md) change: the protocol is new, at 1.0 (`"protocol": "1.0"` in `schema --json`); the tool changes (the claims listing) and the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill's last link points at the protocol; the hooks say less (below).
+Which of the [six versioned things](docs/explanation/versions.md) change: the tool is 0.5.0 (the claims listing changes, `who` and `brief` list only agents that acted, and `demo`, `completion` and the `log` command are gone); the copy in each bus folder is replaced by `agentbus upgrade` (or `update`); the schema is still 1, so there is no migration; the skill changes (a holder in another worktree only warns, `claim area:NAME` locks a simulator or device, and the last link points at the protocol); the hooks change (the Stop hook is removed, and the prompt note counts only messages sent to the agent's own name); plugin users update the plugin; the protocol is new in this release, at 1.0 (`"protocol": "1.0"` in `schema --json`), the first release to carry it.
 
 ### Added
 
-- [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.4.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` is unchanged.
+- [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.5.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` still prints only the tool's version.
 
 ### Changed (learning cycle 0, [#86](https://github.com/wickdninja/agentbus/issues/86))
 
 - Hooks (issue #86): the prompt note counts only messages sent to the agent's own name, and speaks only when one of them is new since it was last said. After a compact or a resume, SessionStart says one line (the name and that count) instead of the whole orientation. There is no Stop hook: `setup claude` writes four hooks and `setup codex` three, and rerunning setup removes an old Stop entry, which does nothing meanwhile. A main session (and Codex) is no longer told that a file it edits has no claim.
 - A Claude Code subagent is itself in the hooks: it is known by the `--as` name its own commands used, so it is not warned about its own claims (or its parent's), and it is never told to act under its parent's name. [Contract, section 12](docs/design/claude-hook-contract.md).
-- `brief` lists the rulings that still stand (decisions, and posts on topic `ruling`; a later one on the same subject or replying to it replaces it), and lists agents holding a live claim first, so a lane needs `brief` alone instead of `read --topic ruling --limit 50` and `claims`.
+- `brief` lists the rulings that still stand among the newest 500 (decisions, and posts on topic `ruling`; a later one on the same subject or replying to it replaces it), and lists agents holding a live claim first, so a lane needs `brief` alone instead of `read --topic ruling --limit 50` and `claims`. A ruling older than the newest 500 is only in `read --topic ruling`.
 - `claims` (and `status`) list live claims only; expired rows are never shown. `brief` still names expired claims of holders on the roster.
-- A text-mode error starts `agentbus: error:` or `agentbus: refused:`, and one that wraps ends with `agentbus: refused (CODE, exit N)`, so `| head` and `| tail` both show it. `--json` errors are unchanged.
+- A text-mode error starts `agentbus: error:` or `agentbus: refused:`, and one that wraps ends with `agentbus: error (CODE, exit N)` or `agentbus: refused (CODE, exit N)`, matching its first line, so `| head` and `| tail` both show it. `--json` errors are unchanged.
 - `post --kind` with a word that is not a kind posts a note with an `unknown_kind` warning naming the kinds; `send` is `post`; `--to all` and `--to everyone` broadcast. A name not on the roster still gets its message.
 - A path claim held by an agent in another git worktree warns (`held_in_other_checkout`) and names the holder instead of refusing; the same resource stays the holder's (`recorded: false`). In the same checkout, and for scheme names such as `area:ios-sim`, a claim is refused as before.
 - The PreToolUse hook's held-file warning follows the same worktree rule: for a path held by an agent that joined in another git checkout it says so and to post what you are touching, as `claim` does, instead of telling the agent to wait for the holder (a scheme name, and a holder in the same checkout, get the held warning as before). `join` refuses the names `all` and `everyone` (any case), since a post to them broadcasts.
@@ -23,7 +23,7 @@ Which of the [six versioned things](docs/explanation/versions.md) change: the pr
 ### Removed (learning cycle 1, [#89](https://github.com/wickdninja/agentbus/issues/89))
 
 - `agentbus demo` and `agentbus completion` are gone: no help line, no schema entry, and running either gets the ordinary unknown-command error. To see two agents hand off work on a temporary bus, run `examples/two-agent-handoff.sh` (README).
-- `log` is no longer a command. Any `agentbus log ...` refuses with one line: rulings are in `agentbus brief`, messages by topic in `agentbus read --topic T`. The log table still gets its rows (join, leave, claim, release, goal, `claim_refused`, `claim_taken`), and `scripts/wave_review.py` and the usage collector read it from the bus file. Protocol: P-LOG-2 (`log add`) is gone, and `log` leaves the operations table.
+- `log` is no longer a command. Any `agentbus log ...` exits 2 with an error that names the replacements: rulings are in `agentbus brief`, messages by topic in `agentbus read --topic T`. The log table still gets its rows (join, leave, claim, release, goal, `claim_refused`, `claim_taken`), and `scripts/wave_review.py` and the usage collector read it from the bus file. Protocol 1.0 ships without P-LOG-2 (`log add`) and without `log` in its operations table.
 
 ### Changed (learning cycle 1, [#89](https://github.com/wickdninja/agentbus/issues/89))
 

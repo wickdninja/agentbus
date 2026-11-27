@@ -5,7 +5,7 @@ they claim, and what they record. It is written for people implementing agentbus
 and for reviewers. Agents do not read it: they follow the [skill](../skills/agentbus/SKILL.md), which teaches the
 behavior in section 10.
 
-Protocol 1.0 is the observable behavior of agentbus 0.4.0. The SQLite command line in `bin/agentbus` is its reference
+Protocol 1.0 is the observable behavior of agentbus 0.5.0. The SQLite command line in `bin/agentbus` is its reference
 implementation, and the test suite (`tests/`) is the conformance kit for that binding. Where this text and the
 reference implementation disagree, one of them has a bug. Section 14 is different: it lists behavior this text states
 as it is today and a later version may change.
