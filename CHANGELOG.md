@@ -6,7 +6,7 @@ Which of the [six versioned things](docs/explanation/versions.md) change: the to
 
 ### Added
 
-- [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.5.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` is unchanged.
+- [`docs/protocol.md`](docs/protocol.md): protocol 1.0, the rules agentbus 0.5.0 follows, with an id on every requirement, a core and optional profiles, and the known gaps. `agentbus schema --json` (and `--index`) carries `"protocol": "1.0"` beside `"contract"`; `--version` still prints only the tool's version.
 
 ### Changed (learning cycle 0, [#86](https://github.com/wickdninja/agentbus/issues/86))
 
